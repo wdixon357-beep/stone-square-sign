@@ -200,7 +200,12 @@ final class AppModel: ObservableObject {
         serverAddress = UserDefaults.standard.string(forKey: "server-address") ?? defaultServerAddress
         biometricLoginEnabled = UserDefaults.standard.bool(forKey: "biometric-login-enabled")
         biometricLoginAvailable = BiometricCredentialStore.isAvailable
-        token = biometricLoginEnabled ? nil : TokenStore.load()
+        /* Always restore the session. Throwing it away when Touch ID is on meant every quit
+         * became a fresh sign in, and the Keychain read that was supposed to replace it fails
+         * whenever the app is rebuilt, because an ad hoc signature changes every build and the
+         * Keychain no longer recognises the app that owns the item. Touch ID is now a convenience
+         * on top of a session that persists, not the only way back in. */
+        token = TokenStore.load()
     }
 
     var baseURL: URL? {
@@ -277,7 +282,18 @@ final class AppModel: ObservableObject {
     func signInWithBiometrics() async {
         await perform {
             guard self.biometricLoginEnabled else { throw BiometricCredentialError.missing }
-            self.token = try await BiometricCredentialStore.load()
+            do {
+                self.token = try await BiometricCredentialStore.load()
+            } catch {
+                /* Usually the app was rebuilt and the Keychain no longer trusts the new
+                 * signature, which is what produces the "enter your login keychain password"
+                 * box. Clear the dead item so it stops asking on every launch. */
+                BiometricCredentialStore.delete()
+                self.biometricLoginEnabled = false
+                UserDefaults.standard.set(false, forKey: "biometric-login-enabled")
+                throw ClientError.server(
+                    "Touch ID could not be used and has been switched off. Sign in with your password, then turn Touch ID back on in Service Settings.")
+            }
             let response: MeResponse = try await self.request("/api/auth/me")
             self.user = response.user
             await self.refresh(silent: true)
@@ -291,7 +307,6 @@ final class AppModel: ObservableObject {
                 guard self.biometricLoginAvailable else { throw BiometricCredentialError.unavailable }
                 guard let token = self.token else { throw BiometricCredentialError.missing }
                 try BiometricCredentialStore.save(token)
-                TokenStore.delete()
                 self.biometricLoginEnabled = true
                 UserDefaults.standard.set(true, forKey: "biometric-login-enabled")
                 self.message = "Touch ID and Keychain login are enabled."
@@ -875,11 +890,11 @@ final class AppModel: ObservableObject {
     }
 
     private func saveLogin(_ token: String) throws {
+        /* The file copy is what survives a quit. The Keychain copy is what Touch ID unlocks.
+         * Keeping both means force quitting the app does not sign him out. */
+        TokenStore.save(token)
         if biometricLoginEnabled {
             try BiometricCredentialStore.save(token)
-            TokenStore.delete()
-        } else {
-            TokenStore.save(token)
         }
     }
 
