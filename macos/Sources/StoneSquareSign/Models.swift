@@ -125,4 +125,64 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case home, documents, candidateTracker, createDispensation, access, profile, settings }
+enum AppSection: Hashable { case home, documents, candidateTracker, createDispensation, access, dues, profile, settings }
+
+// MARK: - Dues
+// Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,
+// the Secretary and the Assistant Secretary; the sidebar hides it for anyone else so
+// no locked door is dangled in front of a viewer.
+
+struct DuesPayment: Codable, Hashable {
+    let dateISO: String
+    let amountCents: Int
+    let campaign: String
+    let matchedVia: String
+}
+
+struct DuesRow: Codable, Identifiable, Hashable {
+    var id: String { name }
+    let name: String
+    let title: String?
+    let assessedCents: Int
+    let paidCents: Int
+    let remainingCents: Int
+    let creditCents: Int
+    let status: String
+    let payments: [DuesPayment]
+    let lastPaymentISO: String?
+}
+
+struct DuesUnmatched: Codable, Identifiable, Hashable {
+    var id: String { "\(dateISO)-\(buyerEmail)-\(amountCents)" }
+    let dateISO: String
+    let amountCents: Int
+    let buyerName: String
+    let buyerEmail: String
+}
+
+struct DuesStaleCampaign: Codable, Hashable { let count: Int; let totalCents: Int }
+
+struct DuesTotals: Codable, Hashable {
+    let assessedCents: Int
+    let collectedCents: Int
+    let outstandingCents: Int
+    let paidCount: Int
+    let partialCount: Int
+    let unpaidCount: Int
+}
+
+struct DuesLedger: Codable {
+    let duesYear: String
+    let rateCents: Int
+    let rows: [DuesRow]
+    let unmatched: [DuesUnmatched]
+    let staleCampaign: DuesStaleCampaign?
+    let totals: DuesTotals
+}
+
+func lodgeMoney(_ cents: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = "USD"
+    return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "$0.00"
+}

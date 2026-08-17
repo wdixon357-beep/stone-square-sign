@@ -1,7 +1,12 @@
 import AppKit
 import Foundation
+
 import LocalAuthentication
 import Security
+
+/// The hosted service. This used to default to localhost, which only worked while a
+/// server happened to be running on this Mac and left the app dead for everyone else.
+let defaultServerAddress = "https://stone-square-sign.onrender.com"
 
 enum ClientError: LocalizedError {
     case invalidServer
@@ -165,6 +170,9 @@ final class AppModel: ObservableObject {
     @Published var candidateTrackerLoading = false
     @Published var isBusy = false
     @Published var isLive = false
+    @Published var dues: DuesLedger?
+    @Published var duesLoading = false
+    @Published var duesError: String?
     @Published var availableUpdateVersion: String?
     @Published var biometricLoginEnabled: Bool
     @Published var biometricLoginAvailable: Bool
@@ -188,7 +196,7 @@ final class AppModel: ObservableObject {
     }()
 
     init() {
-        serverAddress = UserDefaults.standard.string(forKey: "server-address") ?? "http://localhost:3000"
+        serverAddress = UserDefaults.standard.string(forKey: "server-address") ?? defaultServerAddress
         biometricLoginEnabled = UserDefaults.standard.bool(forKey: "biometric-login-enabled")
         biometricLoginAvailable = BiometricCredentialStore.isAvailable
         token = biometricLoginEnabled ? nil : TokenStore.load()
@@ -222,6 +230,23 @@ final class AppModel: ObservableObject {
             throw ClientError.server(message)
         }
         return try decoder.decode(T.self, from: data)
+    }
+
+    /// Dues. The server refuses anyone who is not the Worshipful Master or a Secretary,
+    /// so a failure here is reported rather than swallowed; a silent empty ledger would
+    /// read as "nobody owes anything", which is the worst possible wrong answer.
+    @MainActor
+    func loadDues() async {
+        duesError = nil
+        duesLoading = true
+        defer { duesLoading = false }
+        do {
+            dues = try await request("/api/dues")
+        } catch ClientError.server(let message) {
+            duesError = message
+        } catch {
+            duesError = error.localizedDescription
+        }
     }
 
     func restoreSession() async {

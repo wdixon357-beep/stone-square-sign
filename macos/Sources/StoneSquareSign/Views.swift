@@ -218,7 +218,7 @@ struct AuthenticationView: View {
                     TextField("Signing service address", text: $model.serverAddress)
                         .font(.caption)
                         .textFieldStyle(.roundedBorder)
-                    Text("Use http://localhost:3000 for the local service. Replace it with the permanent HTTPS address after deployment.")
+                    Text("Defaults to the hosted Lodge service at \(defaultServerAddress). Only change this if you are running a server on this Mac for development.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -266,7 +266,7 @@ struct WorkspaceView: View {
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("STONE SQUARE").font(.headline).tracking(1.5)
-                    Text("DOCUMENT SIGN").font(.caption2).tracking(2).foregroundStyle(SignTheme.gold)
+                    Text("LODGE DASHBOARD").font(.caption2).tracking(2).foregroundStyle(SignTheme.gold)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(22)
@@ -277,6 +277,9 @@ struct WorkspaceView: View {
                 if model.user?.role == "owner" {
                         Label("Create Dispensation", systemImage: "doc.badge.plus").tag(AppSection.createDispensation)
                         Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
+                    }
+                    if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
+                        Label("Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.dues)
                     }
                     Label("Signature Profile", systemImage: "signature").tag(AppSection.profile)
                     Label("Service Settings", systemImage: "network").tag(AppSection.settings)
@@ -309,6 +312,7 @@ struct WorkspaceView: View {
                 NativeCandidateTrackerView()
             case .createDispensation: DispensationBuilderView()
             case .access: OfficerAccessView()
+            case .dues: DuesView()
             case .profile: SignatureProfileView()
             case .settings: SettingsView()
             default: DocumentsView()
@@ -2118,4 +2122,139 @@ func signatureDataURL(image: NSImage) -> String? {
           let bitmap = NSBitmapImageRep(data: tiff),
           let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
     return "data:image/png;base64,\(png.base64EncodedString())"
+}
+
+
+// MARK: - Dues
+// The Mac twin of the web dues page. Same ordering, needs-attention-first, because the
+// page exists to show who to call rather than to admire a total.
+
+struct DuesView: View {
+    @EnvironmentObject var model: AppModel
+
+    private func tint(_ status: String) -> Color {
+        switch status {
+        case "paid": return .green
+        case "partial": return SignTheme.gold
+        default: return .red
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("RESTRICTED TO THE WORSHIPFUL MASTER AND THE SECRETARIES")
+                            .font(.caption2).tracking(1.4).foregroundStyle(.secondary)
+                        Text("Dues").font(.largeTitle.weight(.semibold))
+                        if let ledger = model.dues {
+                            Text("\(ledger.duesYear) dues, \(lodgeMoney(ledger.rateCents)) each, reconciled live against both Zeffy campaigns.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Refresh") { Task { await model.loadDues() } }
+                        .disabled(model.duesLoading)
+                }
+
+                if model.duesLoading && model.dues == nil {
+                    ProgressView("Reading payments from Zeffy…").frame(maxWidth: .infinity)
+                }
+                if let error = model.duesError {
+                    Text(error).foregroundStyle(.red)
+                        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.red.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
+                if let ledger = model.dues {
+                    HStack(spacing: 14) {
+                        duesTile("Collected", lodgeMoney(ledger.totals.collectedCents))
+                        duesTile("Outstanding", lodgeMoney(ledger.totals.outstandingCents))
+                        duesTile("Paid in full", "\(ledger.totals.paidCount)")
+                        duesTile("Not yet paid", "\(ledger.totals.unpaidCount)")
+                    }
+
+                    if let stale = ledger.staleCampaign {
+                        Text("Last year's custom dues campaign is still open and has taken \(stale.count) payment(s) totalling \(lodgeMoney(stale.totalCents)). Those are NOT counted above. Close that campaign in Zeffy.")
+                            .font(.callout)
+                            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(SignTheme.gold.opacity(0.14))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    Text("BY BROTHER").font(.caption2).tracking(1.4).foregroundStyle(.secondary)
+                    VStack(spacing: 8) {
+                        ForEach(ledger.rows) { row in
+                            HStack(alignment: .top, spacing: 12) {
+                                RoundedRectangle(cornerRadius: 2).fill(tint(row.status)).frame(width: 3)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(row.name).font(.callout.weight(.semibold))
+                                    Text(detail(for: row)).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(row.status.uppercased())
+                                    .font(.caption2.weight(.bold)).foregroundStyle(tint(row.status))
+                            }
+                            .padding(12)
+                            .background(Color.primary.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+
+                    if !ledger.unmatched.isEmpty {
+                        Text("COULD NOT BE MATCHED").font(.caption2).tracking(1.4).foregroundStyle(.secondary)
+                        Text("These came through Zeffy but matched nobody on the roster. Usually a nickname, a spouse's card, or a Brother missing from the roster.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        VStack(spacing: 8) {
+                            ForEach(ledger.unmatched) { item in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.buyerName.isEmpty ? item.buyerEmail : item.buyerName)
+                                            .font(.callout.weight(.semibold))
+                                        Text("\(item.dateISO) · \(lodgeMoney(item.amountCents)) · \(item.buyerEmail)")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(12)
+                                .background(Color.primary.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(28)
+        }
+        .task { if model.dues == nil { await model.loadDues() } }
+    }
+
+    private func detail(for row: DuesRow) -> String {
+        var text: String
+        switch row.status {
+        case "paid":
+            text = "Paid in full" + (row.lastPaymentISO.map { " on \($0)" } ?? "")
+        case "partial":
+            text = "\(lodgeMoney(row.paidCents)) of \(lodgeMoney(row.assessedCents)), \(lodgeMoney(row.remainingCents)) outstanding"
+        default:
+            text = "Nothing received"
+        }
+        if row.creditCents > 0 { text += " · \(lodgeMoney(row.creditCents)) credit" }
+        let ways = Set(row.payments.map(\.matchedVia)).sorted()
+        if !ways.isEmpty { text += " · matched by " + ways.joined(separator: ", ") }
+        return text
+    }
+
+    @ViewBuilder
+    private func duesTile(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased()).font(.caption2).tracking(1.2).foregroundStyle(.secondary)
+            Text(value).font(.title3.weight(.semibold))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
 }
