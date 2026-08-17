@@ -1565,6 +1565,11 @@ struct DocumentRow: View {
     let open: () -> Void
     let sign: () -> Void
 
+    private var onlyOneSecretary: Bool {
+        let roles = Set(document.signers.map(\.signerRole))
+        return roles.contains("secretary") != roles.contains("assistant_secretary")
+    }
+
     var body: some View {
         HStack(spacing: 14) {
             Text(document.isRescinded ? "R" : queueNumber.map(String.init) ?? "✓")
@@ -1591,6 +1596,13 @@ struct DocumentRow: View {
                 .background((document.isRescinded ? Color.red : document.isComplete ? Color.green : SignTheme.gold).opacity(0.11), in: Capsule())
             if model.user?.role != "viewer" {
                 Button("View", action: open).buttonStyle(.borderless)
+                /* Only worth offering while exactly one of the two Secretaries is on it. */
+                if model.user?.role == "owner" && !document.isTerminal && onlyOneSecretary {
+                    Button("Let either Secretary sign") {
+                        Task { await model.offerToBothSecretaries(documentId: document.id) }
+                    }
+                    .buttonStyle(.borderless)
+                }
                 if document.needsSignature && !document.isTerminal {
                     Button("Review and sign", action: sign)
                         .buttonStyle(.borderedProminent).tint(SignTheme.navy)

@@ -438,6 +438,37 @@ try {
   });
   check('a dispensation addressed to nobody is refused', noneRes.status === 400, String(noneRes.status));
 
+  /* Anything sent before the Master could choose is still stuck with one man. He has
+   * to be able to open it to the other Secretary without rescinding and rebuilding it. */
+  const stuckRes = await api('POST', '/api/dispensations', {
+    token: wmToken,
+    body: { ...dispensationBody, title: 'Sent to the Secretary alone', signerRoles: ['secretary'] },
+  });
+  const stuckId = stuckRes.payload.document?.id;
+  const stuckBefore = await api('GET', '/api/documents', { token: asstToken });
+  check('a document sent to one Secretary does not reach the other',
+    stuckBefore.payload.documents.find((d) => d.id === stuckId)?.needsSignature !== true,
+    JSON.stringify(stuckBefore.payload.documents.find((d) => d.id === stuckId)));
+  const opened = await api('POST', `/api/documents/${stuckId}/offer-to-both`, { token: wmToken });
+  check('the owner can open it to both Secretaries', opened.status === 200,
+    JSON.stringify(opened.payload).slice(0, 200));
+  const stuckAfter = await api('GET', '/api/documents', { token: asstToken });
+  check('it now reaches the Assistant Secretary too',
+    stuckAfter.payload.documents.find((d) => d.id === stuckId)?.needsSignature === true,
+    JSON.stringify(stuckAfter.payload.documents.find((d) => d.id === stuckId)));
+  const openedTwice = await api('POST', `/api/documents/${stuckId}/offer-to-both`, { token: wmToken });
+  check('opening it a second time is refused rather than duplicating the signer',
+    openedTwice.status === 409, String(openedTwice.status));
+  const asstSigns = await api('POST', `/api/documents/${stuckId}/sign`,
+    { token: asstToken, body: { consent: true, officerAddress: '14 Kelly Drive, Bear, DE 19701' } });
+  check('the Assistant Secretary can then sign it', asstSigns.status === 200,
+    JSON.stringify(asstSigns.payload).slice(0, 200));
+  const stuckDone = await api('GET', `/api/documents/${stuckId}`, { token: wmToken });
+  check('his signature alone completes it',
+    stuckDone.payload.document.status === 'completed', stuckDone.payload.document.status);
+  const viewerOpen = await api('POST', `/api/documents/${stuckId}/offer-to-both`, { token: viewerToken });
+  check('a viewer cannot change who may sign', viewerOpen.status === 403, String(viewerOpen.status));
+
   console.log('\nAudit and reset');
   const audit = await api('GET', `/api/documents/${docId}/audit`, { token: wmToken });
   const actions = (audit.payload.events || []).map((e) => e.action);

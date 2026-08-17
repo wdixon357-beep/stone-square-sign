@@ -1745,6 +1745,71 @@ app.post('/api/documents/:id/rescind', requireAuth, requireOwner, rateLimit({ ke
   }
 });
 
+/* Opens a document already waiting on one Secretary to the other one as well.
+ * The Master needs this for anything sent before he could choose, and for the case
+ * where the man it went to is away and the Lodge needs it signed today. */
+app.post('/api/documents/:id/offer-to-both', requireAuth, requireOwner, rateLimit({ key: 'offer-to-both', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+  try {
+    const result = await withTransaction(async () => {
+      const document = await dbGet('SELECT * FROM documents WHERE id = ? FOR UPDATE', [req.params.id]);
+      if (!document) throw httpError(404, 'Document not found.');
+      if (document.owner_user_id !== req.user.id) throw httpError(403, 'Only the document owner can change who may sign this document.');
+      if (document.status === 'rescinded') throw httpError(409, 'This document was rescinded.');
+      if (document.status === 'completed') throw httpError(409, 'This document is already signed.');
+      const existing = await dbAll(
+        'SELECT signer_role FROM document_signers WHERE document_id = ?', [document.id],
+      );
+      const held = new Set(existing.map((row) => row.signer_role));
+      const missing = ['secretary', 'assistant_secretary'].filter((role) => !held.has(role));
+      if (!held.has('secretary') && !held.has('assistant_secretary')) {
+        throw httpError(409, 'This document does not ask the secretary\'s office for a signature.');
+      }
+      if (!missing.length) throw httpError(409, 'Both Secretaries can already sign this document.');
+      const added = [];
+      for (const role of missing) {
+        const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
+        const officerName = officer?.name || (role === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
+        await dbRun(
+          'INSERT INTO document_signers (document_id, user_id, signer_role, signer_name) VALUES (?, ?, ?, ?)',
+          [document.id, officer?.id || null, role, officerName],
+        );
+        added.push({ role, name: officerName, email: officer?.email || '' });
+      }
+      await dbRun('UPDATE documents SET signing_mode = ?, updated_at = ? WHERE id = ?',
+        ['any', nowIso(), document.id]);
+      await addAudit({
+        userId: req.user.id,
+        documentId: document.id,
+        action: 'document_opened_to_both_secretaries',
+        ip: req.ip,
+        userAgent: req.get('user-agent') || '',
+        details: { added: added.map((entry) => entry.role) },
+      });
+      return { documentId: document.id, title: document.title, added };
+    });
+    for (const officer of result.added) {
+      if (officer.email && !officer.email.endsWith('.local')) {
+        try {
+          await sendEmail({
+            to: officer.email,
+            subject: `Signature requested: ${result.title}`,
+            text: `${officer.name},\n\nA dispensation is ready for your signature. Either Secretary may sign this one; whoever signs first completes it. Sign in at ${requestBaseUrl(req)} to review and sign ${result.title}.`,
+          });
+        } catch (error) {
+          console.warn('Signature request email failed:', error.message);
+        }
+      }
+    }
+    broadcast('queue_changed', { reason: 'document_opened_to_both', documentId: result.documentId });
+    res.json({
+      message: 'Either Secretary can now sign this document. Whoever signs first completes it.',
+      added: result.added.map((officer) => officer.name),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/documents/:id/audit', requireAuth, requireDocumentAccess, async (req, res, next) => {
   try {
     const document = await dbGet('SELECT * FROM documents WHERE id = ?', [req.params.id]);

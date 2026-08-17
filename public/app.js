@@ -325,6 +325,26 @@ const renderDocuments = async () => {
         signButton.addEventListener('click', () => openSignerModal(doc.id, doc.title));
         actions.appendChild(signButton);
       }
+      /* Only worth offering while exactly one of the two Secretaries is on it. */
+      const secretaryRoles = ['secretary', 'assistant_secretary'];
+      const onIt = secretaryRoles.filter((role) => (doc.signers || []).some((s) => s.signer_role === role));
+      if (state.user?.role === 'owner' && onIt.length === 1
+          && !['completed', 'rescinded'].includes(doc.status)) {
+        const bothButton = window.document.createElement('button');
+        bothButton.className = 'secondary compact';
+        bothButton.textContent = 'Let either Secretary sign';
+        bothButton.addEventListener('click', async () => {
+          if (!window.confirm(`Send ${doc.title || doc.original_name} to both Secretaries? Whoever signs first completes it.`)) return;
+          try {
+            const payload = await apiFetch(`/api/documents/${doc.id}/offer-to-both`, { method: 'POST' });
+            setMessage(docMessage, payload.message || 'Either Secretary can now sign it.');
+            await renderDocuments();
+          } catch (error) {
+            setMessage(docMessage, error.message, true);
+          }
+        });
+        actions.appendChild(bothButton);
+      }
       if (state.user?.role === 'owner' && !['completed', 'rescinded'].includes(doc.status)) {
         const rescindButton = window.document.createElement('button');
         rescindButton.className = 'secondary compact danger';

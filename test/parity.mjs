@@ -93,6 +93,12 @@ check('both clients default a new dispensation to both Secretaries',
   /SIGNER_CHOICES\.both/.test(read('public/app.js'))
   && /signerChoice = "both"/.test(macBuilder));
 
+check('both clients can open a document already sent to one Secretary',
+  read('public/app.js').includes('/offer-to-both')
+  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/offer-to-both')
+  && /Let either Secretary sign/.test(read('public/app.js'))
+  && /Let either Secretary sign/.test(macViews));
+
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';
 check('the Mac bundle name matches the web page title',

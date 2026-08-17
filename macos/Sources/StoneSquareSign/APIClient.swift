@@ -449,6 +449,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /* Opens a document already waiting on one Secretary to the other one as well.
+     * Needed for anything sent before the Master could choose, and for the case where
+     * the man it went to is away and the Lodge needs it signed today. */
+    func offerToBothSecretaries(documentId: String) async -> Bool {
+        guard user?.role == "owner" else {
+            message = "This account cannot change who may sign a document."
+            isError = true
+            return false
+        }
+        var success = false
+        await perform {
+            let response: MessageResponse = try await self.request(
+                "/api/documents/\(documentId)/offer-to-both", method: "POST", body: Data("{}".utf8))
+            self.message = response.message
+            await self.refresh(silent: true)
+            success = true
+        }
+        return success
+    }
+
     func createDispensation(
         title: String,
         requestDate: String,
