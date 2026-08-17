@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#071b2f" />
+    <title>Stone Square Sign</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <main class="shell">
+      <header class="masthead">
+        <a class="brand" href="/" aria-label="Stone Square Sign home">
+          <span class="brand-mark">22</span>
+          <span><strong>Stone Square</strong><small>Document Sign</small></span>
+        </a>
+        <div class="security-note"><span></span> Private Lodge records</div>
+      </header>
+
+      <section id="authCard" class="auth-layout">
+        <div class="auth-story">
+          <p class="eyebrow">OFFICER SIGNING DESK</p>
+          <h1>Documents move.<br /><em>Records remain.</em></h1>
+          <p class="lead">Review, sign, and retain Lodge documents through one controlled record.</p>
+          <div class="steps">
+            <div><b>01</b><span>Document uploaded</span></div>
+            <div><b>02</b><span>Officers identified</span></div>
+            <div><b>03</b><span>Signed copies delivered</span></div>
+          </div>
+        </div>
+
+        <div class="auth-card">
+          <div class="auth-tabs" role="tablist">
+            <button id="showLogin" class="auth-tab active" type="button">Sign in</button>
+            <button id="showRegister" class="auth-tab" type="button">Create account</button>
+            <button id="showReset" class="auth-tab" type="button">Reset</button>
+          </div>
+
+          <form id="loginForm" class="auth-panel">
+            <div class="form-heading"><p class="eyebrow">WELCOME BACK</p><h2>Sign in to continue</h2></div>
+            <label for="loginEmail">Email address</label>
+            <input id="loginEmail" type="email" autocomplete="email" placeholder="name@example.com" required />
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Your password" required />
+            <button class="primary" type="submit">Sign in securely</button>
+          </form>
+
+          <form id="registerForm" class="auth-panel hidden">
+            <div class="form-heading"><p id="registerEyebrow" class="eyebrow">PRIVATE INVITATION</p><h2 id="registerHeading">Activate your account</h2></div>
+            <p id="registerHelp" class="helper">Use the email address and mobile number from your invitation.</p>
+            <label for="registerName">Full name</label>
+            <input id="registerName" type="text" autocomplete="name" placeholder="Full name" required />
+            <label for="registerEmail">Email address</label>
+            <input id="registerEmail" type="email" autocomplete="email" placeholder="name@example.com" required />
+            <label for="registerPhone">Mobile phone</label>
+            <input id="registerPhone" type="tel" autocomplete="tel" placeholder="(302) 555-0100" required />
+            <label for="registerPassword">Create password</label>
+            <input id="registerPassword" type="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required />
+            <button class="primary" type="submit">Create secure account</button>
+          </form>
+
+          <form id="forgotForm" class="auth-panel hidden">
+            <div class="form-heading"><p class="eyebrow">ACCOUNT RECOVERY</p><h2>Reset your password</h2></div>
+            <label for="resetPhone">Mobile phone</label>
+            <input id="resetPhone" type="tel" autocomplete="tel" placeholder="(302) 555-0100" required />
+            <label for="resetEmail">Or your email address</label>
+            <input id="resetEmail" type="email" autocomplete="email" placeholder="you@example.org" />
+            <button id="requestReset" class="secondary" type="button">Send six digit code</button>
+            <p class="hint">The code is sent to the email address on your account. Enter either your
+              phone number or that email above, then the code below.</p>
+            <label for="resetCode">Reset code</label>
+            <input id="resetCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+            <label for="resetPassword">New password</label>
+            <input id="resetPassword" type="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" />
+            <button id="resetSubmit" class="primary" type="button">Set new password</button>
+          </form>
+          <p id="authMessage" class="message" role="status"></p>
+        </div>
+      </section>
+
+      <section id="appCard" class="workspace hidden">
+        <aside class="sidebar">
+          <div class="user-block"><span id="userInitials"></span><div><strong id="whoami"></strong><small id="userRole"></small></div></div>
+          <nav>
+            <button class="nav-item active" type="button"><span>◫</span> Live Queue</button>
+            <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
+          </nav>
+          <div class="sidebar-foot">
+            <p id="liveStatus" class="live-status"><i></i> Connecting live queue</p>
+            <button id="logoutBtn" class="text-button" type="button">Sign out</button>
+          </div>
+        </aside>
+
+        <div class="content">
+          <div class="content-head">
+            <div><p class="eyebrow">REAL TIME SIGNING QUEUE</p><h1>Dispensation desk</h1><p>New requests and signatures load automatically on every connected device.</p></div>
+            <button id="uploadShortcut" class="primary owner-only" type="button">Upload document</button>
+          </div>
+
+          <div class="metrics">
+            <article><span>All records</span><strong id="metricAll">0</strong></article>
+            <article><span>Awaiting signatures</span><strong id="metricPending">0</strong></article>
+            <article><span>Completed</span><strong id="metricComplete">0</strong></article>
+          </div>
+
+          <div class="workspace-grid">
+            <section id="uploadPanel" class="panel owner-only">
+              <div class="panel-title"><div><p class="eyebrow">NEW REQUEST</p><h2>Upload a dispensation</h2></div><span class="file-badge">PDF</span></div>
+              <form id="uploadForm">
+                <label for="docTitle">Document title</label>
+                <input id="docTitle" type="text" placeholder="Dispensation request" />
+                <label class="drop-zone" for="documentFile"><strong>Choose the dispensation PDF</strong><span>PDF, up to 25 MB</span></label>
+                <input id="documentFile" class="visually-hidden" type="file" accept="application/pdf,.pdf" required />
+                <p id="selectedFile" class="selected-file">No file selected</p>
+                <button class="primary" type="submit">Read document and add to queue</button>
+              </form>
+            </section>
+
+            <section id="officerPanel" class="panel owner-only">
+              <div class="panel-title"><div><p class="eyebrow">ACCESS CONTROL</p><h2>Officer accounts</h2></div></div>
+              <div id="officerList" class="officer-list"></div>
+              <button id="openInvite" class="secondary full" type="button">Invite an officer</button>
+            </section>
+          </div>
+
+          <section class="records">
+            <div class="records-head"><div><p class="eyebrow">LIVE QUEUE</p><h2>Documents waiting for action</h2></div><div id="docMessage" class="message" role="status"></div></div>
+            <div id="docList" class="doc-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="signModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="signTitle">
+        <div class="modal-body">
+          <button id="closeSign" class="modal-close" type="button" aria-label="Close">×</button>
+          <p class="eyebrow">ELECTRONIC SIGNATURE</p><h2 id="signTitle">Sign this document</h2>
+          <p>Review the PDF before applying your saved signature. The action is added to the document audit history.</p>
+          <div class="saved-signature"><span>Your saved signature</span><img id="signingSignaturePreview" alt="Your saved signature" /></div>
+          <button id="changeSignatureFromSign" class="text-button" type="button">Change saved signature</button>
+          <label class="consent"><input id="signatureConsent" type="checkbox" /> <span>I agree that this electronic signature represents my signature on this document.</span></label>
+          <div class="row-buttons"><button id="submitSig" class="primary" type="button">Apply saved signature</button></div>
+          <p id="signMessage" class="message" role="status"></p>
+        </div>
+      </section>
+
+      <section id="signatureSetupModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="signatureSetupTitle">
+        <div class="modal-body signature-setup">
+          <button id="closeSignatureSetup" class="modal-close" type="button" aria-label="Close">×</button>
+          <p class="eyebrow">SIGNATURE PROFILE</p><h2 id="signatureSetupTitle">Create your signature</h2>
+          <p id="signatureSetupHelp">Create the signature that will be applied when you approve a Lodge document.</p>
+          <div class="signature-tabs"><button id="chooseDraw" class="signature-tab active" type="button">Draw it</button><button id="chooseType" class="signature-tab" type="button">Type my name</button></div>
+          <div id="drawSignaturePanel">
+            <div class="signature-area"><canvas id="profileSigCanvas" width="760" height="190"></canvas></div>
+            <button id="clearProfileSig" class="secondary" type="button">Clear drawing</button>
+          </div>
+          <div id="typeSignaturePanel" class="hidden">
+            <label for="typedSignatureName">Name as it should appear</label>
+            <input id="typedSignatureName" type="text" autocomplete="name" />
+            <p class="helper">Choose one of five professional signature styles.</p>
+            <div id="typedSignatureChoices" class="signature-choices"></div>
+          </div>
+          <div class="row-buttons"><button id="saveProfileSignature" class="primary" type="button">Save my signature</button></div>
+          <p id="profileSignatureMessage" class="message" role="status"></p>
+        </div>
+      </section>
+
+      <section id="inviteModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="inviteTitle">
+        <div class="modal-body narrow">
+          <button id="closeInvite" class="modal-close" type="button" aria-label="Close">×</button>
+          <p class="eyebrow">OFFICER ACCESS</p><h2 id="inviteTitle">Send private invitation</h2>
+          <form id="inviteForm">
+            <label for="inviteRole">Office</label><select id="inviteRole"><option value="secretary">Secretary</option><option value="assistant_secretary">Assistant Secretary</option></select>
+            <label for="inviteName">Full name</label><input id="inviteName" type="text" required />
+            <label for="inviteEmail">Email address</label><input id="inviteEmail" type="email" required />
+            <label for="invitePhone">Mobile phone</label><input id="invitePhone" type="tel" required />
+            <button class="primary" type="submit">Create invitation</button>
+          </form>
+          <div id="inviteResult" class="invite-result hidden"><p id="inviteMessage"></p><button id="copyInvite" class="secondary full" type="button">Copy private link</button></div>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

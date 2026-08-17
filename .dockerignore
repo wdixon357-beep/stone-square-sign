@@ -1,0 +1,9 @@
+node_modules
+.env
+data
+uploads
+signed
+signatures
+macos/.build
+macos/dist
+.DS_Store

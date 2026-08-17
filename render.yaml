@@ -1,0 +1,69 @@
+# Free tier only. Two things make it free and both matter:
+#
+#   plan: free       750 instance hours a month, which is more than a month has.
+#   no disk:         a free web service cannot attach one. That is why the documents
+#                    live in Postgres as bytea instead of on the filesystem.
+#
+# The instance sleeps after 15 minutes idle and takes about a minute to wake, so the
+# first officer to open the queue in a day waits. Everyone after that does not. While
+# anyone has the queue open the live event stream keeps it awake.
+#
+# DATABASE_URL comes from Neon (neon.tech), free plan, 0.5 GB, no card. Use the
+# POOLED connection string, the one with "-pooler" in the host.
+
+services:
+  - type: web
+    name: stone-square-sign
+    runtime: node
+    plan: free
+    region: ohio
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+
+      # Neon pooled connection string. Required. Without it the app falls back to
+      # in-process storage and a free instance loses every signed document on restart.
+      - key: DATABASE_URL
+        sync: false
+
+      # The public address officers reach, used to build invitation links.
+      - key: APP_BASE_URL
+        sync: false
+
+      # Only this address may claim the owner account.
+      - key: OWNER_EMAIL
+        sync: false
+
+      # Gmail or Google Workspace on the Lodge domain. SMTP_PASS is a Google App
+      # Password, not the account password. Free, 500 messages a day.
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURE
+        value: "false"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+
+      - key: SESSION_DAYS
+        value: "7"
+      - key: MAX_UPLOAD_BYTES
+        value: "12582912"
+
+      # Optional. There is no free production SMS, so reset codes go by email until
+      # these are filled in. Leave blank and the app uses email without complaint.
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
