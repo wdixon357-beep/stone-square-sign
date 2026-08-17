@@ -23,6 +23,7 @@ const PAIRS = {
   queueNav: 'documents',
   builderNav: 'createDispensation',
   duesNav: 'dues',
+  approvalsNav: 'approvals',
   profileButton: 'profile',
 };
 
@@ -119,6 +120,10 @@ check('both clients show an invited officer as pending rather than still needing
   && /Pending, invited and not signed in yet/.test(read('macos/Sources/StoneSquareSign/Models.swift'))
   && read('public/app.js').includes('pendingByRole')
   && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('pendingInvitations'));
+
+check('both clients say plainly when an approval has no endorsed copy behind it',
+  /No endorsed copy on file/.test(read('public/app.js'))
+  && /No endorsed copy on file/.test(macViews));
 
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';

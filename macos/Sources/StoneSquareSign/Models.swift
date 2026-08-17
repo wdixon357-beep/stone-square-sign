@@ -157,7 +157,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case home, documents, candidateTracker, createDispensation, access, dues, profile, settings }
+enum AppSection: Hashable { case approvals, home, documents, candidateTracker, createDispensation, access, dues, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,
@@ -232,3 +232,42 @@ struct SubmissionDraft: Codable {
 }
 
 struct SubmissionDraftResponse: Codable { let draft: SubmissionDraft }
+
+
+/* What the District Deputy decided about a dispensation, and how the decision arrived.
+ *
+ * Both dispensations the Lodge holds as approved have nothing in the approval block on the form:
+ * no tick, no date, no signature. Both were granted by email. So the route matters as much as the
+ * verdict, and a missing endorsed copy is said out loud rather than glossed over. */
+struct DispensationApproval: Codable, Identifiable {
+    let id: String
+    let title: String?
+    let originalName: String?
+    let approvalStatus: String
+    let approvedBy: String?
+    let approvedOn: String?
+    let approvalSource: String?
+    let approvalNote: String?
+    let hasEndorsedCopy: Bool?
+
+    var displayTitle: String { title?.isEmpty == false ? title! : (originalName ?? "Dispensation") }
+    var isApproved: Bool { approvalStatus == "approved" }
+    var verdict: String {
+        switch approvalStatus {
+        case "approved": return "Approved"
+        case "disapproved": return "Not approved"
+        case "withdrawn": return "Withdrawn"
+        default: return "Awaiting a decision"
+        }
+    }
+    var route: String {
+        switch approvalSource {
+        case "endorsed_pdf": return "endorsed copy returned"
+        case "email": return "given by email"
+        case "verbal": return "given verbally"
+        default: return "route not recorded"
+        }
+    }
+}
+
+struct ApprovalsResponse: Codable { let approvals: [DispensationApproval] }

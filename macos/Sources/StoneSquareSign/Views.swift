@@ -278,6 +278,9 @@ struct WorkspaceView: View {
                         Label("Create Dispensation", systemImage: "doc.badge.plus").tag(AppSection.createDispensation)
                         Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
                     }
+                    Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals)
+                    if model.user?.role == "owner" {
+                    }
                     if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
                         Label("Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.dues)
                     }
@@ -313,6 +316,7 @@ struct WorkspaceView: View {
             case .createDispensation: DispensationBuilderView()
             case .access: OfficerAccessView()
             case .dues: DuesView()
+            case .approvals: ApprovalsView()
             case .profile: SignatureProfileView()
             case .settings: SettingsView()
             default: DocumentsView()
@@ -2335,5 +2339,77 @@ struct DuesView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+
+/* What the District Deputy decided about each dispensation.
+ *
+ * Deliberately loud about a missing endorsed copy. Neither dispensation the Lodge holds as
+ * approved has a single mark in its approval block; both were granted by email over a blank
+ * endorsement. Showing them as simply "approved" would let the Lodge believe it holds paper it
+ * does not hold. */
+struct ApprovalsView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("WHAT THE DISTRICT DEPUTY DECIDED")
+                        .font(.caption.weight(.bold)).foregroundStyle(SignTheme.gold).tracking(1.4)
+                    Text("Approvals")
+                        .font(.system(size: 34, weight: .semibold, design: .serif))
+                        .foregroundStyle(SignTheme.navy)
+                    Text("Every dispensation ruled on, with who granted it, when, and how it was given.")
+                        .foregroundStyle(.secondary)
+                }
+                if model.approvalsLoading && model.approvals.isEmpty {
+                    ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 40)
+                } else if !model.approvalsError.isEmpty {
+                    Text(model.approvalsError).foregroundStyle(.red)
+                } else if model.approvals.isEmpty {
+                    Text("No dispensation has been recorded as decided yet.")
+                        .foregroundStyle(.secondary).padding(.vertical, 30)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(model.approvals) { item in
+                            HStack(alignment: .top, spacing: 14) {
+                                Image(systemName: item.isApproved ? "checkmark.seal.fill" : "seal")
+                                    .font(.title2)
+                                    .foregroundStyle(item.isApproved ? .green : .secondary)
+                                    .frame(width: 30)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(item.displayTitle).font(.headline).foregroundStyle(SignTheme.navy)
+                                    Text("\(item.approvedBy ?? "Not recorded") · \(item.approvedOn ?? "no date") · \(item.route)")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    if item.hasEndorsedCopy != true {
+                                        Text("No endorsed copy on file. The approval block on the form is blank.")
+                                            .font(.caption2.weight(.semibold)).foregroundStyle(.red)
+                                    }
+                                    if let note = item.approvalNote, !note.isEmpty {
+                                        Text(note).font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Text(item.verdict)
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .foregroundStyle(item.isApproved ? .green : SignTheme.navy)
+                                    .background((item.isApproved ? Color.green : SignTheme.gold).opacity(0.12), in: Capsule())
+                            }
+                            .padding(.vertical, 13)
+                            if item.id != model.approvals.last?.id { Divider() }
+                        }
+                    }
+                    .padding(20)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay { RoundedRectangle(cornerRadius: 14).stroke(.separator.opacity(0.5)) }
+                }
+            }
+            .padding(38)
+        }
+        .background(SignTheme.ivory.opacity(0.45))
+        .task { await model.loadApprovals() }
     }
 }

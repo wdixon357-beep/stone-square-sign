@@ -166,6 +166,9 @@ final class AppModel: ObservableObject {
     @Published var documents: [LodgeDocument] = []
     @Published var officers: [Officer] = []
     @Published var pendingInvitations: [PendingInvitation] = []
+    @Published var approvals: [DispensationApproval] = []
+    @Published var approvalsLoading = false
+    @Published var approvalsError = ""
     @Published var submissionProfiles: [SubmissionProfile] = []
     @Published var candidateRecords: [CandidateRecord] = []
     @Published var candidateTrackerLoading = false
@@ -869,6 +872,21 @@ final class AppModel: ObservableObject {
             ?? fallback
     }
 
+    /* What the District Deputy has ruled on. Read on demand rather than with every refresh,
+     * because it changes about once a month. */
+    func loadApprovals() async {
+        approvalsLoading = true
+        approvalsError = ""
+        defer { approvalsLoading = false }
+        do {
+            let response: ApprovalsResponse = try await request("/api/approvals")
+            approvals = response.approvals
+        } catch {
+            approvals = []
+            approvalsError = (error as? ClientError).map { "\($0)" } ?? error.localizedDescription
+        }
+    }
+
     func signOut(localOnly: Bool = false) {
         liveTask?.cancel()
         isLive = false
@@ -884,6 +902,7 @@ final class AppModel: ObservableObject {
         documents = []
         officers = []
         pendingInvitations = []
+        approvals = []
         submissionProfiles = []
         candidateRecords = []
         candidateTrackerAuthenticated = false

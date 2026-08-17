@@ -561,6 +561,73 @@ try {
 
   /* Invitations the Master can see the state of, and that do not require the officer to find
    * the private link. He was invited; typing the address he was invited at is enough. */
+  /* What the District Deputy decided. Recorded as its own fact, because neither dispensation
+   * the Lodge holds as approved has a single mark in its approval block; both were granted by
+   * email over a blank endorsement. */
+  console.log('\nDistrict Deputy approvals');
+  const noStatus = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: wmToken, body: { status: 'granted' },
+  });
+  check('an approval needs a status the Lodge actually uses', noStatus.status === 400, String(noStatus.status));
+  const noName = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: wmToken, body: { status: 'approved', approvedOn: '2026-06-18', source: 'email' },
+  });
+  check('an approval must name the District Deputy who gave it', noName.status === 400, String(noName.status));
+  const noSource = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: wmToken, body: { status: 'approved', approvedBy: 'DDGM Cid L. Jones', approvedOn: '2026-06-18' },
+  });
+  check('and must say how it was given, since a blank form is not evidence',
+    noSource.status === 400, String(noSource.status));
+  const claimedEndorsement = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: wmToken,
+    body: { status: 'approved', approvedBy: 'DDGM Cid L. Jones', approvedOn: '2026-06-18', source: 'endorsed_pdf' },
+  });
+  check('claiming an endorsed copy without attaching one is refused',
+    claimedEndorsement.status === 400, JSON.stringify(claimedEndorsement.payload));
+
+  const recorded = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: wmToken,
+    body: {
+      status: 'approved', approvedBy: 'DDGM Cid L. Jones', approvedOn: '2026-06-18',
+      source: 'email', note: 'Returned approved the same morning by email.',
+    },
+  });
+  check('an approval given by email can be recorded honestly',
+    recorded.status === 200, JSON.stringify(recorded.payload));
+  const approvals = await api('GET', '/api/approvals', { token: wmToken });
+  check('it appears in the approvals section',
+    (approvals.payload.approvals || []).some((a) => a.id === submitId),
+    JSON.stringify(approvals.payload.approvals).slice(0, 200));
+  const record = (approvals.payload.approvals || []).find((a) => a.id === submitId);
+  check('with the Deputy, the date, and how it arrived',
+    record?.approved_by === 'DDGM Cid L. Jones' && record?.approved_on === '2026-06-18'
+    && record?.approval_source === 'email', JSON.stringify(record));
+  check('and it is plain that no endorsed copy exists for it',
+    !record?.has_endorsed_copy, String(record?.has_endorsed_copy));
+  const noEndorsed = await api('GET', `/api/documents/${submitId}/endorsed`, { token: wmToken });
+  check('asking for an endorsed copy that was never filed says so',
+    noEndorsed.status === 404, String(noEndorsed.status));
+
+  const detailAfter = await api('GET', `/api/documents/${submitId}`, { token: wmToken });
+  check('the detail never ships the endorsed blob',
+    !('approved_bytes' in detailAfter.payload.document),
+    Object.keys(detailAfter.payload.document).filter((k) => k.includes('bytes')).join(','));
+  const viewerApprovals = await api('GET', '/api/approvals', { token: viewerToken });
+  check('a viewer sees that the Lodge was granted its request',
+    (viewerApprovals.payload.approvals || []).some((a) => a.id === submitId));
+  check('but not the Master\'s own notes on it',
+    viewerApprovals.payload.approvals.every((a) => a.approval_note === null),
+    JSON.stringify(viewerApprovals.payload.approvals).slice(0, 200));
+  const viewerRecord = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: viewerToken, body: { status: 'approved', approvedBy: 'X', approvedOn: '2026-06-18', source: 'email' },
+  });
+  check('a viewer cannot record an approval', viewerRecord.status === 403, String(viewerRecord.status));
+  const notADispensation = await api('PUT', `/api/documents/${docId}/approval`, {
+    token: wmToken, body: { status: 'approved', approvedBy: 'X', approvedOn: '2026-06-18', source: 'email' },
+  });
+  check('an ordinary uploaded document carries no District Deputy approval',
+    notADispensation.status === 409, String(notADispensation.status));
+
   console.log('\nPending invitations');
   const invited = await api('POST', '/api/officers/invite', {
     token: wmToken, body: { role: 'viewer', name: 'Waiting Brother', email: 'waiting@example.org' },

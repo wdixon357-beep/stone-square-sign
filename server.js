@@ -1401,7 +1401,9 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
   try {
     const rows = await dbAll(
       `SELECT d.id, d.title, d.original_name, d.status, d.created_at, d.updated_at,
-              d.completed_at, u.name AS owner_name, u.email AS owner_email
+              d.completed_at, d.template_kind, d.submitted_at, d.submitted_to, d.submitted_error,
+              d.approval_status, d.approved_by, d.approved_on, d.approval_source,
+              u.name AS owner_name, u.email AS owner_email
        FROM documents d LEFT JOIN users u ON u.id = d.owner_user_id
        WHERE ? = 'viewer' OR d.owner_user_id = ? OR EXISTS (
          SELECT 1 FROM document_signers ds
@@ -1430,6 +1432,10 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
           updated_at: row.updated_at,
           completed_at: row.completed_at,
           owner_name: row.owner_name,
+          template_kind: row.template_kind,
+          approval_status: row.approval_status,
+          approved_by: row.approved_by,
+          approved_on: row.approved_on,
           signers: signers.map((signer) => ({
             signer_role: signer.signer_role,
             signer_name: signer.signer_name,
@@ -1481,6 +1487,8 @@ app.get('/api/documents/:id', requireAuth, requireDocumentAccess, async (req, re
     );
     delete document.file_bytes;
     delete document.signed_bytes;
+    document.has_endorsed_copy = Boolean(asBuffer(document.approved_bytes)?.length);
+    delete document.approved_bytes;
     res.json({ document: { ...document, signers } });
   } catch (error) {
     next(error);
@@ -1933,6 +1941,107 @@ app.get('/api/documents/:id/submission-draft', requireAuth, requireOwner, async 
     const draft = districtDeputyMessage(document);
     if (!draft.to) return res.status(409).json({ error: 'No District Deputy email is configured.' });
     return res.json({ draft: { ...draft, alreadySent: document.submitted_at || null } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const APPROVAL_STATUSES = new Set(['approved', 'disapproved', 'withdrawn', 'pending']);
+const APPROVAL_SOURCES = new Set(['endorsed_pdf', 'email', 'verbal']);
+
+/* Records what the District Deputy decided.
+ *
+ * Kept separate from the document's signing status on purpose. A dispensation can be fully
+ * executed by the Lodge and still not be granted, and both of the Lodge's approvals so far were
+ * given by email over an instrument whose approval block was left completely blank. Recording
+ * how the decision arrived is therefore part of the record, not a detail. */
+app.put('/api/documents/:id/approval', requireAuth, requireOwner, upload.single('endorsed'), async (req, res, next) => {
+  try {
+    const document = await dbGet('SELECT * FROM documents WHERE id = ?', [req.params.id]);
+    if (!document) return res.status(404).json({ error: 'Document not found.' });
+    if (document.owner_user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Only the document owner can record an approval.' });
+    }
+    if (document.template_kind !== 'dispensation_v1') {
+      return res.status(409).json({ error: 'Only dispensations carry a District Deputy approval.' });
+    }
+    const status = String(req.body?.status || '').trim();
+    const approvedBy = String(req.body?.approvedBy || '').trim().slice(0, 120);
+    const approvedOn = String(req.body?.approvedOn || '').trim();
+    const source = String(req.body?.source || '').trim();
+    const note = String(req.body?.note || '').trim().slice(0, 600);
+    if (!APPROVAL_STATUSES.has(status)) {
+      return res.status(400).json({ error: 'Choose approved, disapproved, withdrawn, or pending.' });
+    }
+    if (status !== 'pending') {
+      if (!approvedBy) return res.status(400).json({ error: 'Name the District Deputy who decided it.' });
+      if (!dateParts(approvedOn)) return res.status(400).json({ error: 'Give the date of the decision.' });
+      if (!APPROVAL_SOURCES.has(source)) {
+        return res.status(400).json({ error: 'Say how it was given: an endorsed PDF, an email, or verbally.' });
+      }
+      if (source === 'endorsed_pdf' && !req.file && !document.approved_bytes) {
+        return res.status(400).json({ error: 'Attach the endorsed copy, or record it as email or verbal instead.' });
+      }
+    }
+    const recordedAt = nowIso();
+    await dbRun(
+      `UPDATE documents SET approval_status = ?, approved_by = ?, approved_on = ?,
+       approval_source = ?, approval_note = ?, approval_recorded_at = ?, updated_at = ?
+       WHERE id = ?`,
+      [status, status === 'pending' ? null : approvedBy, status === 'pending' ? null : approvedOn,
+        status === 'pending' ? null : source, note || null, recordedAt, recordedAt, document.id],
+    );
+    if (req.file) {
+      await dbRun('UPDATE documents SET approved_bytes = ? WHERE id = ?', [req.file.buffer, document.id]);
+    }
+    await addAudit({
+      userId: req.user.id,
+      documentId: document.id,
+      action: 'dispensation_approval_recorded',
+      ip: req.ip,
+      userAgent: req.get('user-agent') || '',
+      details: { status, approvedBy, approvedOn, source, endorsedCopyAttached: Boolean(req.file) },
+    });
+    broadcast('queue_changed', { reason: 'approval_recorded', documentId: document.id });
+    return res.json({ message: 'Approval recorded.' });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/* The endorsed copy the District Deputy returned, when there is one. */
+app.get('/api/documents/:id/endorsed', requireAuth, requireDocumentAccess, async (req, res, next) => {
+  try {
+    const document = await dbGet('SELECT * FROM documents WHERE id = ?', [req.params.id]);
+    if (!document) return res.status(404).json({ error: 'Document not found.' });
+    const bytes = asBuffer(document.approved_bytes);
+    if (!bytes?.length) return res.status(404).json({ error: 'No endorsed copy has been filed for this one.' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="endorsed-${document.id}.pdf"`);
+    return res.send(bytes);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/* Every dispensation the District Deputy has ruled on, newest first. */
+app.get('/api/approvals', requireAuth, async (req, res, next) => {
+  try {
+    const rows = await dbAll(
+      `SELECT id, title, original_name, created_at, approval_status, approved_by, approved_on,
+              approval_source, approval_note, approval_recorded_at,
+              (approved_bytes IS NOT NULL) AS has_endorsed_copy
+       FROM documents
+       WHERE template_kind = 'dispensation_v1' AND approval_status IS NOT NULL
+         AND approval_status <> 'pending'
+       ORDER BY approved_on DESC, approval_recorded_at DESC`,
+    );
+    const approvals = rows.map((row) => ({
+      ...row,
+      /* A viewer sees that the Lodge was granted its request, not the Master's own paperwork. */
+      approval_note: req.user.role === 'viewer' ? null : row.approval_note,
+    }));
+    return res.json({ approvals });
   } catch (error) {
     return next(error);
   }

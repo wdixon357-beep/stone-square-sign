@@ -203,15 +203,19 @@ const showWorkspaceSection = (section) => {
   const builder = section === 'builder';
   const queue = section === 'queue';
   const dues = section === 'dues';
+  const approvals = section === 'approvals';
   $('landingSection').classList.toggle('hidden', !home);
   $('queueSection').classList.toggle('hidden', !queue);
   $('builderSection').classList.toggle('hidden', !builder);
   $('duesSection').classList.toggle('hidden', !dues);
+  $('approvalsSection').classList.toggle('hidden', !approvals);
   $('homeNav').classList.toggle('active', home);
   $('queueNav').classList.toggle('active', queue);
   $('builderNav').classList.toggle('active', builder);
   $('duesNav').classList.toggle('active', dues);
+  $('approvalsNav').classList.toggle('active', approvals);
   if (dues) renderDues();
+  if (approvals) renderApprovals();
   /* Zeffy payments arrive from outside the app, so no in-app event can announce
    * them. While the dues page is the one on screen, re-read it on a timer so two
    * officers looking at once see the same figures. */
@@ -219,6 +223,80 @@ const showWorkspaceSection = (section) => {
   if (dues) state.duesTimer = window.setInterval(() => renderDues(true), 60000);
 };
 
+/* What the District Deputy decided, and the proof of it.
+ *
+ * Both dispensations the Lodge holds as approved have nothing written in the approval block on
+ * the form itself: no tick, no date, no signature. Both were granted by email. So this shows how
+ * the decision arrived rather than pretending the instrument carries it, and says plainly when no
+ * endorsed copy exists. */
+const APPROVAL_WORDS = {
+  approved: 'Approved', disapproved: 'Not approved', withdrawn: 'Withdrawn', pending: 'Awaiting a decision',
+};
+const APPROVAL_ROUTE = {
+  endorsed_pdf: 'endorsed copy returned', email: 'given by email', verbal: 'given verbally',
+};
+
+const renderApprovals = async () => {
+  const message = $('approvalsMessage');
+  const list = $('approvalsList');
+  try {
+    const { approvals = [] } = await apiFetch('/api/approvals');
+    list.innerHTML = '';
+    if (!approvals.length) {
+      setMessage(message, 'No dispensation has been recorded as decided yet.');
+      return;
+    }
+    setMessage(message, '');
+    approvals.forEach((item) => {
+      const row = window.document.createElement('article');
+      row.className = 'doc-row';
+      const decided = APPROVAL_WORDS[item.approval_status] || item.approval_status;
+      const route = APPROVAL_ROUTE[item.approval_source] || item.approval_source || '';
+      row.innerHTML = `
+        <div class="queue-number">${item.approval_status === 'approved' ? '\u2713' : '\u2022'}</div>
+        <div class="doc-icon">PDF</div>
+        <div class="doc-main"><h3></h3><p></p></div>
+        <span class="status ${item.approval_status === 'approved' ? 'completed' : 'rescinded'}">${decided}</span>
+        <div class="doc-actions"></div>`;
+      row.querySelector('h3').textContent = item.title || item.original_name;
+      row.querySelector('.doc-main p').textContent =
+        `${item.approved_by || 'Not recorded'} · ${formatDate(item.approved_on)} · ${route}`;
+      if (!item.has_endorsed_copy) {
+        const warn = window.document.createElement('p');
+        warn.className = 'queue-submission queue-submission-warn';
+        warn.textContent = 'No endorsed copy on file. The approval block on the form is blank.';
+        row.querySelector('.doc-main').appendChild(warn);
+      }
+      const actions = row.querySelector('.doc-actions');
+      const open = window.document.createElement('button');
+      open.className = 'text-button';
+      open.textContent = 'View PDF';
+      open.addEventListener('click', () => openPdf(item.id, item.original_name));
+      actions.appendChild(open);
+      if (item.has_endorsed_copy) {
+        const endorsed = window.document.createElement('button');
+        endorsed.className = 'secondary compact';
+        endorsed.textContent = 'View endorsed copy';
+        endorsed.addEventListener('click', async () => {
+          try {
+            const blob = await apiFetch(`/api/documents/${item.id}/endorsed`);
+            window.open(URL.createObjectURL(blob), '_blank');
+          } catch (error) {
+            setMessage(message, error.message, true);
+          }
+        });
+        actions.appendChild(endorsed);
+      }
+      if (state.user?.role === 'viewer') actions.replaceChildren();
+      list.appendChild(row);
+    });
+  } catch (error) {
+    setMessage(message, error.message, true);
+  }
+};
+
+$('approvalsNav').addEventListener('click', () => showWorkspaceSection('approvals'));
+$('approvalsRefresh').addEventListener('click', () => renderApprovals());
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
 $('queueNav').addEventListener('click', () => showWorkspaceSection('queue'));
 $('builderNav').addEventListener('click', () => showWorkspaceSection('builder'));

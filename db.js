@@ -282,6 +282,20 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'documents', 'submitted_at', 'TEXT');
   await addColumn(exec, 'documents', 'submitted_to', 'TEXT');
   await addColumn(exec, 'documents', 'submitted_error', 'TEXT');
+  /* What the District Deputy decided, and the proof of it.
+   *
+   * Neither dispensation the Lodge holds as "approved" has anything written in the approval
+   * block: no tick, no date, no signature, no title. Both were approved by email instead. So the
+   * decision has to be recorded as its own fact with its own evidence, rather than inferred from
+   * a form that was never endorsed. approved_bytes holds the returned endorsed copy on the day
+   * one finally comes back. */
+  await addColumn(exec, 'documents', 'approval_status', 'TEXT');
+  await addColumn(exec, 'documents', 'approved_by', 'TEXT');
+  await addColumn(exec, 'documents', 'approved_on', 'TEXT');
+  await addColumn(exec, 'documents', 'approval_source', 'TEXT');
+  await addColumn(exec, 'documents', 'approval_note', 'TEXT');
+  await addColumn(exec, 'documents', 'approved_bytes', 'BYTEA');
+  await addColumn(exec, 'documents', 'approval_recorded_at', 'TEXT');
   await addColumn(exec, 'documents', 'completed_at', 'TEXT');
   await addColumn(exec, 'documents', 'template_kind', 'TEXT');
   await addColumn(exec, 'reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");
