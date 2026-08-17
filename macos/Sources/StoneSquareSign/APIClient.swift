@@ -469,6 +469,25 @@ final class AppModel: ObservableObject {
         return success
     }
 
+    /* Sends, or re-sends, a completed dispensation to the District Deputy for review. */
+    func submitToDistrictDeputy(documentId: String, resend: Bool = false) async -> Bool {
+        guard user?.role == "owner" else {
+            message = "This account cannot submit documents."
+            isError = true
+            return false
+        }
+        var success = false
+        await perform {
+            let body = try JSONSerialization.data(withJSONObject: ["resend": resend])
+            let response: MessageResponse = try await self.request(
+                "/api/documents/\(documentId)/submit", method: "POST", body: body)
+            self.message = response.message
+            await self.refresh(silent: true)
+            success = true
+        }
+        return success
+    }
+
     func createDispensation(
         title: String,
         requestDate: String,

@@ -91,6 +91,8 @@ const server = spawn(process.execPath, ['server.js'], {
     PGLITE_DIR: '',              // empty keeps it in memory
     OWNER_EMAIL: 'wm@stonesquare22pha.org',
     LODGE_ACCESS_CODE: 'square22-lodge-code',
+    DDGM_EMAIL: 'districtdeputy@example.org',
+    DDGM_NAME: 'District Deputy Grand Master Cid L. Jones',
     APP_BASE_URL: BASE,
     SMTP_HOST: '127.0.0.1',
     SMTP_PORT: String(SMTP_PORT),
@@ -496,6 +498,53 @@ try {
 
   /* Self serve accounts. No email is delivered in production, so an officer has to be able to
    * create his own account from one shared code rather than waiting on an invitation. */
+  /* Getting it to the District Deputy. A dispensation is not finished when it is signed, it is
+   * finished when the man who approves it has it in his hand. */
+  console.log('\nSubmission to the District Deputy');
+  const beforeCount = deliveredMail.length;
+  const toSubmit = await api('POST', '/api/dispensations', {
+    token: wmToken,
+    body: { ...dispensationBody, title: 'Goes to the District Deputy', signerRoles: ['secretary'] },
+  });
+  const submitId = toSubmit.payload.document?.id;
+  const early = await api('POST', `/api/documents/${submitId}/submit`, { token: wmToken });
+  check('it cannot go to the District Deputy before it is signed',
+    early.status === 409, JSON.stringify(early.payload));
+  const finalSign = await api('POST', `/api/documents/${submitId}/sign`, {
+    token: secToken, body: { consent: true, officerAddress: '722 Banning Dr., Middletown, DE 19709' },
+  });
+  check('the Secretary signs it', finalSign.status === 200, JSON.stringify(finalSign.payload).slice(0, 200));
+  check('signing reports that it went to the District Deputy',
+    finalSign.payload.submitted === true, JSON.stringify(finalSign.payload).slice(0, 300));
+
+  const fresh = deliveredMail.slice(beforeCount).join('\n---\n');
+  check('an email actually left the server addressed to the District Deputy',
+    /districtdeputy@example\.org/.test(fresh), fresh.slice(0, 200));
+  check('it carries the signed PDF as an attachment',
+    /application\/pdf/i.test(fresh) && /JVBER/.test(fresh),
+    'no PDF part found in the delivered message');
+  check('it asks him to review it',
+    /review/i.test(fresh) && /Request for Dispensation/i.test(fresh));
+
+  const submittedDoc = await api('GET', `/api/documents/${submitId}`, { token: wmToken });
+  check('the document records when it went and to whom',
+    Boolean(submittedDoc.payload.document.submitted_at)
+    && submittedDoc.payload.document.submitted_to === 'districtdeputy@example.org',
+    JSON.stringify({ at: submittedDoc.payload.document.submitted_at, to: submittedDoc.payload.document.submitted_to }));
+  check('and records no failure', !submittedDoc.payload.document.submitted_error,
+    String(submittedDoc.payload.document.submitted_error));
+
+  const again = await api('POST', `/api/documents/${submitId}/submit`, { token: wmToken });
+  check('it will not quietly send the same dispensation to him twice',
+    again.status === 409, JSON.stringify(again.payload));
+  const onPurpose = await api('POST', `/api/documents/${submitId}/submit`,
+    { token: wmToken, body: { resend: true } });
+  check('but the Master can send it again on purpose',
+    onPurpose.status === 200, JSON.stringify(onPurpose.payload));
+  const viewerSubmit = await api('POST', `/api/documents/${submitId}/submit`, { token: viewerToken });
+  check('a viewer cannot send anything to the District Deputy',
+    viewerSubmit.status === 403, String(viewerSubmit.status));
+
   console.log('\nSelf serve accounts');
   const noCode = await api('POST', '/api/auth/register', {
     body: { email: 'stranger2@example.org', name: 'Passer By', password: 'a long enough secret' },

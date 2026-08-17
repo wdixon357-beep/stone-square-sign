@@ -38,11 +38,19 @@ struct LodgeDocument: Codable, Identifiable {
     let ownerEmail: String?
     let signers: [Signer]
     let needsSignature: Bool
+    /* Optional because a viewer's copy of a document deliberately leaves them out. */
+    let templateKind: String?
+    let submittedAt: String?
+    let submittedTo: String?
+    let submittedError: String?
 
     var displayTitle: String { title?.isEmpty == false ? title! : originalName }
     var isComplete: Bool { status == "completed" }
     var isRescinded: Bool { status == "rescinded" }
     var isTerminal: Bool { isComplete || isRescinded }
+    var isDispensation: Bool { templateKind == "dispensation_v1" }
+    /* A signed dispensation is not finished until the District Deputy has it. */
+    var awaitsDistrictDeputy: Bool { isComplete && isDispensation && submittedAt == nil }
 }
 
 struct Officer: Codable, Identifiable {

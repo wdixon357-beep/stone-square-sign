@@ -313,3 +313,8 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
 .dues-row.dues-partial { border-left-color: var(--gold); }
 .dues-row.dues-unpaid { border-left-color: #96331f; }
 .dues-row small { color: var(--muted); display: block; margin-top: 2px; }
+
+/* Whether a completed dispensation actually reached the District Deputy. The warning state is
+   deliberately loud: a dispensation that quietly failed to send is one that misses its date. */
+.queue-submission { font-size: 12px; color: var(--muted, #6b7280); margin-top: 4px; }
+.queue-submission-warn { color: #b42318; font-weight: 600; }

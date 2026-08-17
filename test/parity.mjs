@@ -99,6 +99,15 @@ check('both clients can open a document already sent to one Secretary',
   && /Let either Secretary sign/.test(read('public/app.js'))
   && /Let either Secretary sign/.test(macViews));
 
+check('both clients can send a signed dispensation to the District Deputy',
+  read('public/app.js').includes('/submit')
+  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/submit')
+  && /Send to the District Deputy/.test(read('public/app.js'))
+  && /Send to the District Deputy/.test(macViews));
+check('both clients say plainly when a dispensation did NOT reach the District Deputy',
+  /NOT sent to the District Deputy/.test(read('public/app.js'))
+  && /NOT sent to the District Deputy/.test(macViews));
+
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';
 check('the Mac bundle name matches the web page title',

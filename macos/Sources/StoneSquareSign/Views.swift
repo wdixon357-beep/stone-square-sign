@@ -1587,6 +1587,18 @@ struct DocumentRow: View {
                     ForEach(document.signers) { signer in SignerStatusView(signer: signer) }
                 }
                 .font(.caption)
+                /* Loud on failure on purpose. A dispensation that quietly did not send is one
+                 * that misses its date, which is exactly how the invitations were lost. */
+                if document.isComplete && document.isDispensation {
+                    if let sentAt = document.submittedAt {
+                        Text("Sent to the District Deputy \(sentAt)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        Text(document.submittedError.map { "NOT sent to the District Deputy. \($0)" }
+                            ?? "Not yet sent to the District Deputy.")
+                            .font(.caption2.weight(.semibold)).foregroundStyle(.red)
+                    }
+                }
             }
             Spacer()
             Text(document.isRescinded ? "Rescinded" : document.isComplete ? "Completed" : document.needsSignature ? "Your signature" : "Awaiting")
@@ -1606,6 +1618,21 @@ struct DocumentRow: View {
                 if document.needsSignature && !document.isTerminal {
                     Button("Review and sign", action: sign)
                         .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                }
+                if model.user?.role == "owner" && document.isComplete && document.isDispensation {
+                    if document.submittedAt == nil {
+                        Button("Send to the District Deputy") {
+                            Task { await model.submitToDistrictDeputy(documentId: document.id) }
+                        }
+                        .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                    } else {
+                        Button("Send again") {
+                            Task {
+                                await model.submitToDistrictDeputy(documentId: document.id, resend: true)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                    }
                 }
             }
         }

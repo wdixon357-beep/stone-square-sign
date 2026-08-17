@@ -325,6 +325,41 @@ const renderDocuments = async () => {
         signButton.addEventListener('click', () => openSignerModal(doc.id, doc.title));
         actions.appendChild(signButton);
       }
+      /* A completed dispensation is not done until the District Deputy has it. Say plainly
+       * whether it went, because a silent failure is how one misses its date. */
+      if (state.user?.role !== 'viewer' && doc.status === 'completed' && doc.template_kind === 'dispensation_v1') {
+        const note = window.document.createElement('p');
+        note.className = 'queue-submission';
+        if (doc.submitted_at) {
+          note.textContent = `Sent to the District Deputy ${new Date(doc.submitted_at).toLocaleString()}`;
+        } else {
+          note.textContent = doc.submitted_error
+            ? `NOT sent to the District Deputy. ${doc.submitted_error}`
+            : 'Not yet sent to the District Deputy.';
+          note.classList.add('queue-submission-warn');
+        }
+        article.querySelector('.doc-main').appendChild(note);
+      }
+      if (state.user?.role === 'owner' && doc.status === 'completed'
+          && doc.template_kind === 'dispensation_v1') {
+        const sendButton = window.document.createElement('button');
+        sendButton.className = doc.submitted_at ? 'secondary compact' : 'primary compact';
+        sendButton.textContent = doc.submitted_at ? 'Send again' : 'Send to the District Deputy';
+        sendButton.addEventListener('click', async () => {
+          if (doc.submitted_at
+              && !window.confirm('This already went to the District Deputy. Send it to him again?')) return;
+          try {
+            const payload = await apiFetch(`/api/documents/${doc.id}/submit`, {
+              method: 'POST', body: JSON.stringify({ resend: Boolean(doc.submitted_at) }),
+            });
+            setMessage(docMessage, payload.message || 'Sent to the District Deputy.');
+            await renderDocuments();
+          } catch (error) {
+            setMessage(docMessage, error.message, true);
+          }
+        });
+        actions.appendChild(sendButton);
+      }
       /* Only worth offering while exactly one of the two Secretaries is on it. */
       const secretaryRoles = ['secretary', 'assistant_secretary'];
       const onIt = secretaryRoles.filter((role) => (doc.signers || []).some((s) => s.signer_role === role));

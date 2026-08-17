@@ -275,6 +275,13 @@ export const initSchema = async (exec = run) => {
    * completes it; the other's row is superseded rather than left hanging in his queue. */
   await addColumn(exec, 'documents', 'signing_mode', "TEXT NOT NULL DEFAULT 'all'");
   await addColumn(exec, 'document_signers', 'superseded_at', 'TEXT');
+  /* Submission to the District Deputy. Recorded on the document rather than inferred, so the
+   * Master can see at a glance what actually left the building and what only looked like it did.
+   * submitted_error holds the reason when it failed, because a silent failure is how a
+   * dispensation misses its date. */
+  await addColumn(exec, 'documents', 'submitted_at', 'TEXT');
+  await addColumn(exec, 'documents', 'submitted_to', 'TEXT');
+  await addColumn(exec, 'documents', 'submitted_error', 'TEXT');
   await addColumn(exec, 'documents', 'completed_at', 'TEXT');
   await addColumn(exec, 'documents', 'template_kind', 'TEXT');
   await addColumn(exec, 'reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");
