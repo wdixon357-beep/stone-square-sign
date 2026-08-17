@@ -508,6 +508,8 @@ $('registerForm').addEventListener('submit', async (event) => {
         email: $('registerEmail').value.trim(),
         password: $('registerPassword').value,
         invitationToken: state.invitationToken,
+        role: $('registerRole').value,
+        accessCode: $('registerAccessCode').value.trim(),
       }),
     });
     state.token = payload.token;
@@ -1083,6 +1085,12 @@ const initialize = async () => {
   if (inviteEmail) $('registerEmail').value = inviteEmail;
   try {
     const setup = await apiFetch('/api/setup');
+    if (setup.registrationMode === 'access_code' && !state.invitationToken) {
+      show($('selfServeFields'));
+      $('registerEyebrow').textContent = 'LODGE OFFICERS';
+      $('registerHeading').textContent = 'Create your account';
+      $('registerHelp').textContent = 'Choose your office and enter the access code the Worshipful Master sent you.';
+    }
     if (setup.needsOwnerSetup && !state.invitationToken) {
       $('registerEyebrow').textContent = 'INITIAL SETUP';
       $('registerHeading').textContent = 'Create the owner account';

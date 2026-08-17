@@ -90,6 +90,7 @@ const server = spawn(process.execPath, ['server.js'], {
     DATABASE_URL: '',            // empty forces PGlite
     PGLITE_DIR: '',              // empty keeps it in memory
     OWNER_EMAIL: 'wm@stonesquare22pha.org',
+    LODGE_ACCESS_CODE: 'square22-lodge-code',
     APP_BASE_URL: BASE,
     SMTP_HOST: '127.0.0.1',
     SMTP_PORT: String(SMTP_PORT),
@@ -468,6 +469,73 @@ try {
     stuckDone.payload.document.status === 'completed', stuckDone.payload.document.status);
   const viewerOpen = await api('POST', `/api/documents/${stuckId}/offer-to-both`, { token: viewerToken });
   check('a viewer cannot change who may sign', viewerOpen.status === 403, String(viewerOpen.status));
+
+  /* Signing out. An officer sharing a phone, or one who signed in on the Lodge laptop,
+   * has to be able to end his own session and be sure it is actually ended. */
+  console.log('\nSigning out');
+  const phone = await api('POST', '/api/auth/login', {
+    body: { email: 'mcduff8995@example.org', password: 'another long secret' },
+  });
+  check('the Secretary can sign in a second time on another device',
+    Boolean(phone.payload.token), JSON.stringify(phone.payload).slice(0, 200));
+  const phoneToken = phone.payload.token;
+  check('the second session works', (await api('GET', '/api/auth/me', { token: phoneToken })).status === 200);
+  const signedOut = await api('POST', '/api/auth/logout', { token: phoneToken });
+  check('signing out is accepted', signedOut.status === 200, JSON.stringify(signedOut.payload));
+  const deadToken = await api('GET', '/api/auth/me', { token: phoneToken });
+  check('the token is dead the moment he signs out', deadToken.status === 401, String(deadToken.status));
+  const deadQueue = await api('GET', '/api/documents', { token: phoneToken });
+  check('a signed out token cannot reach the queue either', deadQueue.status === 401, String(deadQueue.status));
+  check('his other session is untouched, so signing out on one device does not sign him out everywhere',
+    (await api('GET', '/api/auth/me', { token: secToken })).status === 200);
+  const signOutTwice = await api('POST', '/api/auth/logout', { token: phoneToken });
+  check('signing out twice is refused cleanly rather than erroring',
+    signOutTwice.status === 401, String(signOutTwice.status));
+  check('signing out without a session is refused',
+    (await api('POST', '/api/auth/logout')).status === 401);
+
+  /* Self serve accounts. No email is delivered in production, so an officer has to be able to
+   * create his own account from one shared code rather than waiting on an invitation. */
+  console.log('\nSelf serve accounts');
+  const noCode = await api('POST', '/api/auth/register', {
+    body: { email: 'stranger2@example.org', name: 'Passer By', password: 'a long enough secret' },
+  });
+  check('a stranger with no code and no invitation is still refused',
+    noCode.status === 403, JSON.stringify(noCode.payload));
+  const wrongCode = await api('POST', '/api/auth/register', {
+    body: { email: 'stranger3@example.org', name: 'Passer By', password: 'a long enough secret',
+      role: 'viewer', accessCode: 'not-the-code' },
+  });
+  check('a wrong code is refused', wrongCode.status === 403, JSON.stringify(wrongCode.payload));
+  const noOffice = await api('POST', '/api/auth/register', {
+    body: { email: 'brother1@example.org', name: 'A Brother', password: 'a long enough secret',
+      accessCode: 'square22-lodge-code' },
+  });
+  check('the code alone is not enough, he must say which office he holds',
+    noOffice.status === 400, JSON.stringify(noOffice.payload));
+  const joined = await api('POST', '/api/auth/register', {
+    body: { email: 'brother1@example.org', name: 'A Brother', password: 'a long enough secret',
+      role: 'viewer', accessCode: 'square22-lodge-code' },
+  });
+  check('a Brother with the code creates his own account and is signed straight in',
+    joined.status === 201 && Boolean(joined.payload.token), JSON.stringify(joined.payload).slice(0, 200));
+  check('he gets the office he claimed', joined.payload.user?.role === 'viewer', joined.payload.user?.role);
+  check('and can use it immediately',
+    (await api('GET', '/api/auth/me', { token: joined.payload.token })).status === 200);
+  const takenOffice = await api('POST', '/api/auth/register', {
+    body: { email: 'imposter@example.org', name: 'Imposter', password: 'a long enough secret',
+      role: 'secretary', accessCode: 'square22-lodge-code' },
+  });
+  check('the code cannot be used to take an office another officer already holds',
+    takenOffice.status === 409, JSON.stringify(takenOffice.payload));
+  const dupeEmail = await api('POST', '/api/auth/register', {
+    body: { email: 'brother1@example.org', name: 'A Brother', password: 'another long secret',
+      role: 'viewer', accessCode: 'square22-lodge-code' },
+  });
+  check('the same email cannot be registered twice', dupeEmail.status === 409, String(dupeEmail.status));
+  const setupSays = await api('GET', '/api/setup');
+  check('the sign up page is told to show the code fields',
+    setupSays.payload.registrationMode === 'access_code', JSON.stringify(setupSays.payload));
 
   console.log('\nAudit and reset');
   const audit = await api('GET', `/api/documents/${docId}/audit`, { token: wmToken });

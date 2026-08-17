@@ -79,6 +79,16 @@
             <input id="registerEmail" type="email" autocomplete="email" placeholder="name@example.com" required />
             <label for="registerPassword">Create password</label>
             <input id="registerPassword" type="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required />
+            <div id="selfServeFields" class="hidden">
+              <label for="registerRole">Which office do you hold?</label>
+              <select id="registerRole">
+                <option value="secretary">Secretary</option>
+                <option value="assistant_secretary">Assistant Secretary</option>
+                <option value="viewer">Lodge Viewer, can see status only</option>
+              </select>
+              <label for="registerAccessCode">Lodge access code</label>
+              <input id="registerAccessCode" type="text" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" placeholder="The code the Worshipful Master sent you" />
+            </div>
             <button class="primary" type="submit">Create secure account</button>
           </form>
 

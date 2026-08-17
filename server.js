@@ -30,6 +30,16 @@ const CANDIDATE_TRACKER_URL = String(
 ).replace(/\/$/, '');
 const TRACKER_SSO_SHARED_SECRET = String(process.env.TRACKER_SSO_SHARED_SECRET || '');
 const OFFICE_ROLES = new Set(['secretary', 'assistant_secretary']);
+/* One shared Lodge access code, so an officer can create his own account without waiting on an
+ * invitation or on email working. It replaces five separate invitations with one word the Master
+ * texts to the officers. Leave it unset and the app stays invitation only. */
+const LODGE_ACCESS_CODE = String(process.env.LODGE_ACCESS_CODE || '').trim();
+const SELF_SERVE_ROLES = new Set(['secretary', 'assistant_secretary', 'viewer']);
+const secretsMatch = (supplied, expected) => {
+  const a = Buffer.from(String(supplied || ''));
+  const b = Buffer.from(String(expected || ''));
+  return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+};
 
 const httpError = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 const lockOfficeRole = async (role) => {
@@ -785,7 +795,9 @@ app.get('/api/setup', async (_req, res, next) => {
     const realUsers = await dbGet("SELECT COUNT(*) AS total FROM users WHERE email NOT LIKE '%.local'");
     res.json({
       needsOwnerSetup: realUsers.total === 0,
-      registrationMode: realUsers.total === 0 ? 'owner' : 'invitation',
+      registrationMode: realUsers.total === 0
+        ? 'owner'
+        : (LODGE_ACCESS_CODE ? 'access_code' : 'invitation'),
       emailDeliveryReady: Boolean(transporter),
     });
   } catch (error) {
@@ -793,7 +805,10 @@ app.get('/api/setup', async (_req, res, next) => {
   }
 });
 
-app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 8, windowMs: 15 * 60 * 1000 }), async (req, res, next) => {
+/* 20 rather than 8: this limit is per address, so the officers sitting on the Lodge wifi share it,
+ * and a mistyped access code burns an attempt. 20 in 15 minutes is still nothing against anyone
+ * trying to guess the code, and it stops the Craft locking itself out on a Thursday night. */
+app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowMs: 15 * 60 * 1000 }), async (req, res, next) => {
   try {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || '');
@@ -805,9 +820,12 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 8, windowMs
       });
     }
 
+    const accessCode = String(req.body?.accessCode || '').trim();
+    const requestedRole = String(req.body?.role || '');
     let role = 'owner';
     let name = suppliedName;
     let invitation = null;
+    let joinedWithCode = false;
     if (invitationToken) {
       invitation = await dbGet(
         'SELECT * FROM invitations WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?',
@@ -818,10 +836,25 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 8, windowMs
       }
       role = invitation.role;
       name = invitation.name || suppliedName;
+    } else if (LODGE_ACCESS_CODE && accessCode) {
+      /* Self serve. The code proves he is one of ours; the office he claims is still held to one
+       * man, so a second person cannot quietly become Secretary behind the first one's back. */
+      if (!secretsMatch(accessCode, LODGE_ACCESS_CODE)) {
+        return res.status(403).json({ error: 'That Lodge access code is not correct.' });
+      }
+      if (!SELF_SERVE_ROLES.has(requestedRole)) {
+        return res.status(400).json({ error: 'Choose which office you hold.' });
+      }
+      role = requestedRole;
+      joinedWithCode = true;
     } else {
       const realUsers = await dbGet("SELECT COUNT(*) AS total FROM users WHERE email NOT LIKE '%.local'");
       if (realUsers.total > 0) {
-        return res.status(403).json({ error: 'An invitation from the document owner is required.' });
+        return res.status(403).json({
+          error: LODGE_ACCESS_CODE
+            ? 'Enter the Lodge access code, or use the private link the Worshipful Master sent you.'
+            : 'An invitation from the document owner is required.',
+        });
       }
       if (IS_PRODUCTION && (!OWNER_EMAIL || OWNER_EMAIL !== email)) {
         return res.status(403).json({ error: 'This email is not authorized to create the owner account.' });
@@ -849,6 +882,19 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 8, windowMs
           );
           if (occupied) throw httpError(409, 'That office already has an active account.');
         }
+      }
+      if (joinedWithCode) {
+        await lockOfficeRole(role);
+        if (OFFICE_ROLES.has(role)) {
+          const occupied = await dbGet(
+            `SELECT 1 FROM users WHERE role = ? AND email NOT LIKE '%.local'
+             AND access_revoked_at IS NULL AND email <> ?`,
+            [role, email],
+          );
+          if (occupied) throw httpError(409, 'That office already has an active account. Ask the Worshipful Master.');
+        }
+        const taken = await dbGet('SELECT 1 FROM users WHERE email = ? AND access_revoked_at IS NULL', [email]);
+        if (taken) throw httpError(409, 'That email already has an account. Sign in instead.');
       }
       const revokedAccount = invitation
         ? await dbGet('SELECT * FROM users WHERE email = ? AND access_revoked_at IS NOT NULL', [email])
