@@ -1,0 +1,91 @@
+{
+  "meeting": { "date": "Thursday, September 3, 2026", "openedTime": "7:33 PM", "closedTime": "9:11 PM", "opened_on": "Third Degree" },
+
+  "ROLL CALL OF OFFICERS": {
+    "present": ["Worshipful Master", "Senior Warden", "Junior Warden", "Secretary", "Senior Deacon", "Junior Deacon", "Chaplain"],
+    "absent": [
+      { "office": "Treasurer", "name": "Bro. John Brown, PM", "note": "absent" },
+      { "office": "Assistant Treasurer", "name": "Bro. Kendall Harris", "note": "absent, working" }
+    ]
+  },
+
+  "ATTENDANCE AND VISITORS": {
+    "visitors": "Bro. Lloyd Washington, St. John's Lodge No. 7. Bro. Rasta Oney, Temple Lodge No. 8."
+  },
+
+  "PREVIOUS MINUTES": {
+    "previousMeetingDate": "June 18, 2026",
+    "disposition": "Approved as distributed"
+  },
+
+  "TREASURER'S REPORT": {
+    "Savings — Prime Share (Available)": "$4,218.62",
+    "Checking": "$9,804.00",
+    "Scholarship": "$2,500.00",
+    "_note": "Reported by the Secretary; the Treasurer was absent."
+  },
+
+  "SICKNESS, DISTRESS, AND COMMUNICATIONS": {
+    "sickness": "Bro. Terry Wingo underwent surgery and is recovering at home. Bro. Aubrey Saunders lost his sister in law; services were held Saturday.",
+    "communications": [
+      { "source": "Grand Secretary", "subject": "Lodge calendar of events", "action": "Due September 30, 2026" },
+      { "source": "District Deputy", "subject": "Back to School Night dispensation", "action": "Returned approved" }
+    ]
+  },
+
+  "DEMITS, PETITIONS, BALLOTING, AND DEGREE WORK": {
+    "petitions": [{ "name": "Robert Brown", "information": "Petition received", "status": "Pending investigation" }],
+    "degreeWork": "Fellow Craft Degree, Special Communication, October 30, 2026. Dispensation to be submitted this week."
+  },
+
+  "UNFINISHED BUSINESS": [
+    { "item": "Bank resolution at Dexsta Federal Credit Union", "status": "Outstanding, requires two signatures", "note": "To be executed before the next stated communication." }
+  ],
+
+  "NEW BUSINESS": [
+    { "item": "Appropriation of $300.00 for Peach Festival parade expenses", "result": "Carried" }
+  ],
+
+  "COMMITTEE REPORTS": [
+    { "committee": "Scholarship Committee", "reportedBy": "[UNRESOLVED SPEAKER 4]", "summary": "Invoice due to Monique Williams-Johns by September 4, 2026." },
+    { "committee": "Finance Committee", "reportedBy": "Bro. William McDuffie", "summary": "No committee currently appointed. The Worshipful Master will make the appointment." },
+    { "committee": "Relay For Life", "reportedBy": "[UNRESOLVED SPEAKER 6]", "summary": "Team roster and fundraising were due August 25, 2026 and are past due." }
+  ],
+
+  "MOTIONS": [
+    {
+      "motion": "That the Lodge appropriate $300.00 for Peach Festival parade expenses",
+      "movedBy": "[UNRESOLVED SPEAKER 5]",
+      "secondedBy": "[UNRESOLVED SPEAKER 6]",
+      "result": "Carried"
+    },
+    {
+      "motion": "To approve the minutes of June 18, 2026 as distributed",
+      "movedBy": "[UNRESOLVED SPEAKER 5]",
+      "secondedBy": "[UNRESOLVED SPEAKER 6]",
+      "result": "Carried"
+    }
+  ],
+
+  "ACTION ITEMS": [
+    { "item": "Send the scholarship invoice to Monique Williams-Johns", "owner": "[UNRESOLVED SPEAKER 4]", "due": "September 4, 2026", "status": "Open" },
+    { "item": "Execute the bank resolution at Dexsta FCU", "owner": "Bro. William McDuffie", "due": "Before September 17, 2026", "status": "Open" },
+    { "item": "Appoint the standing Committee on Finance", "owner": "Bro. W. Aaron Dixon-Saunders", "due": "", "status": "Open" },
+    { "item": "Submit the Fellow Craft dispensation", "owner": "Bro. W. Aaron Dixon-Saunders", "due": "Week of September 3, 2026", "status": "Open" },
+    { "item": "Address the overdue Relay For Life roster and fundraising", "owner": "[UNRESOLVED SPEAKER 6]", "due": "Past due August 25, 2026", "status": "Open" }
+  ],
+
+  "UPCOMING EVENTS AND REMINDERS": [
+    { "date": "September 17, 2026", "event": "Regular Stated Communication", "time": "7:30 PM", "location": "Stone Square Lodge No. 22", "notes": "" },
+    { "date": "September 30, 2026", "event": "Lodge calendar of events due to Grand Secretary", "time": "", "location": "", "notes": "Deadline" },
+    { "date": "October 30, 2026", "event": "Fellow Craft Degree, Special Communication", "time": "7:30 PM", "location": "Stone Square Lodge No. 22", "notes": "Dispensation pending" }
+  ],
+
+  "LODGE INCOME": [],
+  "LODGE EXPENSES": [],
+
+  "MINUTES DISTRIBUTION AND SIGNATURES": {
+    "distributedBy": "Bro. William McDuffie",
+    "office": "Secretary"
+  }
+}
