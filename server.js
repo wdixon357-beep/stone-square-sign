@@ -336,6 +336,37 @@ const addAudit = async ({
  * dispensation that quietly fails to reach the Deputy misses its date, so this records the
  * failure and the reason where the Master will see it.
  */
+/* One place that composes the note to the District Deputy, so the copy the server sends and the
+ * draft the Master opens in his own mail client are word for word the same. */
+const districtDeputyMessage = (document) => {
+  const title = document.title || document.original_name || 'Dispensation';
+  const fileName = /\.pdf$/i.test(document.original_name || '')
+    ? document.original_name
+    : `${String(title).replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 90) || 'dispensation'}.pdf`;
+  const request = document.parsed_preview
+    ? String(document.parsed_preview).split('\n')[0].slice(0, 300)
+    : title;
+  return {
+    to: DDGM_EMAIL,
+    name: DDGM_NAME,
+    filename: fileName,
+    subject: `Request for Dispensation for your review: ${title}`,
+    body: [
+      `${DDGM_NAME},`,
+      '',
+      `Attached is a Request for Dispensation from ${LODGE_NAME}, executed by the Worshipful Master and the Secretary's office.`,
+      '',
+      `Request: ${request}`,
+      '',
+      'It is submitted for your review and approval, and for onward routing to the Grand Lodge as you see fit. Please let me know if anything further is required from the Lodge.',
+      '',
+      'Respectfully and fraternally,',
+      'W. Aaron Dixon-Saunders',
+      `Worshipful Master, ${LODGE_NAME}`,
+    ].join('\n'),
+  };
+};
+
 const submitToDistrictDeputy = async (document, { actorUserId = null, baseUrl = '', ip = '', userAgent = '' } = {}) => {
   const attemptedAt = nowIso();
   if (!DDGM_EMAIL) {
@@ -349,27 +380,11 @@ const submitToDistrictDeputy = async (document, { actorUserId = null, baseUrl = 
     await dbRun('UPDATE documents SET submitted_error = ? WHERE id = ?', [reason, document.id]);
     return { sent: false, reason };
   }
-  const title = document.title || document.original_name || 'Dispensation';
-  const fileName = /\.pdf$/i.test(document.original_name || '')
-    ? document.original_name
-    : `${String(title).replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 90) || 'dispensation'}.pdf`;
-  const body = [
-    `${DDGM_NAME},`,
-    '',
-    `Attached is a Request for Dispensation from ${LODGE_NAME}, executed by the Worshipful Master and the Secretary's office.`,
-    '',
-    `Request: ${document.parsed_preview ? String(document.parsed_preview).split('\n')[0].slice(0, 300) : title}`,
-    '',
-    'It is submitted for your review and approval, and for onward routing to the Grand Lodge as you see fit. Please let me know if anything further is required from the Lodge.',
-    '',
-    'Respectfully and fraternally,',
-    'W. Aaron Dixon-Saunders',
-    `Worshipful Master, ${LODGE_NAME}`,
-  ].join('\n');
+  const { subject, body, filename: fileName, to } = districtDeputyMessage(document);
   try {
     const sent = await sendEmail({
-      to: DDGM_EMAIL,
-      subject: `Request for Dispensation for your review: ${title}`,
+      to,
+      subject,
       text: body,
       attachment: { filename: fileName, content: pdf },
     });
@@ -1853,6 +1868,32 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
     });
   } catch (error) {
     next(error);
+  }
+});
+
+/* The draft the Master opens in his own mail client.
+ *
+ * Worth having even once the server can send for itself: mail from his own mailbox reaches the
+ * Deputy from the address he already corresponds with, the reply comes back to him rather than to
+ * a server mailbox nobody watches, and it lands in his Sent folder as the Lodge's own record.
+ *
+ * No attachment field exists in mailto, that is the URL scheme and not a client limitation, so the
+ * clients download the executed PDF alongside opening the draft. */
+app.get('/api/documents/:id/submission-draft', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const document = await dbGet('SELECT * FROM documents WHERE id = ?', [req.params.id]);
+    if (!document) return res.status(404).json({ error: 'Document not found.' });
+    if (document.owner_user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Only the document owner can draft this submission.' });
+    }
+    if (document.template_kind !== 'dispensation_v1') {
+      return res.status(409).json({ error: 'Only dispensations go to the District Deputy.' });
+    }
+    const draft = districtDeputyMessage(document);
+    if (!draft.to) return res.status(409).json({ error: 'No District Deputy email is configured.' });
+    return res.json({ draft: { ...draft, alreadySent: document.submitted_at || null } });
+  } catch (error) {
+    return next(error);
   }
 });
 

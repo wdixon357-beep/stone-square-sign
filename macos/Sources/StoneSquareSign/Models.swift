@@ -194,3 +194,17 @@ func lodgeMoney(_ cents: Int) -> String {
     formatter.currencyCode = "USD"
     return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "$0.00"
 }
+
+
+/* The note to the District Deputy, composed by the server so the copy it sends itself and the
+ * draft the Master opens in his own mail client are word for word the same. */
+struct SubmissionDraft: Codable {
+    let to: String
+    let name: String
+    let filename: String
+    let subject: String
+    let body: String
+    let alreadySent: String?
+}
+
+struct SubmissionDraftResponse: Codable { let draft: SubmissionDraft }

@@ -342,6 +342,37 @@ const renderDocuments = async () => {
       }
       if (state.user?.role === 'owner' && doc.status === 'completed'
           && doc.template_kind === 'dispensation_v1') {
+        /* Opens his own mail client with the note already written, and downloads the executed PDF
+         * at the same time so it is sitting in Downloads ready to drag in. mailto has no
+         * attachment field, so the download is the closest thing to attaching it for him. */
+        const draftButton = window.document.createElement('button');
+        draftButton.className = 'secondary compact';
+        draftButton.textContent = 'Draft in my mail app';
+        draftButton.addEventListener('click', async () => {
+          try {
+            const { draft } = await apiFetch(`/api/documents/${doc.id}/submission-draft`);
+            const blob = await apiFetch(`/api/documents/${doc.id}/file`);
+            const url = URL.createObjectURL(blob);
+            const link = window.document.createElement('a');
+            link.href = url;
+            link.download = draft.filename;
+            window.document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 30000);
+            setMessage(docMessage,
+              `${draft.filename} has been downloaded. Your mail app is opening with the note written. Drag the PDF in and send.`);
+            window.location.href = `mailto:${encodeURIComponent(draft.to)}`
+              + `?subject=${encodeURIComponent(draft.subject)}`
+              + `&body=${encodeURIComponent(draft.body)}`;
+          } catch (error) {
+            setMessage(docMessage, error.message, true);
+          }
+        });
+        actions.appendChild(draftButton);
+      }
+      if (state.user?.role === 'owner' && doc.status === 'completed'
+          && doc.template_kind === 'dispensation_v1') {
         const sendButton = window.document.createElement('button');
         sendButton.className = doc.submitted_at ? 'secondary compact' : 'primary compact';
         sendButton.textContent = doc.submitted_at ? 'Send again' : 'Send to the District Deputy';

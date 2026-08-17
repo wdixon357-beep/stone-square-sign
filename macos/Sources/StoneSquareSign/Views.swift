@@ -1620,6 +1620,10 @@ struct DocumentRow: View {
                         .buttonStyle(.borderedProminent).tint(SignTheme.navy)
                 }
                 if model.user?.role == "owner" && document.isComplete && document.isDispensation {
+                    Button("Draft in my mail app") {
+                        Task { await model.draftToDistrictDeputy(document: document) }
+                    }
+                    .buttonStyle(.borderless)
                     if document.submittedAt == nil {
                         Button("Send to the District Deputy") {
                             Task { await model.submitToDistrictDeputy(documentId: document.id) }

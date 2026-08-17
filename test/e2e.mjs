@@ -541,6 +541,20 @@ try {
     { token: wmToken, body: { resend: true } });
   check('but the Master can send it again on purpose',
     onPurpose.status === 200, JSON.stringify(onPurpose.payload));
+  const draft = await api('GET', `/api/documents/${submitId}/submission-draft`, { token: wmToken });
+  check('the Master can pull a ready written draft for his own mail app',
+    draft.status === 200, JSON.stringify(draft.payload).slice(0, 200));
+  check('it is addressed to the District Deputy and names the attachment',
+    draft.payload.draft?.to === 'districtdeputy@example.org' && /\.pdf$/.test(draft.payload.draft?.filename || ''),
+    JSON.stringify(draft.payload.draft).slice(0, 200));
+  check('the draft says the same thing the server sends, so the two never drift',
+    /review/i.test(draft.payload.draft?.body || '') && /Request for Dispensation/i.test(draft.payload.draft?.subject || ''),
+    JSON.stringify(draft.payload.draft).slice(0, 300));
+  const viewerDraft = await api('GET', `/api/documents/${submitId}/submission-draft`, { token: viewerToken });
+  check('a viewer cannot pull the draft', viewerDraft.status === 403, String(viewerDraft.status));
+  const uploadedDraft = await api('GET', `/api/documents/${docId}/submission-draft`, { token: wmToken });
+  check('an ordinary uploaded document has no District Deputy draft',
+    uploadedDraft.status === 409, String(uploadedDraft.status));
   const viewerSubmit = await api('POST', `/api/documents/${submitId}/submit`, { token: viewerToken });
   check('a viewer cannot send anything to the District Deputy',
     viewerSubmit.status === 403, String(viewerSubmit.status));

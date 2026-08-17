@@ -784,6 +784,60 @@ final class AppModel: ObservableObject {
         return data
     }
 
+    /* Hands a completed dispensation to the Master's own mail client as a draft, with the executed
+     * PDF genuinely attached.
+     *
+     * The web page cannot do this: mailto has no attachment field anywhere in the URL scheme, so
+     * the browser can only download the file and let him drag it in. A native app can use the
+     * macOS share sheet, which carries the file itself. If the share sheet is unavailable we fall
+     * back to the browser's behaviour rather than failing, so the Master always gets somewhere.
+     */
+    @discardableResult
+    func draftToDistrictDeputy(document: LodgeDocument) async -> Bool {
+        guard user?.role == "owner" else {
+            message = "This account cannot submit documents."
+            isError = true
+            return false
+        }
+        var success = false
+        await perform {
+            let response: SubmissionDraftResponse = try await self.request(
+                "/api/documents/\(document.id)/submission-draft")
+            let draft = response.draft
+            let pdf = try await self.pdfData(document: document)
+            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(draft.filename)
+            try pdf.write(to: fileURL, options: .atomic)
+
+            await MainActor.run {
+                let service = NSSharingService(named: .composeEmail)
+                service?.recipients = [draft.to]
+                service?.subject = draft.subject
+                let items: [Any] = [draft.body, fileURL]
+                if service?.canPerform(withItems: items) == true {
+                    service?.perform(withItems: items)
+                    self.message = "Draft opened for \(draft.name) with \(draft.filename) attached. Review it and send."
+                } else {
+                    /* No share sheet available. Put the PDF somewhere he can find it and open the
+                     * note anyway, so he is one drag from sending rather than stuck. */
+                    let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                    let saved = downloads?.appendingPathComponent(draft.filename)
+                    if let saved { try? pdf.write(to: saved, options: .atomic) }
+                    var components = URLComponents()
+                    components.scheme = "mailto"
+                    components.path = draft.to
+                    components.queryItems = [
+                        URLQueryItem(name: "subject", value: draft.subject),
+                        URLQueryItem(name: "body", value: draft.body),
+                    ]
+                    if let mailto = components.url { NSWorkspace.shared.open(mailto) }
+                    self.message = "\(draft.filename) is in your Downloads and the note is open. Drag the PDF in and send."
+                }
+            }
+            success = true
+        }
+        return success
+    }
+
     func signOut(localOnly: Bool = false) {
         liveTask?.cancel()
         isLive = false

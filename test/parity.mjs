@@ -108,6 +108,12 @@ check('both clients say plainly when a dispensation did NOT reach the District D
   /NOT sent to the District Deputy/.test(read('public/app.js'))
   && /NOT sent to the District Deputy/.test(macViews));
 
+check('both clients can open a draft to the District Deputy in the Master\'s own mail app',
+  read('public/app.js').includes('/submission-draft')
+  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/submission-draft')
+  && /Draft in my mail app/.test(read('public/app.js'))
+  && /Draft in my mail app/.test(macViews));
+
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';
 check('the Mac bundle name matches the web page title',
