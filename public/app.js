@@ -264,7 +264,7 @@ const renderApprovals = async () => {
       if (!item.has_endorsed_copy) {
         const warn = window.document.createElement('p');
         warn.className = 'queue-submission queue-submission-warn';
-        warn.textContent = 'No endorsed copy on file. The approval block on the form is blank.';
+        warn.textContent = 'No approval document on file. The approval block on the form is blank.';
         row.querySelector('.doc-main').appendChild(warn);
       }
       const actions = row.querySelector('.doc-actions');
@@ -276,7 +276,7 @@ const renderApprovals = async () => {
       if (item.has_endorsed_copy) {
         const endorsed = window.document.createElement('button');
         endorsed.className = 'secondary compact';
-        endorsed.textContent = 'View endorsed copy';
+        endorsed.textContent = 'View Approval';
         endorsed.addEventListener('click', async () => {
           try {
             const blob = await apiFetch(`/api/documents/${item.id}/endorsed`);

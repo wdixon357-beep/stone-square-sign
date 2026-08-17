@@ -2384,7 +2384,7 @@ struct ApprovalsView: View {
                                     Text("\(item.approvedBy ?? "Not recorded") · \(item.approvedOn ?? "no date") · \(item.route)")
                                         .font(.caption).foregroundStyle(.secondary)
                                     if item.hasEndorsedCopy != true {
-                                        Text("No endorsed copy on file. The approval block on the form is blank.")
+                                        Text("No approval document on file. The approval block on the form is blank.")
                                             .font(.caption2.weight(.semibold)).foregroundStyle(.red)
                                     }
                                     if let note = item.approvalNote, !note.isEmpty {
