@@ -1975,7 +1975,12 @@ app.put('/api/documents/:id/approval', requireAuth, requireOwner, upload.single(
     }
     if (status !== 'pending') {
       if (!approvedBy) return res.status(400).json({ error: 'Name the District Deputy who decided it.' });
-      if (!dateParts(approvedOn)) return res.status(400).json({ error: 'Give the date of the decision.' });
+      /* The date is optional on purpose. The Lodge genuinely does not know when the Fish Fry
+       * dispensation was granted; the register records only that it was. Forcing a date here
+       * would invite somebody to invent one, which is worse than an honest gap. */
+      if (approvedOn && !dateParts(approvedOn)) {
+        return res.status(400).json({ error: 'That approval date is not a real date.' });
+      }
       if (!APPROVAL_SOURCES.has(source)) {
         return res.status(400).json({ error: 'Say how it was given: an endorsed PDF, an email, or verbally.' });
       }

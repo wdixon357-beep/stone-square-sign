@@ -573,6 +573,18 @@ try {
     token: wmToken, body: { status: 'approved', approvedOn: '2026-06-18', source: 'email' },
   });
   check('an approval must name the District Deputy who gave it', noName.status === 400, String(noName.status));
+  const badDate = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: wmToken,
+    body: { status: 'approved', approvedBy: 'DDGM Cid L. Jones', approvedOn: 'last June', source: 'email' },
+  });
+  check('a date that is not a date is refused', badDate.status === 400, JSON.stringify(badDate.payload));
+  const undated = await api('PUT', `/api/documents/${submitId}/approval`, {
+    token: wmToken,
+    body: { status: 'approved', approvedBy: 'DDGM Fred E. Cooke II', source: 'email',
+      note: 'The Lodge record does not carry the date.' },
+  });
+  check('an approval the Lodge cannot date can still be recorded honestly',
+    undated.status === 200, JSON.stringify(undated.payload));
   const noSource = await api('PUT', `/api/documents/${submitId}/approval`, {
     token: wmToken, body: { status: 'approved', approvedBy: 'DDGM Cid L. Jones', approvedOn: '2026-06-18' },
   });
