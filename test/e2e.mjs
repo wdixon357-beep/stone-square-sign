@@ -339,6 +339,27 @@ try {
   check('a record copy is mailed to the owner and to every signer', completionMails.length >= 2,
     `${completionMails.length} delivered`);
 
+  console.log('\nDues access');
+  /* The ledger names the men who are behind. Viewers must be refused outright,
+   * not shown an empty page, and an anonymous caller must never reach it. */
+  const duesAnon = await api('GET', '/api/dues');
+  check('dues refuses an unauthenticated caller', duesAnon.status === 401, String(duesAnon.status));
+
+  const duesViewer = await api('GET', '/api/dues', { token: viewerToken });
+  check('a viewer is refused the dues ledger', duesViewer.status === 403, String(duesViewer.status));
+  check('the refusal does not leak a single figure',
+    !/\d{3,}/.test(JSON.stringify(duesViewer.payload)), JSON.stringify(duesViewer.payload));
+
+  for (const [who, tok] of [['owner', wmToken], ['secretary', secToken], ['assistant secretary', asstToken]]) {
+    const r = await api('GET', '/api/dues', { token: tok });
+    check(`the ${who} is allowed through the dues gate`, r.status !== 403 && r.status !== 401,
+      `${r.status} ${JSON.stringify(r.payload).slice(0, 90)}`);
+  }
+  const duesOwner = await api('GET', '/api/dues', { token: wmToken });
+  check('with no Zeffy settings it says so plainly rather than erroring',
+    duesOwner.status === 503 && duesOwner.payload.configured === false,
+    `${duesOwner.status} ${JSON.stringify(duesOwner.payload)}`);
+
   console.log('\nAudit and reset');
   const audit = await api('GET', `/api/documents/${docId}/audit`, { token: wmToken });
   const actions = (audit.payload.events || []).map((e) => e.action);

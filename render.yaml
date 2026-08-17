@@ -61,6 +61,23 @@ services:
       - key: TRACKER_SSO_SHARED_SECRET
         sync: false
 
+      # Dues. Read-only Zeffy access, reconciled against the roster in the database.
+      # Visible to the Worshipful Master and the Secretaries only.
+      - key: ZEFFY_API_KEY
+        sync: false
+      - key: ZEFFY_DUES_CAMPAIGN_ID
+        sync: false
+      - key: ZEFFY_CUSTOM_DUES_CAMPAIGN_ID
+        sync: false
+      # Last year's custom campaign. Set so its payments can be reported as stale
+      # rather than silently counted toward this year.
+      - key: ZEFFY_STALE_CAMPAIGN_ID
+        sync: false
+      - key: DUES_RATE_CENTS
+        value: "17500"
+      - key: DUES_YEAR
+        value: "2026-2027"
+
       - key: SESSION_DAYS
         value: "7"
       - key: MAX_UPLOAD_BYTES

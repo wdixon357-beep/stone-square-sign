@@ -13,6 +13,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import {
   connect, initSchema, dbRun, dbGet, dbAll, withTransaction, isUniqueViolation,
 } from './db.js';
+import { buildDuesLedger, duesConfigured, DUES_ROLES } from './dues.js';
 
 dotenv.config();
 
@@ -1180,6 +1181,42 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
     broadcast('queue_changed', { reason: 'access_revoked', userId: account.id });
     res.json({ message: `${account.name}'s access has been revoked.` });
   } catch (error) {
+    next(error);
+  }
+});
+
+/* Dues. Restricted to the Worshipful Master, the Secretary and the Assistant
+ * Secretary. The ledger names who is behind on his dues, so viewers are refused
+ * outright rather than shown an empty page. */
+const requireDuesAccess = (req, res, next) => {
+  if (!DUES_ROLES.has(req.user.role)) {
+    return res.status(403).json({ error: 'Dues are restricted to the Worshipful Master and the Secretaries.' });
+  }
+  next();
+};
+
+app.get('/api/dues', requireAuth, requireDuesAccess, async (req, res, next) => {
+  try {
+    if (!duesConfigured()) {
+      return res.status(503).json({
+        error: 'Dues are not connected yet. The Zeffy campaign settings are missing.',
+        configured: false,
+      });
+    }
+    const ledger = await buildDuesLedger();
+    await addAudit({
+      userId: req.user.id,
+      action: 'dues_viewed',
+      ip: req.ip,
+      userAgent: req.get('user-agent') || '',
+      details: { duesYear: ledger.duesYear, rows: ledger.rows.length },
+    });
+    res.json(ledger);
+  } catch (error) {
+    // a Zeffy outage should read as a Zeffy outage, not a broken Lodge app
+    if (/Zeffy API/.test(error.message)) {
+      return res.status(502).json({ error: 'Zeffy did not answer. Try again shortly.' });
+    }
     next(error);
   }
 });

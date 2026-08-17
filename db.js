@@ -252,6 +252,20 @@ export const initSchema = async (exec = run) => {
   await exec('ALTER TABLE reset_codes DROP COLUMN IF EXISTS phone');
   await exec('ALTER TABLE invitations DROP COLUMN IF EXISTS phone');
 
+  /* The Lodge roster. It lives here rather than in source because this repository
+   * is public and these are 46 Brothers' names and email addresses. Seeded once by
+   * scripts/seed-roster.mjs and used to match Zeffy payments to the right man. */
+  await exec(`CREATE TABLE IF NOT EXISTS roster (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    title TEXT,
+    prefix TEXT,
+    emails TEXT[] NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL,
+    UNIQUE (first_name, last_name)
+  )`);
+
   // carried forward so an existing database picks these up too
   await addColumn(exec, 'document_signers', 'signed_ip', 'TEXT');
   await addColumn(exec, 'document_signers', 'signed_user_agent', 'TEXT');
