@@ -966,7 +966,21 @@ struct DispensationBuilderView: View {
     @EnvironmentObject var model: AppModel
     @State private var title = ""
     @State private var requestDate = Date()
-    @State private var signerRole = "secretary"
+    @State private var signerChoice = "both"
+
+    /* The builder asks one question and the server takes a list. Sending to both is the
+     * ordinary case: either Secretary may sign and the first one to do it finishes it. */
+    private static let signerLabels = [
+        "both": "Both Secretaries, whoever signs first",
+        "secretary": "William McDuffie, Secretary",
+        "assistant_secretary": "Adrian Reese, Assistant Secretary",
+    ]
+    private static func signerRoles(for choice: String) -> [String] {
+        choice == "both" ? ["secretary", "assistant_secretary"] : [choice]
+    }
+    private static func signerLabel(for choice: String) -> String {
+        signerLabels[choice] ?? signerLabels["both"]!
+    }
     @State private var requestDetails = ""
     @State private var eventDate = Date()
     @State private var eventTime = Date()
@@ -1057,7 +1071,8 @@ struct DispensationBuilderView: View {
                             .foregroundStyle(.secondary)
                         Form {
                             Section("Who should sign for the secretary's office?") {
-                                Picker("Officer signature needed", selection: $signerRole) {
+                                Picker("Send to", selection: $signerChoice) {
+                                    Text("Both Secretaries, whoever signs first").tag("both")
                                     Text("William McDuffie, Secretary").tag("secretary")
                                     Text("Adrian Reese, Assistant Secretary").tag("assistant_secretary")
                                 }
@@ -1090,7 +1105,7 @@ struct DispensationBuilderView: View {
                             ReviewField(label: "Request", value: requestDetails)
                             ReviewField(label: "Event", value: "\(Self.displayDayFormatter.string(from: eventDate)) at \(Self.timeFormatter.string(from: eventTime))")
                             ReviewField(label: "Location", value: "\(locationName)\n\(streetAddress)\n\(cityState)")
-                            ReviewField(label: "Officer", value: signerRole == "assistant_secretary" ? "Adrian Reese, Assistant Secretary" : "William McDuffie, Secretary")
+                            ReviewField(label: "Send to", value: Self.signerLabel(for: signerChoice))
                             ReviewField(label: "Your address", value: worshipfulMasterAddress)
                         }
                         Text("The officer's section is intentionally blank in this preview. The selected officer completes it when signing.")
@@ -1134,7 +1149,7 @@ struct DispensationBuilderView: View {
             let saved = await model.createDispensation(
                 title: title,
                 requestDate: Self.dayFormatter.string(from: requestDate),
-                signerRole: signerRole,
+                signerRoles: Self.signerRoles(for: signerChoice),
                 requestDetails: requestDetails,
                 eventDate: Self.dayFormatter.string(from: eventDate),
                 eventTime: Self.timeFormatter.string(from: eventTime),
@@ -1177,7 +1192,7 @@ struct DispensationBuilderView: View {
         guard let fields = parsedDraft?.fields else { return }
         title = fields.title
         if let value = Self.dayFormatter.date(from: fields.requestDate) { requestDate = value }
-        signerRole = fields.signerRole
+        signerChoice = fields.signerRole == "assistant_secretary" ? "assistant_secretary" : "both"
         requestDetails = fields.requestDetails
         if let value = Self.dayFormatter.date(from: fields.eventDate) { eventDate = value }
         if let value = Self.pastedTimeFormatter.date(from: fields.eventTime) { eventTime = value }
@@ -1196,7 +1211,7 @@ struct DispensationBuilderView: View {
             guard let data = await model.previewDispensation(
                 title: title,
                 requestDate: Self.dayFormatter.string(from: requestDate),
-                signerRole: signerRole,
+                signerRoles: Self.signerRoles(for: signerChoice),
                 requestDetails: requestDetails,
                 eventDate: Self.dayFormatter.string(from: eventDate),
                 eventTime: Self.timeFormatter.string(from: eventTime),
@@ -1413,7 +1428,8 @@ struct DispensationPasteReviewView: View {
                 VStack(spacing: 0) {
                     ReviewField(label: "Title", value: result.fields.title)
                     ReviewField(label: "Request date", value: humanDate(result.fields.requestDate))
-                    ReviewField(label: "Officer", value: result.fields.signerRole == "assistant_secretary" ? "Adrian Reese, Assistant Secretary" : "William McDuffie, Secretary")
+                    ReviewField(label: "Send to", value: result.fields.signerRole == "assistant_secretary"
+                        ? "Adrian Reese, Assistant Secretary" : "Both Secretaries, whoever signs first")
                     ReviewField(label: "Request", value: result.fields.requestDetails)
                     ReviewField(label: "Event date", value: humanDate(result.fields.eventDate))
                     ReviewField(label: "Event time", value: humanEventTime)

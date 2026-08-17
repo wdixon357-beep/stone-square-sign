@@ -158,7 +158,7 @@ const fillFormFromParsedDispensation = () => {
   if (!fields) return;
   $('dispTitle').value = fields.title;
   $('dispRequestDate').value = fields.requestDate || builderTodayValue;
-  $('dispSignerRole').value = fields.signerRole;
+  $('dispSignerRole').value = fields.signerRole === 'assistant_secretary' ? 'assistant_secretary' : 'both';
   $('dispRequestDetails').value = fields.requestDetails;
   $('dispEventDate').value = fields.eventDate;
   $('dispEventTime').value = fields.eventTime;
@@ -565,7 +565,7 @@ $('reviewPastedDetails').addEventListener('click', async () => {
     });
     state.parsedDispensation = result;
     const labels = {
-      title: 'Title', requestDate: 'Request date', signerRole: 'Officer', requestDetails: 'Request',
+      title: 'Title', requestDate: 'Request date', signerRole: 'Send to', requestDetails: 'Request',
       eventDate: 'Event date', eventTime: 'Event time', locationName: 'Location',
       streetAddress: 'Street', cityState: 'City, state, ZIP',
       worshipfulMasterAddress: 'Worshipful Master address', secretaryAddress: 'Officer address',
@@ -580,7 +580,8 @@ $('reviewPastedDetails').addEventListener('click', async () => {
       name.textContent = label;
       let displayValue = result.fields[key] || 'Not found';
       if (key === 'signerRole') {
-        displayValue = result.fields[key] === 'assistant_secretary' ? 'Adrian Reese, Assistant Secretary' : 'William McDuffie, Secretary';
+        displayValue = result.fields[key] === 'assistant_secretary'
+          ? SIGNER_CHOICES.assistant_secretary.label : SIGNER_CHOICES.both.label;
       } else if (key === 'eventTime' && /^\d{1,2}:\d{2}$/.test(result.fields[key] || '')) {
         const [hourText, minute] = result.fields[key].split(':');
         const hour = Number(hourText);
@@ -629,10 +630,19 @@ $('useLocationAddress').addEventListener('click', () => {
 $('rejectPastedDetails').addEventListener('click', () => hide($('pasteReviewModal')));
 $('usePastedDetails').addEventListener('click', fillFormFromParsedDispensation);
 
+/* The builder asks one question, "send to", and the server takes a list. Sending to
+ * both is the ordinary case: either Secretary may sign and the first one finishes it. */
+const SIGNER_CHOICES = {
+  both: { roles: ['secretary', 'assistant_secretary'], label: 'Both Secretaries, whoever signs first' },
+  secretary: { roles: ['secretary'], label: 'William McDuffie, Secretary' },
+  assistant_secretary: { roles: ['assistant_secretary'], label: 'Adrian Reese, Assistant Secretary' },
+};
+const signerChoice = () => SIGNER_CHOICES[$('dispSignerRole').value] || SIGNER_CHOICES.both;
+
 const dispensationPayload = () => ({
   title: $('dispTitle').value.trim(),
   requestDate: $('dispRequestDate').value,
-  signerRole: $('dispSignerRole').value,
+  signerRoles: signerChoice().roles,
   requestDetails: $('dispRequestDetails').value.trim(),
   eventDate: $('dispEventDate').value,
   eventTime: $('dispEventTime').value,
@@ -657,7 +667,7 @@ $('dispensationForm').addEventListener('submit', async (event) => {
       ['Title', payload.title], ['Request', payload.requestDetails],
       ['Event', `${payload.eventDate} at ${formatClockTime(payload.eventTime)}`],
       ['Location', `${payload.locationName}, ${payload.streetAddress}, ${payload.cityState}`],
-      ['Officer', payload.signerRole === 'assistant_secretary' ? 'Adrian Reese, Assistant Secretary' : 'William McDuffie, Secretary'],
+      ['Send to', signerChoice().label],
       ['Worshipful Master address', payload.worshipfulMasterAddress],
     ];
     const container = $('finalReviewFields');

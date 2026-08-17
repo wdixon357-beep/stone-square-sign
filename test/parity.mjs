@@ -82,6 +82,17 @@ check('both clients honour the same dues roles',
   /owner", "secretary", "assistant_secretary"/.test(macViews)
   && /'owner', 'secretary', 'assistant_secretary'/.test(read('public/app.js')));
 
+const builder = read('public/index.html');
+const macBuilder = macViews;
+check('both clients let a dispensation go to both Secretaries at once',
+  /<option value="both"/.test(builder) && /\.tag\("both"\)/.test(macBuilder));
+check('both clients send the officer list rather than a single officer',
+  read('public/app.js').includes('signerRoles:') && macBuilder.includes('signerRoles:')
+  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('"signerRoles"'));
+check('both clients default a new dispensation to both Secretaries',
+  /SIGNER_CHOICES\.both/.test(read('public/app.js'))
+  && /signerChoice = "both"/.test(macBuilder));
+
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';
 check('the Mac bundle name matches the web page title',

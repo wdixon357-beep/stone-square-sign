@@ -452,7 +452,7 @@ final class AppModel: ObservableObject {
     func createDispensation(
         title: String,
         requestDate: String,
-        signerRole: String,
+        signerRoles: [String],
         requestDetails: String,
         eventDate: String,
         eventTime: String,
@@ -472,7 +472,7 @@ final class AppModel: ObservableObject {
             let body = try JSONSerialization.data(withJSONObject: [
                 "title": title,
                 "requestDate": requestDate,
-                "signerRole": signerRole,
+                "signerRoles": signerRoles,
                 "requestDetails": requestDetails,
                 "eventDate": eventDate,
                 "eventTime": eventTime,
@@ -493,7 +493,7 @@ final class AppModel: ObservableObject {
     func previewDispensation(
         title: String,
         requestDate: String,
-        signerRole: String,
+        signerRoles: [String],
         requestDetails: String,
         eventDate: String,
         eventTime: String,
@@ -512,7 +512,7 @@ final class AppModel: ObservableObject {
             let body = try JSONSerialization.data(withJSONObject: [
                 "title": title,
                 "requestDate": requestDate,
-                "signerRole": signerRole,
+                "signerRoles": signerRoles,
                 "requestDetails": requestDetails,
                 "eventDate": eventDate,
                 "eventTime": eventTime,

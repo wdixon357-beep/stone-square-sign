@@ -270,6 +270,11 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'document_signers', 'signed_ip', 'TEXT');
   await addColumn(exec, 'document_signers', 'signed_user_agent', 'TEXT');
   await addColumn(exec, 'document_signers', 'consent_text', 'TEXT');
+  /* 'all' means every assigned officer must sign, which is the original behaviour.
+   * 'any' means the document goes to both Secretaries and the first one to sign
+   * completes it; the other's row is superseded rather than left hanging in his queue. */
+  await addColumn(exec, 'documents', 'signing_mode', "TEXT NOT NULL DEFAULT 'all'");
+  await addColumn(exec, 'document_signers', 'superseded_at', 'TEXT');
   await addColumn(exec, 'documents', 'completed_at', 'TEXT');
   await addColumn(exec, 'documents', 'template_kind', 'TEXT');
   await addColumn(exec, 'reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");

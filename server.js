@@ -1240,7 +1240,7 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
     const documents = [];
     for (const row of rows) {
       const signers = await dbAll(
-        `SELECT id, user_id, signer_role, signer_name, signed_at
+        `SELECT id, user_id, signer_role, signer_name, signed_at, superseded_at
          FROM document_signers WHERE document_id = ? ORDER BY id`,
         [row.id],
       );
@@ -1266,7 +1266,7 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
           ...row,
           signers,
           needsSignature: row.status !== 'rescinded' && signers.some((signer) =>
-            !signer.signed_at &&
+            !signer.signed_at && !signer.superseded_at &&
             (signer.user_id === req.user.id || (!signer.user_id && signer.signer_role === req.user.role))),
         });
       }
@@ -1300,7 +1300,7 @@ app.get('/api/documents/:id', requireAuth, requireDocumentAccess, async (req, re
       return res.status(403).json({ error: 'You do not have access to this document.' });
     }
     const signers = await dbAll(
-      'SELECT id, user_id, signer_role, signer_name, signed_at FROM document_signers WHERE document_id = ? ORDER BY id',
+      'SELECT id, user_id, signer_role, signer_name, signed_at, superseded_at FROM document_signers WHERE document_id = ? ORDER BY id',
       [document.id],
     );
     delete document.file_bytes;
@@ -1377,7 +1377,7 @@ app.post('/api/documents', requireAuth, requireOwner, upload.single('document'),
       );
     }
     const signers = await dbAll(
-      'SELECT id, user_id, signer_role, signer_name, signed_at FROM document_signers WHERE document_id = ? ORDER BY id',
+      'SELECT id, user_id, signer_role, signer_name, signed_at, superseded_at FROM document_signers WHERE document_id = ? ORDER BY id',
       [documentId],
     );
     const signerAccounts = await dbAll(
@@ -1469,11 +1469,18 @@ app.post('/api/dispensations/preview', requireAuth, requireOwner, rateLimit({ ke
     const streetAddress = String(req.body?.streetAddress || '').trim().slice(0, 120);
     const cityState = String(req.body?.cityState || '').trim().slice(0, 120);
     const worshipfulMasterAddress = String(req.body?.worshipfulMasterAddress || '').trim().slice(0, 160);
-    const signerRole = String(req.body?.signerRole || '');
+    /* The Worshipful Master chooses who it goes to. Most of the time that is both
+     * Secretaries, and then the first one to sign completes it. The old single-value
+     * signerRole is still accepted so nothing already pointing at it breaks. */
+    const requestedRoles = Array.isArray(req.body?.signerRoles) && req.body.signerRoles.length
+      ? req.body.signerRoles.map(String)
+      : [String(req.body?.signerRole || '')];
+    const signerRoles = [...new Set(requestedRoles)]
+      .filter((role) => ['secretary', 'assistant_secretary'].includes(role));
     const personalInfoConfirmed = req.body?.personalInfoConfirmed === true;
     if (!dateParts(requestDate) || !dateParts(eventDate) || !requestDetails || !eventTime || !locationName
         || !streetAddress || !cityState || !worshipfulMasterAddress || !personalInfoConfirmed
-        || !['secretary', 'assistant_secretary'].includes(signerRole)) {
+        || signerRoles.length === 0) {
       return res.status(400).json({ error: 'Complete the remaining Lodge questions before reviewing the PDF.' });
     }
     const savedSignature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
@@ -1504,12 +1511,20 @@ app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'disp
     const streetAddress = String(req.body?.streetAddress || '').trim().slice(0, 120);
     const cityState = String(req.body?.cityState || '').trim().slice(0, 120);
     const worshipfulMasterAddress = String(req.body?.worshipfulMasterAddress || '').trim().slice(0, 160);
-    const signerRole = String(req.body?.signerRole || '');
+    /* The Worshipful Master chooses who it goes to. Most of the time that is both
+     * Secretaries, and then the first one to sign completes it. The old single-value
+     * signerRole is still accepted so nothing already pointing at it breaks. */
+    const requestedRoles = Array.isArray(req.body?.signerRoles) && req.body.signerRoles.length
+      ? req.body.signerRoles.map(String)
+      : [String(req.body?.signerRole || '')];
+    const signerRoles = [...new Set(requestedRoles)]
+      .filter((role) => ['secretary', 'assistant_secretary'].includes(role));
+    const signingMode = signerRoles.length > 1 ? 'any' : 'all';
     const personalInfoConfirmed = req.body?.personalInfoConfirmed === true;
     const title = String(req.body?.title || '').trim().slice(0, 200);
     if (!dateParts(requestDate) || !dateParts(eventDate) || !requestDetails || !eventTime || !locationName
         || !streetAddress || !cityState || !worshipfulMasterAddress
-        || !personalInfoConfirmed || !['secretary', 'assistant_secretary'].includes(signerRole)) {
+        || !personalInfoConfirmed || signerRoles.length === 0) {
       return res.status(400).json({ error: 'Complete the remaining Lodge questions before sending the PDF.' });
     }
     const savedSignature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
@@ -1517,8 +1532,6 @@ app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'disp
     if (!ownerSignature?.length) {
       return res.status(409).json({ error: 'Save your Worshipful Master signature before creating a dispensation.' });
     }
-    const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [signerRole]);
-    const secretaryName = officer?.name || (signerRole === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
     const pdfBytes = await createDispensationPdf({
       fields: {
         requestDate, eventDate, requestDetails, eventTime, locationName, streetAddress,
@@ -1546,19 +1559,33 @@ app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'disp
       [documentId, req.user.id, req.user.name, createdAt, ownerSignature,
         'Saved Worshipful Master signature applied when the official template was created.'],
     );
-    await dbRun(
-      'INSERT INTO document_signers (document_id, user_id, signer_role, signer_name) VALUES (?, ?, ?, ?)',
-      [documentId, officer?.id || null, signerRole, secretaryName],
-    );
-    if (officer?.email && !officer.email.endsWith('.local')) {
-      try {
-        await sendEmail({
-          to: officer.email,
-          subject: `Signature requested: ${documentTitle}`,
-          text: `${secretaryName},\n\nA dispensation is ready for your signature. Sign in at ${requestBaseUrl(req)} to review and sign ${documentTitle}.`,
-        });
-      } catch (error) {
-        console.warn('Signature request email failed:', error.message);
+    await dbRun('UPDATE documents SET signing_mode = ? WHERE id = ?', [signingMode, documentId]);
+    /* One row per chosen officer, and each is told it is waiting on him. On 'any' the
+     * first signature completes the document and the other row is superseded, so the
+     * second man is never left chasing a signature the Lodge already has. */
+    const signerNames = [];
+    for (const role of signerRoles) {
+      const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
+      const officerName = officer?.name
+        || (role === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
+      signerNames.push(officerName);
+      await dbRun(
+        'INSERT INTO document_signers (document_id, user_id, signer_role, signer_name) VALUES (?, ?, ?, ?)',
+        [documentId, officer?.id || null, role, officerName],
+      );
+      if (officer?.email && !officer.email.endsWith('.local')) {
+        const eitherOf = signingMode === 'any'
+          ? ' Either Secretary may sign this one; whoever signs first completes it.'
+          : '';
+        try {
+          await sendEmail({
+            to: officer.email,
+            subject: `Signature requested: ${documentTitle}`,
+            text: `${officerName},\n\nA dispensation is ready for your signature.${eitherOf} Sign in at ${requestBaseUrl(req)} to review and sign ${documentTitle}.`,
+          });
+        } catch (error) {
+          console.warn('Signature request email failed:', error.message);
+        }
       }
     }
     await addAudit({
@@ -1567,7 +1594,7 @@ app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'disp
       action: 'dispensation_created_from_template',
       ip: req.ip,
       userAgent: req.get('user-agent') || '',
-      details: { signerRole, secretaryName, requestDate, eventDate, template: 'official-grand-lodge', personalInfoConfirmed },
+      details: { signerRoles, signingMode, signerNames, requestDate, eventDate, template: 'official-grand-lodge', personalInfoConfirmed },
     });
     broadcast('queue_changed', { reason: 'dispensation_created', documentId });
     res.status(201).json({ document: { id: documentId } });
@@ -1594,6 +1621,7 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       }
       const signer = await dbGet(
         `SELECT * FROM document_signers WHERE document_id = ? AND signed_at IS NULL
+         AND superseded_at IS NULL
          AND (user_id = ? OR (user_id IS NULL AND signer_role = ?)) ORDER BY id LIMIT 1 FOR UPDATE`,
         [document.id, req.user.id, req.user.role],
       );
@@ -1632,10 +1660,22 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       );
       if (captured.changes !== 1) throw httpError(409, 'This signature was already captured.');
       await dbRun('UPDATE documents SET signed_bytes = ?, updated_at = ? WHERE id = ?', [stamped, signedAt, document.id]);
-      const remaining = await dbGet(
-        'SELECT COUNT(*) AS total FROM document_signers WHERE document_id = ? AND signed_at IS NULL',
+      let remaining = await dbGet(
+        `SELECT COUNT(*) AS total FROM document_signers
+         WHERE document_id = ? AND signed_at IS NULL AND superseded_at IS NULL`,
         [document.id],
       );
+      /* On an 'any' document the first signature is the whole requirement. The other
+       * officer's row is marked superseded rather than deleted: the record should still
+       * show who it was offered to, and his queue must stop asking him for it. */
+      if (document.signing_mode === 'any' && remaining.total > 0) {
+        await dbRun(
+          `UPDATE document_signers SET superseded_at = ?
+           WHERE document_id = ? AND signed_at IS NULL AND superseded_at IS NULL`,
+          [signedAt, document.id],
+        );
+        remaining = { total: 0 };
+      }
       const status = remaining.total === 0 ? 'completed' : 'partially_signed';
       await dbRun('UPDATE documents SET status = ?, completed_at = ? WHERE id = ?', [
         status,

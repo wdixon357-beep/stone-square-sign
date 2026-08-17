@@ -360,6 +360,84 @@ try {
     duesOwner.status === 503 && duesOwner.payload.configured === false,
     `${duesOwner.status} ${JSON.stringify(duesOwner.payload)}`);
 
+
+  /* Either/or signing.
+   *
+   * A dispensation usually goes to both Secretaries and whichever of them signs it
+   * first finishes it. The other man's row must stop asking him for a signature the
+   * Lodge already has, while still recording that it was offered to him. */
+  console.log('\nEither/or signing');
+  /* The official template stamps the Master's saved signature as it is built, so he
+   * needs one on file before any of this works. */
+  const wmSig = await api('PUT', '/api/profile/signature', {
+    token: wmToken, body: { signatureData: SIG, signatureType: 'drawn' },
+  });
+  check('the Worshipful Master saves his signature', wmSig.status === 200,
+    JSON.stringify(wmSig.payload).slice(0, 200));
+  const dispensationBody = {
+    requestDate: '2026-08-17', eventDate: '2026-08-18',
+    requestDetails: 'to participate in Back to School Night',
+    eventTime: '4:00 PM', locationName: 'Louis L. Redding Middle School',
+    streetAddress: '201 New Street', cityState: 'Middletown, Delaware',
+    worshipfulMasterAddress: '14 Kelly Drive, Bear, DE 19701',
+    personalInfoConfirmed: true,
+  };
+  const eitherRes = await api('POST', '/api/dispensations', {
+    token: wmToken,
+    body: { ...dispensationBody, title: 'Either Secretary', signerRoles: ['secretary', 'assistant_secretary'] },
+  });
+  check('a dispensation can be sent to both Secretaries at once',
+    eitherRes.status === 201, JSON.stringify(eitherRes.payload).slice(0, 200));
+  const eitherId = eitherRes.payload.document?.id;
+
+  const eitherBefore = await api('GET', `/api/documents/${eitherId}`, { token: wmToken });
+  check('both Secretaries are listed as signers',
+    eitherBefore.payload.document.signers.filter((s) => s.signer_role !== 'worshipful_master').length === 2,
+    JSON.stringify(eitherBefore.payload.document.signers.map((s) => s.signer_role)));
+  const asstQueueBefore = await api('GET', '/api/documents', { token: asstToken });
+  check('it shows in the Assistant Secretary\'s queue as needing him',
+    asstQueueBefore.payload.documents.find((d) => d.id === eitherId)?.needsSignature === true,
+    JSON.stringify(asstQueueBefore.payload.documents.find((d) => d.id === eitherId)));
+
+  /* The official form carries the signing officer's own address, so the sign call
+   * has to supply it the same way the real one does. */
+  const firstToSign = await api('POST', `/api/documents/${eitherId}/sign`,
+    { token: secToken, body: { consent: true, officerAddress: '722 Banning Dr., Middletown, DE 19709' } });
+  check('the Secretary signs it', firstToSign.status === 200,
+    JSON.stringify(firstToSign.payload).slice(0, 200));
+
+  const eitherAfter = await api('GET', `/api/documents/${eitherId}`, { token: wmToken });
+  check('one signature completes it, the Assistant Secretary is not held up',
+    eitherAfter.payload.document.status === 'completed', eitherAfter.payload.document.status);
+  const asstQueueAfter = await api('GET', '/api/documents', { token: asstToken });
+  check('it drops out of the Assistant Secretary\'s queue',
+    asstQueueAfter.payload.documents.find((d) => d.id === eitherId)?.needsSignature === false,
+    JSON.stringify(asstQueueAfter.payload.documents.find((d) => d.id === eitherId)));
+  const lateSign = await api('POST', `/api/documents/${eitherId}/sign`,
+    { token: asstToken, body: { consent: true, officerAddress: '14 Kelly Drive, Bear, DE 19701' } });
+  check('the second Secretary cannot sign a document already completed',
+    lateSign.status === 409, String(lateSign.status));
+  check('the record still shows it was offered to him',
+    eitherAfter.payload.document.signers.some((s) => s.signer_role === 'assistant_secretary'),
+    JSON.stringify(eitherAfter.payload.document.signers.map((s) => s.signer_role)));
+
+  /* Sending to one man only must still behave exactly as it always did. */
+  const oneRes = await api('POST', '/api/dispensations', {
+    token: wmToken,
+    body: { ...dispensationBody, title: 'Assistant Secretary only', signerRoles: ['assistant_secretary'] },
+  });
+  check('a dispensation can still be sent to one Secretary alone',
+    oneRes.status === 201, JSON.stringify(oneRes.payload).slice(0, 200));
+  const oneDetail = await api('GET', `/api/documents/${oneRes.payload.document?.id}`, { token: wmToken });
+  check('only that officer is asked for a signature',
+    oneDetail.payload.document.signers.filter((s) => s.signer_role !== 'worshipful_master')
+      .every((s) => s.signer_role === 'assistant_secretary'),
+    JSON.stringify(oneDetail.payload.document.signers.map((s) => s.signer_role)));
+  const noneRes = await api('POST', '/api/dispensations', {
+    token: wmToken, body: { ...dispensationBody, signerRoles: [] },
+  });
+  check('a dispensation addressed to nobody is refused', noneRes.status === 400, String(noneRes.status));
+
   console.log('\nAudit and reset');
   const audit = await api('GET', `/api/documents/${docId}/audit`, { token: wmToken });
   const actions = (audit.payload.events || []).map((e) => e.action);
@@ -414,6 +492,7 @@ try {
   check('an unknown account gets the same answer, so the form cannot be used to enumerate officers',
     unknown.status === 200 && unknown.payload.message === byEmail.payload.message,
     JSON.stringify(unknown.payload));
+
 } catch (error) {
   failures.push(`threw: ${error.message}`);
   console.log(`\nFAILED: ${error.message}`);
