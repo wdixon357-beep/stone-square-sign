@@ -318,3 +318,7 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
    deliberately loud: a dispensation that quietly failed to send is one that misses its date. */
 .queue-submission { font-size: 12px; color: var(--muted, #6b7280); margin-top: 4px; }
 .queue-submission-warn { color: #b42318; font-weight: 600; }
+
+/* An officer who has been invited but has not signed in yet. Amber, because it is neither
+   done nor undone, and the Master needs to see the difference before he invites him twice. */
+.officer-list i.pending { background: #d97706; }

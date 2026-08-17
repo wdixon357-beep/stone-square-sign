@@ -114,6 +114,12 @@ check('both clients can open a draft to the District Deputy in the Master\'s own
   && /Draft in my mail app/.test(read('public/app.js'))
   && /Draft in my mail app/.test(macViews));
 
+check('both clients show an invited officer as pending rather than still needing one',
+  /Pending, invited and not signed in yet/.test(read('public/app.js'))
+  && /Pending, invited and not signed in yet/.test(read('macos/Sources/StoneSquareSign/Models.swift'))
+  && read('public/app.js').includes('pendingByRole')
+  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('pendingInvitations'));
+
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';
 check('the Mac bundle name matches the web page title',

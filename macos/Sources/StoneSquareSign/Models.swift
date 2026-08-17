@@ -63,7 +63,31 @@ struct Officer: Codable, Identifiable {
 struct AuthResponse: Codable { let token: String; let user: User }
 struct MeResponse: Codable { let user: User }
 struct DocumentsResponse: Codable { let documents: [LodgeDocument] }
-struct OfficersResponse: Codable { let officers: [Officer] }
+/* An invitation the Master has created that the officer has not taken up yet. Its own state,
+ * distinct from having no invitation at all. */
+struct PendingInvitation: Codable, Identifiable {
+    var id: String { email }
+    let role: String
+    let name: String
+    let email: String
+    let expiresAt: String?
+}
+
+struct OfficersResponse: Codable {
+    let officers: [Officer]
+    let pending: [PendingInvitation]?
+}
+
+/* Where a seat stands: nobody invited, invited and waiting, or in and working. */
+enum OfficerSeatState { case none, pending, active
+    var label: String {
+        switch self {
+        case .active: return "Active"
+        case .pending: return "Pending, invited and not signed in yet"
+        case .none: return "Invitation needed"
+        }
+    }
+}
 struct InviteResponse: Codable { let inviteUrl: String; let emailSent: Bool; let expiresAt: String }
 struct SignatureResponse: Codable { let message: String; let user: User }
 struct MessageResponse: Codable { let message: String }

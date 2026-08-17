@@ -559,6 +559,46 @@ try {
   check('a viewer cannot send anything to the District Deputy',
     viewerSubmit.status === 403, String(viewerSubmit.status));
 
+  /* Invitations the Master can see the state of, and that do not require the officer to find
+   * the private link. He was invited; typing the address he was invited at is enough. */
+  console.log('\nPending invitations');
+  const invited = await api('POST', '/api/officers/invite', {
+    token: wmToken, body: { role: 'viewer', name: 'Waiting Brother', email: 'waiting@example.org' },
+  });
+  check('the owner invites a Brother', invited.status === 201, JSON.stringify(invited.payload).slice(0, 200));
+  const roster = await api('GET', '/api/officers', { token: wmToken });
+  check('the invitation shows as pending, not as still needing one',
+    (roster.payload.pending || []).some((p) => p.email === 'waiting@example.org'),
+    JSON.stringify(roster.payload.pending));
+  check('and he is not yet counted as an active officer',
+    !(roster.payload.officers || []).some((o) => o.email === 'waiting@example.org'),
+    JSON.stringify(roster.payload.officers));
+
+  const withoutLink = await api('POST', '/api/auth/register', {
+    body: { email: 'waiting@example.org', name: 'Waiting Brother', password: 'a long enough secret' },
+  });
+  check('he can create his account without ever opening the private link',
+    withoutLink.status === 201 && Boolean(withoutLink.payload.token),
+    JSON.stringify(withoutLink.payload).slice(0, 200));
+  check('and he gets the office the Master invited him to, not one he chose',
+    withoutLink.payload.user?.role === 'viewer', withoutLink.payload.user?.role);
+
+  const afterJoin = await api('GET', '/api/officers', { token: wmToken });
+  check('once he is in he moves from pending to active',
+    !(afterJoin.payload.pending || []).some((p) => p.email === 'waiting@example.org')
+    && (afterJoin.payload.officers || []).some((o) => o.email === 'waiting@example.org'),
+    JSON.stringify({ pending: afterJoin.payload.pending, officers: afterJoin.payload.officers }).slice(0, 300));
+  const reuse = await api('POST', '/api/auth/register', {
+    body: { email: 'waiting@example.org', name: 'Imposter', password: 'another long secret' },
+  });
+  check('the same invitation cannot be used a second time',
+    reuse.status === 403 || reuse.status === 409, String(reuse.status));
+  const uninvitedEmail = await api('POST', '/api/auth/register', {
+    body: { email: 'never-invited@example.org', name: 'Nobody', password: 'a long enough secret' },
+  });
+  check('an address that was never invited still gets nowhere',
+    uninvitedEmail.status === 403, String(uninvitedEmail.status));
+
   console.log('\nSelf serve accounts');
   const noCode = await api('POST', '/api/auth/register', {
     body: { email: 'stranger2@example.org', name: 'Passer By', password: 'a long enough secret' },

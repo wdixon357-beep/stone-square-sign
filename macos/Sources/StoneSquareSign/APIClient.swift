@@ -165,6 +165,7 @@ final class AppModel: ObservableObject {
     @Published var user: User?
     @Published var documents: [LodgeDocument] = []
     @Published var officers: [Officer] = []
+    @Published var pendingInvitations: [PendingInvitation] = []
     @Published var submissionProfiles: [SubmissionProfile] = []
     @Published var candidateRecords: [CandidateRecord] = []
     @Published var candidateTrackerLoading = false
@@ -343,6 +344,7 @@ final class AppModel: ObservableObject {
             if user?.role == "owner" {
                 let officerResponse: OfficersResponse = try await request("/api/officers")
                 officers = officerResponse.officers
+                pendingInvitations = officerResponse.pending ?? []
                 let profileResponse: SubmissionProfilesResponse = try await request("/api/submission-profiles")
                 submissionProfiles = profileResponse.profiles
             }
@@ -838,6 +840,20 @@ final class AppModel: ObservableObject {
         return success
     }
 
+    /* Where a seat stands. Mirrors the same three way test the web page makes, so the two
+     * clients never tell the Master different things about the same man. */
+    func seatState(role: String) -> OfficerSeatState {
+        if officers.contains(where: { $0.role == role }) { return .active }
+        if pendingInvitations.contains(where: { $0.role == role }) { return .pending }
+        return .none
+    }
+
+    func seatName(role: String, fallback: String) -> String {
+        officers.first { $0.role == role }?.name
+            ?? pendingInvitations.first { $0.role == role }?.name
+            ?? fallback
+    }
+
     func signOut(localOnly: Bool = false) {
         liveTask?.cancel()
         isLive = false
@@ -852,6 +868,7 @@ final class AppModel: ObservableObject {
         user = nil
         documents = []
         officers = []
+        pendingInvitations = []
         submissionProfiles = []
         candidateRecords = []
         candidateTrackerAuthenticated = false

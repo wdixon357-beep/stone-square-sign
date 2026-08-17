@@ -492,14 +492,25 @@ $('closePdf').addEventListener('click', () => {
 
 const renderOfficers = async () => {
   try {
-    const { officers } = await apiFetch('/api/officers');
+    const { officers, pending = [] } = await apiFetch('/api/officers');
     const list = $('officerList');
     list.innerHTML = '';
     const activeByRole = new Map(officers.filter((officer) => officer.role !== 'viewer').map((officer) => [officer.role, officer]));
+    /* Three states, not two. A man who has been invited and has not taken it up yet is pending,
+     * and calling that "invitation needed" is how he ends up invited twice. */
+    const pendingByRole = new Map(pending.map((invite) => [invite.role, invite]));
+    const seat = (role, fallbackName) => {
+      const active = activeByRole.get(role);
+      if (active) return { ...active, state: 'active' };
+      const waiting = pendingByRole.get(role);
+      if (waiting) return { ...waiting, state: 'pending' };
+      return { role, name: fallbackName, email: '', state: 'none' };
+    };
     const entries = [
-      activeByRole.get('secretary') || { role: 'secretary', name: 'William McDuffie', email: '', inactive: true },
-      activeByRole.get('assistant_secretary') || { role: 'assistant_secretary', name: 'Adrian Reese', email: '', inactive: true },
-      ...officers.filter((officer) => officer.role === 'viewer'),
+      seat('secretary', 'William McDuffie'),
+      seat('assistant_secretary', 'Adrian Reese'),
+      ...officers.filter((officer) => officer.role === 'viewer').map((o) => ({ ...o, state: 'active' })),
+      ...pending.filter((invite) => invite.role === 'viewer').map((i) => ({ ...i, state: 'pending' })),
     ];
     entries.forEach((officer) => {
       const row = window.document.createElement('div');
@@ -510,12 +521,16 @@ const renderOfficers = async () => {
       const strong = window.document.createElement('strong');
       strong.textContent = officer.name;
       const small = window.document.createElement('small');
-      small.textContent = `${roleLabel(officer.role)} · ${officer.inactive ? 'Invitation needed' : 'Active'}`;
+      const stateLabel = officer.state === 'active'
+        ? 'Active'
+        : officer.state === 'pending' ? 'Pending, invited and not signed in yet' : 'Invitation needed';
+      small.textContent = `${roleLabel(officer.role)} · ${stateLabel}`;
       details.append(strong, small);
       const status = window.document.createElement('i');
-      if (!officer.inactive) status.className = 'active';
+      if (officer.state === 'active') status.className = 'active';
+      else if (officer.state === 'pending') status.className = 'pending';
       row.append(badge, details, status);
-      if (!officer.inactive) {
+      if (officer.state === 'active') {
         const revoke = window.document.createElement('button');
         revoke.className = 'text-button danger';
         revoke.type = 'button';

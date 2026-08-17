@@ -1737,14 +1737,14 @@ struct OfficerAccessView: View {
                     .foregroundStyle(.secondary)
                 HStack(spacing: 16) {
                     OfficerCard(
-                        name: model.officers.first { $0.role == "secretary" }?.name ?? "William McDuffie",
+                        name: model.seatName(role: "secretary", fallback: "William McDuffie"),
                         office: "Secretary",
-                        active: model.officers.contains { $0.role == "secretary" }
+                        state: model.seatState(role: "secretary")
                     )
                     OfficerCard(
-                        name: model.officers.first { $0.role == "assistant_secretary" }?.name ?? "Adrian Reese",
+                        name: model.seatName(role: "assistant_secretary", fallback: "Adrian Reese"),
                         office: "Assistant Secretary",
-                        active: model.officers.contains { $0.role == "assistant_secretary" }
+                        state: model.seatState(role: "assistant_secretary")
                     )
                 }
                 Form {
@@ -1825,17 +1825,28 @@ struct OfficerAccessView: View {
 struct OfficerCard: View {
     let name: String
     let office: String
-    let active: Bool
+    let state: OfficerSeatState
+
+    /* Amber for pending. It is neither done nor undone, and the Master has to see the
+     * difference or he invites the same man twice. */
+    private var dot: Color {
+        switch state {
+        case .active: return .green
+        case .pending: return .orange
+        case .none: return .gray.opacity(0.4)
+        }
+    }
+
     var body: some View {
         HStack {
             Image(systemName: "person.crop.circle.fill").font(.largeTitle).foregroundStyle(SignTheme.gold)
             VStack(alignment: .leading) {
                 Text(name).font(.headline)
-                Text("\(office) · \(active ? "Active" : "Invitation needed")")
+                Text("\(office) · \(state.label)")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Circle().fill(active ? .green : .gray.opacity(0.4)).frame(width: 9)
+            Circle().fill(dot).frame(width: 9)
         }
         .padding(18)
         .frame(maxWidth: .infinity)

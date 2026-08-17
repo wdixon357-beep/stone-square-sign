@@ -915,6 +915,7 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
     let name = suppliedName;
     let invitation = null;
     let joinedWithCode = false;
+    let matchedInvitationByEmail = false;
     if (invitationToken) {
       invitation = await dbGet(
         'SELECT * FROM invitations WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?',
@@ -925,6 +926,20 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
       }
       role = invitation.role;
       name = invitation.name || suppliedName;
+    } else if (await dbGet(
+      'SELECT 1 FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ?',
+      [email, nowIso()],
+    )) {
+      /* He was invited, and he typed the address he was invited at. Requiring him to find the
+       * private link as well helps nobody: the Master already decided this man holds this office,
+       * and the link is only a convenience for carrying that decision to him. */
+      invitation = await dbGet(
+        'SELECT * FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ?',
+        [email, nowIso()],
+      );
+      role = invitation.role;
+      name = invitation.name || suppliedName;
+      matchedInvitationByEmail = true;
     } else if (LODGE_ACCESS_CODE && accessCode) {
       /* Self serve. The code proves he is one of ours; the office he claims is still held to one
        * man, so a second person cannot quietly become Secretary behind the first one's back. */
@@ -960,6 +975,25 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
         if (!invitation || normalizeEmail(invitation.email) !== email) {
           throw httpError(403, 'This invitation is invalid, expired, or belongs to another email.');
         }
+        role = invitation.role;
+        name = invitation.name || suppliedName;
+        await lockOfficeRole(role);
+        if (OFFICE_ROLES.has(role)) {
+          const occupied = await dbGet(
+            `SELECT 1 FROM users WHERE role = ? AND email NOT LIKE '%.local'
+             AND access_revoked_at IS NULL AND email <> ?`,
+            [role, email],
+          );
+          if (occupied) throw httpError(409, 'That office already has an active account.');
+        }
+      }
+      if (matchedInvitationByEmail) {
+        /* Re-read under the lock. Two men racing the same invitation must not both get in. */
+        invitation = await dbGet(
+          'SELECT * FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ? FOR UPDATE',
+          [email, nowIso()],
+        );
+        if (!invitation) throw httpError(403, 'That invitation has already been used or has expired.');
         role = invitation.role;
         name = invitation.name || suppliedName;
         await lockOfficeRole(role);
@@ -1218,7 +1252,14 @@ app.get('/api/officers', requireAuth, requireOwner, async (_req, res, next) => {
        AND email NOT LIKE '%.local' AND access_revoked_at IS NULL
        ORDER BY role DESC`,
     );
-    res.json({ officers });
+    /* An invitation that has been created but not taken up is its own state. Without this the
+     * Master sees "invitation needed" for a man he invited an hour ago and invites him twice. */
+    const pending = await dbAll(
+      `SELECT role, name, email, created_at, expires_at FROM invitations
+       WHERE used_at IS NULL AND expires_at > ? ORDER BY created_at DESC`,
+      [nowIso()],
+    );
+    res.json({ officers, pending });
   } catch (error) {
     next(error);
   }
