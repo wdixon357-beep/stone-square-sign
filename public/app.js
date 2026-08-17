@@ -212,6 +212,11 @@ const showWorkspaceSection = (section) => {
   $('builderNav').classList.toggle('active', builder);
   $('duesNav').classList.toggle('active', dues);
   if (dues) renderDues();
+  /* Zeffy payments arrive from outside the app, so no in-app event can announce
+   * them. While the dues page is the one on screen, re-read it on a timer so two
+   * officers looking at once see the same figures. */
+  window.clearInterval(state.duesTimer);
+  if (dues) state.duesTimer = window.setInterval(() => renderDues(true), 60000);
 };
 
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));

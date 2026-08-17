@@ -2227,7 +2227,16 @@ struct DuesView: View {
             }
             .padding(28)
         }
-        .task { if model.dues == nil { await model.loadDues() } }
+        .task {
+            // Zeffy payments arrive from outside the app, so nothing in-app can announce
+            // them. Re-read while this screen is on top so the Mac and the web page agree.
+            if model.dues == nil { await model.loadDues() }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                if Task.isCancelled { break }
+                await model.loadDues()
+            }
+        }
     }
 
     private func detail(for row: DuesRow) -> String {

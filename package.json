@@ -10,7 +10,8 @@
     "start": "node server.js",
     "build:mac": "./macos/scripts/build-app.sh --install",
     "import:history": "node scripts/import-historical-dispensations.mjs",
-    "test": "node test/e2e.mjs"
+    "test": "node test/parity.mjs && node test/e2e.mjs",
+    "test:parity": "node test/parity.mjs"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
