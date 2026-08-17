@@ -5,10 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#071b2f" />
     <title>Stone Square Sign</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=__APP_VERSION__" />
   </head>
   <body>
     <div class="grain" aria-hidden="true"></div>
+    <aside id="webUpdateBanner" class="update-banner hidden" aria-live="polite">
+      <div><strong>Stone Square Sign update available</strong><span>A newer version is ready.</span></div>
+      <button id="applyWebUpdate" class="primary compact" type="button">Update now</button>
+    </aside>
     <main class="shell">
       <header class="masthead">
         <a class="brand" href="/" aria-label="Stone Square Sign home">
@@ -48,13 +52,11 @@
 
           <form id="registerForm" class="auth-panel hidden">
             <div class="form-heading"><p id="registerEyebrow" class="eyebrow">PRIVATE INVITATION</p><h2 id="registerHeading">Activate your account</h2></div>
-            <p id="registerHelp" class="helper">Use the email address and mobile number from your invitation.</p>
+            <p id="registerHelp" class="helper">Use the email address from your invitation.</p>
             <label for="registerName">Full name</label>
             <input id="registerName" type="text" autocomplete="name" placeholder="Full name" required />
             <label for="registerEmail">Email address</label>
             <input id="registerEmail" type="email" autocomplete="email" placeholder="name@example.com" required />
-            <label for="registerPhone">Mobile phone</label>
-            <input id="registerPhone" type="tel" autocomplete="tel" placeholder="(302) 555-0100" required />
             <label for="registerPassword">Create password</label>
             <input id="registerPassword" type="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required />
             <button class="primary" type="submit">Create secure account</button>
@@ -62,13 +64,10 @@
 
           <form id="forgotForm" class="auth-panel hidden">
             <div class="form-heading"><p class="eyebrow">ACCOUNT RECOVERY</p><h2>Reset your password</h2></div>
-            <label for="resetPhone">Mobile phone</label>
-            <input id="resetPhone" type="tel" autocomplete="tel" placeholder="(302) 555-0100" required />
-            <label for="resetEmail">Or your email address</label>
-            <input id="resetEmail" type="email" autocomplete="email" placeholder="you@example.org" />
+            <label for="resetEmail">Email address</label>
+            <input id="resetEmail" type="email" autocomplete="email" placeholder="you@example.org" required />
             <button id="requestReset" class="secondary" type="button">Send six digit code</button>
-            <p class="hint">The code is sent to the email address on your account. Enter either your
-              phone number or that email above, then the code below.</p>
+            <p class="hint">The code is sent to the email address on your account.</p>
             <label for="resetCode">Reset code</label>
             <input id="resetCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
             <label for="resetPassword">New password</label>
@@ -83,7 +82,9 @@
         <aside class="sidebar">
           <div class="user-block"><span id="userInitials"></span><div><strong id="whoami"></strong><small id="userRole"></small></div></div>
           <nav>
-            <button class="nav-item active" type="button"><span>◫</span> Live Queue</button>
+            <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
+            <button id="queueNav" class="nav-item" type="button"><span>◫</span> Live Queue</button>
+            <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
           </nav>
           <div class="sidebar-foot">
@@ -93,6 +94,16 @@
         </aside>
 
         <div class="content">
+          <section id="landingSection" class="landing-section">
+            <div class="landing-head"><p class="eyebrow">STONE SQUARE DOCUMENT CENTER</p><h1 id="landingGreeting">Welcome</h1><p>Choose the Lodge document area you want to open.</p><span id="landingRole"></span></div>
+            <div class="document-menu">
+              <button id="dispensationsMenuCard" class="document-menu-card" type="button"><i>PDF</i><span><strong>Dispensations</strong><small id="dispensationsMenuStatus">Open the dispensation queue</small></span><b>›</b></button>
+              <button class="document-menu-card coming-soon" type="button" disabled><i>MIN</i><span><strong>Previous Lodge Meeting Minutes</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
+              <button class="document-menu-card coming-soon" type="button" disabled><i>TR</i><span><strong>Treasurer Reports</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
+              <a class="document-menu-card" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
+            </div>
+          </section>
+          <section id="queueSection">
           <div class="content-head">
             <div><p class="eyebrow">REAL TIME SIGNING QUEUE</p><h1>Dispensation desk</h1><p>New requests and signatures load automatically on every connected device.</p></div>
             <button id="uploadShortcut" class="primary owner-only" type="button">Upload document</button>
@@ -128,6 +139,78 @@
             <div class="records-head"><div><p class="eyebrow">LIVE QUEUE</p><h2>Documents waiting for action</h2></div><div id="docMessage" class="message" role="status"></div></div>
             <div id="docList" class="doc-list"></div>
           </section>
+          </section>
+
+          <section id="builderSection" class="builder-section owner-only hidden">
+            <div class="content-head">
+              <div><p class="eyebrow">OFFICIAL GRAND LODGE TEMPLATE</p><h1>Create a dispensation</h1><p>Paste the details, answer only the remaining questions, then review the PDF before sending it.</p></div>
+              <span class="file-badge">PDF</span>
+            </div>
+            <form id="dispensationForm" class="builder-form">
+              <section class="builder-card paste-card">
+                <div><p class="eyebrow">QUICK ENTRY</p><h2>Paste all dispensation details</h2><p>Paste an email, message, or labeled list. The form changes only after you approve the review.</p></div>
+                <textarea id="dispPasteDetails" rows="6" placeholder="Title: Back to School Night&#10;Request: Participate in the school event&#10;Event date: August 18, 2026&#10;Event time: 5:00 PM&#10;Location: Louis L. Redding Middle School&#10;Street: 201 New Street&#10;City, state, ZIP: Middletown, DE 19709"></textarea>
+                <button id="reviewPastedDetails" class="secondary" type="button">Read and review pasted details</button>
+              </section>
+              <section class="builder-card fixed-details">
+                <p class="eyebrow">LODGE DETAILS</p>
+                <div><strong>Stone Square Lodge</strong><span>No. 22</span></div>
+                <div><strong id="builderMasterName">Worshipful Master</strong><span>Your saved signature will be applied</span></div>
+              </section>
+              <section id="remainingQuestionsIntro" class="builder-card hidden"><p class="eyebrow">REMAINING QUESTIONS</p><h2>Complete only what was not in the pasted details</h2><p>The selected officer enters their own information when signing.</p></section>
+              <section id="builderQuestions" class="builder-card builder-grid">
+                <div class="field-wide parsed-covered"><label for="dispTitle">Document title</label><input id="dispTitle" type="text" placeholder="Community event dispensation" /></div>
+                <div class="parsed-covered"><label for="dispRequestDate">Request date</label><input id="dispRequestDate" type="date" required /></div>
+                <div><label for="dispSignerRole">Officer signature needed</label><select id="dispSignerRole"><option value="secretary">William McDuffie, Secretary</option><option value="assistant_secretary">Adrian Reese, Assistant Secretary</option></select></div>
+                <div class="field-wide parsed-covered"><label for="dispRequestDetails">What is the Lodge requesting?</label><textarea id="dispRequestDetails" rows="3" placeholder="Describe the requested dispensation" required></textarea></div>
+                <div class="parsed-covered"><label for="dispEventDate">Event date</label><input id="dispEventDate" type="date" required /></div>
+                <div class="parsed-covered"><label for="dispEventTime">Event time</label><input id="dispEventTime" type="time" required /></div>
+                <div class="field-wide location-lookup parsed-covered"><label for="dispLocationName">Location name</label><input id="dispLocationName" type="text" placeholder="Stone Square Lodge No. 22" required /><button id="findLocationAddress" class="secondary" type="button">Find address</button></div>
+                <div class="parsed-covered"><label for="dispStreet">Street and number</label><input id="dispStreet" type="text" placeholder="208 East Lake Street" required /></div>
+                <div class="parsed-covered"><label for="dispCityState">City, state, and ZIP</label><input id="dispCityState" type="text" placeholder="Middletown, DE 19709" required /></div>
+                <div><label for="dispMasterAddress">Worshipful Master address</label><input id="dispMasterAddress" type="text" required /></div>
+                <label class="consent field-wide"><input id="confirmSubmissionProfiles" type="checkbox" /> <span id="submissionProfilePrompt">Yes, use this Worshipful Master address for this submission.</span></label>
+              </section>
+              <div class="builder-actions"><p id="builderMessage" class="message" role="status"></p><button class="primary" type="submit">Review summary and PDF</button></div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="locationConfirmModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="locationConfirmTitle">
+        <div class="modal-body narrow">
+          <p class="eyebrow">ADDRESS CHECK</p><h2 id="locationConfirmTitle">Is this the correct event address?</h2>
+          <div class="location-match"><strong id="locationMatchName"></strong><span id="locationMatchStreet"></span><span id="locationMatchCity"></span></div>
+          <p>Address search provided by OpenStreetMap.</p>
+          <div class="row-buttons"><button id="rejectLocationAddress" class="secondary" type="button">No, keep current address</button><button id="useLocationAddress" class="primary" type="button">Yes, use this address</button></div>
+        </div>
+      </section>
+
+      <section id="pasteReviewModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="pasteReviewTitle">
+        <div class="modal-body paste-review-body">
+          <p class="eyebrow">PASTED DETAILS REVIEW</p><h2 id="pasteReviewTitle">Does this look correct?</h2>
+          <div id="pasteReviewFields" class="paste-review-fields"></div>
+          <p id="pasteReviewWarnings" class="paste-review-warnings"></p>
+          <div class="row-buttons"><button id="rejectPastedDetails" class="secondary" type="button">No, go back</button><button id="usePastedDetails" class="primary" type="button">Yes, use these details</button></div>
+        </div>
+      </section>
+
+      <section id="dispensationFinalReview" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="finalReviewTitle">
+        <div class="modal-body pdf-modal-body">
+          <p class="eyebrow">FINAL REVIEW</p><h2 id="finalReviewTitle">Review before sending</h2>
+          <div id="finalReviewFields" class="paste-review-fields"></div>
+          <p>The officer section is intentionally blank. The selected officer completes it when signing.</p>
+          <iframe id="dispensationPreviewFrame" class="pdf-frame" title="Dispensation PDF preview"></iframe>
+          <div class="row-buttons"><button id="backFromFinalReview" class="secondary" type="button">Back to questions</button><button id="sendDispensation" class="primary" type="button">Send for officer signature</button></div>
+          <p id="finalReviewMessage" class="message" role="status"></p>
+        </div>
+      </section>
+
+      <section id="pendingSignatureNotice" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="pendingSignatureTitle">
+        <div class="modal-body narrow">
+          <p class="eyebrow">OFFICER ACTION NEEDED</p><h2 id="pendingSignatureTitle">Dispensation awaiting review and signature</h2>
+          <p id="pendingSignatureMessage">A dispensation assigned to you is ready for review.</p>
+          <div class="row-buttons"><button id="dismissPendingSignature" class="secondary" type="button">Later</button><button id="reviewPendingSignature" class="primary" type="button">Review now</button></div>
         </div>
       </section>
 
@@ -136,11 +219,23 @@
           <button id="closeSign" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">ELECTRONIC SIGNATURE</p><h2 id="signTitle">Sign this document</h2>
           <p>Review the PDF before applying your saved signature. The action is added to the document audit history.</p>
+          <iframe id="signingPdfFrame" class="pdf-frame signing-pdf-frame" title="Document PDF preview"></iframe>
           <div class="saved-signature"><span>Your saved signature</span><img id="signingSignaturePreview" alt="Your saved signature" /></div>
           <button id="changeSignatureFromSign" class="text-button" type="button">Change saved signature</button>
+          <label for="signerAddress">Your address as it should appear on the dispensation</label><input id="signerAddress" type="text" autocomplete="street-address" />
+          <p>Your name and address are added to the secretary section only when you sign.</p>
           <label class="consent"><input id="signatureConsent" type="checkbox" /> <span>I agree that this electronic signature represents my signature on this document.</span></label>
           <div class="row-buttons"><button id="submitSig" class="primary" type="button">Apply saved signature</button></div>
           <p id="signMessage" class="message" role="status"></p>
+        </div>
+      </section>
+
+      <section id="pdfModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="pdfViewerTitle">
+        <div class="modal-body pdf-modal-body">
+          <button id="closePdf" class="modal-close" type="button" aria-label="Close PDF">×</button>
+          <p class="eyebrow">LODGE RECORD</p><h2 id="pdfViewerTitle">Document</h2>
+          <iframe id="pdfFrame" class="pdf-frame" title="Lodge document PDF"></iframe>
+          <p id="pdfMessage" class="message" role="status"></p>
         </div>
       </section>
 
@@ -149,7 +244,7 @@
           <button id="closeSignatureSetup" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">SIGNATURE PROFILE</p><h2 id="signatureSetupTitle">Create your signature</h2>
           <p id="signatureSetupHelp">Create the signature that will be applied when you approve a Lodge document.</p>
-          <div class="signature-tabs"><button id="chooseDraw" class="signature-tab active" type="button">Draw it</button><button id="chooseType" class="signature-tab" type="button">Type my name</button></div>
+          <div class="signature-tabs"><button id="chooseDraw" class="signature-tab" type="button">Draw signature</button><button id="chooseType" class="signature-tab active" type="button">Cursive signature</button><button id="chooseInitials" class="signature-tab" type="button">Initials</button></div>
           <div id="drawSignaturePanel">
             <div class="signature-area"><canvas id="profileSigCanvas" width="760" height="190"></canvas></div>
             <button id="clearProfileSig" class="secondary" type="button">Clear drawing</button>
@@ -157,8 +252,14 @@
           <div id="typeSignaturePanel" class="hidden">
             <label for="typedSignatureName">Name as it should appear</label>
             <input id="typedSignatureName" type="text" autocomplete="name" />
-            <p class="helper">Choose one of five professional signature styles.</p>
+            <p class="helper">Choose one of eight cursive signature styles.</p>
             <div id="typedSignatureChoices" class="signature-choices"></div>
+          </div>
+          <div id="initialsSignaturePanel" class="hidden">
+            <label for="signatureInitials">Initials as they should appear</label>
+            <input id="signatureInitials" type="text" maxlength="4" autocomplete="off" />
+            <p class="helper">Choose a cursive style for your initials.</p>
+            <div id="initialsSignatureChoices" class="signature-choices"></div>
           </div>
           <div class="row-buttons"><button id="saveProfileSignature" class="primary" type="button">Save my signature</button></div>
           <p id="profileSignatureMessage" class="message" role="status"></p>
@@ -170,16 +271,15 @@
           <button id="closeInvite" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">OFFICER ACCESS</p><h2 id="inviteTitle">Send private invitation</h2>
           <form id="inviteForm">
-            <label for="inviteRole">Office</label><select id="inviteRole"><option value="secretary">Secretary</option><option value="assistant_secretary">Assistant Secretary</option></select>
+            <label for="inviteRole">Access level</label><select id="inviteRole"><option value="secretary">Secretary</option><option value="assistant_secretary">Assistant Secretary</option><option value="viewer">Lodge Viewer</option></select>
             <label for="inviteName">Full name</label><input id="inviteName" type="text" required />
             <label for="inviteEmail">Email address</label><input id="inviteEmail" type="email" required />
-            <label for="invitePhone">Mobile phone</label><input id="invitePhone" type="tel" required />
             <button class="primary" type="submit">Create invitation</button>
           </form>
           <div id="inviteResult" class="invite-result hidden"><p id="inviteMessage"></p><button id="copyInvite" class="secondary full" type="button">Copy private link</button></div>
         </div>
       </section>
     </main>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=__APP_VERSION__"></script>
   </body>
 </html>

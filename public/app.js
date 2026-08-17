@@ -1,7 +1,16 @@
+const CLIENT_BUILD_VERSION = (() => {
+  try {
+    return new URL(document.currentScript.src).searchParams.get('v') || 'development';
+  } catch {
+    return 'development';
+  }
+})();
+
 const state = {
   token: localStorage.getItem('stone-square-sign-token') || '',
   user: null,
   signingDocumentId: null,
+  signingPdfObjectUrl: null,
   invitationToken: new URLSearchParams(window.location.search).get('invite') || '',
   invitationUrl: '',
   signatureRequired: false,
@@ -11,6 +20,12 @@ const state = {
   realtimeAbort: null,
   refreshTimer: null,
   signatureObjectUrl: '',
+  pdfObjectUrl: '',
+  submissionProfiles: {},
+  parsedDispensation: null,
+  locationMatch: null,
+  dispensationPreviewUrl: '',
+  pendingReviewDocument: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -25,6 +40,21 @@ const setMessage = (element, text, isError = false) => {
   element.classList.toggle('error', isError);
   element.classList.toggle('success', Boolean(text) && !isError);
 };
+
+const checkForWebUpdate = async () => {
+  try {
+    const response = await fetch('/api/version', { cache: 'no-store' });
+    if (!response.ok) return;
+    const { version } = await response.json();
+    $('webUpdateBanner').classList.toggle('hidden', !version || version === CLIENT_BUILD_VERSION);
+  } catch {
+    // A temporary connection interruption is handled by the live queue indicator.
+  }
+};
+
+$('applyWebUpdate').addEventListener('click', () => window.location.reload());
+window.setTimeout(checkForWebUpdate, 1500);
+window.setInterval(checkForWebUpdate, 30000);
 
 const apiFetch = async (path, init = {}) => {
   const response = await fetch(path, {
@@ -57,9 +87,10 @@ const setActiveTab = (which) => {
 };
 
 const roleLabel = (role) => ({
-  owner: 'Document Owner',
+  owner: 'Worshipful Master / Administrator',
   secretary: 'Secretary',
   assistant_secretary: 'Assistant Secretary',
+  viewer: 'Lodge Viewer',
 }[role] || 'Signer');
 
 const initials = (name) => name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -67,23 +98,116 @@ const formatDate = (date) => new Intl.DateTimeFormat('en-US', {
   month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
 }).format(new Date(date));
 
+const formatClockTime = (value) => {
+  const [hour, minute] = String(value || '').split(':').map(Number);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return value || '';
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' })
+    .format(new Date(2000, 0, 1, hour, minute));
+};
+
+const easternGreeting = () => {
+  const hour = Number(new Intl.DateTimeFormat('en-US', {
+    hour: '2-digit', hourCycle: 'h23', timeZone: 'America/New_York',
+  }).format(new Date()));
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+};
+
 const enterWorkspace = async (user) => {
   state.user = user;
   $('whoami').textContent = user.name;
   $('userRole').textContent = roleLabel(user.role);
   $('userInitials').textContent = initials(user.name);
+  $('builderMasterName').textContent = user.name;
+  $('landingGreeting').textContent = `${easternGreeting()}, ${user.name}`;
+  $('landingRole').textContent = roleLabel(user.role);
   document.querySelectorAll('.owner-only').forEach((element) => {
     element.classList.toggle('hidden', user.role !== 'owner');
   });
+  showWorkspaceSection('home');
   hide($('authCard'));
   show($('appCard'));
-  await Promise.all([
+  const [documents] = await Promise.all([
     renderDocuments(),
     user.role === 'owner' ? renderOfficers() : Promise.resolve(),
+    user.role === 'owner' ? loadSubmissionProfiles() : Promise.resolve(),
   ]);
+  if (user.hasSignature || user.role === 'viewer') showPendingSignatureNotice(user, documents || []);
   startRealtime();
-  if (!user.hasSignature) window.setTimeout(() => openSignatureSetup(true), 150);
+  if (!user.hasSignature && user.role !== 'viewer') window.setTimeout(() => openSignatureSetup(true), 150);
 };
+
+const applySubmissionProfiles = () => {
+  const owner = state.submissionProfiles.worshipful_master;
+  $('dispMasterAddress').value = owner?.address || '';
+  $('confirmSubmissionProfiles').checked = false;
+  $('submissionProfilePrompt').textContent = owner
+    ? `Yes, use ${owner.address} as my Worshipful Master address for this submission.`
+    : 'Yes, use this Worshipful Master address for this submission.';
+};
+
+const fillFormFromParsedDispensation = () => {
+  const fields = state.parsedDispensation?.fields;
+  if (!fields) return;
+  $('dispTitle').value = fields.title;
+  $('dispRequestDate').value = fields.requestDate || builderTodayValue;
+  $('dispSignerRole').value = fields.signerRole;
+  $('dispRequestDetails').value = fields.requestDetails;
+  $('dispEventDate').value = fields.eventDate;
+  $('dispEventTime').value = fields.eventTime;
+  $('dispLocationName').value = fields.locationName;
+  $('dispStreet').value = fields.streetAddress;
+  $('dispCityState').value = fields.cityState;
+  applySubmissionProfiles();
+  if (fields.worshipfulMasterAddress) $('dispMasterAddress').value = fields.worshipfulMasterAddress;
+  $('confirmSubmissionProfiles').checked = false;
+  const parsedFields = [
+    'dispTitle', 'dispRequestDate', 'dispRequestDetails', 'dispEventDate',
+    'dispEventTime', 'dispLocationName', 'dispStreet', 'dispCityState',
+  ];
+  parsedFields.forEach((id) => {
+    const input = $(id);
+    input.closest('.parsed-covered')?.classList.toggle('hidden', Boolean(input.value.trim()));
+  });
+  $('remainingQuestionsIntro').classList.remove('hidden');
+  const missing = [
+    ['dispRequestDetails', 'request details'], ['dispEventDate', 'event date'],
+    ['dispEventTime', 'event time'], ['dispLocationName', 'location name'],
+    ['dispStreet', 'street and number'], ['dispCityState', 'city, state, and ZIP'],
+  ].filter(([id]) => !$(id).value.trim()).map(([, label]) => label);
+  setMessage(
+    $('builderMessage'),
+    missing.length
+      ? `Complete the missing required fields before review: ${missing.join(', ')}.`
+      : 'The pasted details are ready. Complete the remaining Lodge questions.',
+    missing.length > 0,
+  );
+  hide($('pasteReviewModal'));
+};
+
+const loadSubmissionProfiles = async () => {
+  const { profiles } = await apiFetch('/api/submission-profiles');
+  state.submissionProfiles = Object.fromEntries(profiles.map((profile) => [profile.role, profile]));
+  applySubmissionProfiles();
+};
+
+const showWorkspaceSection = (section) => {
+  const home = section === 'home';
+  const builder = section === 'builder';
+  const queue = section === 'queue';
+  $('landingSection').classList.toggle('hidden', !home);
+  $('queueSection').classList.toggle('hidden', !queue);
+  $('builderSection').classList.toggle('hidden', !builder);
+  $('homeNav').classList.toggle('active', home);
+  $('queueNav').classList.toggle('active', queue);
+  $('builderNav').classList.toggle('active', builder);
+};
+
+$('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
+$('queueNav').addEventListener('click', () => showWorkspaceSection('queue'));
+$('builderNav').addEventListener('click', () => showWorkspaceSection('builder'));
+$('dispensationsMenuCard').addEventListener('click', () => showWorkspaceSection('queue'));
 
 const scheduleQueueRefresh = () => {
   window.clearTimeout(state.refreshTimer);
@@ -137,26 +261,34 @@ const renderDocuments = async () => {
   try {
     const { documents } = await apiFetch('/api/documents');
     $('metricAll').textContent = documents.length;
-    $('metricPending').textContent = documents.filter((item) => item.status !== 'completed').length;
+    $('metricPending').textContent = documents.filter((item) => item.status === 'pending').length;
     $('metricComplete').textContent = documents.filter((item) => item.status === 'completed').length;
+    const awaiting = ['owner', 'viewer'].includes(state.user?.role)
+      ? documents.filter((item) => !['completed', 'rescinded'].includes(item.status)).length
+      : documents.filter((item) => item.needsSignature && !['completed', 'rescinded'].includes(item.status)).length;
+    $('dispensationsMenuCard').classList.toggle('awaiting', awaiting > 0);
+    $('dispensationsMenuStatus').textContent = awaiting > 0
+      ? `${awaiting} document${awaiting === 1 ? '' : 's'} awaiting action`
+      : 'Open the dispensation queue';
     const list = $('docList');
     list.innerHTML = '';
     if (!documents.length) {
       list.innerHTML = '<div class="empty-state"><span>◇</span><h3>The queue is clear</h3><p>New dispensation requests will appear here automatically.</p></div>';
-      return;
+      return documents;
     }
     let queueNumber = 0;
     documents.forEach((doc) => {
-      if (doc.status !== 'completed') queueNumber += 1;
+      if (!['completed', 'rescinded'].includes(doc.status)) queueNumber += 1;
       const article = window.document.createElement('article');
       article.className = 'doc-row';
       const signerHtml = doc.signers.map((signer) =>
         `<span class="signer ${signer.signed_at ? 'signed' : ''}">${signer.signed_at ? '✓' : '○'} ${signer.signer_name}</span>`).join('');
-      const status = doc.status === 'completed'
-        ? 'Completed'
+      const status = doc.status === 'rescinded'
+        ? 'Rescinded'
+        : doc.status === 'completed' ? 'Completed'
         : doc.needsSignature ? 'Your signature is needed' : 'Awaiting signatures';
       article.innerHTML = `
-        <div class="queue-number">${doc.status === 'completed' ? '✓' : queueNumber}</div>
+        <div class="queue-number">${doc.status === 'rescinded' ? 'R' : doc.status === 'completed' ? '✓' : queueNumber}</div>
         <div class="doc-icon">PDF</div>
         <div class="doc-main"><h3></h3><p>${formatDate(doc.created_at)} · ${signerHtml}</p></div>
         <span class="status ${doc.status}">${status}</span>
@@ -168,50 +300,139 @@ const renderDocuments = async () => {
       openButton.textContent = 'View PDF';
       openButton.addEventListener('click', () => openPdf(doc.id, doc.original_name));
       actions.appendChild(openButton);
-      if (doc.needsSignature && doc.status !== 'completed') {
+      if (doc.needsSignature && !['completed', 'rescinded'].includes(doc.status)) {
         const signButton = window.document.createElement('button');
         signButton.className = 'primary compact';
         signButton.textContent = 'Review and sign';
         signButton.addEventListener('click', () => openSignerModal(doc.id, doc.title));
         actions.appendChild(signButton);
       }
+      if (state.user?.role === 'owner' && !['completed', 'rescinded'].includes(doc.status)) {
+        const rescindButton = window.document.createElement('button');
+        rescindButton.className = 'secondary compact danger';
+        rescindButton.textContent = 'Rescind';
+        rescindButton.addEventListener('click', async () => {
+          if (!window.confirm(`Rescind ${doc.title || doc.original_name}? It will be removed from the active signing queue.`)) return;
+          try {
+            const payload = await apiFetch(`/api/documents/${doc.id}/rescind`, { method: 'POST' });
+            setMessage(docMessage, payload.message || 'Document rescinded.');
+            await renderDocuments();
+          } catch (error) {
+            setMessage(docMessage, error.message, true);
+          }
+        });
+        actions.appendChild(rescindButton);
+      }
+      if (state.user?.role === 'viewer') actions.replaceChildren();
       list.appendChild(article);
     });
+    return documents;
   } catch (error) {
     setMessage(docMessage, error.message, true);
+    return [];
   }
 };
 
+const showPendingSignatureNotice = (user, documents) => {
+  const pending = ['owner', 'viewer'].includes(user.role)
+    ? documents.filter((document) => !['completed', 'rescinded'].includes(document.status))
+    : documents.filter((document) => document.needsSignature && !['completed', 'rescinded'].includes(document.status));
+  if (!pending.length) return;
+  state.pendingReviewDocument = pending[0];
+  $('pendingSignatureTitle').textContent = user.role === 'owner'
+    ? (pending.length === 1 ? 'Dispensation activity awaiting review' : `${pending.length} dispensations awaiting review`)
+    : user.role === 'viewer'
+      ? (pending.length === 1 ? 'Dispensation activity ready to view' : `${pending.length} dispensations ready to view`)
+    : (pending.length === 1 ? 'Dispensation awaiting review and signature' : `${pending.length} dispensations awaiting review and signature`);
+  $('pendingSignatureMessage').textContent = user.role === 'owner' || user.role === 'viewer'
+    ? `${pending.length} active dispensation${pending.length === 1 ? ' is' : 's are'} in the officer signing queue.`
+    : (pending.length === 1
+      ? `${pending[0].title || pending[0].original_name} is assigned to you and ready for review.`
+      : `You have ${pending.length} assigned dispensations ready for review.`);
+  show($('pendingSignatureNotice'));
+};
+
+$('dismissPendingSignature').addEventListener('click', () => hide($('pendingSignatureNotice')));
+$('reviewPendingSignature').addEventListener('click', () => {
+  const document = state.pendingReviewDocument;
+  hide($('pendingSignatureNotice'));
+  if (state.user?.role === 'owner' || state.user?.role === 'viewer') {
+    showWorkspaceSection('queue');
+  } else if (document) {
+    openSignerModal(document.id, document.title || document.original_name);
+  }
+});
+
 const openPdf = async (id, fileName) => {
   try {
-    setMessage(docMessage, 'Opening protected PDF...');
+    setMessage(docMessage, 'Loading protected PDF...');
     const blob = await apiFetch(`/api/documents/${id}/file`);
+    if (state.pdfObjectUrl) URL.revokeObjectURL(state.pdfObjectUrl);
     const url = URL.createObjectURL(blob);
-    const popup = window.open(url, '_blank', 'noopener');
-    if (!popup) {
-      const link = window.document.createElement('a');
-      link.href = url;
-      link.download = fileName || 'lodge-document.pdf';
-      link.click();
-    }
-    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    state.pdfObjectUrl = url;
+    $('pdfViewerTitle').textContent = fileName || 'Lodge document';
+    $('pdfFrame').src = url;
+    show($('pdfModal'));
     setMessage(docMessage, '');
   } catch (error) {
     setMessage(docMessage, error.message, true);
   }
 };
 
+$('closePdf').addEventListener('click', () => {
+  hide($('pdfModal'));
+  $('pdfFrame').removeAttribute('src');
+  if (state.pdfObjectUrl) URL.revokeObjectURL(state.pdfObjectUrl);
+  state.pdfObjectUrl = '';
+});
+
 const renderOfficers = async () => {
   try {
     const { officers } = await apiFetch('/api/officers');
-    const byRole = new Map(officers.map((officer) => [officer.role, officer]));
-    $('officerList').innerHTML = [
-      ['secretary', 'William McDuffie', 'Secretary'],
-      ['assistant_secretary', 'Adrian Reese', 'Assistant Secretary'],
-    ].map(([role, fallback, label]) => {
-      const officer = byRole.get(role);
-      return `<div><span class="officer-initials">${initials(officer?.name || fallback)}</span><p><strong>${officer?.name || fallback}</strong><small>${label} · ${officer ? 'Active' : 'Invitation needed'}</small></p><i class="${officer ? 'active' : ''}"></i></div>`;
-    }).join('');
+    const list = $('officerList');
+    list.innerHTML = '';
+    const activeByRole = new Map(officers.filter((officer) => officer.role !== 'viewer').map((officer) => [officer.role, officer]));
+    const entries = [
+      activeByRole.get('secretary') || { role: 'secretary', name: 'William McDuffie', email: '', inactive: true },
+      activeByRole.get('assistant_secretary') || { role: 'assistant_secretary', name: 'Adrian Reese', email: '', inactive: true },
+      ...officers.filter((officer) => officer.role === 'viewer'),
+    ];
+    entries.forEach((officer) => {
+      const row = window.document.createElement('div');
+      const badge = window.document.createElement('span');
+      badge.className = 'officer-initials';
+      badge.textContent = initials(officer.name);
+      const details = window.document.createElement('p');
+      const strong = window.document.createElement('strong');
+      strong.textContent = officer.name;
+      const small = window.document.createElement('small');
+      small.textContent = `${roleLabel(officer.role)} · ${officer.inactive ? 'Invitation needed' : 'Active'}`;
+      details.append(strong, small);
+      const status = window.document.createElement('i');
+      if (!officer.inactive) status.className = 'active';
+      row.append(badge, details, status);
+      if (!officer.inactive) {
+        const revoke = window.document.createElement('button');
+        revoke.className = 'text-button danger';
+        revoke.type = 'button';
+        revoke.textContent = 'Revoke';
+        revoke.addEventListener('click', async () => {
+          if (!window.confirm(`Revoke access for ${officer.name}? They will be signed out immediately.`)) return;
+          try {
+            const result = await apiFetch('/api/officers/revoke', {
+              method: 'POST',
+              body: JSON.stringify({ email: officer.email }),
+            });
+            setMessage(docMessage, result.message);
+            await renderOfficers();
+          } catch (error) {
+            setMessage(docMessage, error.message, true);
+          }
+        });
+        row.appendChild(revoke);
+      }
+      list.appendChild(row);
+    });
   } catch (error) {
     $('officerList').innerHTML = `<p class="helper">${error.message}</p>`;
   }
@@ -247,7 +468,6 @@ $('registerForm').addEventListener('submit', async (event) => {
       body: JSON.stringify({
         name: $('registerName').value.trim(),
         email: $('registerEmail').value.trim(),
-        phone: $('registerPhone').value.trim(),
         password: $('registerPassword').value,
         invitationToken: state.invitationToken,
       }),
@@ -266,7 +486,6 @@ $('requestReset').addEventListener('click', async () => {
     const payload = await apiFetch('/api/auth/forgot-password', {
       method: 'POST',
       body: JSON.stringify({
-        phone: $('resetPhone').value.trim(),
         email: $('resetEmail').value.trim(),
       }),
     });
@@ -281,7 +500,6 @@ $('resetSubmit').addEventListener('click', async () => {
     const payload = await apiFetch('/api/auth/reset-password', {
       method: 'POST',
       body: JSON.stringify({
-        phone: $('resetPhone').value.trim(),
         email: $('resetEmail').value.trim(),
         code: $('resetCode').value.trim(),
         newPassword: $('resetPassword').value,
@@ -309,7 +527,156 @@ $('documentFile').addEventListener('change', () => {
   $('selectedFile').textContent = $('documentFile').files[0]?.name || 'No file selected';
 });
 $('uploadShortcut').addEventListener('click', () => {
+  showWorkspaceSection('queue');
   $('uploadPanel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
+const builderToday = new Date();
+const builderTodayValue = [builderToday.getFullYear(), String(builderToday.getMonth() + 1).padStart(2, '0'), String(builderToday.getDate()).padStart(2, '0')].join('-');
+$('dispRequestDate').value = builderTodayValue;
+$('dispSignerRole').addEventListener('change', applySubmissionProfiles);
+['dispMasterAddress'].forEach((id) => {
+  $(id).addEventListener('input', () => { $('confirmSubmissionProfiles').checked = false; });
+});
+$('reviewPastedDetails').addEventListener('click', async () => {
+  const text = $('dispPasteDetails').value.trim();
+  if (!text) return setMessage($('builderMessage'), 'Paste the dispensation information first.', true);
+  try {
+    const result = await apiFetch('/api/dispensations/parse', {
+      method: 'POST', body: JSON.stringify({ text }),
+    });
+    state.parsedDispensation = result;
+    const labels = {
+      title: 'Title', requestDate: 'Request date', signerRole: 'Officer', requestDetails: 'Request',
+      eventDate: 'Event date', eventTime: 'Event time', locationName: 'Location',
+      streetAddress: 'Street', cityState: 'City, state, ZIP',
+      worshipfulMasterAddress: 'Worshipful Master address', secretaryAddress: 'Officer address',
+    };
+    const container = $('pasteReviewFields');
+    container.innerHTML = '';
+    Object.entries(labels).forEach(([key, label]) => {
+      if (!result.fields[key] && ['worshipfulMasterAddress', 'secretaryAddress'].includes(key)) return;
+      const row = window.document.createElement('div');
+      const name = window.document.createElement('strong');
+      const value = window.document.createElement('span');
+      name.textContent = label;
+      let displayValue = result.fields[key] || 'Not found';
+      if (key === 'signerRole') {
+        displayValue = result.fields[key] === 'assistant_secretary' ? 'Adrian Reese, Assistant Secretary' : 'William McDuffie, Secretary';
+      } else if (key === 'eventTime' && /^\d{1,2}:\d{2}$/.test(result.fields[key] || '')) {
+        const [hourText, minute] = result.fields[key].split(':');
+        const hour = Number(hourText);
+        displayValue = `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
+      } else if ((key === 'requestDate' || key === 'eventDate') && /^\d{4}-\d{2}-\d{2}$/.test(result.fields[key] || '')) {
+        displayValue = new Intl.DateTimeFormat('en-US', { dateStyle: 'long', timeZone: 'UTC' })
+          .format(new Date(`${result.fields[key]}T12:00:00Z`));
+      }
+      value.textContent = displayValue;
+      row.append(name, value);
+      container.appendChild(row);
+    });
+    $('pasteReviewWarnings').textContent = result.warnings.join(' ');
+    show($('pasteReviewModal'));
+  } catch (error) {
+    setMessage($('builderMessage'), error.message, true);
+  }
+});
+$('findLocationAddress').addEventListener('click', async () => {
+  const locationName = $('dispLocationName').value.trim();
+  if (!locationName) return setMessage($('builderMessage'), 'Enter the event location name first.', true);
+  try {
+    setMessage($('builderMessage'), 'Searching for the event address...');
+    const { matches } = await apiFetch('/api/locations/search', {
+      method: 'POST',
+      body: JSON.stringify({ locationName, cityState: $('dispCityState').value.trim() }),
+    });
+    if (!matches.length) throw new Error('No matching address was found. Add a city or ZIP code and try again.');
+    state.locationMatch = matches[0];
+    $('locationMatchName').textContent = matches[0].displayName;
+    $('locationMatchStreet').textContent = matches[0].streetAddress;
+    $('locationMatchCity').textContent = matches[0].cityState;
+    setMessage($('builderMessage'), '');
+    show($('locationConfirmModal'));
+  } catch (error) {
+    setMessage($('builderMessage'), error.message, true);
+  }
+});
+$('rejectLocationAddress').addEventListener('click', () => hide($('locationConfirmModal')));
+$('useLocationAddress').addEventListener('click', () => {
+  if (!state.locationMatch) return;
+  $('dispStreet').value = state.locationMatch.streetAddress;
+  $('dispCityState').value = state.locationMatch.cityState;
+  hide($('locationConfirmModal'));
+});
+$('rejectPastedDetails').addEventListener('click', () => hide($('pasteReviewModal')));
+$('usePastedDetails').addEventListener('click', fillFormFromParsedDispensation);
+
+const dispensationPayload = () => ({
+  title: $('dispTitle').value.trim(),
+  requestDate: $('dispRequestDate').value,
+  signerRole: $('dispSignerRole').value,
+  requestDetails: $('dispRequestDetails').value.trim(),
+  eventDate: $('dispEventDate').value,
+  eventTime: $('dispEventTime').value,
+  locationName: $('dispLocationName').value.trim(),
+  streetAddress: $('dispStreet').value.trim(),
+  cityState: $('dispCityState').value.trim(),
+  worshipfulMasterAddress: $('dispMasterAddress').value.trim(),
+  personalInfoConfirmed: $('confirmSubmissionProfiles').checked,
+});
+
+$('dispensationForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const message = $('builderMessage');
+  try {
+    setMessage(message, 'Creating your PDF preview...');
+    const blob = await apiFetch('/api/dispensations/preview', { method: 'POST', body: JSON.stringify(dispensationPayload()) });
+    if (state.dispensationPreviewUrl) URL.revokeObjectURL(state.dispensationPreviewUrl);
+    state.dispensationPreviewUrl = URL.createObjectURL(blob);
+    $('dispensationPreviewFrame').src = state.dispensationPreviewUrl;
+    const payload = dispensationPayload();
+    const rows = [
+      ['Title', payload.title], ['Request', payload.requestDetails],
+      ['Event', `${payload.eventDate} at ${formatClockTime(payload.eventTime)}`],
+      ['Location', `${payload.locationName}, ${payload.streetAddress}, ${payload.cityState}`],
+      ['Officer', payload.signerRole === 'assistant_secretary' ? 'Adrian Reese, Assistant Secretary' : 'William McDuffie, Secretary'],
+      ['Worshipful Master address', payload.worshipfulMasterAddress],
+    ];
+    const container = $('finalReviewFields');
+    container.innerHTML = '';
+    rows.forEach(([label, value]) => {
+      const row = window.document.createElement('div');
+      const name = window.document.createElement('strong');
+      const content = window.document.createElement('span');
+      name.textContent = label;
+      content.textContent = value;
+      row.append(name, content);
+      container.appendChild(row);
+    });
+    setMessage(message, '');
+    show($('dispensationFinalReview'));
+  } catch (error) {
+    setMessage(message, error.message, true);
+  }
+});
+
+$('backFromFinalReview').addEventListener('click', () => hide($('dispensationFinalReview')));
+$('sendDispensation').addEventListener('click', async () => {
+  try {
+    setMessage($('finalReviewMessage'), 'Sending the dispensation to the officer queue...');
+    await apiFetch('/api/dispensations', { method: 'POST', body: JSON.stringify(dispensationPayload()) });
+    hide($('dispensationFinalReview'));
+    $('dispensationForm').reset();
+    $('dispRequestDate').value = builderTodayValue;
+    applySubmissionProfiles();
+    document.querySelectorAll('.parsed-covered').forEach((element) => element.classList.remove('hidden'));
+    hide($('remainingQuestionsIntro'));
+    showWorkspaceSection('queue');
+    setMessage(docMessage, 'Dispensation created from the official template and added to the queue.');
+    await renderDocuments();
+  } catch (error) {
+    setMessage($('finalReviewMessage'), error.message, true);
+  }
 });
 
 $('uploadForm').addEventListener('submit', async (event) => {
@@ -345,7 +712,6 @@ $('inviteForm').addEventListener('submit', async (event) => {
         role: $('inviteRole').value,
         name: $('inviteName').value.trim(),
         email: $('inviteEmail').value.trim(),
-        phone: $('invitePhone').value.trim(),
       }),
     });
     state.invitationUrl = payload.inviteUrl;
@@ -408,12 +774,15 @@ const clearProfileCanvas = () => {
   state.profileHasInk = false;
 };
 
-const typedFonts = [
-  '"Snell Roundhand", "Segoe Script", cursive',
-  '"Apple Chancery", "URW Chancery L", cursive',
-  '"Brush Script MT", "Segoe Print", cursive',
-  'Georgia, "Times New Roman", serif',
-  '"Bradley Hand", "Comic Sans MS", cursive',
+const typedSignatureStyles = [
+  { label: 'Classic Script', font: '"Snell Roundhand", "Segoe Script", cursive', size: 64, skew: 0, rotation: 0 },
+  { label: 'Bold Script', font: '"Snell Roundhand", "Segoe Script", cursive', size: 61, weight: 700, skew: 0, rotation: 0 },
+  { label: 'Formal Chancery', font: '"Apple Chancery", "URW Chancery L", cursive', size: 55, skew: -0.08, rotation: 0 },
+  { label: 'Elegant Script', font: '"Savoye LET", "Brush Script MT", cursive', size: 61, skew: 0, rotation: 0 },
+  { label: 'House Script', font: 'SignPainter, "Brush Script MT", cursive', size: 60, skew: -0.04, rotation: 0 },
+  { label: 'Ornate Pen', font: 'Zapfino, "Snell Roundhand", cursive', size: 43, skew: 0, rotation: 0 },
+  { label: 'Personal Note', font: 'Noteworthy, "Segoe Print", cursive', size: 56, skew: 0, rotation: -0.02 },
+  { label: 'Natural Hand', font: '"Bradley Hand", "Segoe Print", cursive', size: 58, skew: 0, rotation: -0.035 },
 ];
 
 const drawTypedSignature = (canvas, name, styleIndex) => {
@@ -426,54 +795,74 @@ const drawTypedSignature = (canvas, name, styleIndex) => {
   context.scale(ratio, ratio);
   context.clearRect(0, 0, width, height);
   context.fillStyle = '#071b2f';
-  context.strokeStyle = '#071b2f';
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  const fontSize = [64, 55, 61, 52, 58][styleIndex];
-  const italic = styleIndex === 3 ? 'italic' : '';
-  context.font = `${italic} ${fontSize}px ${typedFonts[styleIndex]}`;
+  const style = typedSignatureStyles[styleIndex] || typedSignatureStyles[0];
+  context.font = `${style.weight || 400} ${style.size}px ${style.font}`;
   const safeName = name || 'Your Name';
   const measured = context.measureText(safeName).width;
   const scale = Math.min(1, 535 / Math.max(measured, 1));
   context.save();
   context.translate(width / 2, height / 2 - 3);
-  if (styleIndex === 1) context.transform(1, 0, -0.13, 1, 0, 0);
-  if (styleIndex === 4) context.rotate(-0.035);
+  if (style.skew) context.transform(1, 0, style.skew, 1, 0, 0);
+  if (style.rotation) context.rotate(style.rotation);
   context.scale(scale, 1);
   context.fillText(safeName, 0, 0);
   context.restore();
-  context.lineCap = 'round';
-  context.lineWidth = styleIndex === 2 ? 2 : 1.4;
-  context.beginPath();
-  if (styleIndex === 0) {
-    context.moveTo(100, 112); context.bezierCurveTo(260, 121, 440, 102, 555, 112);
-  } else if (styleIndex === 1) {
-    context.moveTo(140, 115); context.bezierCurveTo(280, 100, 420, 126, 520, 108);
-  } else if (styleIndex === 2) {
-    context.moveTo(105, 113); context.lineTo(520, 113); context.bezierCurveTo(555, 113, 560, 95, 580, 99);
-  } else if (styleIndex === 3) {
-    context.moveTo(170, 111); context.lineTo(450, 111);
-  } else {
-    context.moveTo(120, 116); context.bezierCurveTo(270, 92, 420, 126, 555, 104);
-  }
-  context.stroke();
 };
 
 const renderTypedChoices = () => {
   const name = $('typedSignatureName').value.trim() || state.user?.name || 'Your Name';
   const container = $('typedSignatureChoices');
   container.innerHTML = '';
-  for (let index = 0; index < 5; index += 1) {
+  for (let index = 0; index < typedSignatureStyles.length; index += 1) {
     const button = window.document.createElement('button');
     button.type = 'button';
     button.className = `signature-choice ${state.selectedTypedStyle === index ? 'selected' : ''}`;
-    button.setAttribute('aria-label', `Signature style ${index + 1}`);
+    button.setAttribute('aria-label', typedSignatureStyles[index].label);
     const canvas = window.document.createElement('canvas');
     drawTypedSignature(canvas, name, index);
     button.appendChild(canvas);
+    const label = window.document.createElement('span');
+    label.textContent = typedSignatureStyles[index].label;
+    button.appendChild(label);
     button.addEventListener('click', () => {
       state.selectedTypedStyle = index;
       renderTypedChoices();
+    });
+    container.appendChild(button);
+  }
+};
+
+const signatureInitialsFromName = (name) => name
+  .trim()
+  .split(/\s+/)
+  .filter(Boolean)
+  .map((part) => part[0])
+  .join('')
+  .slice(0, 4)
+  .toUpperCase();
+
+const renderInitialsChoices = () => {
+  const value = $('signatureInitials').value.trim().toUpperCase()
+    || signatureInitialsFromName(state.user?.name || '')
+    || 'WDS';
+  const container = $('initialsSignatureChoices');
+  container.innerHTML = '';
+  for (let index = 0; index < typedSignatureStyles.length; index += 1) {
+    const button = window.document.createElement('button');
+    button.type = 'button';
+    button.className = `signature-choice ${state.selectedTypedStyle === index ? 'selected' : ''}`;
+    button.setAttribute('aria-label', `${typedSignatureStyles[index].label} initials`);
+    const canvas = window.document.createElement('canvas');
+    drawTypedSignature(canvas, value, index);
+    button.appendChild(canvas);
+    const label = window.document.createElement('span');
+    label.textContent = typedSignatureStyles[index].label;
+    button.appendChild(label);
+    button.addEventListener('click', () => {
+      state.selectedTypedStyle = index;
+      renderInitialsChoices();
     });
     container.appendChild(button);
   }
@@ -483,9 +872,12 @@ const selectSignatureMode = (mode) => {
   state.signatureMode = mode;
   $('chooseDraw').classList.toggle('active', mode === 'drawn');
   $('chooseType').classList.toggle('active', mode === 'typed');
+  $('chooseInitials').classList.toggle('active', mode === 'initials');
   $('drawSignaturePanel').classList.toggle('hidden', mode !== 'drawn');
   $('typeSignaturePanel').classList.toggle('hidden', mode !== 'typed');
+  $('initialsSignaturePanel').classList.toggle('hidden', mode !== 'initials');
   if (mode === 'typed') renderTypedChoices();
+  if (mode === 'initials') renderInitialsChoices();
 };
 
 const openSignatureSetup = (required = false) => {
@@ -496,9 +888,10 @@ const openSignatureSetup = (required = false) => {
     ? 'Choose how your signature should appear before opening the live document queue.'
     : 'The new signature will be used on documents you sign after it is saved.';
   $('typedSignatureName').value = state.user?.name || '';
+  $('signatureInitials').value = signatureInitialsFromName(state.user?.name || '');
   state.selectedTypedStyle = 0;
   show($('signatureSetupModal'));
-  selectSignatureMode('drawn');
+  selectSignatureMode('typed');
   configureProfileCanvas();
   clearProfileCanvas();
   setMessage($('profileSignatureMessage'), '');
@@ -507,7 +900,12 @@ const openSignatureSetup = (required = false) => {
 $('profileButton').addEventListener('click', () => openSignatureSetup(false));
 $('chooseDraw').addEventListener('click', () => selectSignatureMode('drawn'));
 $('chooseType').addEventListener('click', () => selectSignatureMode('typed'));
+$('chooseInitials').addEventListener('click', () => selectSignatureMode('initials'));
 $('typedSignatureName').addEventListener('input', renderTypedChoices);
+$('signatureInitials').addEventListener('input', (event) => {
+  event.target.value = event.target.value.replace(/[^a-z]/gi, '').slice(0, 4).toUpperCase();
+  renderInitialsChoices();
+});
 $('clearProfileSig').addEventListener('click', clearProfileCanvas);
 $('closeSignatureSetup').addEventListener('click', () => {
   if (!state.signatureRequired) hide($('signatureSetupModal'));
@@ -521,13 +919,20 @@ $('saveProfileSignature').addEventListener('click', async () => {
       return setMessage($('profileSignatureMessage'), 'Draw your signature before saving.', true);
     }
     signatureData = profileCanvas.toDataURL('image/png');
-  } else {
+  } else if (state.signatureMode === 'typed') {
     const name = $('typedSignatureName').value.trim();
     if (!name) return setMessage($('profileSignatureMessage'), 'Type your name before choosing a style.', true);
     const canvas = window.document.createElement('canvas');
     drawTypedSignature(canvas, name, state.selectedTypedStyle);
     signatureData = canvas.toDataURL('image/png');
-    styleName = `professional-${state.selectedTypedStyle + 1}`;
+    styleName = `cursive-${state.selectedTypedStyle + 1}`;
+  } else {
+    const value = $('signatureInitials').value.trim().toUpperCase();
+    if (!value) return setMessage($('profileSignatureMessage'), 'Enter your initials before choosing a style.', true);
+    const canvas = window.document.createElement('canvas');
+    drawTypedSignature(canvas, value, state.selectedTypedStyle);
+    signatureData = canvas.toDataURL('image/png');
+    styleName = `initials-${state.selectedTypedStyle + 1}`;
   }
   try {
     const payload = await apiFetch('/api/profile/signature', {
@@ -559,35 +964,71 @@ const openSignerModal = async (documentId, title) => {
   state.signingDocumentId = documentId;
   $('signTitle').textContent = `Sign ${title || 'document'}`;
   $('signatureConsent').checked = false;
-  setMessage($('signMessage'), '');
+  $('signerAddress').value = '';
+  $('submitSig').disabled = true;
+  if (state.signingPdfObjectUrl) URL.revokeObjectURL(state.signingPdfObjectUrl);
+  state.signingPdfObjectUrl = null;
+  $('signingPdfFrame').removeAttribute('src');
+  setMessage($('signMessage'), 'Loading the document for review...');
   show($('signModal'));
   try {
-    await loadSavedSignature($('signingSignaturePreview'));
+    const pdfResponse = await fetch(`/api/documents/${documentId}/file`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
+    if (!pdfResponse.ok) {
+      const payload = await pdfResponse.json().catch(() => ({}));
+      throw new Error(payload.error || 'The PDF could not be loaded for review.');
+    }
+    const [pdfBlob] = await Promise.all([
+      pdfResponse.blob(),
+      loadSavedSignature($('signingSignaturePreview')),
+    ]);
+    state.signingPdfObjectUrl = URL.createObjectURL(pdfBlob);
+    $('signingPdfFrame').src = state.signingPdfObjectUrl;
+    $('submitSig').disabled = false;
+    setMessage($('signMessage'), 'Document loaded. Review it before consenting and signing.');
   } catch (error) {
     setMessage($('signMessage'), error.message, true);
   }
 };
 
-$('closeSign').addEventListener('click', () => hide($('signModal')));
-$('changeSignatureFromSign').addEventListener('click', () => {
+const closeSignerModal = () => {
   hide($('signModal'));
+  $('signingPdfFrame').removeAttribute('src');
+  if (state.signingPdfObjectUrl) URL.revokeObjectURL(state.signingPdfObjectUrl);
+  state.signingPdfObjectUrl = null;
+  $('submitSig').disabled = true;
+};
+
+$('closeSign').addEventListener('click', closeSignerModal);
+$('changeSignatureFromSign').addEventListener('click', () => {
+  closeSignerModal();
   openSignatureSetup(false);
 });
 $('submitSig').addEventListener('click', async () => {
   if (!$('signatureConsent').checked) {
     return setMessage($('signMessage'), 'Confirm the electronic signature consent.', true);
   }
+  if (!$('signerAddress').value.trim()) {
+    return setMessage($('signMessage'), 'Enter your address as it should appear on the dispensation.', true);
+  }
   try {
     const payload = await apiFetch(`/api/documents/${state.signingDocumentId}/sign`, {
-      method: 'POST', body: JSON.stringify({ consent: true }),
+      method: 'POST', body: JSON.stringify({ consent: true, officerAddress: $('signerAddress').value.trim() }),
     });
-    hide($('signModal'));
+    closeSignerModal();
     setMessage(docMessage, payload.message);
     await renderDocuments();
   } catch (error) {
     setMessage($('signMessage'), error.message, true);
   }
 });
+
+$('dispensationForm').addEventListener('invalid', (event) => {
+  event.target.closest('.parsed-covered')?.classList.remove('hidden');
+  const label = document.querySelector(`label[for="${event.target.id}"]`)?.textContent?.trim() || 'required field';
+  setMessage($('builderMessage'), `Complete ${label.toLowerCase()} before reviewing the PDF.`, true);
+}, true);
 
 const initialize = async () => {
   const inviteEmail = new URLSearchParams(window.location.search).get('email');

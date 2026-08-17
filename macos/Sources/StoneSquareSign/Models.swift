@@ -5,14 +5,14 @@ struct User: Codable, Identifiable, Equatable {
     let email: String
     let name: String
     let role: String
-    let phone: String?
     let hasSignature: Bool
 
     var roleLabel: String {
         switch role {
-        case "owner": return "Document Owner"
+        case "owner": return "Worshipful Master / Administrator"
         case "secretary": return "Secretary"
         case "assistant_secretary": return "Assistant Secretary"
+        case "viewer": return "Lodge Viewer"
         default: return "Signer"
         }
     }
@@ -41,14 +41,15 @@ struct LodgeDocument: Codable, Identifiable {
 
     var displayTitle: String { title?.isEmpty == false ? title! : originalName }
     var isComplete: Bool { status == "completed" }
+    var isRescinded: Bool { status == "rescinded" }
+    var isTerminal: Bool { isComplete || isRescinded }
 }
 
 struct Officer: Codable, Identifiable {
-    var id: String { role }
+    var id: String { email }
     let role: String
     let name: String
     let email: String
-    let phone: String?
 }
 
 struct AuthResponse: Codable { let token: String; let user: User }
@@ -62,5 +63,66 @@ struct EmptyResponse: Codable { let ok: Bool }
 struct UploadResponse: Codable { let document: UploadedDocument }
 struct UploadedDocument: Codable { let id: String }
 struct APIError: Codable { let error: String }
+struct VersionResponse: Codable { let version: String }
 
-enum AppSection: Hashable { case documents, access, profile, settings }
+struct CandidateRecord: Codable, Identifiable, Equatable {
+    var id: String
+    var name: String
+    var category: String
+    var phone: String
+    var email: String
+    var status: String
+    var owner: String
+    var lastContacted: String
+    var nextStep: String
+    var targetDate: String
+    var instructor: String
+    var notes: String
+    var source: String
+    var updatedAt: String?
+    var updatedBy: String?
+
+    static func blank(category: String) -> CandidateRecord {
+        CandidateRecord(
+            id: "", name: "", category: category, phone: "", email: "",
+            status: "New", owner: "", lastContacted: "", nextStep: "",
+            targetDate: "", instructor: "", notes: "", source: "Manual entry",
+            updatedAt: nil, updatedBy: nil
+        )
+    }
+}
+
+struct CandidateRecordsResponse: Codable { let records: [CandidateRecord] }
+struct SubmissionProfile: Codable, Identifiable {
+    var id: String { role }
+    let role: String
+    let name: String
+    let address: String
+}
+struct SubmissionProfilesResponse: Codable { let profiles: [SubmissionProfile] }
+struct ParsedDispensationFields: Codable {
+    let title: String
+    let requestDate: String
+    let signerRole: String
+    let requestDetails: String
+    let eventDate: String
+    let eventTime: String
+    let locationName: String
+    let streetAddress: String
+    let cityState: String
+    let worshipfulMasterAddress: String
+    let secretaryAddress: String
+}
+struct ParsedDispensationResponse: Codable {
+    let fields: ParsedDispensationFields
+    let warnings: [String]
+}
+struct LocationMatch: Codable, Identifiable {
+    let displayName: String
+    let streetAddress: String
+    let cityState: String
+    var id: String { "\(displayName)|\(streetAddress)|\(cityState)" }
+}
+struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
+
+enum AppSection: Hashable { case home, documents, candidateTracker, createDispensation, access, profile, settings }

@@ -43,12 +43,10 @@ keeps it awake.
 executed copies and the signature images are held in Postgres as `bytea`. At roughly
 300 KB a dispensation, 0.5 GB is on the order of 1,600 documents.
 
-## What is not free, and what was done instead
+## Account recovery
 
-**Password reset by SMS.** No provider offers free production SMS. Reset codes are
-emailed to the address on the account instead, and an officer can enter either their
-phone number or their email to request one. The Twilio path is still wired up: fill in
-the three `TWILIO_` variables and it switches to SMS on its own, no code change.
+Password reset codes are emailed to the address on the account. The application does
+not collect or store phone numbers.
 
 **A Mac app for anyone else's Mac.** Distributing a Mac app that opens without a
 Gatekeeper warning needs an Apple Developer ID, which is $99 a year. The app runs on

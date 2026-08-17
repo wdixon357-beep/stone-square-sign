@@ -54,16 +54,14 @@ services:
       - key: MAIL_FROM
         sync: false
 
+      # Candidate Tracker single sign on. The shared secret must be the SAME value the
+      # Tracker already runs with; rotating one side alone breaks SSO for every officer.
+      - key: CANDIDATE_TRACKER_URL
+        sync: false
+      - key: TRACKER_SSO_SHARED_SECRET
+        sync: false
+
       - key: SESSION_DAYS
         value: "7"
       - key: MAX_UPLOAD_BYTES
         value: "12582912"
-
-      # Optional. There is no free production SMS, so reset codes go by email until
-      # these are filled in. Leave blank and the app uses email without complaint.
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_FROM_NUMBER
-        sync: false

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LocalAuthentication
 import Security
 
 enum ClientError: LocalizedError {
@@ -16,41 +17,141 @@ enum ClientError: LocalizedError {
     }
 }
 
+private struct TrackerHandoffResponse: Decodable {
+    let url: String
+}
+
 enum TokenStore {
-    private static let service = "com.dstechnology.stonesquare.sign"
-    private static let account = "session-token"
+    private static var fileURL: URL? {
+        guard let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return nil }
+        let directory = applicationSupport.appendingPathComponent("Stone Square Sign", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        return directory.appendingPathComponent("session", isDirectory: false)
+    }
 
     static func save(_ token: String) {
-        delete()
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: Data(token.utf8),
-        ]
-        SecItemAdd(query as CFDictionary, nil)
+        guard let fileURL else { return }
+        try? Data(token.utf8).write(to: fileURL, options: [.atomic, .completeFileProtection])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
 
     static func load() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
+        guard let fileURL, let data = try? Data(contentsOf: fileURL) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     static func delete() {
-        SecItemDelete([
+        guard let fileURL else { return }
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+}
+
+enum BiometricCredentialError: LocalizedError {
+    case unavailable
+    case storage(OSStatus)
+    case missing
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: return "Touch ID is not available on this Mac."
+        case .storage: return "The secure Keychain login could not be saved."
+        case .missing: return "No Touch ID login is saved. Sign in with your password and enable it again."
+        }
+    }
+}
+
+enum BiometricCredentialStore {
+    private static let service = "com.dstechnology.stonesquare.sign.biometric.v2"
+    private static let legacyService = "com.dstechnology.stonesquare.sign.biometric.v1"
+    private static let account = "session-token"
+
+    static var isAvailable: Bool {
+        let context = LAContext()
+        var error: NSError?
+        return context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+    }
+
+    static func save(_ token: String) throws {
+        delete(service: service)
+        var accessError: Unmanaged<CFError>?
+        guard let accessControl = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            .biometryCurrentSet,
+            &accessError
+        ) else {
+            throw BiometricCredentialError.storage(errSecParam)
+        }
+        var query = baseQuery(service: service)
+        query[kSecAttrAccessControl as String] = accessControl
+        query[kSecValueData as String] = Data(token.utf8)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw BiometricCredentialError.storage(status) }
+    }
+
+    static func load() async throws -> String {
+        let context = LAContext()
+        context.localizedCancelTitle = "Use Password"
+        let authenticated = try await context.evaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            localizedReason: "Sign in to Stone Square Sign"
+        )
+        guard authenticated else { throw BiometricCredentialError.unavailable }
+        do {
+            return try read(service: service, context: context)
+        } catch BiometricCredentialError.missing {
+            // Existing installations stored the token in the v1 item. Read it only
+            // after successful Touch ID, then migrate it to a biometry-bound item.
+            let token = try read(service: legacyService, context: context)
+            do {
+                try save(token)
+                delete(service: legacyService)
+            } catch {
+                // Preserve the authenticated legacy item when migration cannot be
+                // completed so an existing owner is not locked out mid-upgrade.
+            }
+            return token
+        }
+    }
+
+    private static func read(service: String, context: LAContext) throws -> String {
+        var query = baseQuery(service: service)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationContext as String] = context
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { throw BiometricCredentialError.missing }
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let token = String(data: data, encoding: .utf8) else {
+            throw BiometricCredentialError.storage(status)
+        }
+        return token
+    }
+
+    static func delete() {
+        delete(service: service)
+        delete(service: legacyService)
+    }
+
+    private static func delete(service: String) {
+        SecItemDelete(baseQuery(service: service) as CFDictionary)
+    }
+
+    private static func baseQuery(service: String) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-        ] as CFDictionary)
+        ]
     }
 }
 
@@ -59,16 +160,27 @@ final class AppModel: ObservableObject {
     @Published var user: User?
     @Published var documents: [LodgeDocument] = []
     @Published var officers: [Officer] = []
+    @Published var submissionProfiles: [SubmissionProfile] = []
+    @Published var candidateRecords: [CandidateRecord] = []
+    @Published var candidateTrackerLoading = false
     @Published var isBusy = false
     @Published var isLive = false
+    @Published var availableUpdateVersion: String?
+    @Published var biometricLoginEnabled: Bool
+    @Published var biometricLoginAvailable: Bool
     @Published var message = ""
     @Published var isError = false
+    @Published var requestedSection: AppSection?
     @Published var serverAddress: String {
         didSet { UserDefaults.standard.set(serverAddress, forKey: "server-address") }
     }
 
     private var token: String?
     private var liveTask: Task<Void, Never>?
+    private var updateTask: Task<Void, Never>?
+    private var candidateTrackerAuthenticated = false
+    private var dismissedUpdateVersion = UserDefaults.standard.string(forKey: "dismissed-update-version")
+    private let candidateTrackerBaseURL = URL(string: "https://tracker.stonesquare22pha.org/")!
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -77,7 +189,9 @@ final class AppModel: ObservableObject {
 
     init() {
         serverAddress = UserDefaults.standard.string(forKey: "server-address") ?? "http://localhost:3000"
-        token = TokenStore.load()
+        biometricLoginEnabled = UserDefaults.standard.bool(forKey: "biometric-login-enabled")
+        biometricLoginAvailable = BiometricCredentialStore.isAvailable
+        token = biometricLoginEnabled ? nil : TokenStore.load()
     }
 
     var baseURL: URL? {
@@ -127,39 +241,70 @@ final class AppModel: ObservableObject {
             let body = try JSONSerialization.data(withJSONObject: ["email": email, "password": password])
             let response: AuthResponse = try await self.request("/api/auth/login", method: "POST", body: body)
             self.token = response.token
-            TokenStore.save(response.token)
+            try self.saveLogin(response.token)
             self.user = response.user
             await self.refresh(silent: true)
             self.startLiveQueue()
         }
     }
 
-    func createOwner(name: String, email: String, phone: String, password: String) async {
+    func signInWithBiometrics() async {
+        await perform {
+            guard self.biometricLoginEnabled else { throw BiometricCredentialError.missing }
+            self.token = try await BiometricCredentialStore.load()
+            let response: MeResponse = try await self.request("/api/auth/me")
+            self.user = response.user
+            await self.refresh(silent: true)
+            self.startLiveQueue()
+        }
+    }
+
+    func setBiometricLogin(enabled: Bool) async {
+        await perform {
+            if enabled {
+                guard self.biometricLoginAvailable else { throw BiometricCredentialError.unavailable }
+                guard let token = self.token else { throw BiometricCredentialError.missing }
+                try BiometricCredentialStore.save(token)
+                TokenStore.delete()
+                self.biometricLoginEnabled = true
+                UserDefaults.standard.set(true, forKey: "biometric-login-enabled")
+                self.message = "Touch ID and Keychain login are enabled."
+            } else {
+                if let token = self.token { TokenStore.save(token) }
+                BiometricCredentialStore.delete()
+                self.biometricLoginEnabled = false
+                UserDefaults.standard.set(false, forKey: "biometric-login-enabled")
+                self.message = "Touch ID and Keychain login are disabled."
+            }
+        }
+    }
+
+    func createOwner(name: String, email: String, password: String) async {
         await perform {
             let body = try JSONSerialization.data(withJSONObject: [
-                "name": name, "email": email, "phone": phone, "password": password,
+                "name": name, "email": email, "password": password,
             ])
             let response: AuthResponse = try await self.request("/api/auth/register", method: "POST", body: body)
             self.token = response.token
-            TokenStore.save(response.token)
+            try self.saveLogin(response.token)
             self.user = response.user
             await self.refresh(silent: true)
             self.startLiveQueue()
         }
     }
 
-    func requestReset(phone: String) async {
+    func requestReset(email: String) async {
         await perform {
-            let body = try JSONSerialization.data(withJSONObject: ["phone": phone])
+            let body = try JSONSerialization.data(withJSONObject: ["email": email])
             let response: MessageResponse = try await self.request("/api/auth/forgot-password", method: "POST", body: body)
             self.message = response.message
         }
     }
 
-    func resetPassword(phone: String, code: String, password: String) async {
+    func resetPassword(email: String, code: String, password: String) async {
         await perform {
             let body = try JSONSerialization.data(withJSONObject: [
-                "phone": phone, "code": code, "newPassword": password,
+                "email": email, "code": code, "newPassword": password,
             ])
             let response: MessageResponse = try await self.request("/api/auth/reset-password", method: "POST", body: body)
             self.message = response.message
@@ -173,6 +318,8 @@ final class AppModel: ObservableObject {
             if user?.role == "owner" {
                 let officerResponse: OfficersResponse = try await request("/api/officers")
                 officers = officerResponse.officers
+                let profileResponse: SubmissionProfilesResponse = try await request("/api/submission-profiles")
+                submissionProfiles = profileResponse.profiles
             }
         } catch {
             if !silent { show(error) }
@@ -214,7 +361,47 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func startUpdateChecks() {
+        updateTask?.cancel()
+        updateTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                await self.checkForUpdate()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
+    }
+
+    func checkForUpdate() async {
+        do {
+            let response: VersionResponse = try await request("/api/version")
+            let currentVersion = Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? "0"
+            let isNewer = response.version.compare(currentVersion, options: .numeric) == .orderedDescending
+            availableUpdateVersion = isNewer && response.version != dismissedUpdateVersion
+                ? response.version
+                : nil
+        } catch {
+            // The normal connection status already reports service interruptions.
+        }
+    }
+
+    func dismissAvailableUpdate() {
+        guard let version = availableUpdateVersion else { return }
+        dismissedUpdateVersion = version
+        UserDefaults.standard.set(version, forKey: "dismissed-update-version")
+        availableUpdateVersion = nil
+        message = "Update notice dismissed. Install only a signed and notarized Stone Square Sign release."
+        isError = false
+    }
+
     func upload(url: URL) async {
+        guard user?.role == "owner" else {
+            message = "This account has status-only document access."
+            isError = true
+            return
+        }
         await perform {
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
@@ -237,16 +424,235 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func invite(name: String, email: String, phone: String, role: String) async -> InviteResponse? {
+    func createDispensation(
+        title: String,
+        requestDate: String,
+        signerRole: String,
+        requestDetails: String,
+        eventDate: String,
+        eventTime: String,
+        locationName: String,
+        streetAddress: String,
+        cityState: String,
+        worshipfulMasterAddress: String,
+        personalInfoConfirmed: Bool
+    ) async -> Bool {
+        guard user?.role == "owner" else {
+            message = "This account cannot create dispensations."
+            isError = true
+            return false
+        }
+        var success = false
+        await perform {
+            let body = try JSONSerialization.data(withJSONObject: [
+                "title": title,
+                "requestDate": requestDate,
+                "signerRole": signerRole,
+                "requestDetails": requestDetails,
+                "eventDate": eventDate,
+                "eventTime": eventTime,
+                "locationName": locationName,
+                "streetAddress": streetAddress,
+                "cityState": cityState,
+                "worshipfulMasterAddress": worshipfulMasterAddress,
+                "personalInfoConfirmed": personalInfoConfirmed,
+            ])
+            let _: UploadResponse = try await self.request("/api/dispensations", method: "POST", body: body)
+            self.message = "Dispensation created from the official template and added to the queue."
+            await self.refresh(silent: true)
+            success = true
+        }
+        return success
+    }
+
+    func previewDispensation(
+        title: String,
+        requestDate: String,
+        signerRole: String,
+        requestDetails: String,
+        eventDate: String,
+        eventTime: String,
+        locationName: String,
+        streetAddress: String,
+        cityState: String,
+        worshipfulMasterAddress: String,
+        personalInfoConfirmed: Bool
+    ) async -> Data? {
+        var previewData: Data?
+        await perform {
+            guard let baseURL = self.baseURL,
+                  let url = URL(string: "/api/dispensations/preview", relativeTo: baseURL) else {
+                throw ClientError.invalidServer
+            }
+            let body = try JSONSerialization.data(withJSONObject: [
+                "title": title,
+                "requestDate": requestDate,
+                "signerRole": signerRole,
+                "requestDetails": requestDetails,
+                "eventDate": eventDate,
+                "eventTime": eventTime,
+                "locationName": locationName,
+                "streetAddress": streetAddress,
+                "cityState": cityState,
+                "worshipfulMasterAddress": worshipfulMasterAddress,
+                "personalInfoConfirmed": personalInfoConfirmed,
+            ])
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = self.token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                throw ClientError.server(object?["error"] as? String ?? "The PDF preview could not be created.")
+            }
+            previewData = data
+        }
+        return previewData
+    }
+
+    func parseDispensationText(_ text: String) async -> ParsedDispensationResponse? {
+        var result: ParsedDispensationResponse?
+        await perform {
+            let body = try JSONSerialization.data(withJSONObject: ["text": text])
+            result = try await self.request("/api/dispensations/parse", method: "POST", body: body)
+        }
+        return result
+    }
+
+    func searchLocation(name: String, cityState: String) async -> LocationMatch? {
+        var match: LocationMatch?
+        await perform {
+            let body = try JSONSerialization.data(withJSONObject: [
+                "locationName": name,
+                "cityState": cityState,
+            ])
+            let response: LocationSearchResponse = try await self.request(
+                "/api/locations/search", method: "POST", body: body
+            )
+            guard let first = response.matches.first else {
+                throw ClientError.server("No matching address was found. Add a city or ZIP code and try again.")
+            }
+            match = first
+        }
+        return match
+    }
+
+    func candidateTrackerSignInURL() async -> URL? {
+        do {
+            let response: TrackerHandoffResponse = try await request(
+                "/api/tracker/handoff",
+                method: "POST"
+            )
+            guard let url = URL(string: response.url) else {
+                throw ClientError.invalidResponse
+            }
+            return url
+        } catch {
+            show(error)
+            return nil
+        }
+    }
+
+    func loadCandidateRecords(silent: Bool = false) async {
+        if silent && candidateTrackerLoading { return }
+        if !silent { candidateTrackerLoading = true }
+        defer { if !silent { candidateTrackerLoading = false } }
+        do {
+            let data = try await candidateTrackerRequest(path: "/api/records")
+            candidateRecords = try decoder.decode(CandidateRecordsResponse.self, from: data).records
+        } catch {
+            if !silent { show(error) }
+        }
+    }
+
+    func saveCandidateRecord(_ record: CandidateRecord, isNew: Bool) async -> Bool {
+        guard user?.role == "owner" else {
+            message = "Candidate Tracker is read only for this account."
+            isError = true
+            return false
+        }
+        var saved = false
+        candidateTrackerLoading = true
+        defer { candidateTrackerLoading = false }
+        do {
+            let body = try JSONEncoder().encode(record)
+            _ = try await candidateTrackerRequest(
+                path: "/api/records",
+                method: isNew ? "POST" : "PATCH",
+                body: body
+            )
+            let refreshed = try await candidateTrackerRequest(path: "/api/records")
+            candidateRecords = try decoder.decode(CandidateRecordsResponse.self, from: refreshed).records
+            message = isNew ? "Candidate record added." : "Candidate record updated."
+            isError = false
+            saved = true
+        } catch {
+            show(error)
+        }
+        return saved
+    }
+
+    private func candidateTrackerRequest(
+        path: String,
+        method: String = "GET",
+        body: Data? = nil,
+        mayRetry: Bool = true
+    ) async throws -> Data {
+        if !candidateTrackerAuthenticated {
+            guard let signInURL = await candidateTrackerSignInURL() else {
+                throw ClientError.server(message.isEmpty ? "Candidate Tracker sign-in could not be completed." : message)
+            }
+            let (_, response) = try await URLSession.shared.data(from: signInURL)
+            guard let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode) else {
+                throw ClientError.server("Candidate Tracker sign-in could not be completed.")
+            }
+            candidateTrackerAuthenticated = true
+        }
+        guard let url = URL(string: path, relativeTo: candidateTrackerBaseURL) else {
+            throw ClientError.invalidResponse
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
+        if http.statusCode == 401, mayRetry {
+            candidateTrackerAuthenticated = false
+            return try await candidateTrackerRequest(path: path, method: method, body: body, mayRetry: false)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let error = try? decoder.decode(APIError.self, from: data)
+            throw ClientError.server(error?.error ?? "Candidate Tracker request failed.")
+        }
+        return data
+    }
+
+    func invite(name: String, email: String, role: String) async -> InviteResponse? {
         var result: InviteResponse?
         await perform {
             let body = try JSONSerialization.data(withJSONObject: [
-                "name": name, "email": email, "phone": phone, "role": role,
+                "name": name, "email": email, "role": role,
             ])
             result = try await self.request("/api/officers/invite", method: "POST", body: body)
             self.message = result?.emailSent == true ? "Invitation emailed." : "Invitation created. Copy the private link."
         }
         return result
+    }
+
+    func revokeAccess(email: String) async {
+        await perform {
+            let body = try JSONSerialization.data(withJSONObject: ["email": email])
+            let response: MessageResponse = try await self.request(
+                "/api/officers/revoke",
+                method: "POST",
+                body: body
+            )
+            self.message = response.message
+            await self.refresh(silent: true)
+        }
     }
 
     func saveSignature(dataURL: String, type: String, style: String) async -> Bool {
@@ -278,10 +684,15 @@ final class AppModel: ObservableObject {
         return image
     }
 
-    func sign(document: LodgeDocument) async -> Bool {
+    func sign(document: LodgeDocument, officerAddress: String) async -> Bool {
+        guard user?.role != "viewer" else {
+            message = "This account has status-only document access."
+            isError = true
+            return false
+        }
         var success = false
         await perform {
-            let body = try JSONSerialization.data(withJSONObject: ["consent": true])
+            let body = try JSONSerialization.data(withJSONObject: ["consent": true, "officerAddress": officerAddress])
             let response: MessageResponse = try await self.request(
                 "/api/documents/\(document.id)/sign", method: "POST", body: body
             )
@@ -292,26 +703,21 @@ final class AppModel: ObservableObject {
         return success
     }
 
-    func open(document: LodgeDocument) async {
-        await perform {
-            guard let baseURL = self.baseURL,
-                  let url = URL(string: "/api/documents/\(document.id)/file", relativeTo: baseURL) else {
-                throw ClientError.invalidServer
-            }
-            var request = URLRequest(url: url)
-            if let token = self.token {
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            }
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw ClientError.server("The PDF could not be downloaded.")
-            }
-            let safeName = document.originalName.replacingOccurrences(of: "/", with: "_")
-            let localURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(document.id)-\(safeName)")
-            try data.write(to: localURL, options: .atomic)
-            NSWorkspace.shared.open(localURL)
+    func pdfData(document: LodgeDocument) async throws -> Data {
+        guard user?.role != "viewer" else {
+            throw ClientError.server("This account has status-only document access.")
         }
+        guard let baseURL,
+              let url = URL(string: "/api/documents/\(document.id)/file", relativeTo: baseURL) else {
+            throw ClientError.invalidServer
+        }
+        var request = URLRequest(url: url)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ClientError.server("The PDF could not be loaded.")
+        }
+        return data
     }
 
     func signOut(localOnly: Bool = false) {
@@ -322,9 +728,24 @@ final class AppModel: ObservableObject {
         }
         token = nil
         TokenStore.delete()
+        BiometricCredentialStore.delete()
+        biometricLoginEnabled = false
+        UserDefaults.standard.set(false, forKey: "biometric-login-enabled")
         user = nil
         documents = []
         officers = []
+        submissionProfiles = []
+        candidateRecords = []
+        candidateTrackerAuthenticated = false
+    }
+
+    private func saveLogin(_ token: String) throws {
+        if biometricLoginEnabled {
+            try BiometricCredentialStore.save(token)
+            TokenStore.delete()
+        } else {
+            TokenStore.save(token)
+        }
     }
 
     private func perform(_ work: @escaping () async throws -> Void) async {

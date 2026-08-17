@@ -15,10 +15,38 @@
  * to be rewritten around a new idiom.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 const usePglite = !process.env.DATABASE_URL;
 
 let query;          // (sql, params) -> { rows, rowCount }
 let closeDriver;
+let beginTransaction;
+const transactionQuery = new AsyncLocalStorage();
+
+export const isUniqueViolation = (error) =>
+  error?.code === '23505' || /UNIQUE constraint failed/i.test(String(error?.message || ''));
+
+export const postgresTlsOptions = ({
+  databaseUrl = process.env.DATABASE_URL || '',
+  pgssl = process.env.PGSSL || '',
+  ca = process.env.PGSSL_CA || '',
+} = {}) => {
+  if (String(pgssl).toLowerCase() === 'off') return false;
+  let sslMode = '';
+  try {
+    sslMode = new URL(databaseUrl).searchParams.get('sslmode') || '';
+  } catch {
+    // pg will provide the useful connection-string error; TLS remains fail-closed.
+  }
+  if (sslMode.toLowerCase() === 'disable') {
+    throw new Error('DATABASE_URL cannot disable TLS. Use a verified managed PostgreSQL connection string.');
+  }
+  return {
+    rejectUnauthorized: true,
+    ...(ca ? { ca: ca.replace(/\\n/g, '\n') } : {}),
+  };
+};
 
 /* `?` is SQLite's placeholder and `$1` is Postgres's. Translate, but never inside a
  * quoted literal, or a question mark in ordinary text would shift every later index. */
@@ -59,6 +87,8 @@ export const connect = async () => {
     const dir = process.env.PGLITE_DIR || null;      // null keeps it in memory, for tests
     const db = await PGlite.create(dir ? { dataDir: dir } : {});
     query = (sql, params) => db.query(sql, params);
+    beginTransaction = (callback) => db.transaction((tx) =>
+      transactionQuery.run((sql, params) => tx.query(sql, params), callback));
     closeDriver = () => db.close();
     return { driver: 'pglite', location: dir || 'memory' };
   }
@@ -71,19 +101,41 @@ export const connect = async () => {
   pg.types.setTypeParser(20, (value) => (value === null ? null : Number(value)));
   const pool = new pg.Pool({
     connectionString: process.env.DATABASE_URL,
-    // Neon terminates TLS at its proxy with a certificate chain node does not ship.
-    ssl: process.env.PGSSL === 'off' ? false : { rejectUnauthorized: false },
+    ssl: postgresTlsOptions(),
     max: Number(process.env.PG_POOL_MAX || 5),
     idleTimeoutMillis: 30_000,
   });
   query = (sql, params) => pool.query(sql, params);
+  beginTransaction = async (callback) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await transactionQuery.run(
+        (sql, params) => client.query(sql, params),
+        callback,
+      );
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
   closeDriver = () => pool.end();
   return { driver: 'pg', location: 'DATABASE_URL' };
 };
 
 const run = async (sql, params = []) => {
   if (!query) throw new Error('connect() was never called');
-  return query(toPgPlaceholders(sql), params);
+  return (transactionQuery.getStore() || query)(toPgPlaceholders(sql), params);
+};
+
+export const withTransaction = async (callback) => {
+  if (transactionQuery.getStore()) return callback();
+  if (!beginTransaction) throw new Error('connect() was never called');
+  return beginTransaction(callback);
 };
 
 export const dbRun = async (sql, params = []) => {
@@ -101,35 +153,35 @@ export const close = async () => { if (closeDriver) await closeDriver(); };
 
 /* Postgres has no ALTER TABLE ... ADD COLUMN unless not exists before 9.6 and no
  * PRAGMA table_info at all, so the SQLite helper is replaced outright. */
-const addColumn = (table, column, type) =>
-  run(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${type}`);
+const addColumn = (exec, table, column, type) =>
+  exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${type}`);
 
-export const initSchema = async () => {
-  await run(`CREATE TABLE IF NOT EXISTS users (
+/* Takes an optional runner so the migration tool can build this same schema on a
+ * target it already holds open, without db.js opening a second connection to it. */
+export const initSchema = async (exec = run) => {
+  await exec(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     name TEXT NOT NULL,
-    phone TEXT UNIQUE,
     role TEXT NOT NULL DEFAULT 'signer',
     created_at TEXT NOT NULL
   )`);
-  await run(`CREATE TABLE IF NOT EXISTS sessions (
+  await exec(`CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
     token TEXT UNIQUE NOT NULL,
     expires_at TEXT NOT NULL
   )`);
-  await run(`CREATE TABLE IF NOT EXISTS reset_codes (
+  await exec(`CREATE TABLE IF NOT EXISTS reset_codes (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
     code TEXT NOT NULL,
-    phone TEXT NOT NULL,
     channel TEXT NOT NULL DEFAULT 'email',
     expires_at TEXT NOT NULL,
     used INTEGER DEFAULT 0
   )`);
-  await run(`CREATE TABLE IF NOT EXISTS documents (
+  await exec(`CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
     title TEXT,
     original_name TEXT NOT NULL,
@@ -144,7 +196,7 @@ export const initSchema = async () => {
     updated_at TEXT NOT NULL,
     completed_at TEXT
   )`);
-  await run(`CREATE TABLE IF NOT EXISTS document_signers (
+  await exec(`CREATE TABLE IF NOT EXISTS document_signers (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES users(id),
@@ -156,18 +208,24 @@ export const initSchema = async () => {
     signed_user_agent TEXT,
     consent_text TEXT
   )`);
-  await run(`CREATE TABLE IF NOT EXISTS profile_signatures (
+  await exec(`CREATE TABLE IF NOT EXISTS profile_signatures (
     user_id INTEGER PRIMARY KEY REFERENCES users(id),
     signature_bytes BYTEA NOT NULL,
     signature_type TEXT NOT NULL,
     style_name TEXT,
     updated_at TEXT NOT NULL
   )`);
-  await run(`CREATE TABLE IF NOT EXISTS invitations (
+  await exec(`CREATE TABLE IF NOT EXISTS submission_profiles (
+    role TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    source_reference TEXT,
+    updated_at TEXT NOT NULL
+  )`);
+  await exec(`CREATE TABLE IF NOT EXISTS invitations (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     email TEXT NOT NULL,
     name TEXT NOT NULL,
-    phone TEXT,
     role TEXT NOT NULL,
     token_hash TEXT UNIQUE NOT NULL,
     invited_by_user_id INTEGER NOT NULL REFERENCES users(id),
@@ -175,7 +233,7 @@ export const initSchema = async () => {
     used_at TEXT,
     created_at TEXT NOT NULL
   )`);
-  await run(`CREATE TABLE IF NOT EXISTS audit_events (
+  await exec(`CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id INTEGER REFERENCES users(id),
     document_id TEXT,
@@ -185,16 +243,31 @@ export const initSchema = async () => {
     details_json TEXT,
     created_at TEXT NOT NULL
   )`);
+  await exec(`CREATE TABLE IF NOT EXISTS office_slots (
+    role TEXT PRIMARY KEY
+  )`);
+  await exec("INSERT INTO office_slots (role) VALUES ('secretary') ON CONFLICT (role) DO NOTHING");
+  await exec("INSERT INTO office_slots (role) VALUES ('assistant_secretary') ON CONFLICT (role) DO NOTHING");
+  await exec('ALTER TABLE users DROP COLUMN IF EXISTS phone');
+  await exec('ALTER TABLE reset_codes DROP COLUMN IF EXISTS phone');
+  await exec('ALTER TABLE invitations DROP COLUMN IF EXISTS phone');
 
   // carried forward so an existing database picks these up too
-  await addColumn('document_signers', 'signed_ip', 'TEXT');
-  await addColumn('document_signers', 'signed_user_agent', 'TEXT');
-  await addColumn('document_signers', 'consent_text', 'TEXT');
-  await addColumn('documents', 'completed_at', 'TEXT');
-  await addColumn('reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");
+  await addColumn(exec, 'document_signers', 'signed_ip', 'TEXT');
+  await addColumn(exec, 'document_signers', 'signed_user_agent', 'TEXT');
+  await addColumn(exec, 'document_signers', 'consent_text', 'TEXT');
+  await addColumn(exec, 'documents', 'completed_at', 'TEXT');
+  await addColumn(exec, 'documents', 'template_kind', 'TEXT');
+  await addColumn(exec, 'reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");
+  await addColumn(exec, 'users', 'access_revoked_at', 'TEXT');
 
-  await run('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
-  await run('CREATE INDEX IF NOT EXISTS idx_signers_document ON document_signers(document_id)');
-  await run('CREATE INDEX IF NOT EXISTS idx_audit_document ON audit_events(document_id)');
-  await run('DELETE FROM sessions WHERE expires_at < $1', [new Date().toISOString()]);
+  await exec('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
+  await exec('CREATE INDEX IF NOT EXISTS idx_signers_document ON document_signers(document_id)');
+  await exec('CREATE INDEX IF NOT EXISTS idx_audit_document ON audit_events(document_id)');
+  await exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_office
+    ON users(role) WHERE role IN ('secretary', 'assistant_secretary')
+    AND access_revoked_at IS NULL AND email NOT LIKE '%.local'`);
+  await exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_one_pending_office_invitation
+    ON invitations(role) WHERE role IN ('secretary', 'assistant_secretary') AND used_at IS NULL`);
+  await exec('DELETE FROM sessions WHERE expires_at < $1', [new Date().toISOString()]);
 };
