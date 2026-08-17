@@ -304,3 +304,12 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; }
 }
+
+/* Dues. Status is carried by a left rule as well as the pill, so it reads at a
+   glance on a phone and does not rely on colour alone. */
+.dues-rows { display: flex; flex-direction: column; gap: 8px; }
+.dues-row { border-left: 3px solid var(--muted); }
+.dues-row.dues-paid { border-left-color: var(--green); }
+.dues-row.dues-partial { border-left-color: var(--gold); }
+.dues-row.dues-unpaid { border-left-color: #96331f; }
+.dues-row small { color: var(--muted); display: block; margin-top: 2px; }

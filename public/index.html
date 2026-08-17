@@ -105,6 +105,7 @@
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
             <button id="queueNav" class="nav-item" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
+            <button id="duesNav" class="nav-item dues-only" type="button"><span>$</span> Dues</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
           </nav>
           <div class="sidebar-foot">
@@ -118,7 +119,8 @@
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
             <div class="document-menu">
               <button id="dispensationsMenuCard" class="document-menu-card" type="button"><i>PDF</i><span><strong>Dispensations</strong><small id="dispensationsMenuStatus">Open the dispensation queue</small></span><b>›</b></button>
-              <button class="document-menu-card coming-soon" type="button" disabled><i>MIN</i><span><strong>Previous Lodge Meeting Minutes</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
+              <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
+                <button class="document-menu-card coming-soon" type="button" disabled><i>MIN</i><span><strong>Previous Lodge Meeting Minutes</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
               <button class="document-menu-card coming-soon" type="button" disabled><i>TR</i><span><strong>Treasurer Reports</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
               <a class="document-menu-card" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
             </div>
@@ -159,6 +161,38 @@
             <div class="records-head"><div><p class="eyebrow">LIVE QUEUE</p><h2>Documents waiting for action</h2></div><div id="docMessage" class="message" role="status"></div></div>
             <div id="docList" class="doc-list"></div>
           </section>
+          </section>
+
+          <section id="duesSection" class="hidden">
+            <div class="content-head">
+              <div>
+                <p class="eyebrow">RESTRICTED TO THE WORSHIPFUL MASTER AND THE SECRETARIES</p>
+                <h1>Dues</h1>
+                <p id="duesYearLine">Reconciled live against the Lodge&rsquo;s Zeffy campaigns.</p>
+              </div>
+              <button id="duesRefresh" class="secondary" type="button">Refresh</button>
+            </div>
+
+            <div class="metrics">
+              <article><span>Collected</span><strong id="duesCollected">&mdash;</strong></article>
+              <article><span>Outstanding</span><strong id="duesOutstanding">&mdash;</strong></article>
+              <article><span>Paid in full</span><strong id="duesPaidCount">&mdash;</strong></article>
+              <article><span>Not yet paid</span><strong id="duesUnpaidCount">&mdash;</strong></article>
+            </div>
+
+            <div id="duesStale" class="message hidden" role="status"></div>
+            <div id="duesMessage" class="message" role="status"></div>
+
+            <section class="records">
+              <div class="records-head"><div><p class="eyebrow">BY BROTHER</p><h2>Needs attention first</h2></div></div>
+              <div id="duesRows" class="dues-rows"></div>
+            </section>
+
+            <section id="duesUnmatchedPanel" class="panel hidden">
+              <div class="panel-title"><div><p class="eyebrow">COULD NOT BE MATCHED</p><h2>Payments with no Brother</h2></div></div>
+              <p class="helper">These came through Zeffy but did not match anyone on the roster. Usually a nickname, a spouse&rsquo;s card, or a Brother missing from the roster.</p>
+              <div id="duesUnmatched" class="dues-rows"></div>
+            </section>
           </section>
 
           <section id="builderSection" class="builder-section owner-only hidden">

@@ -125,6 +125,12 @@ const enterWorkspace = async (user) => {
   document.querySelectorAll('.owner-only').forEach((element) => {
     element.classList.toggle('hidden', user.role !== 'owner');
   });
+  /* Dues names the men who are behind, so a viewer is not shown the tile at all.
+   * The server refuses him regardless; this avoids dangling a locked door. */
+  const maySeeDues = ['owner', 'secretary', 'assistant_secretary'].includes(user.role);
+  document.querySelectorAll('.dues-only').forEach((element) => {
+    element.classList.toggle('hidden', !maySeeDues);
+  });
   showWorkspaceSection('home');
   hide($('authCard'));
   show($('appCard'));
@@ -196,18 +202,25 @@ const showWorkspaceSection = (section) => {
   const home = section === 'home';
   const builder = section === 'builder';
   const queue = section === 'queue';
+  const dues = section === 'dues';
   $('landingSection').classList.toggle('hidden', !home);
   $('queueSection').classList.toggle('hidden', !queue);
   $('builderSection').classList.toggle('hidden', !builder);
+  $('duesSection').classList.toggle('hidden', !dues);
   $('homeNav').classList.toggle('active', home);
   $('queueNav').classList.toggle('active', queue);
   $('builderNav').classList.toggle('active', builder);
+  $('duesNav').classList.toggle('active', dues);
+  if (dues) renderDues();
 };
 
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
 $('queueNav').addEventListener('click', () => showWorkspaceSection('queue'));
 $('builderNav').addEventListener('click', () => showWorkspaceSection('builder'));
 $('dispensationsMenuCard').addEventListener('click', () => showWorkspaceSection('queue'));
+$('duesNav').addEventListener('click', () => showWorkspaceSection('dues'));
+$('duesMenuCard').addEventListener('click', () => showWorkspaceSection('dues'));
+$('duesRefresh').addEventListener('click', () => renderDues(true));
 
 const scheduleQueueRefresh = () => {
   window.clearTimeout(state.refreshTimer);
@@ -1054,3 +1067,69 @@ const initialize = async () => {
 };
 
 initialize();
+
+/* ---------- Dues ----------
+ * Restricted to the Worshipful Master, the Secretary and the Assistant Secretary.
+ * Rendered needs-attention-first, because the point of the page is knowing who to
+ * call, not admiring a total. */
+const money = (cents) => `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const renderDues = async (force = false) => {
+  if (state.duesLoading) return;
+  if (state.duesLoaded && !force) return;
+  state.duesLoading = true;
+  setMessage($('duesMessage'), 'Reading payments from Zeffy…');
+  try {
+    const led = await apiFetch('/api/dues');
+    $('duesYearLine').textContent =
+      `${led.duesYear} dues, ${money(led.rateCents)} each, reconciled live against both Zeffy campaigns.`;
+    $('duesCollected').textContent = money(led.totals.collectedCents);
+    $('duesOutstanding').textContent = money(led.totals.outstandingCents);
+    $('duesPaidCount').textContent = String(led.totals.paidCount);
+    $('duesUnpaidCount').textContent = String(led.totals.unpaidCount);
+
+    const stale = $('duesStale');
+    if (led.staleCampaign) {
+      stale.textContent = `Last year's custom dues campaign is still open and has taken ${led.staleCampaign.count} payment(s) totalling ${money(led.staleCampaign.totalCents)}. Those are NOT counted above. Close that campaign in Zeffy.`;
+      stale.classList.remove('hidden');
+    } else stale.classList.add('hidden');
+
+    const rows = $('duesRows');
+    rows.replaceChildren();
+    for (const r of led.rows) {
+      const el = document.createElement('div');
+      el.className = `item dues-row dues-${r.status}`;
+      const paid = r.status === 'paid'
+        ? `Paid in full${r.lastPaymentISO ? ` on ${r.lastPaymentISO}` : ''}`
+        : r.status === 'partial'
+          ? `${money(r.paidCents)} of ${money(r.assessedCents)}, ${money(r.remainingCents)} outstanding`
+          : 'Nothing received';
+      const credit = r.creditCents ? ` · ${money(r.creditCents)} credit` : '';
+      const how = r.payments.length
+        ? ` · matched by ${[...new Set(r.payments.map((p) => p.matchedVia))].join(', ')}`
+        : '';
+      el.innerHTML = `<div class="grow"><div class="name">${r.name}</div><small>${paid}${credit}${how}</small></div><span class="pill">${r.status}</span>`;
+      rows.append(el);
+    }
+
+    const panel = $('duesUnmatchedPanel');
+    const un = $('duesUnmatched');
+    un.replaceChildren();
+    if (led.unmatched.length) {
+      for (const u of led.unmatched) {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.innerHTML = `<div class="grow"><div class="name">${u.buyerName || u.buyerEmail || 'Unknown'}</div><small>${u.dateISO} · ${money(u.amountCents)} · ${u.buyerEmail}</small></div>`;
+        un.append(el);
+      }
+      panel.classList.remove('hidden');
+    } else panel.classList.add('hidden');
+
+    setMessage($('duesMessage'), `${led.rows.length} Brothers · updated just now`);
+    state.duesLoaded = true;
+  } catch (error) {
+    setMessage($('duesMessage'), error.message, true);
+  } finally {
+    state.duesLoading = false;
+  }
+};
