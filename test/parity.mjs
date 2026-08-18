@@ -125,6 +125,11 @@ check('both clients say plainly when an approval has no endorsed copy behind it'
   /No approval document on file/.test(read('public/app.js'))
   && /No approval document on file/.test(macViews));
 
+check('both clients show a Brother invited as a viewer, not only the two Secretaries',
+  read('public/app.js').includes("invite.role === 'viewer'")
+  && macViews.includes('$0.role == "viewer"')
+  && macViews.includes('pendingInvitations.filter'));
+
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';
 check('the Mac bundle name matches the web page title',

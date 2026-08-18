@@ -1739,17 +1739,22 @@ struct OfficerAccessView: View {
                     .foregroundStyle(SignTheme.navy)
                 Text("Create one private invitation for each officer. They choose their own password.")
                     .foregroundStyle(.secondary)
-                HStack(spacing: 16) {
-                    OfficerCard(
-                        name: model.seatName(role: "secretary", fallback: "William McDuffie"),
-                        office: "Secretary",
-                        state: model.seatState(role: "secretary")
-                    )
-                    OfficerCard(
-                        name: model.seatName(role: "assistant_secretary", fallback: "Adrian Reese"),
-                        office: "Assistant Secretary",
-                        state: model.seatState(role: "assistant_secretary")
-                    )
+                /* One card per man, in one grid, so a Lodge Viewer reads exactly the way the
+                 * two Secretaries do. Viewers previously had nowhere to appear at all, which made
+                 * an invited Brother invisible until he signed in. */
+                let seats: [(name: String, office: String, state: OfficerSeatState)] =
+                    [(model.seatName(role: "secretary", fallback: "William McDuffie"),
+                      "Secretary", model.seatState(role: "secretary")),
+                     (model.seatName(role: "assistant_secretary", fallback: "Adrian Reese"),
+                      "Assistant Secretary", model.seatState(role: "assistant_secretary"))]
+                    + model.officers.filter { $0.role == "viewer" }
+                        .map { ($0.name, "Lodge Viewer", OfficerSeatState.active) }
+                    + model.pendingInvitations.filter { $0.role == "viewer" }
+                        .map { ($0.name, "Lodge Viewer", OfficerSeatState.pending) }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 16)], spacing: 16) {
+                    ForEach(Array(seats.enumerated()), id: \.offset) { _, seat in
+                        OfficerCard(name: seat.name, office: seat.office, state: seat.state)
+                    }
                 }
                 Form {
                     Picker("Office", selection: $role) {
@@ -1777,6 +1782,41 @@ struct OfficerAccessView: View {
                 }
                 .formStyle(.grouped)
                 .frame(maxWidth: 660)
+
+                if !model.pendingInvitations.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Invited, waiting on them")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(SignTheme.navy)
+                        Text("They can create their account with the address you invited, or with the private link.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        ForEach(model.pendingInvitations) { invite in
+                            HStack(spacing: 14) {
+                                Image(systemName: "hourglass.circle.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(invite.name).font(.headline)
+                                    Text("\(invite.role == "viewer" ? "Lodge Viewer" : invite.role == "secretary" ? "Secretary" : "Assistant Secretary") · \(invite.email)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text("Pending")
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .foregroundStyle(.orange)
+                                    .background(Color.orange.opacity(0.12), in: Capsule())
+                            }
+                            .padding(.vertical, 10)
+                            if invite.email != model.pendingInvitations.last?.email { Divider() }
+                        }
+                    }
+                    .padding(20)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay { RoundedRectangle(cornerRadius: 14).stroke(.separator.opacity(0.5)) }
+                }
 
                 if !model.officers.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
