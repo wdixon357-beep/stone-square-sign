@@ -264,6 +264,7 @@ struct DispensationApproval: Codable, Identifiable {
         switch approvalSource {
         case "endorsed_pdf": return "endorsed copy returned"
         case "email": return "given by email"
+        case "text_message": return "given by text message"
         case "verbal": return "given verbally"
         default: return "route not recorded"
         }

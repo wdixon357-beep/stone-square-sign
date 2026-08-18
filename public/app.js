@@ -233,7 +233,8 @@ const APPROVAL_WORDS = {
   approved: 'Approved', disapproved: 'Not approved', withdrawn: 'Withdrawn', pending: 'Awaiting a decision',
 };
 const APPROVAL_ROUTE = {
-  endorsed_pdf: 'endorsed copy returned', email: 'given by email', verbal: 'given verbally',
+  endorsed_pdf: 'endorsed copy returned', email: 'given by email',
+  text_message: 'given by text message', verbal: 'given verbally',
 };
 
 const renderApprovals = async () => {

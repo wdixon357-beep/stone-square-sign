@@ -1947,7 +1947,10 @@ app.get('/api/documents/:id/submission-draft', requireAuth, requireOwner, async 
 });
 
 const APPROVAL_STATUSES = new Set(['approved', 'disapproved', 'withdrawn', 'pending']);
-const APPROVAL_SOURCES = new Set(['endorsed_pdf', 'email', 'verbal']);
+/* Text message is here because it is what this District actually does. Both of Cooke's
+ * endorsements and Jones's approval of the Back to School request all arrived by text, which is
+ * precisely why none of them were ever filed anywhere. */
+const APPROVAL_SOURCES = new Set(['endorsed_pdf', 'email', 'text_message', 'verbal']);
 
 /* Records what the District Deputy decided.
  *
@@ -1982,7 +1985,7 @@ app.put('/api/documents/:id/approval', requireAuth, requireOwner, upload.single(
         return res.status(400).json({ error: 'That approval date is not a real date.' });
       }
       if (!APPROVAL_SOURCES.has(source)) {
-        return res.status(400).json({ error: 'Say how it was given: an endorsed PDF, an email, or verbally.' });
+        return res.status(400).json({ error: 'Say how it was given: an endorsed PDF, an email, a text message, or verbally.' });
       }
       if (source === 'endorsed_pdf' && !req.file && !document.approved_bytes) {
         return res.status(400).json({ error: 'Attach the endorsed copy, or record it as email or verbal instead.' });
