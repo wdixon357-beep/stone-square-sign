@@ -1273,7 +1273,7 @@ struct LandingDashboardView: View {
                             title: "Dispensations",
                             description: awaitingCount > 0
                                 ? "\(awaitingCount) document\(awaitingCount == 1 ? "" : "s") awaiting action"
-                                : "Open the dispensation queue",
+                                : "Open the document queue",
                             systemImage: "doc.text.fill",
                             comingSoon: false,
                             awaiting: awaitingCount > 0,
@@ -1491,14 +1491,14 @@ struct DocumentsView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("REAL TIME SIGNING QUEUE")
                             .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
-                        Text("Dispensation desk")
+                        Text("Lodge documents")
                             .font(.system(size: 40, weight: .semibold, design: .serif))
                             .foregroundStyle(SignTheme.navy)
                         Text("New requests and signatures load automatically.").foregroundStyle(.secondary)
                     }
                     Spacer()
                     if model.user?.role == "owner" {
-                        Button("Upload Dispensation", systemImage: "arrow.up.doc.fill") {
+                        Button("Upload Lodge Document", systemImage: "arrow.up.doc.fill") {
                             showImporter = true
                         }
                         .buttonStyle(.borderedProminent)
