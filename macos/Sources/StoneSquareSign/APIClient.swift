@@ -189,6 +189,7 @@ final class AppModel: ObservableObject {
 
     private var token: String?
     private var liveTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
     private var updateTask: Task<Void, Never>?
     private var candidateTrackerAuthenticated = false
     private var dismissedUpdateVersion = UserDefaults.standard.string(forKey: "dismissed-update-version")
@@ -372,6 +373,19 @@ final class AppModel: ObservableObject {
     }
 
     func startLiveQueue() {
+        /* The live stream only pushes on document and profile events. An officer creating his
+         * account pushes nothing, so a Master watching this screen to see a man come in would
+         * sit on a stale page. This re-reads on a slow timer so officer status moves on its own.
+         * ponytail: a poll, not a broadcast; make the server broadcast on registration when the
+         * deploy pipeline is calm and this can drop to a fallback. */
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard let self, self.token != nil, !Task.isCancelled else { return }
+                await self.refresh(silent: true)
+            }
+        }
         liveTask?.cancel()
         liveTask = Task { [weak self] in
             guard let self else { return }
@@ -889,6 +903,7 @@ final class AppModel: ObservableObject {
 
     func signOut(localOnly: Bool = false) {
         liveTask?.cancel()
+        heartbeatTask?.cancel()
         isLive = false
         if !localOnly {
             Task { let _: EmptyResponse? = try? await request("/api/auth/logout", method: "POST") }
