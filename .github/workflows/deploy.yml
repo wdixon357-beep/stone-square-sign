@@ -1,0 +1,62 @@
+# Deploys to Render on every push to main, and PROVES it went live.
+#
+# Render's own auto deploy stopped on 17 August 2026 and said nothing. Six commits went
+# to GitHub and none of them reached the officers, including the fix for the bug that
+# had killed the web dashboard. A service that stops deploying keeps serving the last
+# good build, so there is no symptom to notice.
+#
+# This replaces that trigger with one that reports. It fires Render's deploy hook, then
+# watches the live file until it actually changes, and FAILS the run if it does not. A
+# red mark on the commit is the signal that was missing.
+#
+# One time setup, by William:
+#   Render -> stone-square-sign -> Settings -> Deploy Hook -> copy the URL
+#   GitHub -> this repo -> Settings -> Secrets and variables -> Actions -> New secret
+#     name:  RENDER_DEPLOY_HOOK
+#     value: the URL
+# Nobody but GitHub and Render ever sees it.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to deploy without the hook
+        if: ${{ secrets.RENDER_DEPLOY_HOOK == '' }}
+        run: |
+          echo "::error::RENDER_DEPLOY_HOOK is not set, so this commit will NOT reach the officers."
+          echo "Render -> stone-square-sign -> Settings -> Deploy Hook, then add it as a repository secret."
+          exit 1
+
+      - name: Note the build that is live now
+        id: before
+        run: |
+          echo "sum=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Start the build
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}")
+          if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+            echo "::error::Render refused the deploy hook, HTTP $code. The hook is probably stale."
+            exit 1
+          fi
+
+      - name: Wait for it to actually go live
+        run: |
+          before='${{ steps.before.outputs.sum }}'
+          for i in $(seq 1 40); do
+            sleep 30
+            now=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)
+            if [ -n "$now" ] && [ "$now" != "$before" ]; then
+              echo "Live after about $((i * 30)) seconds."
+              exit 0
+            fi
+          done
+          echo "::error::Twenty minutes on and the officers are still being served the old build. Check the Render build log."
+          exit 1
