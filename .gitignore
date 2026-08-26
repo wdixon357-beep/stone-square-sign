@@ -11,3 +11,6 @@ macos/Resources/*.icns
 .DS_Store
 .pglite/
 test/*.pdf
+
+# Working document for the Wardens feature. Stays local, names real Brothers.
+PLAN.md

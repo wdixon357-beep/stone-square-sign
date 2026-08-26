@@ -24,12 +24,16 @@ const PAIRS = {
   builderNav: 'createDispensation',
   duesNav: 'dues',
   approvalsNav: 'approvals',
+  proposalReviewNav: 'proposalReview',
   profileButton: 'profile',
 };
 
 /* Deliberate asymmetries. Each needs a reason, so the list stays honest. */
 const WEB_ONLY = {
-  // none today
+  proposalsNav: 'the Wardens propose from their phones. The Mac build is ad hoc signed and only '
+    + 'runs on the machine it was built on, so Xavier and Jamal can never install it. Building a '
+    + 'proposing screen there would be a screen nobody who proposes can open. The Master\'s '
+    + 'deciding side IS on the Mac, as proposalReview.',
 };
 const MAC_ONLY = {
   settings: 'the Mac app has to be told which server to talk to; the web page is served by it',
@@ -85,8 +89,16 @@ check('both clients honour the same dues roles',
 
 const builder = read('public/index.html');
 const macBuilder = macViews;
-check('both clients let a dispensation go to both Secretaries at once',
-  /<option value="both"/.test(builder) && /\.tag\("both"\)/.test(macBuilder));
+/* William settled this on 2026-08-25: the Lodge no longer picks a Secretary. Every dispensation
+ * goes to both and whoever signs first completes it. The gate is now that NEITHER client offers
+ * the choice, and both say so plainly. The invite dropdown is a different control and still
+ * lets him choose which office he is inviting a Brother into, so this looks for the picker
+ * itself rather than for the word anywhere on the page. */
+check('neither client still offers a Secretary picker on the builder',
+  !/id="dispSignerRole"[^>]*>\s*<option/.test(builder) && !/Picker\("Send to"/.test(macBuilder));
+check('both clients say it goes to both Secretaries, whoever signs first',
+  /Both Secretaries\. Whoever signs it first/.test(builder)
+  && /both Secretaries\. Whoever signs it first/.test(macBuilder));
 check('both clients send the officer list rather than a single officer',
   read('public/app.js').includes('signerRoles:') && macBuilder.includes('signerRoles:')
   && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('"signerRoles"'));
@@ -129,6 +141,59 @@ check('both clients show a Brother invited as a viewer, not only the two Secreta
   read('public/app.js').includes("invite.role === 'viewer'")
   && macViews.includes('$0.role == "viewer"')
   && macViews.includes('pendingInvitations.filter'));
+
+/* A workspace section has to live inside <div class="content">. Put one outside and it
+ * still exists, showWorkspaceSection still un-hides it, every test still passes, and the
+ * Warden sees an empty pane with his form stranded at the foot of the page. Both new
+ * warden sections shipped that way. */
+const appJsSource = read('public/app.js');
+const contentStart = html.indexOf('<div class="content">');
+const contentEnd = html.indexOf('class="modal', contentStart);  /* the modals begin where the content pane ends */
+const toggled = [...appJsSource.matchAll(/\$\('(\w+Section)'\)\.classList\.toggle\('hidden'/g)]
+  .map((m) => m[1]);
+const stranded = toggled.filter((id) => {
+  const at = html.indexOf(`id="${id}"`);
+  return at < contentStart || at > contentEnd;
+});
+check('every workspace section sits inside the content pane',
+  stranded.length === 0,
+  stranded.length ? `outside <div class="content">: ${stranded.join(', ')}` : '');
+
+/* Every $('id') the dashboard reaches for must exist in the page. A bare $() returns
+ * null, and app.js binds its listeners at the top level, so ONE missing element throws
+ * before initialize() ever runs and the whole web dashboard is dead on load. That is
+ * not hypothetical: the Approvals section shipped on 17 August with its nav button, its
+ * app.js and its server route, and no section markup at all. The web app had been dead
+ * since. Nothing caught it because the e2e suite talks to the API and never opens a page.
+ * Optional ones, $('id')?., are the author saying it may legitimately be absent. */
+const pageIds = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
+const appJs = read('public/app.js');
+const required = [...appJs.matchAll(/\$\('([a-zA-Z][\w-]*)'\)(\??)/g)]
+  .filter(([, , optional]) => optional !== '?')
+  .map(([, id]) => id);
+const missing = [...new Set(required)].filter((id) => !pageIds.has(id));
+check('every element app.js binds without ?. actually exists in index.html',
+  missing.length === 0,
+  missing.length ? `missing from index.html: ${missing.join(', ')}` : '');
+
+/* This repository is public. A Brother's personal address is his, not the Lodge's to
+ * publish, and one went in with the Warden feature before anybody noticed. Addresses
+ * belong in the environment. Only the Lodge's own domain and example.org may appear in
+ * the source. */
+const PERSONAL_ADDRESS = /[A-Za-z0-9._%+-]+@(?!stonesquare22pha\.org|example\.(?:org|com)|[^\s"'`]*\.local)[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const sourcesToCheck = ['server.js', 'db.js', 'dues.js', 'public/app.js', 'public/index.html',
+  'test/e2e.mjs', 'test/parity.mjs', 'render.yaml', '.env.example',
+  'macos/Sources/StoneSquareSign/APIClient.swift', 'macos/Sources/StoneSquareSign/Models.swift',
+  'macos/Sources/StoneSquareSign/Views.swift'];
+const leaked = sourcesToCheck.flatMap((file) => {
+  let text = '';
+  try { text = read(file); } catch { return []; }
+  return (text.match(PERSONAL_ADDRESS) || [])
+    .filter((address) => !/@(sentry|schemas|www)\./i.test(address))
+    .map((address) => `${file}: ${address}`);
+});
+check('no personal email address is committed to this public repository',
+  leaked.length === 0, leaked.join('; '));
 
 const plist = read('macos/Resources/Info.plist');
 const title = html.match(/<title>([^<]*)<\/title>/)?.[1] || '';
