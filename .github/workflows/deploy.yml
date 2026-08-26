@@ -27,12 +27,17 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # The secrets context is not allowed in a step condition, so read it as an
+      # environment variable and check it in the shell.
       - name: Refuse to deploy without the hook
-        if: ${{ secrets.RENDER_DEPLOY_HOOK == '' }}
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
-          echo "::error::RENDER_DEPLOY_HOOK is not set, so this commit will NOT reach the officers."
-          echo "Render -> stone-square-sign -> Settings -> Deploy Hook, then add it as a repository secret."
-          exit 1
+          if [ -z "$HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK is not set, so this commit will NOT reach the officers."
+            echo "Render, stone-square-sign, Settings, Deploy Hook. Then add it here as a repository secret."
+            exit 1
+          fi
 
       - name: Note the build that is live now
         id: before
@@ -40,8 +45,10 @@ jobs:
           echo "sum=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Start the build
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}")
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$HOOK")
           if [ "$code" != "200" ] && [ "$code" != "201" ]; then
             echo "::error::Render refused the deploy hook, HTTP $code. The hook is probably stale."
             exit 1
