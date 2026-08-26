@@ -27,6 +27,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       # The secrets context is not allowed in a step condition, so read it as an
       # environment variable and check it in the shell.
       - name: Refuse to deploy without the hook
@@ -39,11 +41,6 @@ jobs:
             exit 1
           fi
 
-      - name: Note the build that is live now
-        id: before
-        run: |
-          echo "sum=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-
       - name: Start the build
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
@@ -54,16 +51,19 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for it to actually go live
+      # Waiting for the file to CHANGE is wrong: redeploying the same code changes
+      # nothing and would report a false failure. The real question is whether what the
+      # officers are served matches the commit being deployed, which is true either way.
+      - name: Wait until the officers are served this commit
         run: |
-          before='${{ steps.before.outputs.sum }}'
+          want=$(sha256sum public/app.js | cut -c1-16)
           for i in $(seq 1 40); do
-            sleep 30
-            now=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)
-            if [ -n "$now" ] && [ "$now" != "$before" ]; then
-              echo "Live after about $((i * 30)) seconds."
+            live=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)
+            if [ "$live" = "$want" ]; then
+              echo "Serving this commit after about $((i * 30)) seconds."
               exit 0
             fi
+            sleep 30
           done
-          echo "::error::Twenty minutes on and the officers are still being served the old build. Check the Render build log."
+          echo "::error::Twenty minutes on and the officers are still not being served this commit. Check the Render build log."
           exit 1
