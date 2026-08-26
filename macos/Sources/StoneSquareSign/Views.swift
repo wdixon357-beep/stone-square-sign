@@ -276,6 +276,7 @@ struct WorkspaceView: View {
                 Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker)
                 if model.user?.role == "owner" {
                         Label("Create Dispensation", systemImage: "doc.badge.plus").tag(AppSection.createDispensation)
+                        Label("Warden Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                         Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
                     }
                     Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals)
@@ -317,6 +318,7 @@ struct WorkspaceView: View {
             case .access: OfficerAccessView()
             case .dues: DuesView()
             case .approvals: ApprovalsView()
+            case .proposalReview: ProposalReviewView()
             case .profile: SignatureProfileView()
             case .settings: SettingsView()
             default: DocumentsView()
@@ -1075,11 +1077,8 @@ struct DispensationBuilderView: View {
                             .foregroundStyle(.secondary)
                         Form {
                             Section("Who should sign for the secretary's office?") {
-                                Picker("Send to", selection: $signerChoice) {
-                                    Text("Both Secretaries, whoever signs first").tag("both")
-                                    Text("William McDuffie, Secretary").tag("secretary")
-                                    Text("Adrian Reese, Assistant Secretary").tag("assistant_secretary")
-                                }
+                                Text("Goes to both Secretaries. Whoever signs it first completes it.")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                             Section("Your information") {
                                 TextField("Worshipful Master address", text: $worshipfulMasterAddress)
@@ -1196,7 +1195,7 @@ struct DispensationBuilderView: View {
         guard let fields = parsedDraft?.fields else { return }
         title = fields.title
         if let value = Self.dayFormatter.date(from: fields.requestDate) { requestDate = value }
-        signerChoice = fields.signerRole == "assistant_secretary" ? "assistant_secretary" : "both"
+        // The Lodge no longer chooses a Secretary; every dispensation goes to both.
         requestDetails = fields.requestDetails
         if let value = Self.dayFormatter.date(from: fields.eventDate) { eventDate = value }
         if let value = Self.pastedTimeFormatter.date(from: fields.eventTime) { eventTime = value }
@@ -2451,5 +2450,105 @@ struct ApprovalsView: View {
         }
         .background(SignTheme.ivory.opacity(0.45))
         .task { await model.loadApprovals() }
+    }
+}
+
+/* What the Wardens have put up, and the Master ruling on it.
+ *
+ * Xavier and Jamal work on their phones through the web page, because the Mac build is
+ * ad hoc signed and only runs on the machine it was built on. So the proposing side is
+ * deliberately web only and this is the deciding side. */
+struct ProposalReviewView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var note = ""
+    @State private var busyID: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("WHAT THE WARDENS HAVE PUT UP")
+                        .font(.caption.weight(.bold)).foregroundStyle(SignTheme.gold).tracking(1.4)
+                    Text("Warden Proposals")
+                        .font(.system(size: 34, weight: .semibold, design: .serif))
+                        .foregroundStyle(SignTheme.navy)
+                    Text("Approving one creates the dispensation exactly as if you had built it yourself, and it goes to both Secretaries.")
+                        .foregroundStyle(.secondary)
+                }
+                if model.proposalsLoading && model.proposals.isEmpty {
+                    ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 40)
+                } else if !model.proposalsError.isEmpty {
+                    Text(model.proposalsError).foregroundStyle(.red)
+                } else if model.proposals.isEmpty {
+                    Text("No Warden has proposed a dispensation yet.")
+                        .foregroundStyle(.secondary).padding(.vertical, 20)
+                } else {
+                    ForEach(model.proposals) { proposal in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(proposal.displayTitle)
+                                    .font(.headline).foregroundStyle(SignTheme.navy)
+                                Spacer()
+                                Text(proposal.verdict)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(proposal.isPending ? SignTheme.gold : .secondary)
+                            }
+                            Text("Proposed by \(proposal.proposerName)")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            if let date = proposal.eventDate, !date.isEmpty {
+                                Text("Event date: \(date)\(proposal.eventTime.map { $0.isEmpty ? "" : ", \($0)" } ?? "")")
+                                    .font(.subheadline)
+                            }
+                            if let place = proposal.locationName, !place.isEmpty {
+                                Text(place).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            if let details = proposal.requestDetails, !details.isEmpty {
+                                Text(details).font(.body).padding(.top, 2)
+                            }
+                            if let his = proposal.proposerNote, !his.isEmpty {
+                                Text("His note: \(his)")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(SignTheme.navy.opacity(0.05))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            if proposal.isPending {
+                                TextField("A note back to him, optional", text: $note)
+                                    .textFieldStyle(.roundedBorder).padding(.top, 4)
+                                HStack(spacing: 10) {
+                                    Button("Approve") { decide(proposal, "approve") }
+                                        .buttonStyle(.borderedProminent)
+                                    Button("Send back") { decide(proposal, "changes") }
+                                    Button("Decline") { decide(proposal, "decline") }
+                                    if busyID == proposal.id { ProgressView().controlSize(.small) }
+                                }
+                                .disabled(busyID != nil)
+                                Text("To change the wording before approving, use the web page. This decides it as written.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if let wm = proposal.wmNote, !wm.isEmpty {
+                                Text("Your note: \(wm)").font(.callout).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+            }
+            .padding(30)
+        }
+        .task { await model.loadProposals() }
+    }
+
+    private func decide(_ proposal: WardenProposal, _ decision: String) {
+        busyID = proposal.id
+        let text = note
+        Task {
+            _ = await model.decideProposal(id: proposal.id, decision: decision, wmNote: text)
+            note = ""
+            busyID = nil
+        }
     }
 }

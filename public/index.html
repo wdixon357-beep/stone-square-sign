@@ -113,9 +113,11 @@
           <div class="user-block"><span id="userInitials"></span><div><strong id="whoami"></strong><small id="userRole"></small></div></div>
           <nav>
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
-            <button id="queueNav" class="nav-item" type="button"><span>◫</span> Live Queue</button>
+            <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
-            <button id="approvalsNav" class="nav-item" type="button"><span>&#10003;</span> Approvals</button>
+            <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
+            <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> Propose a Dispensation</button>
+            <button id="proposalReviewNav" class="nav-item owner-only" type="button"><span>&#9998;</span> Warden Proposals</button>
             <button id="duesNav" class="nav-item dues-only" type="button"><span>$</span> Dues</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
           </nav>
@@ -129,11 +131,12 @@
           <section id="landingSection" class="landing-section">
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
             <div class="document-menu">
-              <button id="dispensationsMenuCard" class="document-menu-card" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
+              <button id="proposeMenuCard" class="document-menu-card warden-only" type="button"><i>&#9998;</i><span><strong>Propose a Dispensation</strong><small>Put an event to the Worshipful Master</small></span><b>&rsaquo;</b></button>
+              <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
-                <button class="document-menu-card coming-soon" type="button" disabled><i>MIN</i><span><strong>Previous Lodge Meeting Minutes</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
-              <button class="document-menu-card coming-soon" type="button" disabled><i>TR</i><span><strong>Treasurer Reports</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
-              <a class="document-menu-card" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
+                <button class="document-menu-card coming-soon signer-only" type="button" disabled><i>MIN</i><span><strong>Previous Lodge Meeting Minutes</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
+              <button class="document-menu-card coming-soon signer-only" type="button" disabled><i>TR</i><span><strong>Treasurer Reports</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
+              <a class="document-menu-card signer-only" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
             </div>
           </section>
           <section id="queueSection">
@@ -206,6 +209,20 @@
             </section>
           </section>
 
+          <section id="approvalsSection" class="hidden">
+            <div class="content-head">
+              <div>
+                <p class="eyebrow">DECIDED BY THE DISTRICT DEPUTY</p>
+                <h1>Approvals</h1>
+                <p>What the District Deputy actually ruled on each dispensation, and whether the Lodge holds the endorsed paper.</p>
+              </div>
+              <button id="approvalsRefresh" class="secondary" type="button">Refresh</button>
+            </div>
+
+            <div id="approvalsMessage" class="message" role="status"></div>
+            <div id="approvalsList" class="doc-list"></div>
+          </section>
+
           <section id="builderSection" class="builder-section owner-only hidden">
             <div class="content-head">
               <div><p class="eyebrow">OFFICIAL GRAND LODGE TEMPLATE</p><h1>Create a dispensation</h1><p>Paste the details, answer only the remaining questions, then review the PDF before sending it.</p></div>
@@ -226,7 +243,7 @@
               <section id="builderQuestions" class="builder-card builder-grid">
                 <div class="field-wide parsed-covered"><label for="dispTitle">Document title</label><input id="dispTitle" type="text" placeholder="Community event dispensation" /></div>
                 <div class="parsed-covered"><label for="dispRequestDate">Request date</label><input id="dispRequestDate" type="date" required /></div>
-                <div><label for="dispSignerRole">Send to</label><select id="dispSignerRole"><option value="both">Both Secretaries, whoever signs first</option><option value="secretary">William McDuffie, Secretary</option><option value="assistant_secretary">Adrian Reese, Assistant Secretary</option></select></div>
+                <div><label>Send to</label><p class="muted" id="dispSignerRole" data-fixed="both">Both Secretaries. Whoever signs it first completes it.</p></div>
                 <div class="field-wide parsed-covered"><label for="dispRequestDetails">What is the Lodge requesting?</label><textarea id="dispRequestDetails" rows="3" placeholder="Describe the requested dispensation" required></textarea></div>
                 <div class="parsed-covered"><label for="dispEventDate">Event date</label><input id="dispEventDate" type="date" required /></div>
                 <div class="parsed-covered"><label for="dispEventTime">Event time</label><input id="dispEventTime" type="time" required /></div>
@@ -238,6 +255,51 @@
               </section>
               <div class="builder-actions"><p id="builderMessage" class="message" role="status"></p><button class="primary" type="submit">Review summary and PDF</button></div>
             </form>
+          </section>
+
+          <section id="proposalsSection" class="warden-only hidden">
+            <p class="eyebrow">FOR THE SENIOR AND JUNIOR WARDEN</p>
+            <h2>Propose a dispensation</h2>
+            <p class="muted">Tell the Worshipful Master what you have in mind. You can see exactly what the
+              dispensation would look like before you send it. He reviews it, changes anything he needs to,
+              and if he approves it the Lodge sends it on from there.</p>
+            <form id="proposalForm">
+              <label for="propTitle">What is it, in a few words</label>
+              <input id="propTitle" type="text" placeholder="Community cookout" />
+              <label for="propDetails">What are you asking to do <span class="req">*</span></label>
+              <textarea id="propDetails" rows="4" required placeholder="Describe the event the way you would explain it on the floor."></textarea>
+              <div class="two">
+                <div><label for="propEventDate">Date of the event <span class="req">*</span></label>
+                  <input id="propEventDate" type="date" required /></div>
+                <div><label for="propEventTime">Time <span class="req">*</span></label>
+                  <input id="propEventTime" type="text" required placeholder="6:00 PM to 9:00 PM" /></div>
+              </div>
+              <label for="propLocation">Where <span class="req">*</span></label>
+              <input id="propLocation" type="text" required placeholder="Stone Square Lodge No. 22" />
+              <div class="two">
+                <div><label for="propStreet">Street <span class="req">*</span></label>
+                  <input id="propStreet" type="text" required placeholder="208 East Lake Street" /></div>
+                <div><label for="propCityState">City and state <span class="req">*</span></label>
+                  <input id="propCityState" type="text" required placeholder="Middletown, DE" /></div>
+              </div>
+              <label for="propNote">Your thoughts for the Master</label>
+              <textarea id="propNote" rows="3" placeholder="Why you think the Lodge should do this."></textarea>
+              <div class="two">
+                <button id="proposalPreview" class="secondary" type="button">Show me what it would look like</button>
+                <button class="primary" type="submit">Send to the Worshipful Master</button>
+              </div>
+              <p id="proposalMessage" class="muted"></p>
+            </form>
+            <h3>What has been put up</h3>
+            <div id="proposalList" class="list"></div>
+          </section>
+
+          <section id="proposalReviewSection" class="owner-only hidden">
+            <p class="eyebrow">WHAT THE WARDENS HAVE PUT UP</p>
+            <h2>Warden proposals</h2>
+            <p class="muted">Approving one creates the dispensation exactly as if you had built it yourself,
+              with your signature on it, and it goes to both Secretaries.</p>
+            <div id="proposalReviewList" class="list"></div>
           </section>
         </div>
       </section>
@@ -336,7 +398,7 @@
           <button id="closeInvite" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">OFFICER ACCESS</p><h2 id="inviteTitle">Send private invitation</h2>
           <form id="inviteForm">
-            <label for="inviteRole">Access level</label><select id="inviteRole"><option value="secretary">Secretary</option><option value="assistant_secretary">Assistant Secretary</option><option value="viewer">Lodge Viewer</option></select>
+            <label for="inviteRole">Access level</label><select id="inviteRole"><option value="secretary">Secretary</option><option value="assistant_secretary">Assistant Secretary</option><option value="viewer">Lodge Viewer</option><option value="warden">Warden</option></select>
             <label for="inviteName">Full name</label><input id="inviteName" type="text" required />
             <label for="inviteEmail">Email address</label><input id="inviteEmail" type="email" required />
             <button class="primary" type="submit">Create invitation</button>

@@ -39,6 +39,13 @@ services:
       - key: OWNER_EMAIL
         sync: false
 
+      # The Senior and Junior Warden, comma separated. These are the only two addresses
+      # that may hold the warden seat. They live here rather than in the source because
+      # this repository is public and a Brother's personal address is his own. Unset
+      # means nobody can hold the seat, which is the safe way to fail.
+      - key: WARDEN_EMAILS
+        sync: false
+
       # Gmail or Google Workspace on the Lodge domain. SMTP_PASS is a Google App
       # Password, not the account password. Free, 500 messages a day.
       - key: SMTP_HOST

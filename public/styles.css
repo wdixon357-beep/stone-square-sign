@@ -23,7 +23,7 @@ body {
   background: radial-gradient(circle at 7% 15%, rgba(199,154,66,.18), transparent 24rem), linear-gradient(135deg, #f7f3eb 0%, #e8e3d8 100%);
   -webkit-font-smoothing: antialiased;
 }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { min-height: 44px; cursor: pointer; touch-action: manipulation; }
 h1, h2, h3, p { margin-top: 0; }
 h1, h2 { font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; }
@@ -69,7 +69,7 @@ h1, h2 { font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; }
 .form-heading h2 { margin: 0; color: var(--navy); font-size: 31px; font-weight: 500; }
 .helper { color: var(--muted); font-size: 12px; line-height: 1.5; }
 label { color: var(--ink); font-size: 11px; font-weight: 800; letter-spacing: .045em; }
-input, select { width: 100%; min-height: 46px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); padding: 13px 14px; outline: none; }
+input, select, textarea { width: 100%; min-height: 46px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); padding: 13px 14px; outline: none; }
 input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(199,154,66,.14); }
 .primary, .secondary { border-radius: 8px; padding: 12px 16px; font-size: 12px; font-weight: 800; letter-spacing: .025em; }
 .primary { border: 1px solid var(--navy); background: var(--navy); color: white; box-shadow: 0 6px 18px rgba(7,27,47,.15); }
@@ -322,3 +322,26 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
 /* An officer who has been invited but has not signed in yet. Amber, because it is neither
    done nor undone, and the Master needs to see the difference before he invites him twice. */
 .officer-list i.pending { background: #d97706; }
+
+/* Warden proposals and the Master's review of them. Uses the same paper, line and
+ * muted tokens as .panel so the two screens read as one app rather than two. */
+#proposalsSection .list, #proposalReviewSection .list { display: grid; gap: 16px; margin-top: 22px; }
+#proposalsSection .card, #proposalReviewSection .card {
+  padding: 22px 24px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper);
+}
+#proposalsSection .card > p, #proposalReviewSection .card > p { margin: 8px 0 0; font-size: 14px; line-height: 1.55; }
+#proposalsSection .card .row, #proposalReviewSection .card .row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+}
+#proposalsSection .card .row strong, #proposalReviewSection .card .row strong { font-size: 17px; color: var(--navy); }
+.muted { color: var(--muted); }
+.err { color: var(--red); }
+.req { color: var(--red); }
+#proposalsSection form label, #proposalReviewSection .card label {
+  display: block; margin: 18px 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .02em;
+}
+#proposalsSection form > .row-buttons, #proposalsSection form .two { margin-top: 22px; }
+#proposalReviewSection .card .two { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+#proposalReviewSection .card .two button { flex: 1 1 auto; }
+#proposalsSection h2, #proposalReviewSection h2 { color: var(--navy); font-size: 34px; font-weight: 500; margin: 4px 0 10px; }
+#proposalsSection h3 { color: var(--navy); font-size: 20px; font-weight: 500; margin: 34px 0 0; }

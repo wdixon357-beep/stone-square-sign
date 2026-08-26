@@ -91,12 +91,23 @@ const roleLabel = (role) => ({
   secretary: 'Secretary',
   assistant_secretary: 'Assistant Secretary',
   viewer: 'Lodge Viewer',
+  warden: 'Warden',
 }[role] || 'Signer');
 
 const initials = (name) => name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 const formatDate = (date) => new Intl.DateTimeFormat('en-US', {
   month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
 }).format(new Date(date));
+
+/* An event date is a calendar day, not an instant. Parsing "2026-10-10" with new Date()
+ * reads it as UTC midnight and shows the day before to anyone east of Greenwich, so build
+ * the day from its own parts. */
+const eventDayLabel = (value) => {
+  const [y, m, d] = String(value || '').split('-').map(Number);
+  if (!y || !m || !d) return value || '';
+  return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+    .format(new Date(y, m - 1, d));
+};
 
 const formatClockTime = (value) => {
   const [hour, minute] = String(value || '').split(':').map(Number);
@@ -114,6 +125,10 @@ const easternGreeting = () => {
   return 'Good evening';
 };
 
+/* Who is ever asked for a saved signature. An allowlist, so a new role is never trapped
+ * behind the forced signature modal that has no dismiss control. */
+const CAN_SIGN = new Set(['owner', 'secretary', 'assistant_secretary', 'signer']);
+
 const enterWorkspace = async (user) => {
   state.user = user;
   $('whoami').textContent = user.name;
@@ -124,6 +139,18 @@ const enterWorkspace = async (user) => {
   $('landingRole').textContent = roleLabel(user.role);
   document.querySelectorAll('.owner-only').forEach((element) => {
     element.classList.toggle('hidden', user.role !== 'owner');
+  });
+  /* A Warden proposes and nothing else. He never sees the queue or the approvals record,
+   * and the server refuses him on both regardless of what the page shows. */
+  document.querySelectorAll('.warden-only').forEach((element) => {
+    element.classList.toggle('hidden', user.role !== 'warden');
+  });
+  if (user.role === 'warden') {
+    const line = document.querySelector('.landing-head p');
+    if (line) line.textContent = 'Put an event to the Worshipful Master for a dispensation.';
+  }
+  document.querySelectorAll('.signer-only').forEach((element) => {
+    element.classList.toggle('hidden', user.role === 'warden');
   });
   /* Dues names the men who are behind, so a viewer is not shown the tile at all.
    * The server refuses him regardless; this avoids dangling a locked door. */
@@ -139,9 +166,11 @@ const enterWorkspace = async (user) => {
     user.role === 'owner' ? renderOfficers() : Promise.resolve(),
     user.role === 'owner' ? loadSubmissionProfiles() : Promise.resolve(),
   ]);
-  if (user.hasSignature || user.role === 'viewer') showPendingSignatureNotice(user, documents || []);
+  if (user.hasSignature || !CAN_SIGN.has(user.role)) showPendingSignatureNotice(user, documents || []);
   startRealtime();
-  if (!user.hasSignature && user.role !== 'viewer') window.setTimeout(() => openSignatureSetup(true), 150);
+  /* Only roles that actually sign are asked for a signature. This modal has no close button
+   * when forced, so a role that can never sign would be trapped behind it with no way out. */
+  if (!user.hasSignature && CAN_SIGN.has(user.role)) window.setTimeout(() => openSignatureSetup(true), 150);
 };
 
 const applySubmissionProfiles = () => {
@@ -158,7 +187,6 @@ const fillFormFromParsedDispensation = () => {
   if (!fields) return;
   $('dispTitle').value = fields.title;
   $('dispRequestDate').value = fields.requestDate || builderTodayValue;
-  $('dispSignerRole').value = fields.signerRole === 'assistant_secretary' ? 'assistant_secretary' : 'both';
   $('dispRequestDetails').value = fields.requestDetails;
   $('dispEventDate').value = fields.eventDate;
   $('dispEventTime').value = fields.eventTime;
@@ -204,18 +232,25 @@ const showWorkspaceSection = (section) => {
   const queue = section === 'queue';
   const dues = section === 'dues';
   const approvals = section === 'approvals';
+  const proposals = section === 'proposals';
+  const proposalReview = section === 'proposalReview';
   $('landingSection').classList.toggle('hidden', !home);
   $('queueSection').classList.toggle('hidden', !queue);
   $('builderSection').classList.toggle('hidden', !builder);
   $('duesSection').classList.toggle('hidden', !dues);
   $('approvalsSection').classList.toggle('hidden', !approvals);
+  $('proposalsSection').classList.toggle('hidden', !proposals);
+  $('proposalReviewSection').classList.toggle('hidden', !proposalReview);
   $('homeNav').classList.toggle('active', home);
   $('queueNav').classList.toggle('active', queue);
   $('builderNav').classList.toggle('active', builder);
   $('duesNav').classList.toggle('active', dues);
   $('approvalsNav').classList.toggle('active', approvals);
+  $('proposalsNav').classList.toggle('active', proposals);
+  $('proposalReviewNav').classList.toggle('active', proposalReview);
   if (dues) renderDues();
   if (approvals) renderApprovals();
+  if (proposals || proposalReview) renderProposals();
   /* Zeffy payments arrive from outside the app, so no in-app event can announce
    * them. While the dues page is the one on screen, re-read it on a timer so two
    * officers looking at once see the same figures. */
@@ -281,7 +316,7 @@ const renderApprovals = async () => {
         endorsed.addEventListener('click', async () => {
           try {
             const blob = await apiFetch(`/api/documents/${item.id}/endorsed`);
-            window.open(URL.createObjectURL(blob), '_blank');
+            showPdfBlob(blob, `Approval for ${item.title || item.original_name}`);
           } catch (error) {
             setMessage(message, error.message, true);
           }
@@ -296,12 +331,204 @@ const renderApprovals = async () => {
   }
 };
 
+$('proposalsNav').addEventListener('click', () => showWorkspaceSection('proposals'));
+$('proposalReviewNav').addEventListener('click', () => showWorkspaceSection('proposalReview'));
+
+/* Warden proposals. The Wardens put one up, the Master rules on it. */
+const proposalFields = () => ({
+  title: $('propTitle').value.trim(),
+  requestDetails: $('propDetails').value.trim(),
+  eventDate: $('propEventDate').value,
+  eventTime: $('propEventTime').value.trim(),
+  locationName: $('propLocation').value.trim(),
+  streetAddress: $('propStreet').value.trim(),
+  cityState: $('propCityState').value.trim(),
+  requestDate: new Date().toISOString().slice(0, 10),
+  proposerNote: $('propNote').value.trim(),
+});
+
+const renderProposals = async () => {
+  const owner = state.user?.role === 'owner';
+  const panel = owner ? $('proposalReviewList') : $('proposalList');
+  let proposals = [];
+  try {
+    ({ proposals } = await apiFetch('/api/proposals'));
+  } catch (error) {
+    if (panel) {
+      panel.replaceChildren(Object.assign(document.createElement('p'), {
+        className: 'err',
+        textContent: error.message || 'Could not load proposals. Check your connection and try again.',
+      }));
+    }
+    return;
+  }
+  const isOwner = owner;
+  const target = panel;
+  if (!target) return;
+  if (!proposals.length) {
+    target.replaceChildren(Object.assign(document.createElement('p'), {
+      className: 'muted',
+      textContent: isOwner ? 'No Warden has proposed a dispensation yet.'
+        : 'Nothing has been put up yet. Yours will show here once you send it.',
+    }));
+    return;
+  }
+  target.replaceChildren(...proposals.map((p) => {
+    const card = document.createElement('article');
+    card.className = 'card';
+    const head = document.createElement('div');
+    head.className = 'row';
+    head.append(
+      Object.assign(document.createElement('strong'), { textContent: p.title || (p.requestDetails || '').slice(0, 70) }),
+      Object.assign(document.createElement('span'), { className: 'muted', textContent: statusWords(p.status) }),
+    );
+    card.append(head);
+    card.append(Object.assign(document.createElement('p'), { className: 'muted', textContent: `Proposed by ${p.proposerName}` }));
+    if (p.eventDate) card.append(Object.assign(document.createElement('p'), { textContent: `${eventDayLabel(p.eventDate)}${p.eventTime ? `, ${p.eventTime}` : ''}` }));
+    if (p.requestDetails) card.append(Object.assign(document.createElement('p'), { textContent: p.requestDetails }));
+    if (p.proposerNote) card.append(Object.assign(document.createElement('p'), { className: 'muted', textContent: `His note: ${p.proposerNote}` }));
+    if (p.wmNote) card.append(Object.assign(document.createElement('p'), { className: 'muted', textContent: `From the Master: ${p.wmNote}` }));
+    if (p.document) {
+      card.append(Object.assign(document.createElement('p'), {
+        className: 'muted',
+        textContent: `Dispensation: ${statusWords(p.document.status)}${p.document.submittedTo ? `, sent to ${p.document.submittedTo}` : ''}${p.document.approvalStatus ? `, ${p.document.approvalStatus}` : ''}`,
+      }));
+    }
+    const problem = Object.assign(document.createElement('p'), { className: 'err' });
+
+    if (isOwner && (p.status === 'pending' || p.status === 'changes_requested' || p.status === 'approving')) {
+      /* William was told he could change anything before approving, so the fields are editable
+       * here rather than only over the API. What he types is what goes on the instrument. */
+      const edit = (label, key, value, type = 'text') => {
+        const wrap = document.createElement('div');
+        wrap.append(Object.assign(document.createElement('label'), { textContent: label }));
+        const input = Object.assign(document.createElement(key === 'requestDetails' ? 'textarea' : 'input'),
+          { value: value || '' });
+        if (key !== 'requestDetails') input.type = type;
+        input.dataset.key = key;
+        wrap.append(input);
+        return wrap;
+      };
+      const editor = document.createElement('div');
+      editor.className = 'proposal-edit';
+      editor.append(
+        edit('What it is', 'title', p.title),
+        edit('What is being asked', 'requestDetails', p.requestDetails),
+        edit('Date of the event', 'eventDate', p.eventDate, 'date'),
+        edit('Time', 'eventTime', p.eventTime),
+        edit('Where', 'locationName', p.locationName),
+        edit('Street', 'streetAddress', p.streetAddress),
+        edit('City and state', 'cityState', p.cityState),
+      );
+      const editedFields = () => Object.fromEntries(
+        [...editor.querySelectorAll('[data-key]')].map((el) => [el.dataset.key, el.value.trim()]),
+      );
+      const look = Object.assign(document.createElement('button'),
+        { type: 'button', className: 'secondary', textContent: 'See it as it stands' });
+      look.addEventListener('click', async () => {
+        try {
+          const blob = await apiFetch(`/api/proposals/${p.id}/preview`, {
+            method: 'POST', body: JSON.stringify(editedFields()),
+          });
+          showPdfBlob(blob, 'Dispensation as it stands');
+        } catch (error) { problem.textContent = error.message || 'Could not build the preview.'; }
+      });
+      card.append(editor, look);
+      const note = Object.assign(document.createElement('input'), { type: 'text', placeholder: 'A note back to him, optional' });
+      const row = document.createElement('div');
+      row.className = 'two';
+      const decide = async (decision) => {
+        row.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        try {
+          await apiFetch(`/api/proposals/${p.id}/decision`, {
+            method: 'POST',
+            body: JSON.stringify({ decision, wmNote: note.value.trim(), ...editedFields() }),
+          });
+          renderProposals();
+        } catch (error) {
+          row.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+          problem.textContent = error.message || 'That did not go through. Try again.';
+        }
+      };
+      const mk = (label, cls, decision) => {
+        const b = Object.assign(document.createElement('button'), { type: 'button', className: cls, textContent: label });
+        b.addEventListener('click', () => decide(decision));
+        return b;
+      };
+      row.append(mk('Approve', 'primary', 'approve'), mk('Send back', 'secondary', 'changes'), mk('Decline', 'secondary', 'decline'));
+      card.append(note, row, problem);
+    }
+
+    /* Sent back means he has to be able to change it and send it up again. */
+    if (!isOwner && p.status === 'changes_requested' && p.proposerUserId === state.user?.id) {
+      const again = Object.assign(document.createElement('button'),
+        { type: 'button', className: 'primary', textContent: 'Change it and send it back up' });
+      again.addEventListener('click', () => {
+        $('propTitle').value = p.title || '';
+        $('propDetails').value = p.requestDetails || '';
+        $('propEventDate').value = p.eventDate || '';
+        $('propEventTime').value = p.eventTime || '';
+        $('propLocation').value = p.locationName || '';
+        $('propStreet').value = p.streetAddress || '';
+        $('propCityState').value = p.cityState || '';
+        $('propNote').value = p.proposerNote || '';
+        state.resubmitId = p.id;
+        $('proposalMessage').textContent = 'Change what you need to above, then send it back up.';
+        $('propDetails').scrollIntoView({ block: 'center' });
+      });
+      card.append(again, problem);
+    }
+    return card;
+  }));
+};
+
+const statusWords = (status) => ({
+  pending: 'Waiting on the Master',
+  changes_requested: 'Sent back for changes',
+  approved: 'Approved',
+  declined: 'Not approved',
+  partially_signed: 'Waiting on a Secretary',
+  completed: 'Signed',
+}[status] || status);
+
+$('proposalPreview')?.addEventListener('click', async () => {
+  try {
+    const blob = await apiFetch('/api/proposals/new/preview', {
+      method: 'POST', body: JSON.stringify(proposalFields()),
+    });
+    showPdfBlob(blob, 'What the dispensation would look like');
+  } catch (error) {
+    $('proposalMessage').textContent = 'Could not build the preview.';
+  }
+});
+
+$('proposalForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = event.target.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    if (state.resubmitId) {
+      await apiFetch(`/api/proposals/${state.resubmitId}`, { method: 'PUT', body: JSON.stringify(proposalFields()) });
+      state.resubmitId = null;
+    } else {
+      await apiFetch('/api/proposals', { method: 'POST', body: JSON.stringify(proposalFields()) });
+    }
+    $('proposalMessage').textContent = 'Sent to the Worshipful Master. He will come back to you.';
+    event.target.reset();
+    renderProposals();
+  } catch (error) {
+    $('proposalMessage').textContent = error.message || 'Could not send it.';
+  }
+  button.disabled = false;
+});
+
 $('approvalsNav').addEventListener('click', () => showWorkspaceSection('approvals'));
 $('approvalsRefresh').addEventListener('click', () => renderApprovals());
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
 $('queueNav').addEventListener('click', () => showWorkspaceSection('queue'));
 $('builderNav').addEventListener('click', () => showWorkspaceSection('builder'));
 $('dispensationsMenuCard').addEventListener('click', () => showWorkspaceSection('queue'));
+$('proposeMenuCard')?.addEventListener('click', () => showWorkspaceSection('proposals'));
 $('duesNav').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesMenuCard').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesRefresh').addEventListener('click', () => renderDues(true));
@@ -343,6 +570,12 @@ const startRealtime = async () => {
         events.forEach((event) => {
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();
+          }
+          /* The server was already broadcasting this and nobody was listening, so a Warden
+           * watching his proposal saw a stale card until he reloaded. */
+          if (event.includes('event: proposals_changed')) {
+            const section = state.user?.role === 'owner' ? 'proposalReviewSection' : 'proposalsSection';
+            if (!$(section)?.classList.contains('hidden')) renderProposals();
           }
         });
       }
@@ -546,16 +779,23 @@ $('reviewPendingSignature').addEventListener('click', () => {
   }
 });
 
+/* Chrome blocks window.open once the click's user gesture has been spent on an await,
+ * which every one of these does while the PDF renders. The tab never appeared and nothing
+ * said why. The app already has a viewer modal, so show it there. */
+const showPdfBlob = (blob, title) => {
+  if (state.pdfObjectUrl) URL.revokeObjectURL(state.pdfObjectUrl);
+  const url = URL.createObjectURL(blob);
+  state.pdfObjectUrl = url;
+  $('pdfViewerTitle').textContent = title;
+  $('pdfFrame').src = url;
+  show($('pdfModal'));
+};
+
 const openPdf = async (id, fileName) => {
   try {
     setMessage(docMessage, 'Loading protected PDF...');
     const blob = await apiFetch(`/api/documents/${id}/file`);
-    if (state.pdfObjectUrl) URL.revokeObjectURL(state.pdfObjectUrl);
-    const url = URL.createObjectURL(blob);
-    state.pdfObjectUrl = url;
-    $('pdfViewerTitle').textContent = fileName || 'Lodge document';
-    $('pdfFrame').src = url;
-    show($('pdfModal'));
+    showPdfBlob(blob, fileName || 'Lodge document');
     setMessage(docMessage, '');
   } catch (error) {
     setMessage(docMessage, error.message, true);
@@ -718,6 +958,9 @@ $('logoutBtn').addEventListener('click', async () => {
   state.token = '';
   state.user = null;
   localStorage.removeItem('stone-square-sign-token');
+  /* Every modal belongs to the session that opened it. Leaving one up over the sign-in
+   * screen shows the next person Lodge business he has no account for. */
+  document.querySelectorAll('.modal').forEach((modal) => hide(modal));
   hide($('appCard'));
   show($('authCard'));
   setActiveTab('login');
@@ -734,7 +977,6 @@ $('uploadShortcut').addEventListener('click', () => {
 const builderToday = new Date();
 const builderTodayValue = [builderToday.getFullYear(), String(builderToday.getMonth() + 1).padStart(2, '0'), String(builderToday.getDate()).padStart(2, '0')].join('-');
 $('dispRequestDate').value = builderTodayValue;
-$('dispSignerRole').addEventListener('change', applySubmissionProfiles);
 ['dispMasterAddress'].forEach((id) => {
   $(id).addEventListener('input', () => { $('confirmSubmissionProfiles').checked = false; });
 });
@@ -819,7 +1061,8 @@ const SIGNER_CHOICES = {
   secretary: { roles: ['secretary'], label: 'William McDuffie, Secretary' },
   assistant_secretary: { roles: ['assistant_secretary'], label: 'Adrian Reese, Assistant Secretary' },
 };
-const signerChoice = () => SIGNER_CHOICES[$('dispSignerRole').value] || SIGNER_CHOICES.both;
+/* The Lodge no longer chooses. Every dispensation goes to both Secretaries. */
+const signerChoice = () => SIGNER_CHOICES.both;
 
 const dispensationPayload = () => ({
   title: $('dispTitle').value.trim(),

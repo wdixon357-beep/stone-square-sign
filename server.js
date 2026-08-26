@@ -202,6 +202,28 @@ const userForResponse = async (user) => {
   };
 };
 
+/* Role capability sets. These are ALLOWLISTS on purpose.
+ *
+ * The old guards asked "is this role viewer?" and let everything else through. That is a
+ * denylist, and it only ever tested the one role somebody happened to think of. The moment
+ * a new role existed it would have fallen straight through into the signed dispensations
+ * and the Master's private approval notes. Adding a role must never widen access by
+ * accident, so every guard below asks what a role MAY do, not what it may not. */
+const SIGNING_ROLES = new Set(['owner', 'secretary', 'assistant_secretary', 'signer']);
+const APPROVAL_QUEUE_ROLES = new Set(['owner', 'secretary', 'assistant_secretary', 'viewer']);
+const APPROVAL_NOTE_ROLES = new Set(['owner']);
+/* The two Wardens are named in the environment, never in the source. This repository is
+ * public, and a Brother's personal address is his, not the Lodge's to publish. Set
+ * WARDEN_EMAILS to the two addresses, comma separated. Left unset, nobody can hold the
+ * seat, which is the safe way to fail. */
+const WARDEN_EMAILS = new Set(
+  String(process.env.WARDEN_EMAILS || '')
+    .split(',')
+    .map((address) => address.trim().toLowerCase())
+    .filter(Boolean),
+);
+const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'viewer', 'warden'];
+
 const requireAuth = async (req, res, next) => {
   try {
     const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -235,10 +257,28 @@ const requireOwner = (req, res, next) => {
 };
 
 const requireDocumentAccess = (req, res, next) => {
-  if (req.user.role === 'viewer') {
-    return res.status(403).json({ error: 'Viewers can review document status only.' });
+  if (!SIGNING_ROLES.has(req.user.role)) {
+    return res.status(403).json({
+      error: req.user.role === 'warden'
+        ? 'Wardens propose dispensations. They do not open or sign Lodge documents.'
+        : 'Viewers can review document status only.',
+    });
   }
   next();
+};
+
+/* Only the two Wardens named in WARDEN_EMAILS may hold the role, checked on every request
+ * rather than only at invite time, so removing an address revokes access immediately. */
+const requireWarden = (req, res, next) => {
+  if (req.user.role !== 'warden' || !WARDEN_EMAILS.has(String(req.user.email || '').toLowerCase())) {
+    return res.status(403).json({ error: 'This is for the Senior and Junior Wardens.' });
+  }
+  next();
+};
+
+const requireOwnerOrWarden = (req, res, next) => {
+  if (req.user.role === 'owner') return next();
+  return requireWarden(req, res, next);
 };
 
 const rateBuckets = new Map();
@@ -302,9 +342,17 @@ const searchLocationAddress = async (query) => {
 };
 
 const realtimeClients = new Set();
+/* A Warden has no business receiving document events. He cannot open any of those documents,
+ * so the id is useless to him, but he should not be handed it at all. He gets the proposal
+ * events, which are his, and nothing else. */
+const WARDEN_EVENTS = new Set(['proposals_changed', 'connected']);
+
 const broadcast = (type, data = {}) => {
   const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of realtimeClients) client.response.write(event);
+  for (const client of realtimeClients) {
+    if (client.role === 'warden' && !WARDEN_EVENTS.has(type)) continue;
+    client.response.write(event);
+  }
 };
 
 const addAudit = async ({
@@ -716,10 +764,17 @@ const drawValuesOnFormLines = ({ pdfDoc, form, font, values, size = 10 }) => {
   form.updateFieldAppearances(font);
   placements.forEach(({ rectangle, value }) => {
     if (!value) return;
+    /* Nothing clips a value to its line, so a long one runs straight across the next
+     * field: "12:00 PM to 4:00 PM" in Time lands on top of the location. The template's
+     * lines are fixed, so shrink the text to the line instead, down to 6pt, which is the
+     * smallest a District Deputy should be asked to read. */
+    const room = rectangle.width - 6;
+    const natural = font.widthOfTextAtSize(value, size);
+    const fitted = natural > room ? Math.max(6, (size * room) / natural) : size;
     page.drawText(value, {
       x: rectangle.x + 3,
       y: rectangle.y + 3,
-      size,
+      size: fitted,
       font,
     });
   });
@@ -766,20 +821,26 @@ const createDispensationPdf = async ({ fields, ownerName, ownerSignature }) => {
     ],
   });
   const page = pdfDoc.getPages()[0];
-  const signatureImage = await pdfDoc.embedPng(ownerSignature);
-  const signatureRectangle = formFieldRectangle(form, 'Signature');
-  const ratio = Math.min(
-    (signatureRectangle.width - 8) / signatureImage.width,
-    (signatureRectangle.height - 4) / signatureImage.height,
-  );
-  const signatureWidth = signatureImage.width * ratio;
-  const signatureHeight = signatureImage.height * ratio;
-  page.drawImage(signatureImage, {
-    x: signatureRectangle.x + (signatureRectangle.width - signatureWidth) / 2,
-    y: signatureRectangle.y + 2,
-    width: signatureWidth,
-    height: signatureHeight,
-  });
+  /* A Warden previewing his own proposal passes no signature, and that is correct: nothing
+   * is signed until the Master approves it, and the Warden has no business seeing the
+   * Master's signature on a document that does not exist yet. Every path that creates a
+   * real dispensation checks for the signature before it gets here. */
+  if (ownerSignature?.length) {
+    const signatureImage = await pdfDoc.embedPng(ownerSignature);
+    const signatureRectangle = formFieldRectangle(form, 'Signature');
+    const ratio = Math.min(
+      (signatureRectangle.width - 8) / signatureImage.width,
+      (signatureRectangle.height - 4) / signatureImage.height,
+    );
+    const signatureWidth = signatureImage.width * ratio;
+    const signatureHeight = signatureImage.height * ratio;
+    page.drawImage(signatureImage, {
+      x: signatureRectangle.x + (signatureRectangle.width - signatureWidth) / 2,
+      y: signatureRectangle.y + 2,
+      width: signatureWidth,
+      height: signatureHeight,
+    });
+  }
   return Buffer.from(await pdfDoc.save());
 };
 
@@ -1189,7 +1250,7 @@ app.get('/api/events', requireAuth, (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
   res.write(`retry: 2500\nevent: connected\ndata: ${JSON.stringify({ time: nowIso() })}\n\n`);
-  const client = { response: res, userId: req.user.id };
+  const client = { response: res, userId: req.user.id, role: req.user.role };
   realtimeClients.add(client);
   const heartbeat = setInterval(() => res.write(`: heartbeat ${Date.now()}\n\n`), 20000);
   req.on('close', () => {
@@ -1248,7 +1309,7 @@ app.get('/api/officers', requireAuth, requireOwner, async (_req, res, next) => {
   try {
     const officers = await dbAll(
       `SELECT role, name, email, created_at FROM users
-       WHERE role IN ('secretary', 'assistant_secretary', 'viewer')
+       WHERE role IN ('secretary', 'assistant_secretary', 'viewer', 'warden')
        AND email NOT LIKE '%.local' AND access_revoked_at IS NULL
        ORDER BY role DESC`,
     );
@@ -1270,7 +1331,14 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
     const email = normalizeEmail(req.body?.email);
     const name = String(req.body?.name || '').trim();
     const role = String(req.body?.role || '');
-    if (!isEmail(email) || !name || !['secretary', 'assistant_secretary', 'viewer'].includes(role)) {
+    /* The Warden seat is not open to the Lodge at large. Only the two men William named,
+     * checked here and again on every warden request, so removing an address revokes it. */
+    if (role === 'warden' && !WARDEN_EMAILS.has(email)) {
+      return res.status(403).json({
+        error: 'The Warden seats are held by the Senior and Junior Warden. Add the address to the allowlist first.',
+      });
+    }
+    if (!isEmail(email) || !name || !INVITABLE_ROLES.includes(role)) {
       return res.status(400).json({ error: 'Enter the officer name, valid email, and office.' });
     }
     const token = generateToken();
@@ -1305,7 +1373,7 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
       emailSent = await sendEmail({
         to: email,
         subject: 'Your Stone Square Sign account invitation',
-        text: `${name},\n\nYou have been invited to Stone Square Sign as ${role === 'viewer' ? 'a Lodge Viewer' : role === 'secretary' ? 'Secretary' : 'Assistant Secretary'}. ${role === 'viewer' ? 'You can review document status and signing progress, but cannot upload, create, or sign documents.' : 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
+        text: `${name},\n\nYou have been invited to Stone Square Sign as ${{ viewer: 'a Lodge Viewer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary', warden: 'a Warden' }[role] || 'a signer'}. ${{ viewer: 'You can review document status and signing progress, but cannot upload, create, or sign documents.', warden: 'You can propose a dispensation to the Worshipful Master for his approval. You will not be asked to sign anything.' }[role] || 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
       });
     } catch (error) {
       console.warn('Invitation email failed:', error.message);
@@ -1685,106 +1753,381 @@ app.post('/api/dispensations/preview', requireAuth, requireOwner, rateLimit({ ke
   }
 });
 
-app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'dispensation-create', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
-  try {
-    const requestDate = String(req.body?.requestDate || '');
-    const eventDate = String(req.body?.eventDate || '');
-    const requestDetails = String(req.body?.requestDetails || '').trim().slice(0, 600);
-    const eventTime = String(req.body?.eventTime || '').trim().slice(0, 40);
-    const locationName = String(req.body?.locationName || '').trim().slice(0, 120);
-    const streetAddress = String(req.body?.streetAddress || '').trim().slice(0, 120);
-    const cityState = String(req.body?.cityState || '').trim().slice(0, 120);
-    const worshipfulMasterAddress = String(req.body?.worshipfulMasterAddress || '').trim().slice(0, 160);
-    /* The Worshipful Master chooses who it goes to. Most of the time that is both
-     * Secretaries, and then the first one to sign completes it. The old single-value
-     * signerRole is still accepted so nothing already pointing at it breaks. */
-    const requestedRoles = Array.isArray(req.body?.signerRoles) && req.body.signerRoles.length
-      ? req.body.signerRoles.map(String)
-      : [String(req.body?.signerRole || '')];
-    const signerRoles = [...new Set(requestedRoles)]
-      .filter((role) => ['secretary', 'assistant_secretary'].includes(role));
-    const signingMode = signerRoles.length > 1 ? 'any' : 'all';
-    const personalInfoConfirmed = req.body?.personalInfoConfirmed === true;
-    const title = String(req.body?.title || '').trim().slice(0, 200);
-    if (!dateParts(requestDate) || !dateParts(eventDate) || !requestDetails || !eventTime || !locationName
-        || !streetAddress || !cityState || !worshipfulMasterAddress
-        || !personalInfoConfirmed || signerRoles.length === 0) {
-      return res.status(400).json({ error: 'Complete the remaining Lodge questions before sending the PDF.' });
-    }
-    const savedSignature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
-    const ownerSignature = asBuffer(savedSignature?.signature_bytes);
-    if (!ownerSignature?.length) {
-      return res.status(409).json({ error: 'Save your Worshipful Master signature before creating a dispensation.' });
-    }
-    const pdfBytes = await createDispensationPdf({
-      fields: {
-        requestDate, eventDate, requestDetails, eventTime, locationName, streetAddress,
-        cityState, worshipfulMasterAddress,
-      },
-      ownerName: req.user.name,
-      ownerSignature,
-    });
-    const documentId = crypto.randomUUID();
-    const createdAt = nowIso();
-    const documentTitle = title || `Dispensation - ${requestDetails.slice(0, 90)}`;
-    const fileName = `${documentTitle.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100) || 'dispensation'}.pdf`;
+/* The one place a dispensation document is created.
+ *
+ * Both the Worshipful Master's own builder and the Warden proposal approval path call this.
+ * Two copies of this logic would drift, and the drift would be silent until a dispensation
+ * came out wrong on somebody's date.
+ *
+ * Every dispensation now goes to BOTH Secretaries in either/or mode by William's decision of
+ * 2026-08-25: "I don't want to pick which secretary, I wanted to go to both, and whoever signs
+ * it first is whoever signs it." The signer picker is gone from both clients. */
+const BOTH_SECRETARIES = ['secretary', 'assistant_secretary'];
+
+const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, userAgent, auditAction }) => {
+  const {
+    requestDate, eventDate, requestDetails, eventTime, locationName,
+    streetAddress, cityState, worshipfulMasterAddress, title,
+  } = fields;
+  if (!dateParts(requestDate) || !dateParts(eventDate) || !requestDetails || !eventTime
+      || !locationName || !streetAddress || !cityState || !worshipfulMasterAddress) {
+    throw httpError(400, 'Complete the remaining Lodge questions before sending the PDF.');
+  }
+  const savedSignature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [ownerUser.id]);
+  const ownerSignature = asBuffer(savedSignature?.signature_bytes);
+  if (!ownerSignature?.length) {
+    throw httpError(409, 'Save your Worshipful Master signature before creating a dispensation.');
+  }
+  const pdfBytes = await createDispensationPdf({
+    fields: {
+      requestDate, eventDate, requestDetails, eventTime, locationName, streetAddress,
+      cityState, worshipfulMasterAddress,
+    },
+    ownerName: ownerUser.name,
+    ownerSignature,
+  });
+  const documentId = crypto.randomUUID();
+  const createdAt = nowIso();
+  const documentTitle = title || `Dispensation - ${requestDetails.slice(0, 90)}`;
+  const fileName = `${documentTitle.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100) || 'dispensation'}.pdf`;
+  await dbRun(
+    `INSERT INTO documents
+     (id, title, original_name, stored_name, owner_user_id, owner_email, file_bytes,
+      signed_bytes, status, parsed_preview, created_at, updated_at, template_kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'partially_signed', ?, ?, ?, 'dispensation_v1')`,
+    [documentId, documentTitle, fileName, `${documentId}.pdf`, ownerUser.id, ownerUser.email,
+      pdfBytes, pdfBytes, requestDetails, createdAt, createdAt],
+  );
+  await dbRun(
+    `INSERT INTO document_signers
+     (document_id, user_id, signer_role, signer_name, signed_at, signature_bytes, consent_text)
+     VALUES (?, ?, 'worshipful_master', ?, ?, ?, ?)`,
+    [documentId, ownerUser.id, ownerUser.name, createdAt, ownerSignature,
+      'Saved Worshipful Master signature applied when the official template was created.'],
+  );
+  await dbRun('UPDATE documents SET signing_mode = ? WHERE id = ?', ['any', documentId]);
+  const signerNames = [];
+  for (const role of BOTH_SECRETARIES) {
+    const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
+    const officerName = officer?.name
+      || (role === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
+    signerNames.push(officerName);
     await dbRun(
-      `INSERT INTO documents
-       (id, title, original_name, stored_name, owner_user_id, owner_email, file_bytes,
-        signed_bytes, status, parsed_preview, created_at, updated_at, template_kind)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'partially_signed', ?, ?, ?, 'dispensation_v1')`,
-      [documentId, documentTitle, fileName, `${documentId}.pdf`, req.user.id, req.user.email,
-        pdfBytes, pdfBytes, requestDetails, createdAt, createdAt],
+      'INSERT INTO document_signers (document_id, user_id, signer_role, signer_name) VALUES (?, ?, ?, ?)',
+      [documentId, officer?.id || null, role, officerName],
     );
-    await dbRun(
-      `INSERT INTO document_signers
-       (document_id, user_id, signer_role, signer_name, signed_at, signature_bytes, consent_text)
-       VALUES (?, ?, 'worshipful_master', ?, ?, ?, ?)`,
-      [documentId, req.user.id, req.user.name, createdAt, ownerSignature,
-        'Saved Worshipful Master signature applied when the official template was created.'],
-    );
-    await dbRun('UPDATE documents SET signing_mode = ? WHERE id = ?', [signingMode, documentId]);
-    /* One row per chosen officer, and each is told it is waiting on him. On 'any' the
-     * first signature completes the document and the other row is superseded, so the
-     * second man is never left chasing a signature the Lodge already has. */
-    const signerNames = [];
-    for (const role of signerRoles) {
-      const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
-      const officerName = officer?.name
-        || (role === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
-      signerNames.push(officerName);
-      await dbRun(
-        'INSERT INTO document_signers (document_id, user_id, signer_role, signer_name) VALUES (?, ?, ?, ?)',
-        [documentId, officer?.id || null, role, officerName],
-      );
-      if (officer?.email && !officer.email.endsWith('.local')) {
-        const eitherOf = signingMode === 'any'
-          ? ' Either Secretary may sign this one; whoever signs first completes it.'
-          : '';
-        try {
-          await sendEmail({
-            to: officer.email,
-            subject: `Signature requested: ${documentTitle}`,
-            text: `${officerName},\n\nA dispensation is ready for your signature.${eitherOf} Sign in at ${requestBaseUrl(req)} to review and sign ${documentTitle}.`,
-          });
-        } catch (error) {
-          console.warn('Signature request email failed:', error.message);
-        }
+    if (officer?.email && !officer.email.endsWith('.local')) {
+      try {
+        await sendEmail({
+          to: officer.email,
+          subject: `Signature requested: ${documentTitle}`,
+          text: `${officerName},\n\nA dispensation is ready for your signature. Either Secretary may sign this one; whoever signs first completes it. Sign in at ${baseUrl} to review and sign ${documentTitle}.`,
+        });
+      } catch (error) {
+        console.warn('Signature request email failed:', error.message);
       }
     }
-    await addAudit({
-      userId: req.user.id,
-      documentId,
-      action: 'dispensation_created_from_template',
+  }
+  await addAudit({
+    userId: ownerUser.id,
+    documentId,
+    action: auditAction || 'dispensation_created_from_template',
+    ip,
+    userAgent,
+    details: {
+      signerRoles: BOTH_SECRETARIES, signingMode: 'any', signerNames,
+      requestDate, eventDate, template: 'official-grand-lodge',
+    },
+  });
+  broadcast('queue_changed', { reason: 'dispensation_created', documentId });
+  return { documentId, documentTitle };
+};
+
+app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'dispensation-create', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+  try {
+    const personalInfoConfirmed = req.body?.personalInfoConfirmed === true;
+    if (!personalInfoConfirmed) {
+      return res.status(400).json({ error: 'Complete the remaining Lodge questions before sending the PDF.' });
+    }
+    /* signerRoles is still accepted from an older cached page and deliberately ignored.
+     * Every dispensation goes to both Secretaries now. */
+    const { documentId } = await createDispensationDocument({
+      fields: {
+        requestDate: String(req.body?.requestDate || ''),
+        eventDate: String(req.body?.eventDate || ''),
+        requestDetails: String(req.body?.requestDetails || '').trim().slice(0, 600),
+        eventTime: String(req.body?.eventTime || '').trim().slice(0, 40),
+        locationName: String(req.body?.locationName || '').trim().slice(0, 120),
+        streetAddress: String(req.body?.streetAddress || '').trim().slice(0, 120),
+        cityState: String(req.body?.cityState || '').trim().slice(0, 120),
+        worshipfulMasterAddress: String(req.body?.worshipfulMasterAddress || '').trim().slice(0, 160),
+        title: String(req.body?.title || '').trim().slice(0, 200),
+      },
+      ownerUser: req.user,
+      baseUrl: requestBaseUrl(req),
       ip: req.ip,
       userAgent: req.get('user-agent') || '',
-      details: { signerRoles, signingMode, signerNames, requestDate, eventDate, template: 'official-grand-lodge', personalInfoConfirmed },
     });
-    broadcast('queue_changed', { reason: 'dispensation_created', documentId });
     res.status(201).json({ document: { id: documentId } });
   } catch (error) {
     next(error);
   }
+});
+
+/* ---------------------------------------------------------------------------
+ * Warden dispensation proposals.
+ *
+ * Xavier White (Senior Warden) and Jamal Sadler (Junior Warden) propose. The Worshipful
+ * Master decides. A Warden never signs, never opens a Lodge document, and never reaches
+ * the queue or the approvals record.
+ * ------------------------------------------------------------------------- */
+
+const PROPOSAL_FIELDS = ['requestDate', 'eventDate', 'requestDetails', 'eventTime',
+  'locationName', 'streetAddress', 'cityState', 'title'];
+const PROPOSAL_LIMITS = { requestDetails: 600, eventTime: 40, locationName: 120,
+  streetAddress: 120, cityState: 120, title: 200, requestDate: 40, eventDate: 40 };
+
+const readProposalFields = (body = {}) => {
+  const out = {};
+  for (const f of PROPOSAL_FIELDS) out[f] = String(body[f] || '').trim().slice(0, PROPOSAL_LIMITS[f] || 200);
+  return out;
+};
+
+const proposalForResponse = (row) => ({
+  id: row.id,
+  proposerName: row.proposer_name,
+  proposerUserId: row.proposer_user_id,
+  status: row.status,
+  requestDate: row.request_date,
+  eventDate: row.event_date,
+  requestDetails: row.request_details,
+  eventTime: row.event_time,
+  locationName: row.location_name,
+  streetAddress: row.street_address,
+  cityState: row.city_state,
+  title: row.title,
+  proposerNote: row.proposer_note,
+  wmNote: row.wm_note,
+  createdAt: row.created_at,
+  decidedAt: row.decided_at,
+  resultingDocumentId: row.resulting_document_id,
+  /* A Warden sees the progress of the document his proposal became, and nothing else about
+   * it. Scalars only, joined here so no document route has to admit him. */
+  document: row.doc_id ? {
+    status: row.doc_status,
+    completedAt: row.doc_completed_at,
+    submittedAt: row.doc_submitted_at,
+    submittedTo: row.doc_submitted_to,
+    approvalStatus: row.doc_approval_status,
+    approvedOn: row.doc_approved_on,
+  } : null,
+});
+
+const PROPOSAL_SELECT = `
+  SELECT p.*, d.id AS doc_id, d.status AS doc_status, d.completed_at AS doc_completed_at,
+         d.submitted_at AS doc_submitted_at, d.submitted_to AS doc_submitted_to,
+         d.approval_status AS doc_approval_status, d.approved_on AS doc_approved_on
+    FROM dispensation_proposals p
+    LEFT JOIN documents d ON d.id = p.resulting_document_id`;
+
+app.get('/api/proposals', requireAuth, requireOwnerOrWarden, async (_req, res, next) => {
+  try {
+    const rows = await dbAll(`${PROPOSAL_SELECT} ORDER BY p.created_at DESC`);
+    res.json({ proposals: rows.map(proposalForResponse) });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/proposals', requireAuth, requireWarden, rateLimit({ key: 'proposal-create', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+  try {
+    const f = readProposalFields(req.body);
+    const note = String(req.body?.proposerNote || '').trim().slice(0, 2000);
+    if (!f.requestDetails || !f.eventDate) {
+      return res.status(400).json({ error: 'Tell the Master what the event is and when it is.' });
+    }
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    await dbRun(
+      `INSERT INTO dispensation_proposals
+       (id, proposer_user_id, proposer_name, status, request_date, event_date, request_details,
+        event_time, location_name, street_address, city_state, title, proposer_note,
+        created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, req.user.id, req.user.name, f.requestDate, f.eventDate, f.requestDetails, f.eventTime,
+        f.locationName, f.streetAddress, f.cityState, f.title, note, now, now],
+    );
+    await addAudit({ userId: req.user.id, action: 'proposal_created', ip: req.ip,
+      userAgent: req.get('user-agent') || '', details: { proposalId: id, eventDate: f.eventDate } });
+    if (OWNER_EMAIL) {
+      try {
+        await sendEmail({
+          to: OWNER_EMAIL,
+          subject: `Dispensation proposed by ${req.user.name}`,
+          text: `${req.user.name} has proposed a dispensation for ${f.eventDate}.\n\n${f.requestDetails}\n\nHis note:\n${note || '(none)'}\n\nReview it at ${requestBaseUrl(req)}`,
+        });
+      } catch (error) { console.warn('Proposal notice email failed:', error.message); }
+    }
+    broadcast('proposals_changed', { reason: 'proposal_created', proposalId: id });
+    res.status(201).json({ proposal: { id } });
+  } catch (error) { next(error); }
+});
+
+app.put('/api/proposals/:id', requireAuth, requireWarden, async (req, res, next) => {
+  try {
+    const row = await dbGet('SELECT * FROM dispensation_proposals WHERE id = ?', [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Proposal not found.' });
+    if (row.proposer_user_id !== req.user.id) {
+      return res.status(403).json({ error: 'You can only change a proposal you made.' });
+    }
+    if (row.status !== 'changes_requested') {
+      return res.status(409).json({ error: 'Only a proposal the Master sent back can be changed.' });
+    }
+    const f = readProposalFields(req.body);
+    const note = String(req.body?.proposerNote || '').trim().slice(0, 2000);
+    /* Same floor the create path holds, so a resubmit cannot empty a proposal. */
+    if (!f.requestDetails || !f.eventDate) {
+      return res.status(400).json({ error: 'Tell the Master what the event is and when it is.' });
+    }
+    await dbRun(
+      `UPDATE dispensation_proposals
+          SET request_date=?, event_date=?, request_details=?, event_time=?, location_name=?,
+              street_address=?, city_state=?, title=?, proposer_note=?, status='pending', updated_at=?
+        WHERE id = ?`,
+      [f.requestDate, f.eventDate, f.requestDetails, f.eventTime, f.locationName,
+        f.streetAddress, f.cityState, f.title, note, nowIso(), req.params.id],
+    );
+    await addAudit({ userId: req.user.id, action: 'proposal_resubmitted', ip: req.ip,
+      userAgent: req.get('user-agent') || '', details: { proposalId: req.params.id } });
+    broadcast('proposals_changed', { reason: 'proposal_resubmitted', proposalId: req.params.id });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/proposals/:id/preview', requireAuth, requireOwnerOrWarden, rateLimit({ key: 'proposal-preview', maximum: 40, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+  try {
+    const f = readProposalFields(req.body);
+    /* The template writes the date into split boxes, so a blank or malformed one throws deep
+     * inside the PDF builder. Say what is missing instead of returning a 500. */
+    if (!dateParts(f.eventDate)) {
+      return res.status(400).json({ error: 'Put the date of the event in before previewing it.' });
+    }
+    if (!dateParts(f.requestDate)) f.requestDate = new Date().toISOString().slice(0, 10);
+    const owner = await dbGet("SELECT id, name FROM users WHERE role = 'owner' LIMIT 1");
+    const pdfBytes = await createDispensationPdf({
+      fields: {
+        ...f,
+        worshipfulMasterAddress: String(req.body?.worshipfulMasterAddress || '208 East Lake Street, Middletown, DE 19709'),
+      },
+      ownerName: owner?.name || 'W. Aaron Dixon-Saunders',
+      ownerSignature: null,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="dispensation-preview.pdf"');
+    res.send(Buffer.from(pdfBytes));
+  } catch (error) { next(error); }
+});
+
+app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const decision = String(req.body?.decision || '');
+    if (!['approve', 'decline', 'changes'].includes(decision)) {
+      return res.status(400).json({ error: 'Choose approve, decline, or request changes.' });
+    }
+    const wmNote = String(req.body?.wmNote || '').trim().slice(0, 2000);
+
+    /* Claimed inside a transaction with FOR UPDATE so a double-clicked Approve cannot
+     * create two dispensations and email both Secretaries twice. */
+    const claimed = await withTransaction(async () => {
+      const row = await dbGet('SELECT * FROM dispensation_proposals WHERE id = ? FOR UPDATE', [req.params.id]);
+      if (!row) throw httpError(404, 'Proposal not found.');
+      /* 'approving' means a previous attempt died between claiming the row and creating the
+       * document. Nothing was created, or the id would have been stamped, so let it be retried
+       * rather than leaving it stuck forever. */
+      const retryable = row.status === 'approving' && !row.resulting_document_id;
+      if (!['pending', 'changes_requested'].includes(row.status) && !retryable) {
+        throw httpError(409, 'That proposal has already been decided.');
+      }
+      const nextStatus = decision === 'approve' ? 'approving'
+        : decision === 'decline' ? 'declined' : 'changes_requested';
+      await dbRun('UPDATE dispensation_proposals SET status = ?, wm_note = ?, updated_at = ? WHERE id = ?',
+        [nextStatus, wmNote, nowIso(), req.params.id]);
+      return row;
+    });
+
+    const proposer = await dbGet('SELECT email, name FROM users WHERE id = ?', [claimed.proposer_user_id]);
+    const notify = async (subject, text) => {
+      if (proposer?.email && !proposer.email.endsWith('.local')) {
+        try { await sendEmail({ to: proposer.email, subject, text }); }
+        catch (error) { console.warn('Proposal decision email failed:', error.message); }
+      }
+    };
+
+    if (decision !== 'approve') {
+      const action = decision === 'decline' ? 'proposal_declined' : 'proposal_changes_requested';
+      await addAudit({ userId: req.user.id, action, ip: req.ip,
+        userAgent: req.get('user-agent') || '', details: { proposalId: req.params.id } });
+      await notify(
+        decision === 'decline' ? 'Your dispensation proposal was not approved' : 'The Worshipful Master sent your proposal back',
+        `${proposer?.name || 'Brother'},\n\n${decision === 'decline'
+          ? 'The Worshipful Master has not approved the dispensation you proposed.'
+          : 'The Worshipful Master has asked for changes to the dispensation you proposed. Sign in and update it.'}\n\n${wmNote ? `His note:\n${wmNote}\n\n` : ''}${requestBaseUrl(req)}`,
+      );
+      broadcast('proposals_changed', { reason: action, proposalId: req.params.id });
+      return res.json({ ok: true, status: decision === 'decline' ? 'declined' : 'changes_requested' });
+    }
+
+    /* Approve. The Master's edits win over whatever the Warden typed. */
+    const edited = readProposalFields({
+      requestDate: req.body?.requestDate ?? claimed.request_date,
+      eventDate: req.body?.eventDate ?? claimed.event_date,
+      requestDetails: req.body?.requestDetails ?? claimed.request_details,
+      eventTime: req.body?.eventTime ?? claimed.event_time,
+      locationName: req.body?.locationName ?? claimed.location_name,
+      streetAddress: req.body?.streetAddress ?? claimed.street_address,
+      cityState: req.body?.cityState ?? claimed.city_state,
+      title: req.body?.title ?? claimed.title,
+    });
+    /* The Master's own address on the instrument. Neither client sends it on a decision and
+     * they should not have to: it is his, not the Warden's. Read it from the stored submission
+     * profile the way his own builder does, and fall back to the Lodge address so an empty
+     * profile table can never make Approve a dead button. */
+    const wmProfile = await dbGet("SELECT address FROM submission_profiles WHERE role = 'worshipful_master'");
+    const masterAddress = String(
+      req.body?.worshipfulMasterAddress || wmProfile?.address || '208 East Lake Street, Middletown, DE 19709',
+    ).trim().slice(0, 160);
+    let createdDocumentId = null;
+    try {
+      const { documentId } = await createDispensationDocument({
+        fields: { ...edited, worshipfulMasterAddress: masterAddress },
+        ownerUser: req.user,
+        baseUrl: requestBaseUrl(req),
+        ip: req.ip,
+        userAgent: req.get('user-agent') || '',
+        auditAction: 'dispensation_created_from_proposal',
+      });
+      createdDocumentId = documentId;
+      await dbRun(
+        `UPDATE dispensation_proposals
+            SET status='approved', decided_at=?, decided_by=?, resulting_document_id=?, updated_at=?
+          WHERE id = ?`,
+        [nowIso(), req.user.id, documentId, nowIso(), req.params.id],
+      );
+      await addAudit({ userId: req.user.id, documentId, action: 'proposal_approved', ip: req.ip,
+        userAgent: req.get('user-agent') || '', details: { proposalId: req.params.id } });
+      await notify('Your dispensation proposal was approved',
+        `${proposer?.name || 'Brother'},\n\nThe Worshipful Master approved the dispensation you proposed. It has gone to the Secretaries for signature and will follow the usual course from there.\n\n${wmNote ? `His note:\n${wmNote}\n\n` : ''}You can follow its progress at ${requestBaseUrl(req)}`);
+      broadcast('proposals_changed', { reason: 'proposal_approved', proposalId: req.params.id });
+      res.json({ ok: true, status: 'approved', documentId });
+    } catch (error) {
+      /* Hand the proposal back rather than stranding it, but ONLY if nothing was created.
+       * If the dispensation exists and something later failed, returning it to pending would
+       * let a retry build a second one. */
+      if (!createdDocumentId) {
+        await dbRun("UPDATE dispensation_proposals SET status='pending', updated_at=? WHERE id = ?",
+          [nowIso(), req.params.id]);
+      }
+      throw error;
+    }
+  } catch (error) { next(error); }
 });
 
 app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimit({ key: 'sign', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
@@ -2022,6 +2365,11 @@ app.get('/api/documents/:id/endorsed', requireAuth, requireDocumentAccess, async
   try {
     const document = await dbGet('SELECT * FROM documents WHERE id = ?', [req.params.id]);
     if (!document) return res.status(404).json({ error: 'Document not found.' });
+    /* Its four sibling routes check this and this one never did, so anybody who could guess
+     * a document id could pull the executed copy. */
+    if (!(await participantForDocument(document, req.user))) {
+      return res.status(403).json({ error: 'You are not a participant on this document.' });
+    }
     const bytes = asBuffer(document.approved_bytes);
     if (!bytes?.length) return res.status(404).json({ error: 'No endorsed copy has been filed for this one.' });
     res.setHeader('Content-Type', 'application/pdf');
@@ -2033,7 +2381,14 @@ app.get('/api/documents/:id/endorsed', requireAuth, requireDocumentAccess, async
 });
 
 /* Every dispensation the District Deputy has ruled on, newest first. */
-app.get('/api/approvals', requireAuth, async (req, res, next) => {
+app.get('/api/approvals', requireAuth, (req, res, next) => {
+  /* This route returns every dispensation the Lodge has ever filed. It carried requireAuth
+   * only, so any authenticated account saw the lot. Wardens are deliberately excluded. */
+  if (!APPROVAL_QUEUE_ROLES.has(req.user.role)) {
+    return res.status(403).json({ error: 'The approvals record is for the Master and the Secretaries.' });
+  }
+  next();
+}, async (req, res, next) => {
   try {
     const rows = await dbAll(
       `SELECT id, title, original_name, created_at, approval_status, approved_by, approved_on,
@@ -2047,7 +2402,7 @@ app.get('/api/approvals', requireAuth, async (req, res, next) => {
     const approvals = rows.map((row) => ({
       ...row,
       /* A viewer sees that the Lodge was granted its request, not the Master's own paperwork. */
-      approval_note: req.user.role === 'viewer' ? null : row.approval_note,
+      approval_note: APPROVAL_NOTE_ROLES.has(req.user.role) ? row.approval_note : null,
     }));
     return res.json({ approvals });
   } catch (error) {

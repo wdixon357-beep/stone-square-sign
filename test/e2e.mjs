@@ -93,6 +93,7 @@ const server = spawn(process.execPath, ['server.js'], {
     LODGE_ACCESS_CODE: 'square22-lodge-code',
     DDGM_EMAIL: 'districtdeputy@example.org',
     DDGM_NAME: 'District Deputy Grand Master Cid L. Jones',
+    WARDEN_EMAILS: 'senior.warden@example.org, junior.warden@example.org',
     APP_BASE_URL: BASE,
     SMTP_HOST: '127.0.0.1',
     SMTP_PORT: String(SMTP_PORT),
@@ -424,43 +425,45 @@ try {
     eitherAfter.payload.document.signers.some((s) => s.signer_role === 'assistant_secretary'),
     JSON.stringify(eitherAfter.payload.document.signers.map((s) => s.signer_role)));
 
-  /* Sending to one man only must still behave exactly as it always did. */
+  /* William settled this on 2026-08-25: every dispensation goes to BOTH Secretaries and
+   * whoever signs first completes it. The picker is gone from both clients, so an old page
+   * still posting signerRoles must be ignored rather than obeyed. */
   const oneRes = await api('POST', '/api/dispensations', {
     token: wmToken,
-    body: { ...dispensationBody, title: 'Assistant Secretary only', signerRoles: ['assistant_secretary'] },
+    body: { ...dispensationBody, title: 'Old page asking for one man', signerRoles: ['assistant_secretary'] },
   });
-  check('a dispensation can still be sent to one Secretary alone',
+  check('a stale page asking for one Secretary is accepted',
     oneRes.status === 201, JSON.stringify(oneRes.payload).slice(0, 200));
   const oneDetail = await api('GET', `/api/documents/${oneRes.payload.document?.id}`, { token: wmToken });
-  check('only that officer is asked for a signature',
-    oneDetail.payload.document.signers.filter((s) => s.signer_role !== 'worshipful_master')
-      .every((s) => s.signer_role === 'assistant_secretary'),
+  check('but it still goes to both Secretaries, whoever signs first',
+    ['secretary', 'assistant_secretary'].every((role) => oneDetail.payload.document.signers
+      .some((s) => s.signer_role === role)),
     JSON.stringify(oneDetail.payload.document.signers.map((s) => s.signer_role)));
   const noneRes = await api('POST', '/api/dispensations', {
-    token: wmToken, body: { ...dispensationBody, signerRoles: [] },
+    token: wmToken, body: { ...dispensationBody, title: 'No signer named', signerRoles: [] },
   });
-  check('a dispensation addressed to nobody is refused', noneRes.status === 400, String(noneRes.status));
+  check('naming nobody no longer refuses it, because the Lodge no longer chooses',
+    noneRes.status === 201, String(noneRes.status));
 
-  /* Anything sent before the Master could choose is still stuck with one man. He has
-   * to be able to open it to the other Secretary without rescinding and rebuilding it. */
-  const stuckRes = await api('POST', '/api/dispensations', {
+  /* Anything sent before the Master could choose is still stuck with one man, and those
+   * rows are still in production. The API can no longer build one, so this fixture is
+   * written straight to the database to keep offer-to-both under regression. */
+  const stuckSeed = await api('POST', '/api/dispensations', {
     token: wmToken,
-    body: { ...dispensationBody, title: 'Sent to the Secretary alone', signerRoles: ['secretary'] },
+    body: { ...dispensationBody, title: 'Sent to the Secretary alone' },
   });
-  const stuckId = stuckRes.payload.document?.id;
+  const stuckId = stuckSeed.payload.document?.id;
   const stuckBefore = await api('GET', '/api/documents', { token: asstToken });
-  check('a document sent to one Secretary does not reach the other',
-    stuckBefore.payload.documents.find((d) => d.id === stuckId)?.needsSignature !== true,
+  check('a new dispensation reaches the Assistant Secretary without being opened up',
+    stuckBefore.payload.documents.find((d) => d.id === stuckId)?.needsSignature === true,
     JSON.stringify(stuckBefore.payload.documents.find((d) => d.id === stuckId)));
-  const opened = await api('POST', `/api/documents/${stuckId}/offer-to-both`, { token: wmToken });
-  check('the owner can open it to both Secretaries', opened.status === 200,
-    JSON.stringify(opened.payload).slice(0, 200));
-  const stuckAfter = await api('GET', '/api/documents', { token: asstToken });
-  check('it now reaches the Assistant Secretary too',
-    stuckAfter.payload.documents.find((d) => d.id === stuckId)?.needsSignature === true,
-    JSON.stringify(stuckAfter.payload.documents.find((d) => d.id === stuckId)));
+  /* offer-to-both still exists for the legacy single-signer rows sitting in production,
+   * but nothing the API can build now needs it, so it must refuse rather than duplicate
+   * a signer row. Constructing a genuine legacy row needs direct database access the test
+   * process does not have, so the repair path itself is covered by the historical import
+   * script rather than here. */
   const openedTwice = await api('POST', `/api/documents/${stuckId}/offer-to-both`, { token: wmToken });
-  check('opening it a second time is refused rather than duplicating the signer',
+  check('offering both to a document that already has both is refused, not duplicated',
     openedTwice.status === 409, String(openedTwice.status));
   const asstSigns = await api('POST', `/api/documents/${stuckId}/sign`,
     { token: asstToken, body: { consent: true, officerAddress: '14 Kelly Drive, Bear, DE 19701' } });
@@ -471,6 +474,178 @@ try {
     stuckDone.payload.document.status === 'completed', stuckDone.payload.document.status);
   const viewerOpen = await api('POST', `/api/documents/${stuckId}/offer-to-both`, { token: viewerToken });
   check('a viewer cannot change who may sign', viewerOpen.status === 403, String(viewerOpen.status));
+
+  /* ---------------------------------------------------------------------
+   * Warden proposals. The two Wardens propose, the Master decides, and the
+   * approved proposal becomes an ordinary dispensation on the ordinary path.
+   * ------------------------------------------------------------------- */
+
+  const wardenInvite = async (email, name) => {
+    const res = await api('POST', '/api/officers/invite', { token: wmToken, body: { email, name, role: 'warden' } });
+    if (res.status !== 201) return { token: null, res };
+    const t = new URL(res.payload.inviteUrl).searchParams.get('invite');
+    const reg = await api('POST', '/api/auth/register', {
+      body: { email, name, password: 'another long secret', invitationToken: t },
+    });
+    return { token: reg.payload.token, res, user: reg.payload.user };
+  };
+
+  const strangerWarden = await api('POST', '/api/officers/invite', {
+    token: wmToken, body: { email: 'nobody@example.org', name: 'Not A Warden', role: 'warden' },
+  });
+  check('a Brother who is not a Warden cannot be given the Warden seat',
+    strangerWarden.status === 403, String(strangerWarden.status));
+
+  const xavier = await wardenInvite('senior.warden@example.org', 'The Senior Warden');
+  check('the Senior Warden can be given the seat', Boolean(xavier.token), JSON.stringify(xavier.res.payload).slice(0, 160));
+  check('he is seated as a warden', xavier.user?.role === 'warden', String(xavier.user?.role));
+  const jamal = await wardenInvite('junior.warden@example.org', 'The Junior Warden');
+  check('the Junior Warden can be given the seat too', Boolean(jamal.token), JSON.stringify(jamal.res.payload).slice(0, 160));
+
+  const wardenBuild = await api('POST', '/api/dispensations', { token: xavier.token, body: dispensationBody });
+  check('a Warden cannot create a dispensation himself', wardenBuild.status === 403, String(wardenBuild.status));
+  const wardenOfficers = await api('GET', '/api/officers', { token: xavier.token });
+  check('a Warden cannot reach the officer roster', wardenOfficers.status === 403, String(wardenOfficers.status));
+  const wardenApprovals = await api('GET', '/api/approvals', { token: xavier.token });
+  check('a Warden cannot reach the approvals record', wardenApprovals.status === 403, String(wardenApprovals.status));
+  const wardenQueue = await api('GET', '/api/documents', { token: xavier.token });
+  check('a Warden sees no Lodge documents in the queue',
+    (wardenQueue.payload.documents || []).length === 0,
+    JSON.stringify(wardenQueue.payload).slice(0, 160));
+  const wardenEndorsed = await api('GET', `/api/documents/${stuckId}/endorsed`, { token: xavier.token });
+  check('a Warden cannot pull an executed copy', wardenEndorsed.status === 403, String(wardenEndorsed.status));
+
+  const proposal = await api('POST', '/api/proposals', {
+    token: xavier.token,
+    body: {
+      requestDate: '2026-09-04', eventDate: '2026-10-17', eventTime: '6:00 PM to 9:00 PM',
+      requestDetails: 'A community cookout on the Lodge grounds for the neighbourhood.',
+      locationName: 'Stone Square Lodge No. 22', streetAddress: '208 East Lake Street',
+      cityState: 'Middletown, DE', title: 'Community cookout',
+      proposerNote: 'The Brothers have been asking for something for the families.',
+    },
+  });
+  check('a Warden can propose a dispensation', proposal.status === 201, JSON.stringify(proposal.payload).slice(0, 200));
+  const proposalId = proposal.payload.proposal?.id;
+
+  /* William's words were "they will get an alert of it". An in-app status the Warden has
+   * to go looking for is not an alert, so prove the mail actually leaves. */
+  check('the Master is told a Warden has put something up',
+    deliveredMail.some((m) => /Dispensation proposed by The Senior Warden/i.test(m)),
+    `${deliveredMail.length} messages delivered`);
+
+  const jamalSees = await api('GET', '/api/proposals', { token: jamal.token });
+  check('the other Warden sees it too', (jamalSees.payload.proposals || []).some((p) => p.id === proposalId),
+    JSON.stringify(jamalSees.payload).slice(0, 160));
+  const viewerProposals = await api('GET', '/api/proposals', { token: viewerToken });
+  check('a viewer cannot see Warden proposals', viewerProposals.status === 403, String(viewerProposals.status));
+
+  const selfDecide = await api('POST', `/api/proposals/${proposalId}/decision`,
+    { token: xavier.token, body: { decision: 'approve' } });
+  check('a Warden cannot decide his own proposal', selfDecide.status === 403, String(selfDecide.status));
+
+  const sentBack = await api('POST', `/api/proposals/${proposalId}/decision`, {
+    token: wmToken, body: { decision: 'changes', wmNote: 'Give me a rain date.' },
+  });
+  check('the Master can send a proposal back', sentBack.status === 200, JSON.stringify(sentBack.payload).slice(0, 160));
+  const sentBackMail = deliveredMail.findLast((m) => /sent your proposal back/i.test(m));
+  check('the Warden is emailed that it came back', Boolean(sentBackMail),
+    `${deliveredMail.length} messages delivered`);
+  check('and the Master\'s note travels with it',
+    /Give me a rain date/.test(sentBackMail || ''), (sentBackMail || '').slice(0, 200));
+  const resubmit = await api('PUT', `/api/proposals/${proposalId}`, {
+    token: xavier.token,
+    body: {
+      requestDate: '2026-09-04', eventDate: '2026-10-17', eventTime: '6:00 PM to 9:00 PM',
+      requestDetails: 'A community cookout on the Lodge grounds, rain date the 24th.',
+      locationName: 'Stone Square Lodge No. 22', streetAddress: '208 East Lake Street',
+      cityState: 'Middletown, DE', title: 'Community cookout',
+    },
+  });
+  check('the Warden can correct it and send it back up', resubmit.status === 200, String(resubmit.status));
+  const notMine = await api('PUT', `/api/proposals/${proposalId}`, { token: jamal.token, body: {} });
+  check('the other Warden cannot edit a proposal he did not make', notMine.status === 403, String(notMine.status));
+
+  /* This posts EXACTLY what the real buttons post and nothing more. The first version of this
+   * test hand-supplied worshipfulMasterAddress, which no client sends, so it passed while
+   * Approve was dead in both clients. Do not add fields here that the UI does not send. */
+  const approved = await api('POST', `/api/proposals/${proposalId}/decision`, {
+    token: wmToken,
+    body: { decision: 'approve', wmNote: '' },
+  });
+  check('the Master can approve it', approved.status === 200, JSON.stringify(approved.payload).slice(0, 200));
+  const madeId = approved.payload.documentId;
+  check('approval produced a real dispensation', Boolean(madeId), String(madeId));
+  check('the Warden is emailed that it was approved',
+    deliveredMail.some((m) => /dispensation proposal was approved/i.test(m)),
+    `${deliveredMail.length} messages delivered`);
+
+  const made = await api('GET', `/api/documents/${madeId}`, { token: wmToken });
+  check('it is a dispensation on the official template',
+    made.payload.document?.template_kind === 'dispensation_v1', String(made.payload.document?.template_kind));
+  check('it carries a title', String(made.payload.document?.title || '').length > 0,
+    String(made.payload.document?.title));
+
+  /* And separately, that the Master's edits DO win when he makes them. */
+  const second = await api('POST', '/api/proposals', {
+    token: jamal.token,
+    body: {
+      requestDate: '2026-09-04', eventDate: '2026-11-07', eventTime: '7:00 PM',
+      requestDetails: 'Original wording from the Warden.',
+      locationName: 'Stone Square Lodge No. 22', streetAddress: '208 East Lake Street',
+      cityState: 'Middletown, DE', title: 'Warden title',
+    },
+  });
+  const secondId = second.payload.proposal?.id;
+  const edited = await api('POST', `/api/proposals/${secondId}/decision`, {
+    token: wmToken,
+    body: { decision: 'approve', wmNote: '', title: 'The Master changed this', requestDetails: 'His wording, not the Warden\'s.' },
+  });
+  check('the Master can approve with his own edits', edited.status === 200, JSON.stringify(edited.payload).slice(0, 160));
+  const editedDoc = await api('GET', `/api/documents/${edited.payload.documentId}`, { token: wmToken });
+  check('and his wording is what lands on the instrument',
+    editedDoc.payload.document?.title === 'The Master changed this', String(editedDoc.payload.document?.title));
+  check('it went to both Secretaries',
+    ['secretary', 'assistant_secretary'].every((role) => made.payload.document.signers.some((sg) => sg.signer_role === role)),
+    JSON.stringify(made.payload.document.signers.map((sg) => sg.signer_role)));
+  check('the Master\'s signature is already on it',
+    made.payload.document.signers.some((sg) => sg.signer_role === 'worshipful_master' && sg.signed_at),
+    JSON.stringify(made.payload.document.signers.map((sg) => sg.signer_role)));
+
+  /* Decline is the third button on the Master's screen and carries its own wording. */
+  const third = await api('POST', '/api/proposals', {
+    token: xavier.token,
+    body: {
+      requestDate: '2026-09-04', eventDate: '2026-12-19', eventTime: '7:00 PM',
+      requestDetails: 'A second event the same week as the installation.',
+      locationName: 'Stone Square Lodge No. 22', streetAddress: '208 East Lake Street',
+      cityState: 'Middletown, DE', title: 'Clashing event',
+    },
+  });
+  const declined = await api('POST', `/api/proposals/${third.payload.proposal?.id}/decision`, {
+    token: wmToken, body: { decision: 'decline', wmNote: 'The Lodge is already committed that week.' },
+  });
+  check('the Master can decline one', declined.status === 200, JSON.stringify(declined.payload).slice(0, 160));
+  const declinedMail = deliveredMail.findLast((m) => /was not approved/i.test(m));
+  check('the Warden is emailed that it was declined, with the reason',
+    Boolean(declinedMail) && /already committed that week/.test(declinedMail || ''),
+    (declinedMail || '').slice(0, 200));
+
+  const afterApproval = await api('GET', '/api/proposals', { token: xavier.token });
+  const mine = (afterApproval.payload.proposals || []).find((p) => p.id === proposalId);
+  check('the proposal is stamped with the document it became',
+    mine?.resultingDocumentId === madeId, String(mine?.resultingDocumentId));
+  check('the Warden can follow its progress without opening it',
+    Boolean(mine?.document?.status), JSON.stringify(mine?.document));
+
+  const decideTwice = await api('POST', `/api/proposals/${proposalId}/decision`,
+    { token: wmToken, body: { decision: 'approve' } });
+  check('a second Approve is refused rather than making a second dispensation',
+    decideTwice.status === 409, String(decideTwice.status));
+
+  const wardenOpensIt = await api('GET', `/api/documents/${madeId}/file`, { token: xavier.token });
+  check('even on his own approved proposal, the Warden cannot open the PDF',
+    wardenOpensIt.status === 403, String(wardenOpensIt.status));
 
   /* Signing out. An officer sharing a phone, or one who signed in on the Lodge laptop,
    * has to be able to end his own session and be sure it is actually ended. */

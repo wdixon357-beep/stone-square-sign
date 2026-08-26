@@ -255,6 +255,35 @@ export const initSchema = async (exec = run) => {
   /* The Lodge roster. It lives here rather than in source because this repository
    * is public and these are 46 Brothers' names and email addresses. Seeded once by
    * scripts/seed-roster.mjs and used to match Zeffy payments to the right man. */
+  await exec(`CREATE TABLE IF NOT EXISTS dispensation_proposals (
+    id TEXT PRIMARY KEY,
+    proposer_user_id INTEGER NOT NULL REFERENCES users(id),
+    proposer_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    request_date TEXT,
+    event_date TEXT,
+    request_details TEXT,
+    event_time TEXT,
+    location_name TEXT,
+    street_address TEXT,
+    city_state TEXT,
+    title TEXT,
+    proposer_note TEXT,
+    wm_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by INTEGER REFERENCES users(id),
+    resulting_document_id TEXT REFERENCES documents(id)
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_proposals_status
+    ON dispensation_proposals(status)`);
+  /* The cap on Wardens is the WARDEN_EMAILS allowlist in server.js, enforced at invite
+   * time and again on every request. A unique index on email would add nothing, since
+   * users.email is already unique. This index just makes the seat cheap to look up. */
+  await exec(`CREATE INDEX IF NOT EXISTS idx_users_warden
+    ON users(role) WHERE role = 'warden'`);
+
   await exec(`CREATE TABLE IF NOT EXISTS roster (
     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     first_name TEXT NOT NULL,

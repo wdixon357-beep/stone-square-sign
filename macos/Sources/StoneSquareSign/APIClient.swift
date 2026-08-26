@@ -169,6 +169,9 @@ final class AppModel: ObservableObject {
     @Published var approvals: [DispensationApproval] = []
     @Published var approvalsLoading = false
     @Published var approvalsError = ""
+    @Published var proposals: [WardenProposal] = []
+    @Published var proposalsLoading = false
+    @Published var proposalsError = ""
     @Published var submissionProfiles: [SubmissionProfile] = []
     @Published var candidateRecords: [CandidateRecord] = []
     @Published var candidateTrackerLoading = false
@@ -898,6 +901,38 @@ final class AppModel: ObservableObject {
         } catch {
             approvals = []
             approvalsError = (error as? ClientError).map { "\($0)" } ?? error.localizedDescription
+        }
+    }
+
+    /* Warden proposals waiting on the Master. Read on demand, the same as approvals. */
+    func loadProposals() async {
+        proposalsLoading = true
+        proposalsError = ""
+        defer { proposalsLoading = false }
+        do {
+            let response: ProposalsResponse = try await request("/api/proposals")
+            proposals = response.proposals
+        } catch {
+            proposals = []
+            proposalsError = (error as? ClientError).map { "\($0)" } ?? error.localizedDescription
+        }
+    }
+
+    /* approve | decline | changes. The Master may correct any field before approving; the
+     * server creates the real dispensation through the same path his own builder uses. */
+    func decideProposal(id: String, decision: String, wmNote: String) async -> Bool {
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["decision": decision, "wmNote": wmNote])
+            let _: EmptyResponse = try await request(
+                "/api/proposals/\(id)/decision",
+                method: "POST",
+                body: body
+            )
+            await loadProposals()
+            return true
+        } catch {
+            proposalsError = (error as? ClientError).map { "\($0)" } ?? error.localizedDescription
+            return false
         }
     }
 

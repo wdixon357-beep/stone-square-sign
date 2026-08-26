@@ -157,7 +157,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case approvals, home, documents, candidateTracker, createDispensation, access, dues, profile, settings }
+enum AppSection: Hashable { case approvals, home, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,
@@ -270,5 +270,45 @@ struct DispensationApproval: Codable, Identifiable {
         }
     }
 }
+
+// MARK: - Warden proposals
+// Xavier White and Jamal Sadler propose a dispensation; the Worshipful Master decides.
+// The Wardens themselves work on their phones through the web page, so only the Master's
+// review side lives here.
+
+struct WardenProposal: Codable, Identifiable {
+    let id: String
+    let proposerName: String
+    let status: String
+    let requestDate: String?
+    let eventDate: String?
+    let requestDetails: String?
+    let eventTime: String?
+    let locationName: String?
+    let streetAddress: String?
+    let cityState: String?
+    let title: String?
+    let proposerNote: String?
+    let wmNote: String?
+    let createdAt: String?
+    let resultingDocumentId: String?
+
+    var displayTitle: String {
+        if let t = title, !t.isEmpty { return t }
+        if let d = requestDetails, !d.isEmpty { return String(d.prefix(80)) }
+        return "Proposed dispensation"
+    }
+    var isPending: Bool { status == "pending" || status == "changes_requested" }
+    var verdict: String {
+        switch status {
+        case "approved": return "Approved"
+        case "declined": return "Not approved"
+        case "changes_requested": return "Sent back for changes"
+        default: return "Waiting on the Master"
+        }
+    }
+}
+
+struct ProposalsResponse: Codable { let proposals: [WardenProposal] }
 
 struct ApprovalsResponse: Codable { let approvals: [DispensationApproval] }
