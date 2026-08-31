@@ -43,6 +43,10 @@ keeps it awake.
 executed copies and the signature images are held in Postgres as `bytea`. At roughly
 300 KB a dispensation, 0.5 GB is on the order of 1,600 documents.
 
+**Health checks do not use database time.** Render and the daytime wake-up workflow
+call `/api/health` frequently. That endpoint checks only the web process, so an idle
+Neon database can suspend instead of consuming compute for routine host checks.
+
 ## Account recovery
 
 Password reset codes are emailed to the address on the account. The application does

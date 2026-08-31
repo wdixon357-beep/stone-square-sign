@@ -51,15 +51,17 @@ jobs:
             exit 1
           fi
 
-      # Waiting for the file to CHANGE is wrong: redeploying the same code changes
-      # nothing and would report a false failure. The real question is whether what the
-      # officers are served matches the commit being deployed, which is true either way.
+      # Waiting for a browser file alone is not enough. A server-only fix leaves app.js
+      # unchanged, so compare both the client hash and the server's package version.
       - name: Wait until the officers are served this commit
         run: |
-          want=$(sha256sum public/app.js | cut -c1-16)
+          want_hash=$(sha256sum public/app.js | cut -c1-16)
+          want_version=$(node -p "require('./package.json').version")
           for i in $(seq 1 40); do
-            live=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)
-            if [ "$live" = "$want" ]; then
+            live_hash=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)
+            live_version=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/api/version \
+              | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+            if [ "$live_hash" = "$want_hash" ] && [ "$live_version" = "$want_version" ]; then
               echo "Serving this commit after about $((i * 30)) seconds."
               exit 0
             fi

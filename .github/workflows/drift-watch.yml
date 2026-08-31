@@ -38,6 +38,15 @@ jobs:
               fail=1
             fi
           done
+          want_version=$(node -p "require('./package.json').version")
+          live_version=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/api/version \
+            | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+          if [ "$live_version" = "$want_version" ]; then
+            echo "  ok    server version $want_version"
+          else
+            echo "::error::live server version is $live_version; main expects $want_version."
+            fail=1
+          fi
           exit $fail
 
       - name: Can an officer actually load the dashboard

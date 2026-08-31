@@ -926,13 +926,18 @@ app.use(express.static(path.join(APP_DIR, 'public'), {
   setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate'),
 }));
 
-app.get('/api/health', async (_req, res) => {
-  try {
-    await dbGet('SELECT 1 AS ok');
-    res.json({ ok: true, service: 'stone-square-sign', time: nowIso() });
-  } catch (_error) {
-    res.status(503).json({ ok: false });
-  }
+/* Render and the daytime keep-awake workflow call this frequently. It is deliberately
+ * process-only: querying Postgres here kept Neon's compute awake even when no officer
+ * was using the app. Real app requests still fail clearly if the database is down. */
+app.get('/api/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    service: 'stone-square-sign',
+    version: APP_VERSION,
+    database: 'not-checked',
+    time: nowIso(),
+  });
 });
 
 app.get('/api/version', (_req, res) => {

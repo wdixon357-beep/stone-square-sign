@@ -148,6 +148,15 @@ try {
   console.log('\nBooting the server against PGlite');
   if (!await waitForBoot()) throw new Error(`server never came up.\n${serverLog}`);
   check('server boots and answers /api/health', true);
+  const healthResponse = await fetch(`${BASE}/api/health`);
+  const health = await healthResponse.json();
+  check('routine health checks do not claim to check or wake the database',
+    healthResponse.status === 200 && health.ok === true && health.database === 'not-checked',
+    JSON.stringify(health));
+  const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  const healthRoute = serverSource.match(/app\.get\('\/api\/health'[\s\S]*?\n\}\);/)?.[0] || '';
+  check('the health route contains no database query',
+    Boolean(healthRoute) && !/\bdb(?:Get|All|Run)\s*\(/.test(healthRoute), healthRoute);
   check('boot log names the driver', /Database: pglite/.test(serverLog), serverLog.slice(0, 300));
 
   console.log('\nAccounts');

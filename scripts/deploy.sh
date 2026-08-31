@@ -21,9 +21,10 @@ if [ -z "${RENDER_DEPLOY_HOOK:-}" ]; then
   exit 1
 fi
 
-BEFORE=$(curl -s --max-time 45 "${APP_BASE_URL:-https://stone-square-sign.onrender.com}/app.js" \
-  | shasum | cut -c1-12)
-echo "live build right now: $BEFORE"
+BASE_URL="${APP_BASE_URL:-https://stone-square-sign.onrender.com}"
+WANT_HASH=$(shasum public/app.js | cut -c1-12)
+WANT_VERSION=$(node -p "require('./package.json').version")
+echo "deploying server version $WANT_VERSION, client build $WANT_HASH"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$RENDER_DEPLOY_HOOK")
 if [ "$code" != "200" ] && [ "$code" != "201" ]; then
@@ -34,10 +35,12 @@ echo "build started. watching for it to go live, up to 15 minutes."
 
 for i in $(seq 1 45); do
   sleep 20
-  NOW=$(curl -s --max-time 45 "${APP_BASE_URL:-https://stone-square-sign.onrender.com}/app.js" \
+  NOW_HASH=$(curl -s --max-time 45 "$BASE_URL/app.js" \
     | shasum | cut -c1-12)
-  if [ -n "$NOW" ] && [ "$NOW" != "$BEFORE" ]; then
-    echo "LIVE after about $((i * 20)) seconds. new build: $NOW"
+  NOW_VERSION=$(curl -s --max-time 45 "$BASE_URL/api/version" \
+    | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+  if [ "$NOW_HASH" = "$WANT_HASH" ] && [ "$NOW_VERSION" = "$WANT_VERSION" ]; then
+    echo "LIVE after about $((i * 20)) seconds. server $NOW_VERSION, client $NOW_HASH"
     exit 0
   fi
 done

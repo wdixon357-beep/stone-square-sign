@@ -19,6 +19,8 @@ services:
     region: ohio
     buildCommand: npm ci --omit=dev
     startCommand: node server.js
+    # Process-only liveness check. It must never query Neon, because Render calls it
+    # frequently and those checks otherwise consume database compute while nobody uses it.
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

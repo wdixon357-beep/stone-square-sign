@@ -3,7 +3,8 @@
 # A free Render web service sleeps after 15 minutes idle and takes roughly 50 seconds
 # to wake, which is a poor first impression when the Secretary taps a link. This pings
 # the health endpoint often enough that it never sleeps while anyone is likely to open
-# it, and lets it sleep overnight.
+# it, and lets it sleep overnight. The health endpoint checks the web process only, so
+# these pings do not keep the Neon database awake or consume its compute allowance.
 #
 # The hours are deliberate, not lazy. Render allows 750 instance hours a month per
 # workspace and a 31 day month is 744, so keeping it awake around the clock would eat
