@@ -52,6 +52,10 @@ Neon database can suspend instead of consuming compute for routine host checks.
 Password reset codes are emailed to the address on the account. The application does
 not collect or store phone numbers.
 
+Sessions use a 90-day inactivity window. An officer who uses the desk during the last
+30 days of that window is renewed for another 90 days. Explicit sign-out, password
+reset and access revocation still end the affected session immediately.
+
 **A Mac app for anyone else's Mac.** Distributing a Mac app that opens without a
 Gatekeeper warning needs an Apple Developer ID, which is $99 a year. The app runs on
 the Mac it was built on. The officers use the URL, which is what they want anyway.

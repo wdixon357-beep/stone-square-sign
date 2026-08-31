@@ -14,6 +14,7 @@ import {
   connect, initSchema, dbRun, dbGet, dbAll, withTransaction, isUniqueViolation,
 } from './db.js';
 import { buildDuesLedger, duesConfigured, DUES_ROLES } from './dues.js';
+import { createSessionPolicy } from './session-policy.js';
 
 dotenv.config();
 
@@ -24,7 +25,10 @@ const DISPENSATION_TEMPLATE = path.join(APP_DIR, 'assets', 'grand-lodge-dispensa
 const APP_VERSION = JSON.parse(await fs.readFile(path.join(APP_DIR, 'package.json'), 'utf8')).version;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
-const SESSION_DAYS = Math.max(1, Number(process.env.SESSION_DAYS || 7));
+const SESSION_POLICY = createSessionPolicy({
+  lifetimeDays: process.env.SESSION_DAYS,
+  refreshWindowDays: process.env.SESSION_REFRESH_DAYS,
+});
 const CANDIDATE_TRACKER_URL = String(
   process.env.CANDIDATE_TRACKER_URL || 'https://tracker.stonesquare22pha.org/',
 ).replace(/\/$/, '');
@@ -182,7 +186,7 @@ const extractTextFromPdf = async (buffer) => {
 
 const createAuthToken = async (userId) => {
   const token = generateToken();
-  const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = SESSION_POLICY.expiresAt();
   await dbRun('INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)', [
     userId,
     hashSecret(token),
@@ -229,20 +233,26 @@ const requireAuth = async (req, res, next) => {
     const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     const token = bearer || req.headers['x-lodge-token'];
     if (!token) return res.status(401).json({ error: 'Sign in is required.' });
+    const tokenHash = hashSecret(token);
     const row = await dbGet(
       `SELECT users.id, users.email, users.name, users.role, users.access_revoked_at, sessions.expires_at
        FROM sessions JOIN users ON users.id = sessions.user_id
        WHERE sessions.token = ?`,
-      [hashSecret(token)],
+      [tokenHash],
     );
     if (!row) return res.status(401).json({ error: 'Your sign in has expired.' });
     if (row.access_revoked_at) return res.status(403).json({ error: 'Your access has been revoked by the Worshipful Master.' });
     if (Date.now() > new Date(row.expires_at).getTime()) {
-      await dbRun('DELETE FROM sessions WHERE token = ?', [hashSecret(token)]);
+      await dbRun('DELETE FROM sessions WHERE token = ?', [tokenHash]);
       return res.status(401).json({ error: 'Your sign in has expired.' });
     }
+    if (SESSION_POLICY.shouldRefresh(row.expires_at)) {
+      await dbRun('UPDATE sessions SET expires_at = ? WHERE token = ?', [
+        SESSION_POLICY.expiresAt(), tokenHash,
+      ]);
+    }
     req.user = row;
-    req.authTokenHash = hashSecret(token);
+    req.authTokenHash = tokenHash;
     next();
   } catch (error) {
     next(error);

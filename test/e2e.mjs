@@ -126,7 +126,8 @@ try {
     postgresTlsOptions({ databaseUrl: 'postgresql://example.invalid/db?sslmode=require' }).rejectUnauthorized === true);
   const dockerfile = fs.readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
   check('Docker image includes database adapter and PDF assets',
-    /COPY\s+package\.json\s+server\.js\s+db\.js/.test(dockerfile) && /COPY\s+assets\s+\.\/assets/.test(dockerfile));
+    /COPY\s+package\.json\s+server\.js\s+db\.js\s+session-policy\.js/.test(dockerfile)
+      && /COPY\s+assets\s+\.\/assets/.test(dockerfile));
 
   const productionFailure = async (overrides) => {
     const child = spawn(process.execPath, ['server.js'], {
