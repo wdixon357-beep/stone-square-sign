@@ -157,7 +157,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case approvals, home, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
+enum AppSection: Hashable { case approvals, home, reportGenerator, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,

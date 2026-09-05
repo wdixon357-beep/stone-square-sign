@@ -227,6 +227,11 @@ const loadSubmissionProfiles = async () => {
 };
 
 const showWorkspaceSection = (section) => {
+  const reports = section === 'reports';
+  $('reportsSection').classList.toggle('hidden', !reports);
+  $('reportsNav').classList.toggle('active', reports);
+  const reportFrame = $('reportGeneratorFrame');
+  if (reports && !reportFrame.hasAttribute('src')) reportFrame.src = reportFrame.dataset.src;
   const home = section === 'home';
   const builder = section === 'builder';
   const queue = section === 'queue';
@@ -524,6 +529,8 @@ $('proposalForm')?.addEventListener('submit', async (event) => {
 
 $('approvalsNav').addEventListener('click', () => showWorkspaceSection('approvals'));
 $('approvalsRefresh').addEventListener('click', () => renderApprovals());
+$('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
+$('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
 $('queueNav').addEventListener('click', () => showWorkspaceSection('queue'));
 $('builderNav').addEventListener('click', () => showWorkspaceSection('builder'));

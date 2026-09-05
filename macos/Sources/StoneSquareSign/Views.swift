@@ -260,6 +260,7 @@ struct LoginStep: View {
 struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
     @State private var selection: AppSection? = .home
+    @StateObject private var reportBrowser = ReportBrowserModel()
 
     var body: some View {
         NavigationSplitView {
@@ -272,6 +273,7 @@ struct WorkspaceView: View {
                 .padding(22)
                 List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
+                Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator)
                 Label("Live Queue", systemImage: "list.number").tag(AppSection.documents)
                 Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker)
                 if model.user?.role == "owner" {
@@ -310,8 +312,11 @@ struct WorkspaceView: View {
             case .home:
                 LandingDashboardView(
                     openDispensations: { selection = .documents },
-                    openCandidateTracker: { selection = .candidateTracker }
+                    openCandidateTracker: { selection = .candidateTracker },
+                    openReports: { selection = .reportGenerator }
                 )
+            case .reportGenerator:
+                ReportGeneratorView(browser: reportBrowser)
             case .candidateTracker:
                 NativeCandidateTrackerView()
             case .createDispensation: DispensationBuilderView()
@@ -1234,6 +1239,7 @@ struct LandingDashboardView: View {
     @EnvironmentObject var model: AppModel
     let openDispensations: () -> Void
     let openCandidateTracker: () -> Void
+    let openReports: () -> Void
     @State private var pulse = false
 
     private var awaitingCount: Int {
@@ -1267,6 +1273,9 @@ struct LandingDashboardView: View {
                 }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 18)], spacing: 18) {
+                    Button(action: openReports) {
+                        LandingDocumentCard(title: "Report Generator", description: "Prepare, preview and send a Lodge report", systemImage: "doc.text", comingSoon: false, awaiting: false, pulse: false)
+                    }.buttonStyle(.plain)
                     Button(action: openDispensations) {
                         LandingDocumentCard(
                             title: "Dispensations",

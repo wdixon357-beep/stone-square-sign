@@ -345,3 +345,7 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
 #proposalReviewSection .card .two button { flex: 1 1 auto; }
 #proposalsSection h2, #proposalReviewSection h2 { color: var(--navy); font-size: 34px; font-weight: 500; margin: 4px 0 10px; }
 #proposalsSection h3 { color: var(--navy); font-size: 20px; font-weight: 500; margin: 34px 0 0; }
+
+/* Keep the report form loaded when switching dashboard areas. */
+#reportGeneratorFrame { display: block; width: 100%; height: max(760px, 82vh); border: 1px solid #d6dce2; border-radius: 16px; background: #fff; }
+#reportsSection .content-head { flex-wrap: wrap; gap: 16px; }

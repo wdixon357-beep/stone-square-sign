@@ -20,6 +20,7 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 /* web element id -> Mac AppSection case */
 const PAIRS = {
   homeNav: 'home',
+  reportsNav: 'reportGenerator',
   queueNav: 'documents',
   builderNav: 'createDispensation',
   duesNav: 'dues',

@@ -3,7 +3,7 @@
 A signing queue for Lodge documents that need the Secretary's or the Assistant
 Secretary's signature. Dispensations today, anything else later.
 
-Runs on free infrastructure. There is no paid tier anywhere in this setup.
+The shared service currently runs on Render Starter and Neon Free. See hosting costs below.
 
 ---
 
@@ -22,15 +22,27 @@ executed PDF by email and the document is marked complete.
 - The document as uploaded is kept separately from the executed copy, so the original
   is always recoverable.
 
+## Report Generator
+
+Home and the sidebar open the shared Report Generator inside the web dashboard and
+Mac app. The report form stays separate from the dispensation signing queue. Brothers
+preview first, then review, type their signature and explicitly send the final report.
+Previewing, printing and saving do not trigger email. The Mac preview has its own
+window so the report form remains available.
+
 ## What it costs
 
-Nothing.
+The live Render service was verified on **Starter, $7/month**, on September 4, 2026.
+Neon is on Free. The table below describes a target free configuration, not the current
+bill. Before downgrading Render, replace the SMTP transport with an HTTPS email API:
+Render Free blocks outbound SMTP ports 25, 465 and 587. Retain the same database and
+verify invitation, reset and signed-document delivery before changing the plan.
 
 | Piece | Service | Free allowance |
 |---|---|---|
 | Web server | Render, free web service | 750 instance hours a month |
 | Database | Neon, free plan | 0.5 GB, no card required |
-| Email | Gmail or Google Workspace | 500 messages a day |
+| Email | HTTPS email API, integration required | Resend Free: 100/day, 3,000/month |
 
 Two consequences of free, both worth knowing before you commit:
 
@@ -70,7 +82,7 @@ card. Create them yourself; this is the one part nobody can do for you.
 **1. Database.** At neon.tech create a project. Copy the **pooled** connection string,
 the one with `-pooler` in the host name. That is `DATABASE_URL`.
 
-**2. Mail.** At myaccount.google.com/apppasswords, with two-step verification on,
+**2. Mail (paid Render only).** The current SMTP implementation requires a Render tier that permits SMTP. For that configuration, at myaccount.google.com/apppasswords, with two-step verification on,
 generate an App Password for the Lodge account. That sixteen character string is
 `SMTP_PASS`. It is not the account password and it can be revoked on its own.
 

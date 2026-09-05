@@ -113,6 +113,7 @@
           <div class="user-block"><span id="userInitials"></span><div><strong id="whoami"></strong><small id="userRole"></small></div></div>
           <nav>
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
+            <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
             <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
@@ -132,12 +133,17 @@
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
             <div class="document-menu">
               <button id="proposeMenuCard" class="document-menu-card warden-only" type="button"><i>&#9998;</i><span><strong>Propose a Dispensation</strong><small>Put an event to the Worshipful Master</small></span><b>&rsaquo;</b></button>
+              <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
                 <button class="document-menu-card coming-soon signer-only" type="button" disabled><i>MIN</i><span><strong>Previous Lodge Meeting Minutes</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
               <button class="document-menu-card coming-soon signer-only" type="button" disabled><i>TR</i><span><strong>Treasurer Reports</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
               <a class="document-menu-card signer-only" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
             </div>
+          </section>
+          <section id="reportsSection" class="hidden">
+            <div class="content-head"><div><p class="eyebrow">REPORTS FOR THE CRAFT</p><h1>Report Generator</h1><p>Preview your report before reviewing, signing and sending it.</p></div><a class="secondary" href="https://request.stonesquare22pha.org/report" target="_blank" rel="noopener noreferrer">Open in a separate tab</a></div>
+            <iframe id="reportGeneratorFrame" title="Report Generator" data-src="https://request.stonesquare22pha.org/report" referrerpolicy="no-referrer"></iframe>
           </section>
           <section id="queueSection">
           <div class="content-head">
