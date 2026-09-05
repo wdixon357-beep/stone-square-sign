@@ -12,12 +12,13 @@ enum ClientError: LocalizedError {
     case invalidServer
     case invalidResponse
     case server(String)
+    case unauthorized(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidServer: return "Enter a valid signing service address."
         case .invalidResponse: return "The signing service returned an invalid response."
-        case .server(let message): return message
+        case .server(let message), .unauthorized(let message): return message
         }
     }
 }
@@ -163,6 +164,9 @@ enum BiometricCredentialStore {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var user: User?
+    @Published var restoringSession = false
+    @Published var sessionConnectionError: String?
+    var hasSavedSession: Bool { token != nil }
     @Published var documents: [LodgeDocument] = []
     @Published var officers: [Officer] = []
     @Published var pendingInvitations: [PendingInvitation] = []
@@ -190,6 +194,7 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(serverAddress, forKey: "server-address") }
     }
 
+    private let session: URLSession
     private var token: String?
     private var liveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
@@ -203,7 +208,8 @@ final class AppModel: ObservableObject {
         return decoder
     }()
 
-    init() {
+    init(session: URLSession = .shared, savedSessionToken: String? = TokenStore.load()) {
+        self.session = session
         serverAddress = UserDefaults.standard.string(forKey: "server-address") ?? defaultServerAddress
         biometricLoginEnabled = UserDefaults.standard.bool(forKey: "biometric-login-enabled")
         biometricLoginAvailable = BiometricCredentialStore.isAvailable
@@ -212,7 +218,7 @@ final class AppModel: ObservableObject {
          * whenever the app is rebuilt, because an ad hoc signature changes every build and the
          * Keychain no longer recognises the app that owns the item. Touch ID is now a convenience
          * on top of a session that persists, not the only way back in. */
-        token = TokenStore.load()
+        token = savedSessionToken
     }
 
     var baseURL: URL? {
@@ -235,11 +241,12 @@ final class AppModel: ObservableObject {
         request.httpBody = body
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? decoder.decode(APIError.self, from: data).error)
                 ?? "Request failed with status \(http.statusCode)."
+            if http.statusCode == 401 || http.statusCode == 403 { throw ClientError.unauthorized(message) }
             throw ClientError.server(message)
         }
         return try decoder.decode(T.self, from: data)
@@ -263,14 +270,23 @@ final class AppModel: ObservableObject {
     }
 
     func restoreSession() async {
-        guard token != nil else { return }
+        guard token != nil, !restoringSession else { return }
+        restoringSession = true
+        sessionConnectionError = nil
+        defer { restoringSession = false }
         do {
             let response: MeResponse = try await request("/api/auth/me")
             user = response.user
             await refresh(silent: true)
             startLiveQueue()
-        } catch {
+        } catch ClientError.unauthorized(let message) {
+            // Only an explicit rejection from the service invalidates this Mac's login.
             signOut(localOnly: true)
+            self.message = message
+            isError = true
+        } catch {
+            // An outage or sleeping host is not a sign-out. Retain the local credential.
+            sessionConnectionError = "Stone Square Sign could not connect. Your automatic login is still saved."
         }
     }
 

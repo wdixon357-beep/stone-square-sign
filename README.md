@@ -64,7 +64,9 @@ Neon database can suspend instead of consuming compute for routine host checks.
 Password reset codes are emailed to the address on the account. The application does
 not collect or store phone numbers.
 
-Sessions use a 90-day inactivity window. An officer who uses the desk during the last
+William's personally authorized Mac installation uses a separate persistent session and opens directly into his account without a password or Touch ID. Its credential stays in the Mac app's private storage. Temporary connection failures show Reconnect and preserve it. Account reset or explicit revocation can still invalidate access. The local setup is recorded in the audit trail; it does not disable website authentication.
+
+Website sessions use a 90-day inactivity window. An officer who uses the desk during the last
 30 days of that window is renewed for another 90 days. Explicit sign-out, password
 reset and access revocation still end the affected session immediately.
 

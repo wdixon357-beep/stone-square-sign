@@ -21,8 +21,18 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if model.user == nil { AuthenticationView() }
-            else { WorkspaceView() }
+            if model.user != nil { WorkspaceView() }
+            else if model.hasSavedSession {
+                VStack(spacing: 16) {
+                    if let error = model.sessionConnectionError {
+                        Text(error).multilineTextAlignment(.center)
+                        Button("Reconnect") { Task { await model.restoreSession() } }
+                    } else {
+                        ProgressView()
+                        Text("Opening Stone Square Sign…")
+                    }
+                }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else { AuthenticationView() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .bottom) {
@@ -301,7 +311,7 @@ struct WorkspaceView: View {
                     Divider().padding(.vertical, 5)
                     Text(model.user?.name ?? "").font(.callout.weight(.semibold))
                     Text(model.user?.roleLabel ?? "").font(.caption).foregroundStyle(.secondary)
-                    Button("Sign out") { model.signOut() }.buttonStyle(.link).padding(.top, 5)
+                    Text("Automatic login on this Mac").font(.caption2).foregroundStyle(.secondary).padding(.top, 5)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
@@ -1951,27 +1961,10 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Test and refresh") { Task { await model.refresh() } }
             }
-            Section("Touch ID and Keychain") {
-                if model.biometricLoginEnabled {
-                    Label("Touch ID login is enabled", systemImage: "touchid")
-                        .foregroundStyle(.green)
-                    Button("Disable Touch ID and Keychain login", role: .destructive) {
-                        Task { await model.setBiometricLogin(enabled: false) }
-                    }
-                    .disabled(model.isBusy)
-                } else {
-                    Button {
-                        Task { await model.setBiometricLogin(enabled: true) }
-                    } label: {
-                        Label("Enable Touch ID and Keychain login", systemImage: "touchid")
-                    }
-                    .disabled(model.isBusy || !model.biometricLoginAvailable)
-                }
-                Text(model.biometricLoginAvailable
-                     ? "Your session is stored in your Mac Keychain and opens only after Touch ID. Keychain is accessed only when you choose biometric login."
-                     : "Touch ID is not available or is not configured on this Mac.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Section("Automatic login") {
+                Label("This Mac opens your saved account automatically", systemImage: "desktopcomputer")
+                Text("No password or Touch ID is needed when opening the app. Connection interruptions keep your login saved.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
