@@ -114,7 +114,6 @@ variables marked `sync: false`:
 | `SMTP_USER` | the Lodge Gmail address |
 | `SMTP_PASS` | the App Password from step 2 |
 | `MAIL_FROM` | `Stone Square Sign <that same address>` |
-| `OPENAI_API_KEY` | the API key used only when an authorized officer creates draft meeting minutes |
 
 **4. Claim the owner account.** Open the URL and register with `OWNER_EMAIL`. That is
 the only account that can be created without an invitation, and only once.

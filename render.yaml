@@ -93,10 +93,3 @@ services:
         value: "30"
       - key: MAX_UPLOAD_BYTES
         value: "12582912"
-
-      # Meeting minutes. Required for turning an officer-corrected Plaud transcript
-      # into a structured draft. Requests set the OpenAI store option to false.
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: MINUTES_MODEL
-        value: gpt-5-mini

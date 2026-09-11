@@ -847,7 +847,7 @@ $('generateMinutes').addEventListener('click', async () => {
   }
   button.disabled = true;
   button.textContent = 'Creating draft...';
-  setMessage($('minutesMessage'), 'Reading the transcript. This can take about a minute.');
+  setMessage($('minutesMessage'), 'Organizing the transcript into the Lodge minutes template.');
   try {
     const payload = await apiFetch('/api/minutes/generate', { method: 'POST', body: data });
     $('minutesTranscriptFile').value = '';
