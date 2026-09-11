@@ -31,6 +31,7 @@ const PAIRS = {
 
 /* Deliberate asymmetries. Each needs a reason, so the list stays honest. */
 const WEB_ONLY = {
+  minutesNav: 'Plaud transcripts are uploaded from the shared web dashboard used by both Secretaries. The Mac app links officers to the same service and does not need a second minutes implementation.',
   proposalsNav: 'the Wardens propose from their phones. The Mac build is ad hoc signed and only '
     + 'runs on the machine it was built on, so Xavier and Jamal can never install it. Building a '
     + 'proposing screen there would be a screen nobody who proposes can open. The Master\'s '

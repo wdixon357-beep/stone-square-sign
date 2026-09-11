@@ -243,6 +243,33 @@ export const initSchema = async (exec = run) => {
     details_json TEXT,
     created_at TEXT NOT NULL
   )`);
+  /* Plaud transcripts and the minutes built from them remain private officer records.
+   * Nothing in this table is exposed to viewers or Wardens. Authorization to circulate
+   * a draft is separate from the Lodge's later approval of the official minutes. */
+  await exec(`CREATE TABLE IF NOT EXISTS meeting_minutes (
+    id TEXT PRIMARY KEY,
+    meeting_date TEXT,
+    source_name TEXT NOT NULL,
+    transcript_text TEXT NOT NULL,
+    draft_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    updated_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    submitted_for_review_at TEXT,
+    preparer_attested_at TEXT,
+    master_attested_by_user_id INTEGER REFERENCES users(id),
+    master_attested_at TEXT,
+    authorized_by_user_id INTEGER REFERENCES users(id),
+    authorized_at TEXT,
+    distributed_by_user_id INTEGER REFERENCES users(id),
+    distributed_at TEXT,
+    approved_by_lodge_on TEXT,
+    approval_note TEXT
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_meeting_minutes_date
+    ON meeting_minutes(meeting_date, created_at)`);
   await exec(`CREATE TABLE IF NOT EXISTS office_slots (
     role TEXT PRIMARY KEY
   )`);
@@ -329,6 +356,9 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'documents', 'template_kind', 'TEXT');
   await addColumn(exec, 'reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");
   await addColumn(exec, 'users', 'access_revoked_at', 'TEXT');
+  await addColumn(exec, 'meeting_minutes', 'preparer_attested_at', 'TEXT');
+  await addColumn(exec, 'meeting_minutes', 'master_attested_by_user_id', 'INTEGER REFERENCES users(id)');
+  await addColumn(exec, 'meeting_minutes', 'master_attested_at', 'TEXT');
 
   await exec('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
   await exec('CREATE INDEX IF NOT EXISTS idx_signers_document ON document_signers(document_id)');

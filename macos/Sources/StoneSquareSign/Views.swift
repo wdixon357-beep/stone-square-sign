@@ -1979,7 +1979,17 @@ struct SignatureApprovalView: View {
     @State private var consent = false
     @State private var signatureImage: NSImage?
     @State private var showingPDF = false
-    @State private var officerAddress = ""
+    @State private var officerProfile: SubmissionProfile?
+    @State private var profileError = ""
+
+    private var profileReady: Bool {
+        guard document.isDispensation else { return true }
+        guard let profile = officerProfile else { return false }
+        return !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !profile.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && profile.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                != profile.address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -2002,25 +2012,36 @@ struct SignatureApprovalView: View {
                 "I agree that this electronic signature represents my signature on this document.",
                 isOn: $consent
             )
-            TextField("Your address as it should appear on the dispensation", text: $officerAddress)
-            Text("Your name and address are added to the secretary section only when you sign.")
-                .font(.caption).foregroundStyle(.secondary)
+            if document.isDispensation {
+                if let officerProfile {
+                    Text(officerProfile.name).font(.headline)
+                    Text(officerProfile.address)
+                    Text("These details fill the secretary section when you sign. Contact the Worshipful Master if a correction is needed.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !profileError.isEmpty { Text(profileError).foregroundStyle(.red) }
+            }
             HStack {
                 Button("View PDF") { showingPDF = true }
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Apply saved signature") {
-                    Task { if await model.sign(document: document, officerAddress: officerAddress) { dismiss() } }
+                    Task { if await model.sign(document: document) { dismiss() } }
                 }
                 .buttonStyle(.borderedProminent).tint(SignTheme.navy)
-                .disabled(!consent || signatureImage == nil || officerAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isBusy)
+                .disabled(!consent || signatureImage == nil || !profileReady || model.isBusy)
             }
         }
         .padding(30)
         .frame(width: 760)
         .task {
             signatureImage = try? await model.signatureImage()
-            officerAddress = model.submissionProfiles.first(where: { $0.role == model.user?.role })?.address ?? ""
+            if document.isDispensation {
+                do {
+                    officerProfile = try await model.signingProfile()
+                    if !profileReady { profileError = "Ask the Worshipful Master to save your name and mailing address before signing." }
+                } catch { profileError = error.localizedDescription }
+            }
         }
         .sheet(isPresented: $showingPDF) { PDFPreviewView(document: document) }
     }

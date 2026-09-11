@@ -6,6 +6,7 @@ import bcrypt from 'bcrypt';
 import dotenv from 'dotenv';
 import express from 'express';
 import multer from 'multer';
+import mammoth from 'mammoth';
 import nodemailer from 'nodemailer';
 import { PDFParse } from 'pdf-parse';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
@@ -15,6 +16,8 @@ import {
 } from './db.js';
 import { buildDuesLedger, duesConfigured, DUES_ROLES } from './dues.js';
 import { createSessionPolicy } from './session-policy.js';
+import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
+import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
 
 dotenv.config();
 
@@ -34,6 +37,7 @@ const CANDIDATE_TRACKER_URL = String(
 ).replace(/\/$/, '');
 const TRACKER_SSO_SHARED_SECRET = String(process.env.TRACKER_SSO_SHARED_SECRET || '');
 const OFFICE_ROLES = new Set(['secretary', 'assistant_secretary']);
+const MINUTES_ROLES = new Set(['owner', 'secretary', 'assistant_secretary']);
 /* One shared Lodge access code, so an officer can create his own account without waiting on an
  * invitation or on email working. It replaces five separate invitations with one word the Master
  * texts to the officers. Leave it unset and the app stays invitation only. */
@@ -273,6 +277,27 @@ const requireDocumentAccess = (req, res, next) => {
         ? 'Wardens propose dispensations. They do not open or sign Lodge documents.'
         : 'Viewers can review document status only.',
     });
+  }
+  next();
+};
+
+const requireMinutesAccess = (req, res, next) => {
+  if (!MINUTES_ROLES.has(req.user.role)) {
+    return res.status(403).json({ error: 'Meeting minutes are restricted to the Worshipful Master and the Secretaries.' });
+  }
+  next();
+};
+
+const requireSecretaryOrOwner = (req, res, next) => {
+  if (!new Set(['owner', 'secretary']).has(req.user.role)) {
+    return res.status(403).json({ error: 'The Secretary records distribution after the Worshipful Master authorizes it.' });
+  }
+  next();
+};
+
+const requireMinutesPreparer = (req, res, next) => {
+  if (!OFFICE_ROLES.has(req.user.role)) {
+    return res.status(403).json({ error: 'The Secretary or Assistant Secretary prepares and attests to the draft.' });
   }
   next();
 };
@@ -868,6 +893,10 @@ const fillDispensationOfficerInformation = async ({ pdfBytes, officerName, offic
       ['Address_2', officerAddress],
     ],
   });
+  // These entries are now part of the signed page. Blank widget appearances must
+  // not paint over them, including on imported dispensation templates.
+  form.removeField(form.getTextField('Secretary'));
+  form.removeField(form.getTextField('Address_2'));
   return Buffer.from(await pdfDoc.save());
 };
 
@@ -902,6 +931,64 @@ const upload = multer({
     callback(null, true);
   },
 });
+
+const minutesUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+  fileFilter: (_req, file, callback) => {
+    const name = file.originalname.toLowerCase();
+    if (!name.endsWith('.txt') && !name.endsWith('.docx') && !name.endsWith('.pdf')) {
+      return callback(new Error('Upload a Plaud transcript as a TXT, DOCX, or PDF file.'));
+    }
+    callback(null, true);
+  },
+});
+
+const transcriptFromUpload = async (file) => {
+  if (!file) return '';
+  const name = file.originalname.toLowerCase();
+  if (name.endsWith('.pdf')) return extractTextFromPdf(file.buffer);
+  if (name.endsWith('.docx')) return (await mammoth.extractRawText({ buffer: file.buffer })).value;
+  return file.buffer.toString('utf8');
+};
+
+const minutesForResponse = (row) => ({
+  id: row.id,
+  meetingDate: row.meeting_date,
+  sourceName: row.source_name,
+  draft: normalizeMinutesDraft(JSON.parse(row.draft_json)),
+  status: row.status,
+  createdBy: row.created_by_name,
+  updatedBy: row.updated_by_name,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  submittedForReviewAt: row.submitted_for_review_at,
+  preparerRole: row.created_by_role,
+  preparerAttestedAt: row.preparer_attested_at,
+  masterAttestedAt: row.master_attested_at,
+  masterAttestedBy: row.master_attested_by_name,
+  authorizedAt: row.authorized_at,
+  authorizedBy: row.authorized_by_name,
+  distributedAt: row.distributed_at,
+  distributedBy: row.distributed_by_name,
+  approvedByLodgeOn: row.approved_by_lodge_on,
+  approvalNote: row.approval_note,
+});
+
+const getMinutesRow = (id) => dbGet(
+  `SELECT m.*,
+     creator.name AS created_by_name, creator.role AS created_by_role, updater.name AS updated_by_name,
+     authorizer.name AS authorized_by_name, distributor.name AS distributed_by_name
+     , master.name AS master_attested_by_name
+   FROM meeting_minutes m
+   JOIN users creator ON creator.id = m.created_by_user_id
+   JOIN users updater ON updater.id = m.updated_by_user_id
+   LEFT JOIN users authorizer ON authorizer.id = m.authorized_by_user_id
+   LEFT JOIN users distributor ON distributor.id = m.distributed_by_user_id
+   LEFT JOIN users master ON master.id = m.master_attested_by_user_id
+   WHERE m.id = ?`,
+  [id],
+);
 
 if (IS_PRODUCTION) app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -1480,6 +1567,254 @@ app.get('/api/dues', requireAuth, requireDuesAccess, async (req, res, next) => {
   }
 });
 
+/* Meeting minutes stay inside the same officer sign in as the signing queue. Uploading a
+ * Plaud transcript creates working material only. The application never emails minutes.
+ * Authorization to distribute and later approval by the Lodge are separate recorded facts. */
+app.get('/api/minutes', requireAuth, requireMinutesAccess, async (_req, res, next) => {
+  try {
+    const rows = await dbAll(
+      `SELECT m.*,
+         creator.name AS created_by_name, creator.role AS created_by_role, updater.name AS updated_by_name,
+         authorizer.name AS authorized_by_name, distributor.name AS distributed_by_name,
+         master.name AS master_attested_by_name
+       FROM meeting_minutes m
+       JOIN users creator ON creator.id = m.created_by_user_id
+       JOIN users updater ON updater.id = m.updated_by_user_id
+       LEFT JOIN users authorizer ON authorizer.id = m.authorized_by_user_id
+       LEFT JOIN users distributor ON distributor.id = m.distributed_by_user_id
+       LEFT JOIN users master ON master.id = m.master_attested_by_user_id
+       ORDER BY COALESCE(m.meeting_date, m.created_at) DESC`,
+    );
+    res.json({ minutes: rows.map(minutesForResponse) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/minutes/generate', requireAuth, requireMinutesPreparer,
+  rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 60 * 60 * 1000 }),
+  minutesUpload.single('transcriptFile'), async (req, res, next) => {
+    try {
+      const uploadedText = await transcriptFromUpload(req.file);
+      const transcript = uploadedText || String(req.body.transcriptText || '').trim();
+      if (!transcript) return res.status(400).json({ error: 'Choose a Plaud transcript or paste its text.' });
+      const draft = await generateMinutesDraft(transcript);
+      const id = crypto.randomUUID();
+      const time = nowIso();
+      await dbRun(
+        `INSERT INTO meeting_minutes
+          (id, meeting_date, source_name, transcript_text, draft_json, status,
+           created_by_user_id, updated_by_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+        [id, draft.meetingDate, req.file?.originalname || 'Pasted Plaud transcript', transcript,
+          JSON.stringify(draft), req.user.id, req.user.id, time, time],
+      );
+      await dbRun(
+        `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
+         VALUES (?, 'minutes_draft_created', ?, ?, ?, ?)`,
+        [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: id }), time],
+      );
+      res.status(201).json({ minutes: minutesForResponse(await getMinutesRow(id)) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (row.status !== 'draft') {
+      return res.status(409).json({ error: 'Reopen these minutes before changing an attested or official record.' });
+    }
+    const draft = normalizeMinutesDraft(req.body.draft);
+    if (!draft.sections.length) return res.status(400).json({ error: 'The minutes need at least one section.' });
+    const time = nowIso();
+    await dbRun(
+      `UPDATE meeting_minutes SET meeting_date = ?, draft_json = ?, updated_by_user_id = ?,
+       updated_at = ? WHERE id = ?`,
+      [draft.meetingDate, JSON.stringify(draft), req.user.id, time, row.id],
+    );
+    await dbRun(
+      `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
+       VALUES (?, 'minutes_draft_saved', ?, ?, ?, ?)`,
+      [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id }), time],
+    );
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (row.status !== 'draft') return res.status(409).json({ error: 'Only a working draft can be attested and sent to the Worshipful Master.' });
+    if (row.created_by_user_id !== req.user.id) {
+      return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
+    }
+    const signature = await dbGet('SELECT 1 FROM profile_signatures WHERE user_id = ?', [req.user.id]);
+    if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
+    const time = nowIso();
+    await dbRun(
+      `UPDATE meeting_minutes SET status = 'awaiting_master_attestation', submitted_for_review_at = ?,
+       preparer_attested_at = ?,
+       updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+      [time, time, req.user.id, time, row.id],
+    );
+    const owner = await dbGet("SELECT email FROM users WHERE role = 'owner' AND access_revoked_at IS NULL ORDER BY id LIMIT 1");
+    if (owner?.email) {
+      try {
+        await sendEmail({
+          to: owner.email,
+          subject: `Meeting minutes ready for review: ${row.meeting_date || 'date needs review'}`,
+          text: `${req.user.name} attested to the draft meeting minutes. They are ready for your review and attestation in the Stone Square Dashboard.`,
+        });
+      } catch (error) {
+        console.warn('Minutes review notice failed:', error.message);
+      }
+    }
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (row.status !== 'awaiting_master_attestation') return res.status(409).json({ error: 'The preparing officer must attest to the draft first.' });
+    const signature = await dbGet('SELECT 1 FROM profile_signatures WHERE user_id = ?', [req.user.id]);
+    if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
+    const time = nowIso();
+    await dbRun(
+      `UPDATE meeting_minutes SET status = 'ready_for_distribution', master_attested_by_user_id = ?,
+       master_attested_at = ?, authorized_by_user_id = ?, authorized_at = ?,
+       updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+      [req.user.id, time, req.user.id, time, req.user.id, time, row.id],
+    );
+    await dbRun(
+      `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
+       VALUES (?, 'minutes_master_attested', ?, ?, ?, ?)`,
+      [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id }), time],
+    );
+    const secretary = await dbGet("SELECT email FROM users WHERE role = 'secretary' AND access_revoked_at IS NULL ORDER BY id LIMIT 1");
+    if (secretary?.email) {
+      try {
+        await sendEmail({
+          to: secretary.email,
+          subject: `Meeting minutes ready for distribution: ${row.meeting_date || 'date needs review'}`,
+          text: 'The Worshipful Master has reviewed and attested to the meeting minutes. The signed draft is ready for the Secretary to distribute from the Stone Square Dashboard.',
+        });
+      } catch (error) {
+        console.warn('Minutes distribution notice failed:', error.message);
+      }
+    }
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/minutes/:id/mark-distributed', requireAuth, requireSecretaryOrOwner, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (row.status !== 'ready_for_distribution') {
+      return res.status(409).json({ error: 'The Worshipful Master must attest to the minutes first.' });
+    }
+    const time = nowIso();
+    await dbRun(
+      `UPDATE meeting_minutes SET status = 'distributed', distributed_by_user_id = ?,
+       distributed_at = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+      [req.user.id, time, req.user.id, time, row.id],
+    );
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/minutes/:id/lodge-approval', requireAuth, requireSecretaryOrOwner, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (!['ready_for_distribution', 'distributed'].includes(row.status)) {
+      return res.status(409).json({ error: 'Record the Lodge approval only after the draft has been authorized.' });
+    }
+    const approvalDate = String(req.body.approvalDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(approvalDate)) {
+      return res.status(400).json({ error: 'Enter the date on which the Lodge approved the minutes.' });
+    }
+    const time = nowIso();
+    await dbRun(
+      `UPDATE meeting_minutes SET status = 'approved_by_lodge', approved_by_lodge_on = ?,
+       approval_note = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+      [approvalDate, String(req.body.approvalNote || '').trim() || null, req.user.id, time, row.id],
+    );
+    await dbRun(
+      `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
+       VALUES (?, 'minutes_lodge_approval_recorded', ?, ?, ?, ?)`,
+      [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id, approvalDate }), time],
+    );
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/minutes/:id/reopen', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (row.status === 'approved_by_lodge') return res.status(409).json({ error: 'An approved Lodge record cannot be reopened here.' });
+    const time = nowIso();
+    await dbRun(
+      `UPDATE meeting_minutes SET status = 'draft', submitted_for_review_at = NULL,
+       preparer_attested_at = NULL, master_attested_by_user_id = NULL, master_attested_at = NULL,
+       authorized_by_user_id = NULL, authorized_at = NULL, distributed_by_user_id = NULL,
+       distributed_at = NULL, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
+      [req.user.id, time, row.id],
+    );
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    const draft = normalizeMinutesDraft(JSON.parse(row.draft_json));
+    const preparerSignature = row.preparer_attested_at
+      ? await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [row.created_by_user_id])
+      : null;
+    const masterSignature = row.master_attested_at
+      ? await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [row.master_attested_by_user_id])
+      : null;
+    const bytes = await buildMinutesDocx({
+      draft,
+      status: row.status,
+      approvedByLodgeOn: row.approved_by_lodge_on,
+      preparedBy: row.created_by_name,
+      preparerRole: row.created_by_role,
+      preparedSignature: asBuffer(preparerSignature?.signature_bytes),
+      preparerAttestedAt: row.preparer_attested_at,
+      masterName: row.master_attested_by_name,
+      masterSignature: asBuffer(masterSignature?.signature_bytes),
+      masterAttestedAt: row.master_attested_at,
+    });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${minutesFileName(draft, row.status)}"`);
+    res.send(bytes);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/documents', requireAuth, async (req, res, next) => {
   try {
     const rows = await dbAll(
@@ -1542,15 +1877,40 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
   }
 });
 
-app.get('/api/submission-profiles', requireAuth, requireOwner, async (_req, res, next) => {
+app.get('/api/submission-profiles', requireAuth, async (req, res, next) => {
   try {
-    const profiles = await dbAll(
-      'SELECT role, name, address FROM submission_profiles ORDER BY role',
-    );
+    if (req.user.role !== 'owner' && !OFFICE_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'This account cannot access officer addresses.' });
+    }
+    const profiles = req.user.role === 'owner'
+      ? await dbAll('SELECT role, name, address FROM submission_profiles ORDER BY role')
+      : await dbAll('SELECT role, name, address FROM submission_profiles WHERE role = ?', [req.user.role]);
     res.json({ profiles });
   } catch (error) {
     next(error);
   }
+});
+
+app.put('/api/submission-profiles/:role', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const role = req.params.role;
+    if (!OFFICE_ROLES.has(role)) return res.status(400).json({ error: 'Choose a Secretary office.' });
+    const name = String(req.body?.name || '').trim();
+    const address = String(req.body?.address || '').trim();
+    if (!name || name.length > 120 || !address || address.length > 160
+        || address.toLowerCase() === name.toLowerCase()) {
+      return res.status(400).json({ error: 'Save the officer name and a separate mailing address.' });
+    }
+    await withTransaction(async () => {
+      await dbRun(`INSERT INTO submission_profiles (role, name, address, source_reference, updated_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(role) DO UPDATE SET name = excluded.name,
+        address = excluded.address, source_reference = excluded.source_reference, updated_at = excluded.updated_at`,
+      [role, name, address, 'Confirmed by Worshipful Master', nowIso()]);
+      await addAudit({ userId: req.user.id, action: 'officer_submission_profile_updated',
+        ip: req.ip, userAgent: req.get('user-agent') || '', details: { role } });
+    });
+    res.json({ profile: { role, name, address } });
+  } catch (error) { next(error); }
 });
 
 app.get('/api/documents/:id', requireAuth, requireDocumentAccess, async (req, res, next) => {
@@ -2176,19 +2536,24 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       if (!current?.length) throw httpError(409, 'Document file is missing.');
       let prepared = current;
       let officerAddress = '';
+      let signerName = req.user.name;
       if (document.template_kind === 'dispensation_v1') {
-        officerAddress = String(req.body?.officerAddress || '').trim().slice(0, 160);
-        if (!officerAddress) throw httpError(400, 'Enter your address as it should appear on the dispensation.');
+        const profile = await dbGet('SELECT name, address FROM submission_profiles WHERE role = ?', [req.user.role]);
+        officerAddress = String(profile?.address || '').trim();
+        signerName = String(profile?.name || '').trim();
+        if (!signerName || !officerAddress || officerAddress.toLowerCase() === signerName.toLowerCase()) {
+          throw httpError(409, 'Ask the Worshipful Master to save your name and mailing address before signing.');
+        }
         prepared = await fillDispensationOfficerInformation({
           pdfBytes: current,
-          officerName: req.user.name,
+          officerName: signerName,
           officerAddress,
         });
       }
       const stamped = await appendSignatureToPdf({
         pdfBytes: prepared,
         signatureBytes,
-        signerName: req.user.name,
+        signerName,
         order: Number(count.total) + 1,
         placement: document.template_kind === 'dispensation_v1' ? 'dispensation-secretary' : 'general',
       });
@@ -2197,7 +2562,7 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       const captured = await dbRun(
         `UPDATE document_signers SET user_id = ?, signer_name = ?, signed_at = ?, signature_bytes = ?,
          signed_ip = ?, signed_user_agent = ?, consent_text = ? WHERE id = ? AND signed_at IS NULL`,
-        [req.user.id, req.user.name, signedAt, signatureBytes, req.ip,
+        [req.user.id, signerName, signedAt, signatureBytes, req.ip,
           String(req.get('user-agent') || '').slice(0, 500), consentText, signer.id],
       );
       if (captured.changes !== 1) throw httpError(409, 'This signature was already captured.');
@@ -2576,11 +2941,12 @@ app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError) {
     return res.status(400).json({
       error: error.code === 'LIMIT_FILE_SIZE'
-        ? `PDF must be ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} MB or smaller.`
+        ? `The file must be ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} MB or smaller.`
         : error.message,
     });
   }
-  if (error.message === 'Only PDF files are supported.') {
+  if (error.message === 'Only PDF files are supported.'
+      || error.message === 'Upload a Plaud transcript as a TXT, DOCX, or PDF file.') {
     return res.status(400).json({ error: error.message });
   }
   if (Number.isInteger(error.statusCode)) {

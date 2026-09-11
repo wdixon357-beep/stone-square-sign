@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import mammoth from 'mammoth';
 import { isUniqueViolation, postgresTlsOptions } from '../db.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +27,27 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const SIG = `data:image/png;base64,${fs.readFileSync(path.join(HERE, 'signature.b64'), 'utf8').trim()}`;
 const PDF = fs.readFileSync(path.join(HERE, 'sample-dispensation.pdf'));
 const deliveredMail = [];
+const minutesTestDraft = {
+  meetingDate: '2026-09-03',
+  meetingType: 'Stated Communication',
+  degree: 'Third Degree of Masonry',
+  openingTime: '7:30 PM',
+  closingTime: '9:04 PM',
+  presiding: 'Worshipful Master W. Aaron Dixon-Saunders',
+  quorum: 'Established',
+  nextMeeting: 'Thursday, September 17, 2026 at 7:30 PM',
+  present: ['Adrian Reese', 'William M. McDuffie'],
+  excused: ['Brother Example'],
+  visitors: [],
+  sections: [
+    { heading: 'Opening', body: 'The Lodge was opened in due form. A quorum was present.' },
+    { heading: 'New Business and Motions', body: 'MOTION: A motion was made and seconded to purchase supplies for $125.\nDISPOSITION: CARRIED.' },
+    { heading: 'Prayer and Closing', body: 'The Lodge was closed in due form at 9:04 PM.' },
+  ],
+  warnings: ['The transcript did not clearly identify the mover.'],
+  sensitiveReview: ['A detailed medical diagnosis was excluded from the draft body.'],
+  actionItems: ['Secretary to retain the approved record.'],
+};
 
 const smtpServer = net.createServer((socket) => {
   socket.setEncoding('utf8');
@@ -101,6 +123,7 @@ const server = spawn(process.execPath, ['server.js'], {
     SMTP_USER: 'test',
     SMTP_PASS: 'test',
     MAIL_FROM: 'Stone Square Sign <test@example.org>',
+    MINUTES_TEST_RESPONSE: JSON.stringify(minutesTestDraft),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -196,6 +219,24 @@ try {
   const secToken = await invite('mcduff8995@example.org', 'William M. McDuffie', 'secretary');
   const asstToken = await invite('adrianreese22@example.org', 'Adrian Reese', 'assistant_secretary');
   const viewerToken = await invite('viewer22@example.org', 'Lodge Viewer', 'viewer');
+
+  const saveSecretaryProfile = await api('PUT', '/api/submission-profiles/secretary', {
+    token: wmToken, body: { name: 'William M. McDuffie', address: '722 Banning Dr., Middletown, DE 19709' },
+  });
+  check('the Master saves the Secretary details once', saveSecretaryProfile.status === 200);
+  const refusedProfile = await api('PUT', '/api/submission-profiles/secretary', {
+    token: asstToken, body: { name: 'Another Officer', address: '123 Example Street' },
+  });
+  check('an officer cannot change another officer saved details', refusedProfile.status === 403);
+  const ownProfiles = await api('GET', '/api/submission-profiles', { token: secToken });
+  check('the Secretary sees only his own saved details', ownProfiles.payload.profiles?.length === 1
+    && ownProfiles.payload.profiles[0].role === 'secretary');
+  check('a viewer cannot read officer mailing addresses',
+    (await api('GET', '/api/submission-profiles', { token: viewerToken })).status === 403);
+  const invalidProfile = await api('PUT', '/api/submission-profiles/assistant_secretary', {
+    token: wmToken, body: { name: 'Adrian Reese', address: 'Adrian Reese' },
+  });
+  check('a name entered as an address is rejected', invalidProfile.status === 400);
 
   const replay = await api('POST', '/api/auth/register', {
     body: { email: 'mcduff8995@example.org', name: 'William M. McDuffie', password: 'yet another secret' },
@@ -375,6 +416,88 @@ try {
     `${duesOwner.status} ${JSON.stringify(duesOwner.payload)}`);
 
 
+  console.log('\nMeeting minutes');
+  const minutesViewer = await api('GET', '/api/minutes', { token: viewerToken });
+  check('a viewer cannot read private meeting minutes', minutesViewer.status === 403,
+    String(minutesViewer.status));
+  const mailBeforeMinutes = deliveredMail.length;
+  const minutesForm = new FormData();
+  minutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '
+    + 'A quorum was present. The Lodge discussed business, acted on a motion, and closed in due form. '
+    + 'This is a synthetic Plaud transcript used only by the automated test.');
+  const generatedMinutes = await api('POST', '/api/minutes/generate', {
+    token: asstToken, body: minutesForm, raw: true,
+  });
+  check('the Assistant Secretary can turn a Plaud transcript into a draft',
+    generatedMinutes.status === 201 && generatedMinutes.payload.minutes?.status === 'draft',
+    `${generatedMinutes.status} ${JSON.stringify(generatedMinutes.payload).slice(0, 160)}`);
+  const minutesId = generatedMinutes.payload.minutes?.id;
+  check('private transcript details are held for officer review rather than placed in the draft',
+    generatedMinutes.payload.minutes?.draft?.sensitiveReview?.length === 1
+      && !JSON.stringify(generatedMinutes.payload.minutes.draft.sections).includes('medical diagnosis'));
+  const minutesForSecretary = await api('GET', '/api/minutes', { token: secToken });
+  check('the Secretary can review the Assistant Secretary draft',
+    minutesForSecretary.status === 200 && minutesForSecretary.payload.minutes.some((m) => m.id === minutesId));
+  const revisedDraft = structuredClone(generatedMinutes.payload.minutes.draft);
+  revisedDraft.sections[0].body += ' The officers were examined in their stations and duties.';
+  const savedMinutes = await api('PUT', `/api/minutes/${minutesId}`, {
+    token: asstToken, body: { draft: revisedDraft },
+  });
+  check('Adrian can correct and save the generated draft',
+    savedMinutes.status === 200
+      && savedMinutes.payload.minutes.draft.sections[0].body.includes('officers were examined'));
+  const submittedMinutes = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
+  check('Adrian can attest and send the corrected draft to the Worshipful Master',
+    submittedMinutes.status === 200 && submittedMinutes.payload.minutes.status === 'awaiting_master_attestation'
+      && Boolean(submittedMinutes.payload.minutes.preparerAttestedAt));
+  const assistantAuthorization = await api('POST', `/api/minutes/${minutesId}/master-attest`, { token: asstToken });
+  check('only the Worshipful Master can complete the second attestation', assistantAuthorization.status === 403,
+    String(assistantAuthorization.status));
+  const missingMasterSignature = await api('POST', `/api/minutes/${minutesId}/master-attest`, { token: wmToken });
+  check('the Worshipful Master must have a saved signature before attesting', missingMasterSignature.status === 409,
+    String(missingMasterSignature.status));
+  const minutesWmSig = await api('PUT', '/api/profile/signature', {
+    token: wmToken, body: { signatureData: SIG, signatureType: 'drawn' },
+  });
+  check('the Worshipful Master saves the signature used on the minutes', minutesWmSig.status === 200);
+  const authorizedMinutes = await api('POST', `/api/minutes/${minutesId}/master-attest`, { token: wmToken });
+  check('the Worshipful Master can attest and return the signed draft to McDuffie',
+    authorizedMinutes.status === 200 && authorizedMinutes.payload.minutes.status === 'ready_for_distribution'
+      && Boolean(authorizedMinutes.payload.minutes.masterAttestedAt));
+  const draftDocx = await api('GET', `/api/minutes/${minutesId}/docx`, { token: secToken });
+  const draftText = draftDocx.status === 200
+    ? (await mammoth.extractRawText({ buffer: draftDocx.payload })).value : '';
+  check('the signed distribution copy carries attendance and still says DRAFT until the Lodge acts',
+    draftDocx.status === 200 && /DRAFT/.test(draftText) && /NOT YET APPROVED BY THE LODGE/.test(draftText)
+      && /Present: Adrian Reese, William M. McDuffie/.test(draftText)
+      && /Adrian Reese/.test(draftText) && /Worshipful Master/.test(draftText));
+  const assistantDistributed = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: asstToken });
+  check('the Assistant Secretary cannot record McDuffie\'s correspondence duty',
+    assistantDistributed.status === 403, String(assistantDistributed.status));
+  const distributedMinutes = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: secToken });
+  check('the Secretary can mark the authorized draft as distributed',
+    distributedMinutes.status === 200 && distributedMinutes.payload.minutes.status === 'distributed'
+      && distributedMinutes.payload.minutes.distributedBy === 'William M. McDuffie');
+  const approvedMinutes = await api('POST', `/api/minutes/${minutesId}/lodge-approval`, {
+    token: secToken, body: { approvalDate: '2026-09-17', approvalNote: 'Approved as corrected.' },
+  });
+  check('formal Lodge approval is recorded separately from distribution authorization',
+    approvedMinutes.status === 200 && approvedMinutes.payload.minutes.status === 'approved_by_lodge'
+      && approvedMinutes.payload.minutes.approvedByLodgeOn === '2026-09-17');
+  const officialDocx = await api('GET', `/api/minutes/${minutesId}/docx`, { token: wmToken });
+  const officialText = officialDocx.status === 200
+    ? (await mammoth.extractRawText({ buffer: officialDocx.payload })).value : '';
+  check('the approved Word record removes the draft warning',
+    officialDocx.status === 200 && /APPROVED BY THE LODGE/.test(officialText)
+      && !/NOT YET APPROVED/.test(officialText));
+  const minutesNotices = deliveredMail.slice(mailBeforeMinutes);
+  check('the workflow notifies only the Master and the Secretary',
+    minutesNotices.length === 2
+      && minutesNotices.some((message) => /wm@stonesquare22pha\.org/i.test(message))
+      && minutesNotices.some((message) => /mcduff8995@example\.org/i.test(message)),
+    `${minutesNotices.length} notices`);
+
+
   /* Either/or signing.
    *
    * A dispensation usually goes to both Secretaries and whichever of them signs it
@@ -413,12 +536,31 @@ try {
     asstQueueBefore.payload.documents.find((d) => d.id === eitherId)?.needsSignature === true,
     JSON.stringify(asstQueueBefore.payload.documents.find((d) => d.id === eitherId)));
 
-  /* The official form carries the signing officer's own address, so the sign call
-   * has to supply it the same way the real one does. */
+  const missingProfile = await api('POST', `/api/documents/${eitherId}/sign`, {
+    token: asstToken, body: { consent: true, officerAddress: 'Untrusted client address' },
+  });
+  check('an officer with no saved address cannot complete a dispensation', missingProfile.status === 409);
+  await api('PUT', '/api/submission-profiles/assistant_secretary', {
+    token: wmToken, body: { name: 'Adrian Reese', address: '123 Example Street, Dover, DE 19901' },
+  });
+  // The browser no longer supplies a name or address; the server owns both values.
   const firstToSign = await api('POST', `/api/documents/${eitherId}/sign`,
-    { token: secToken, body: { consent: true, officerAddress: '722 Banning Dr., Middletown, DE 19709' } });
+    { token: secToken, body: { consent: true, officerAddress: 'Wrong address', officerName: 'Wrong name' } });
   check('the Secretary signs it', firstToSign.status === 200,
     JSON.stringify(firstToSign.payload).slice(0, 200));
+  const profilePdf = await api('GET', `/api/documents/${eitherId}/file`, { token: wmToken });
+  const { PDFParse } = await import('pdf-parse');
+  const profileParser = new PDFParse({ data: profilePdf.payload });
+  const profileText = (await profileParser.getText()).text;
+  await profileParser.destroy();
+  check('the signed PDF uses the saved address and ignores client overrides',
+    profileText.includes('722 Banning Dr., Middletown, DE 19709') && !profileText.includes('Wrong address')
+    && profileText.includes('William M. McDuffie') && !profileText.includes('Wrong name'));
+  const { PDFDocument } = await import('pdf-lib');
+  const signedProfilePdf = await PDFDocument.load(profilePdf.payload);
+  check('blank officer widgets cannot cover the completed name and address',
+    !signedProfilePdf.getForm().getFields().some(f => ['Secretary', 'Address_2'].includes(f.getName())));
+  if (process.env.SIGN_PROFILE_PREVIEW_PATH) fs.writeFileSync(process.env.SIGN_PROFILE_PREVIEW_PATH, profilePdf.payload);
 
   const eitherAfter = await api('GET', `/api/documents/${eitherId}`, { token: wmToken });
   check('one signature completes it, the Assistant Secretary is not held up',
@@ -476,9 +618,19 @@ try {
   check('offering both to a document that already has both is refused, not duplicated',
     openedTwice.status === 409, String(openedTwice.status));
   const asstSigns = await api('POST', `/api/documents/${stuckId}/sign`,
-    { token: asstToken, body: { consent: true, officerAddress: '14 Kelly Drive, Bear, DE 19701' } });
+    { token: asstToken, body: { consent: true } });
   check('the Assistant Secretary can then sign it', asstSigns.status === 200,
     JSON.stringify(asstSigns.payload).slice(0, 200));
+  const assistantPdf = await api('GET', `/api/documents/${stuckId}/file`, { token: wmToken });
+  const assistantParser = new PDFParse({ data: assistantPdf.payload });
+  const assistantText = (await assistantParser.getText()).text;
+  await assistantParser.destroy();
+  check('Adrian signs without entering details and gets his own saved information',
+    assistantText.includes('Adrian Reese') && assistantText.includes('123 Example Street, Dover, DE 19901')
+    && !assistantText.includes('722 Banning'));
+  const assistantProfiles = await api('GET', '/api/submission-profiles', { token: asstToken });
+  check('Adrian cannot see the Secretary mailing address', assistantProfiles.payload.profiles?.length === 1
+    && assistantProfiles.payload.profiles[0].role === 'assistant_secretary');
   const stuckDone = await api('GET', `/api/documents/${stuckId}`, { token: wmToken });
   check('his signature alone completes it',
     stuckDone.payload.document.status === 'completed', stuckDone.payload.document.status);

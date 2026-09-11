@@ -114,6 +114,7 @@
           <nav>
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
+            <button id="minutesNav" class="nav-item minutes-only" type="button"><span>MIN</span> Meeting Minutes</button>
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
             <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
@@ -136,7 +137,7 @@
               <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
-                <button class="document-menu-card coming-soon signer-only" type="button" disabled><i>MIN</i><span><strong>Previous Lodge Meeting Minutes</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
+              <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small>Upload a Plaud transcript and prepare the draft</small></span><b>›</b></button>
               <button class="document-menu-card coming-soon signer-only" type="button" disabled><i>TR</i><span><strong>Treasurer Reports</strong><small>Coming soon</small></span><b>COMING SOON</b></button>
               <a class="document-menu-card signer-only" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
             </div>
@@ -181,6 +182,40 @@
             <div class="records-head"><div><p class="eyebrow">LIVE QUEUE</p><h2>Documents waiting for action</h2></div><div id="docMessage" class="message" role="status"></div></div>
             <div id="docList" class="doc-list"></div>
           </section>
+          </section>
+
+          <section id="minutesSection" class="hidden">
+            <div class="content-head">
+              <div>
+                <p class="eyebrow">RESTRICTED OFFICER RECORD</p>
+                <h1>Meeting minutes</h1>
+                <p>Adrian or McDuffie pastes the corrected transcript. The preparer attests, the Worshipful Master attests, and the signed draft returns to McDuffie for distribution.</p>
+              </div>
+              <button id="minutesRefresh" class="secondary" type="button">Refresh</button>
+            </div>
+
+            <div class="minutes-workflow" aria-label="Minutes workflow">
+              <span><b>1</b> Correct Plaud names in the AI tool you prefer</span>
+              <span><b>2</b> Paste the corrected transcript</span>
+              <span><b>3</b> Preparer and Master attest</span>
+              <span><b>4</b> McDuffie distributes the signed draft</span>
+            </div>
+
+            <section class="panel minutes-generator preparer-only">
+              <div class="panel-title"><div><p class="eyebrow">NEW DRAFT</p><h2>Paste the corrected Plaud transcript</h2></div><span class="file-badge">TXT DOCX PDF</span></div>
+              <p class="helper">First correct any names Plaud heard incorrectly in ChatGPT, Claude, Gemini, or the AI tool you prefer. Paste that corrected text here. A file upload works too.</p>
+              <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose the Plaud transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
+              <input id="minutesTranscriptFile" class="visually-hidden" type="file" accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+              <p id="minutesSelectedFile" class="selected-file">No file selected</p>
+              <label for="minutesTranscriptText">Or paste the transcript</label>
+              <textarea id="minutesTranscriptText" rows="8" placeholder="Paste the Plaud transcript here"></textarea>
+              <div class="builder-actions"><p id="minutesMessage" class="message" role="status"></p><button id="generateMinutes" class="primary" type="button">Create draft minutes</button></div>
+            </section>
+
+            <section class="records">
+              <div class="records-head"><div><p class="eyebrow">MINUTES RECORD</p><h2>Drafts and approved minutes</h2></div></div>
+              <div id="minutesList" class="minutes-list"></div>
+            </section>
           </section>
 
           <section id="duesSection" class="hidden">
@@ -310,6 +345,53 @@
         </div>
       </section>
 
+      <section id="minutesEditorModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="minutesEditorTitle">
+        <div class="modal-body minutes-editor-body">
+          <button id="closeMinutesEditor" class="modal-close" type="button" aria-label="Close">&times;</button>
+          <p class="eyebrow">MEETING MINUTES DRAFT</p>
+          <h2 id="minutesEditorTitle">Review every section</h2>
+          <p id="minutesEditorStatus" class="minutes-status-line"></p>
+            <div id="minutesReviewWarnings" class="minutes-review-warning hidden"></div>
+          <form id="minutesEditorForm" class="minutes-editor-form">
+            <div class="minutes-meta-grid">
+              <div><label for="minutesMeetingDate">Meeting date</label><input id="minutesMeetingDate" type="date" /></div>
+              <div><label for="minutesMeetingType">Meeting type</label><input id="minutesMeetingType" type="text" /></div>
+              <div><label for="minutesDegree">Degree</label><input id="minutesDegree" type="text" /></div>
+              <div><label for="minutesOpeningTime">Opening time</label><input id="minutesOpeningTime" type="text" /></div>
+              <div><label for="minutesClosingTime">Closing time</label><input id="minutesClosingTime" type="text" /></div>
+              <div><label for="minutesPresiding">Presiding</label><input id="minutesPresiding" type="text" /></div>
+              <div><label for="minutesQuorum">Quorum</label><input id="minutesQuorum" type="text" /></div>
+              <div><label for="minutesNextMeeting">Next meeting</label><input id="minutesNextMeeting" type="text" /></div>
+            </div>
+            <div class="minutes-attendance-grid">
+              <div><label for="minutesPresent">Present</label><textarea id="minutesPresent" rows="4"></textarea></div>
+              <div><label for="minutesExcused">Excused</label><textarea id="minutesExcused" rows="4"></textarea></div>
+              <div><label for="minutesVisitors">Visitors</label><textarea id="minutesVisitors" rows="4"></textarea></div>
+            </div>
+            <div id="minutesSections" class="minutes-sections"></div>
+            <div class="minutes-editor-actions">
+              <button id="saveMinutes" class="secondary" type="submit">Save corrections</button>
+              <button id="downloadMinutes" class="secondary" type="button">Download Word draft</button>
+              <button id="submitMinutesReview" class="primary" type="button">Attest and send to Worshipful Master</button>
+              <button id="authorizeMinutes" class="primary owner-only" type="button">Attest and return to McDuffie</button>
+              <button id="markMinutesDistributed" class="primary" type="button">Mark as distributed</button>
+              <button id="reopenMinutes" class="secondary owner-only" type="button">Reopen for corrections</button>
+            </div>
+            <section id="minutesApprovalPanel" class="minutes-approval-panel hidden">
+              <p class="eyebrow">AFTER THE LODGE ACTS</p>
+              <h3>Record the Lodge approval</h3>
+              <p>This removes the DRAFT marking from the official Word record. Use it only after the minutes are approved in a communication.</p>
+              <label for="minutesApprovalDate">Date approved by the Lodge</label>
+              <input id="minutesApprovalDate" type="date" />
+              <label for="minutesApprovalNote">Corrections adopted, if any</label>
+              <textarea id="minutesApprovalNote" rows="3"></textarea>
+              <button id="recordMinutesApproval" class="primary" type="button">Record Lodge approval</button>
+            </section>
+            <p id="minutesEditorMessage" class="message" role="status"></p>
+          </form>
+        </div>
+      </section>
+
       <section id="locationConfirmModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="locationConfirmTitle">
         <div class="modal-body narrow">
           <p class="eyebrow">ADDRESS CHECK</p><h2 id="locationConfirmTitle">Is this the correct event address?</h2>
@@ -355,8 +437,11 @@
           <iframe id="signingPdfFrame" class="pdf-frame signing-pdf-frame" title="Document PDF preview"></iframe>
           <div class="saved-signature"><span>Your saved signature</span><img id="signingSignaturePreview" alt="Your saved signature" /></div>
           <button id="changeSignatureFromSign" class="text-button" type="button">Change saved signature</button>
-          <label for="signerAddress">Your address as it should appear on the dispensation</label><input id="signerAddress" type="text" autocomplete="street-address" />
-          <p>Your name and address are added to the secretary section only when you sign.</p>
+          <div id="signerInformation" class="hidden">
+            <label for="signerName">Your name</label><input id="signerName" type="text" readonly />
+            <label for="signerAddress">Your saved mailing address</label><input id="signerAddress" type="text" readonly />
+            <p>These details fill the secretary section when you sign. Contact the Worshipful Master if a correction is needed.</p>
+          </div>
           <label class="consent"><input id="signatureConsent" type="checkbox" /> <span>I agree that this electronic signature represents my signature on this document.</span></label>
           <div class="row-buttons"><button id="submitSig" class="primary" type="button">Apply saved signature</button></div>
           <p id="signMessage" class="message" role="status"></p>

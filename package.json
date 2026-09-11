@@ -1,6 +1,6 @@
 {
   "name": "stone-square-sign",
-  "version": "1.9.4",
+  "version": "1.10.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,8 +16,10 @@
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "docx": "^9.7.1",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "mammoth": "^1.12.2",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^9.0.5",
     "pdf-lib": "^1.17.1",
@@ -26,5 +28,10 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.5"
+  },
+  "overrides": {
+    "express": {
+      "qs": "6.16.0"
+    }
   }
 }

@@ -801,7 +801,12 @@ final class AppModel: ObservableObject {
         return image
     }
 
-    func sign(document: LodgeDocument, officerAddress: String) async -> Bool {
+    func signingProfile() async throws -> SubmissionProfile? {
+        let response: SubmissionProfilesResponse = try await request("/api/submission-profiles")
+        return response.profiles.first(where: { $0.role == user?.role })
+    }
+
+    func sign(document: LodgeDocument) async -> Bool {
         guard user?.role != "viewer" else {
             message = "This account has status-only document access."
             isError = true
@@ -809,7 +814,7 @@ final class AppModel: ObservableObject {
         }
         var success = false
         await perform {
-            let body = try JSONSerialization.data(withJSONObject: ["consent": true, "officerAddress": officerAddress])
+            let body = try JSONSerialization.data(withJSONObject: ["consent": true])
             let response: MessageResponse = try await self.request(
                 "/api/documents/\(document.id)/sign", method: "POST", body: body
             )

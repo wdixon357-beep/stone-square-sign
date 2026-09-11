@@ -26,6 +26,8 @@ const state = {
   locationMatch: null,
   dispensationPreviewUrl: '',
   pendingReviewDocument: null,
+  minutes: [],
+  editingMinutesId: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -158,6 +160,12 @@ const enterWorkspace = async (user) => {
   document.querySelectorAll('.dues-only').forEach((element) => {
     element.classList.toggle('hidden', !maySeeDues);
   });
+  document.querySelectorAll('.minutes-only').forEach((element) => {
+    element.classList.toggle('hidden', !maySeeDues);
+  });
+  document.querySelectorAll('.preparer-only').forEach((element) => {
+    element.classList.toggle('hidden', !['secretary', 'assistant_secretary'].includes(user.role));
+  });
   showWorkspaceSection('home');
   hide($('authCard'));
   show($('appCard'));
@@ -237,6 +245,7 @@ const showWorkspaceSection = (section) => {
   const queue = section === 'queue';
   const dues = section === 'dues';
   const approvals = section === 'approvals';
+  const minutes = section === 'minutes';
   const proposals = section === 'proposals';
   const proposalReview = section === 'proposalReview';
   $('landingSection').classList.toggle('hidden', !home);
@@ -244,6 +253,7 @@ const showWorkspaceSection = (section) => {
   $('builderSection').classList.toggle('hidden', !builder);
   $('duesSection').classList.toggle('hidden', !dues);
   $('approvalsSection').classList.toggle('hidden', !approvals);
+  $('minutesSection').classList.toggle('hidden', !minutes);
   $('proposalsSection').classList.toggle('hidden', !proposals);
   $('proposalReviewSection').classList.toggle('hidden', !proposalReview);
   $('homeNav').classList.toggle('active', home);
@@ -251,16 +261,198 @@ const showWorkspaceSection = (section) => {
   $('builderNav').classList.toggle('active', builder);
   $('duesNav').classList.toggle('active', dues);
   $('approvalsNav').classList.toggle('active', approvals);
+  $('minutesNav').classList.toggle('active', minutes);
   $('proposalsNav').classList.toggle('active', proposals);
   $('proposalReviewNav').classList.toggle('active', proposalReview);
   if (dues) renderDues();
   if (approvals) renderApprovals();
+  if (minutes) renderMinutes();
   if (proposals || proposalReview) renderProposals();
   /* Zeffy payments arrive from outside the app, so no in-app event can announce
    * them. While the dues page is the one on screen, re-read it on a timer so two
    * officers looking at once see the same figures. */
   window.clearInterval(state.duesTimer);
   if (dues) state.duesTimer = window.setInterval(() => renderDues(true), 60000);
+};
+
+const MINUTES_STATUS = {
+  draft: 'Working draft',
+  awaiting_master_attestation: 'Waiting for the Worshipful Master',
+  ready_for_distribution: 'Signed and ready for McDuffie',
+  distributed: 'Distributed by the Secretary',
+  approved_by_lodge: 'Approved by the Lodge',
+};
+
+const currentMinutes = () => state.minutes.find((item) => item.id === state.editingMinutesId);
+
+const collectMinutesDraft = () => ({
+  meetingDate: $('minutesMeetingDate').value || null,
+  meetingType: $('minutesMeetingType').value.trim(),
+  degree: $('minutesDegree').value.trim() || null,
+  openingTime: $('minutesOpeningTime').value.trim() || null,
+  closingTime: $('minutesClosingTime').value.trim() || null,
+  presiding: $('minutesPresiding').value.trim() || null,
+  quorum: $('minutesQuorum').value.trim() || null,
+  nextMeeting: $('minutesNextMeeting').value.trim() || null,
+  present: $('minutesPresent').value.split('\n').map((name) => name.trim()).filter(Boolean),
+  excused: $('minutesExcused').value.split('\n').map((name) => name.trim()).filter(Boolean),
+  visitors: $('minutesVisitors').value.split('\n').map((name) => name.trim()).filter(Boolean),
+  sections: [...$('minutesSections').querySelectorAll('.minutes-section-card')].map((card) => ({
+    heading: card.querySelector('input').value.trim(),
+    body: card.querySelector('textarea').value.trim(),
+  })).filter((section) => section.heading || section.body),
+  warnings: currentMinutes()?.draft.warnings || [],
+  sensitiveReview: currentMinutes()?.draft.sensitiveReview || [],
+  actionItems: currentMinutes()?.draft.actionItems || [],
+});
+
+const minutesDateLabel = (item) => item.meetingDate ? eventDayLabel(item.meetingDate) : 'Meeting date needs review';
+
+const renderMinutes = async () => {
+  try {
+    const payload = await apiFetch('/api/minutes');
+    state.minutes = payload.minutes || [];
+    const list = $('minutesList');
+    list.replaceChildren();
+    if (!state.minutes.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      const title = document.createElement('h3');
+      title.textContent = 'No meeting minutes yet';
+      const note = document.createElement('p');
+      note.textContent = 'Upload the Plaud transcript above to create the first draft.';
+      empty.append(title, note);
+      list.append(empty);
+      return;
+    }
+    state.minutes.forEach((item) => {
+      const row = document.createElement('article');
+      row.className = 'minutes-row';
+      const icon = document.createElement('div');
+      icon.className = 'doc-icon';
+      icon.textContent = 'MIN';
+      const main = document.createElement('div');
+      const heading = document.createElement('h3');
+      heading.textContent = `Minutes of ${minutesDateLabel(item)}`;
+      const detail = document.createElement('p');
+      detail.textContent = `Prepared by ${item.createdBy}. Last saved by ${item.updatedBy}, ${formatDate(item.updatedAt)}.`;
+      main.append(heading, detail);
+      const status = document.createElement('span');
+      status.className = `status ${item.status === 'approved_by_lodge' ? 'completed' : ''}`;
+      status.textContent = MINUTES_STATUS[item.status] || item.status;
+      const actions = document.createElement('div');
+      actions.className = 'minutes-row-actions';
+      const open = document.createElement('button');
+      open.className = 'secondary small';
+      open.type = 'button';
+      open.textContent = 'Review';
+      open.addEventListener('click', () => openMinutesEditor(item.id));
+      actions.append(open);
+      row.append(icon, main, status, actions);
+      list.append(row);
+    });
+  } catch (error) {
+    setMessage($('minutesMessage'), error.message, true);
+  }
+};
+
+const sectionEditor = (section, index) => {
+  const card = document.createElement('div');
+  card.className = 'minutes-section-card';
+  const label = document.createElement('label');
+  label.textContent = `Section ${index + 1}`;
+  const heading = document.createElement('input');
+  heading.type = 'text';
+  heading.value = section.heading || '';
+  const body = document.createElement('textarea');
+  body.rows = 6;
+  body.value = section.body || '';
+  card.append(label, heading, body);
+  return card;
+};
+
+const updateMinutesEditorControls = (item) => {
+  const role = state.user?.role;
+  const editable = item.status === 'draft';
+  $('minutesEditorStatus').textContent = MINUTES_STATUS[item.status] || item.status;
+  $('saveMinutes').classList.toggle('hidden', !editable);
+  $('submitMinutesReview').classList.toggle('hidden', item.status !== 'draft'
+    || !['secretary', 'assistant_secretary'].includes(role));
+  $('authorizeMinutes').classList.toggle('hidden', role !== 'owner' || item.status !== 'awaiting_master_attestation');
+  $('markMinutesDistributed').classList.toggle('hidden', item.status !== 'ready_for_distribution'
+    || !['owner', 'secretary'].includes(role));
+  $('reopenMinutes').classList.toggle('hidden', role !== 'owner'
+    || ['draft', 'approved_by_lodge'].includes(item.status));
+  $('minutesApprovalPanel').classList.toggle('hidden',
+    !['owner', 'secretary'].includes(role) || !['ready_for_distribution', 'distributed'].includes(item.status));
+  $('downloadMinutes').textContent = item.status === 'approved_by_lodge' ? 'Download official Word record' : 'Download Word draft';
+  $('minutesEditorForm').querySelectorAll('input, textarea').forEach((field) => {
+    if (!['minutesApprovalDate', 'minutesApprovalNote'].includes(field.id)) field.disabled = !editable;
+  });
+};
+
+const openMinutesEditor = (id) => {
+  const item = state.minutes.find((entry) => entry.id === id);
+  if (!item) return;
+  state.editingMinutesId = id;
+  const draft = item.draft;
+  $('minutesMeetingDate').value = draft.meetingDate || '';
+  $('minutesMeetingType').value = draft.meetingType || '';
+  $('minutesDegree').value = draft.degree || '';
+  $('minutesOpeningTime').value = draft.openingTime || '';
+  $('minutesClosingTime').value = draft.closingTime || '';
+  $('minutesPresiding').value = draft.presiding || '';
+  $('minutesQuorum').value = draft.quorum || '';
+  $('minutesNextMeeting').value = draft.nextMeeting || '';
+  $('minutesPresent').value = (draft.present || []).join('\n');
+  $('minutesExcused').value = (draft.excused || []).join('\n');
+  $('minutesVisitors').value = (draft.visitors || []).join('\n');
+  $('minutesApprovalDate').value = item.approvedByLodgeOn || '';
+  $('minutesApprovalNote').value = item.approvalNote || '';
+  $('minutesSections').replaceChildren(...draft.sections.map(sectionEditor));
+  const reviewItems = [
+    ...(draft.warnings || []).map((text) => `Check: ${text}`),
+    ...(draft.sensitiveReview || []).map((text) => `Private review: ${text}`),
+  ];
+  const warnings = $('minutesReviewWarnings');
+  warnings.replaceChildren();
+  warnings.classList.toggle('hidden', !reviewItems.length);
+  if (reviewItems.length) {
+    const label = document.createElement('strong');
+    label.textContent = 'Items that need officer review';
+    const list = document.createElement('ul');
+    reviewItems.forEach((text) => {
+      const li = document.createElement('li');
+      li.textContent = text;
+      list.append(li);
+    });
+    warnings.append(label, list);
+  }
+  setMessage($('minutesEditorMessage'), '');
+  updateMinutesEditorControls(item);
+  show($('minutesEditorModal'));
+};
+
+const refreshOpenMinutes = async (message) => {
+  const id = state.editingMinutesId;
+  await renderMinutes();
+  const item = state.minutes.find((entry) => entry.id === id);
+  if (item) {
+    openMinutesEditor(id);
+    setMessage($('minutesEditorMessage'), message);
+  }
+};
+
+const minutesAction = async (path, body, message) => {
+  try {
+    await apiFetch(`/api/minutes/${state.editingMinutesId}/${path}`, {
+      method: 'POST',
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    await refreshOpenMinutes(message);
+  } catch (error) {
+    setMessage($('minutesEditorMessage'), error.message, true);
+  }
 };
 
 /* What the District Deputy decided, and the proof of it.
@@ -531,6 +723,9 @@ $('approvalsNav').addEventListener('click', () => showWorkspaceSection('approval
 $('approvalsRefresh').addEventListener('click', () => renderApprovals());
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
 $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
+$('minutesNav').addEventListener('click', () => showWorkspaceSection('minutes'));
+$('minutesMenuCard').addEventListener('click', () => showWorkspaceSection('minutes'));
+$('minutesRefresh').addEventListener('click', () => renderMinutes());
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
 $('queueNav').addEventListener('click', () => showWorkspaceSection('queue'));
 $('builderNav').addEventListener('click', () => showWorkspaceSection('builder'));
@@ -539,6 +734,93 @@ $('proposeMenuCard')?.addEventListener('click', () => showWorkspaceSection('prop
 $('duesNav').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesMenuCard').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesRefresh').addEventListener('click', () => renderDues(true));
+
+$('minutesTranscriptFile').addEventListener('change', () => {
+  $('minutesSelectedFile').textContent = $('minutesTranscriptFile').files[0]?.name || 'No file selected';
+});
+
+$('generateMinutes').addEventListener('click', async () => {
+  const button = $('generateMinutes');
+  const data = new FormData();
+  const file = $('minutesTranscriptFile').files[0];
+  const pasted = $('minutesTranscriptText').value.trim();
+  if (file) data.append('transcriptFile', file);
+  if (pasted) data.append('transcriptText', pasted);
+  if (!file && !pasted) {
+    setMessage($('minutesMessage'), 'Choose the Plaud transcript or paste its text.', true);
+    return;
+  }
+  button.disabled = true;
+  button.textContent = 'Creating draft...';
+  setMessage($('minutesMessage'), 'Reading the transcript. This can take about a minute.');
+  try {
+    const payload = await apiFetch('/api/minutes/generate', { method: 'POST', body: data });
+    $('minutesTranscriptFile').value = '';
+    $('minutesSelectedFile').textContent = 'No file selected';
+    $('minutesTranscriptText').value = '';
+    await renderMinutes();
+    setMessage($('minutesMessage'), 'Draft created. Review every section before sending it to the Worshipful Master.');
+    openMinutesEditor(payload.minutes.id);
+  } catch (error) {
+    setMessage($('minutesMessage'), error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Create draft minutes';
+  }
+});
+
+$('closeMinutesEditor').addEventListener('click', () => hide($('minutesEditorModal')));
+$('minutesEditorForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    await apiFetch(`/api/minutes/${state.editingMinutesId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ draft: collectMinutesDraft() }),
+    });
+    await refreshOpenMinutes('Corrections saved.');
+  } catch (error) {
+    setMessage($('minutesEditorMessage'), error.message, true);
+  }
+});
+$('submitMinutesReview').addEventListener('click', () => minutesAction(
+  'preparer-attest', null, 'Your attestation is recorded. The draft is ready for the Worshipful Master.',
+));
+$('authorizeMinutes').addEventListener('click', () => minutesAction(
+  'master-attest', null, 'Your attestation is recorded. The signed draft is ready for McDuffie to distribute.',
+));
+$('markMinutesDistributed').addEventListener('click', () => minutesAction(
+  'mark-distributed', null, 'The record now shows that the Secretary distributed the draft.',
+));
+$('reopenMinutes').addEventListener('click', () => minutesAction(
+  'reopen', null, 'The minutes are open for corrections. Prior distribution authorization has been cleared.',
+));
+$('recordMinutesApproval').addEventListener('click', () => {
+  const approvalDate = $('minutesApprovalDate').value;
+  if (!approvalDate) {
+    setMessage($('minutesEditorMessage'), 'Enter the date on which the Lodge approved the minutes.', true);
+    return;
+  }
+  minutesAction('lodge-approval', {
+    approvalDate,
+    approvalNote: $('minutesApprovalNote').value.trim(),
+  }, 'The Lodge approval is recorded. The Word download is now the official record.');
+});
+$('downloadMinutes').addEventListener('click', async () => {
+  try {
+    const item = currentMinutes();
+    const blob = await apiFetch(`/api/minutes/${state.editingMinutesId}/docx`);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${item?.status === 'approved_by_lodge' ? 'APPROVED' : 'DRAFT'}_Stone_Square_22_Minutes_${item?.meetingDate || 'undated'}.docx`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    setMessage($('minutesEditorMessage'), error.message, true);
+  }
+});
 
 const scheduleQueueRefresh = () => {
   window.clearTimeout(state.refreshTimer);
@@ -1424,7 +1706,9 @@ const openSignerModal = async (documentId, title) => {
   state.signingDocumentId = documentId;
   $('signTitle').textContent = `Sign ${title || 'document'}`;
   $('signatureConsent').checked = false;
+  $('signerName').value = '';
   $('signerAddress').value = '';
+  hide($('signerInformation'));
   $('submitSig').disabled = true;
   if (state.signingPdfObjectUrl) URL.revokeObjectURL(state.signingPdfObjectUrl);
   state.signingPdfObjectUrl = null;
@@ -1432,6 +1716,17 @@ const openSignerModal = async (documentId, title) => {
   setMessage($('signMessage'), 'Loading the document for review...');
   show($('signModal'));
   try {
+    const { document } = await apiFetch(`/api/documents/${documentId}`);
+    if (document.template_kind === 'dispensation_v1') {
+      show($('signerInformation'));
+      const { profiles } = await apiFetch('/api/submission-profiles');
+      const profile = profiles.find((entry) => entry.role === state.user.role);
+      $('signerName').value = profile?.name || state.user.name;
+      $('signerAddress').value = profile?.address || '';
+      if (!profile?.name || !profile?.address || profile.address.trim().toLowerCase() === profile.name.trim().toLowerCase()) {
+        throw new Error('Ask the Worshipful Master to save your name and mailing address before signing.');
+      }
+    }
     const pdfResponse = await fetch(`/api/documents/${documentId}/file`, {
       headers: { Authorization: `Bearer ${state.token}` },
     });
@@ -1469,12 +1764,9 @@ $('submitSig').addEventListener('click', async () => {
   if (!$('signatureConsent').checked) {
     return setMessage($('signMessage'), 'Confirm the electronic signature consent.', true);
   }
-  if (!$('signerAddress').value.trim()) {
-    return setMessage($('signMessage'), 'Enter your address as it should appear on the dispensation.', true);
-  }
   try {
     const payload = await apiFetch(`/api/documents/${state.signingDocumentId}/sign`, {
-      method: 'POST', body: JSON.stringify({ consent: true, officerAddress: $('signerAddress').value.trim() }),
+      method: 'POST', body: JSON.stringify({ consent: true }),
     });
     closeSignerModal();
     setMessage(docMessage, payload.message);

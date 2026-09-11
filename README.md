@@ -30,6 +30,20 @@ preview first, then review, type their signature and explicitly send the final r
 Previewing, printing and saving do not trigger email. The Mac preview has its own
 window so the report form remains available.
 
+## Meeting Minutes
+
+The Secretary or Assistant Secretary can paste a corrected Plaud transcript or upload
+its TXT, DOCX or PDF export. The app structures a draft for officer review, including
+attendance, motions, decisions, assignments and dates. It sends the transcript to the
+OpenAI Responses API only when the officer chooses Create Draft, with response storage
+disabled. The transcript and resulting draft remain restricted to the Worshipful
+Master and the Secretaries inside Stone Square Sign.
+
+The preparer attests first. The Worshipful Master reviews and attests next. The signed
+draft then returns to the Secretary as ready for distribution. Nothing is sent to the
+Craft automatically, and every copy remains marked DRAFT until the Lodge's formal
+approval is recorded after a communication.
+
 ## What it costs
 
 The live Render service was verified on **Starter, $7/month**, on September 4, 2026.
@@ -100,6 +114,7 @@ variables marked `sync: false`:
 | `SMTP_USER` | the Lodge Gmail address |
 | `SMTP_PASS` | the App Password from step 2 |
 | `MAIL_FROM` | `Stone Square Sign <that same address>` |
+| `OPENAI_API_KEY` | the API key used only when an authorized officer creates draft meeting minutes |
 
 **4. Claim the owner account.** Open the URL and register with `OWNER_EMAIL`. That is
 the only account that can be created without an invitation, and only once.
