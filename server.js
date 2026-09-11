@@ -1592,7 +1592,7 @@ app.get('/api/minutes', requireAuth, requireMinutesAccess, async (_req, res, nex
   }
 });
 
-app.post('/api/minutes/generate', requireAuth, requireMinutesPreparer,
+app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
   rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 60 * 60 * 1000 }),
   minutesUpload.single('transcriptFile'), async (req, res, next) => {
     try {

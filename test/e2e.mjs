@@ -427,6 +427,16 @@ try {
   const minutesViewer = await api('GET', '/api/minutes', { token: viewerToken });
   check('a viewer cannot read private meeting minutes', minutesViewer.status === 403,
     String(minutesViewer.status));
+  const ownerMinutesForm = new FormData();
+  ownerMinutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '
+    + 'A quorum was present. The Lodge discussed business, acted on a motion, and closed in due form. '
+    + 'This is a synthetic Plaud transcript used only to verify the owner minutes workflow.');
+  const ownerGeneratedMinutes = await api('POST', '/api/minutes/generate', {
+    token: wmToken, body: ownerMinutesForm, raw: true,
+  });
+  check('the Worshipful Master can turn a Plaud transcript into a draft',
+    ownerGeneratedMinutes.status === 201 && ownerGeneratedMinutes.payload.minutes?.status === 'draft',
+    `${ownerGeneratedMinutes.status} ${JSON.stringify(ownerGeneratedMinutes.payload).slice(0, 160)}`);
   const mailBeforeMinutes = deliveredMail.length;
   const minutesForm = new FormData();
   minutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '

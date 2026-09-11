@@ -284,6 +284,9 @@ struct WorkspaceView: View {
                 List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
                 Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator)
+                if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
+                    Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes)
+                }
                 Label("Live Queue", systemImage: "list.number").tag(AppSection.documents)
                 Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker)
                 if model.user?.role == "owner" {
@@ -323,10 +326,13 @@ struct WorkspaceView: View {
                 LandingDashboardView(
                     openDispensations: { selection = .documents },
                     openCandidateTracker: { selection = .candidateTracker },
-                    openReports: { selection = .reportGenerator }
+                    openReports: { selection = .reportGenerator },
+                    openMinutes: { selection = .minutes }
                 )
             case .reportGenerator:
                 ReportGeneratorView(browser: reportBrowser)
+            case .minutes:
+                MeetingMinutesView()
             case .candidateTracker:
                 NativeCandidateTrackerView()
             case .createDispensation: DispensationBuilderView()
@@ -1250,6 +1256,7 @@ struct LandingDashboardView: View {
     let openDispensations: () -> Void
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
+    let openMinutes: () -> Void
     @State private var pulse = false
 
     private var awaitingCount: Int {
@@ -1299,14 +1306,19 @@ struct LandingDashboardView: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    LandingDocumentCard(
-                        title: "Previous Lodge Meeting Minutes",
-                        description: "Coming soon",
-                        systemImage: "books.vertical.fill",
-                        comingSoon: true,
-                        awaiting: false,
-                        pulse: false
-                    )
+                    if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
+                        Button(action: openMinutes) {
+                            LandingDocumentCard(
+                                title: "Meeting Minutes",
+                                description: "Create, review, preview, and attest to meeting minutes",
+                                systemImage: "text.document.fill",
+                                comingSoon: false,
+                                awaiting: false,
+                                pulse: false
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                     LandingDocumentCard(
                         title: "Treasurer Reports",
                         description: "Coming soon",

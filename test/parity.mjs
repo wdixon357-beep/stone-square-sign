@@ -21,6 +21,7 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const PAIRS = {
   homeNav: 'home',
   reportsNav: 'reportGenerator',
+  minutesNav: 'minutes',
   queueNav: 'documents',
   builderNav: 'createDispensation',
   duesNav: 'dues',
@@ -31,7 +32,6 @@ const PAIRS = {
 
 /* Deliberate asymmetries. Each needs a reason, so the list stays honest. */
 const WEB_ONLY = {
-  minutesNav: 'Plaud transcripts are uploaded from the shared web dashboard used by both Secretaries. The Mac app links officers to the same service and does not need a second minutes implementation.',
   proposalsNav: 'the Wardens propose from their phones. The Mac build is ad hoc signed and only '
     + 'runs on the machine it was built on, so Xavier and Jamal can never install it. Building a '
     + 'proposing screen there would be a screen nobody who proposes can open. The Master\'s '
@@ -81,6 +81,7 @@ for (const mac of macSections) {
 /* Things that must be true of the Mac app whatever sections exist. */
 console.log('\nMac app configuration');
 const client = read('macos/Sources/StoneSquareSign/APIClient.swift');
+const macMinutes = read('macos/Sources/StoneSquareSign/MeetingMinutes.swift');
 check('the Mac app defaults to the hosted service, not localhost',
   /let defaultServerAddress = "https:\/\//.test(client) && !/\?\? "http:\/\/localhost/.test(client));
 check('the Mac app consumes the same live event stream as the web page',
@@ -88,6 +89,13 @@ check('the Mac app consumes the same live event stream as the web page',
 check('both clients honour the same dues roles',
   /owner", "secretary", "assistant_secretary"/.test(macViews)
   && /'owner', 'secretary', 'assistant_secretary'/.test(read('public/app.js')));
+check('the Worshipful Master can open the minutes generator on the web',
+  /'owner', 'secretary', 'assistant_secretary'/.test(read('public/app.js'))
+  && read('server.js').includes("app.post('/api/minutes/generate', requireAuth, requireMinutesAccess"));
+check('the Mac app opens the authenticated minutes workspace',
+  client.includes("/?section=minutes")
+  && macMinutes.includes("localStorage.setItem('stone-square-sign-token'")
+  && macViews.includes('MeetingMinutesView()'));
 
 const builder = read('public/index.html');
 const macBuilder = macViews;

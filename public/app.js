@@ -30,6 +30,7 @@ const state = {
   editingMinutesId: null,
   minutesPreviewUrl: '',
 };
+const requestedWorkspaceSection = new URLSearchParams(window.location.search).get('section');
 
 const $ = (id) => document.getElementById(id);
 const show = (element) => element.classList.remove('hidden');
@@ -165,9 +166,9 @@ const enterWorkspace = async (user) => {
     element.classList.toggle('hidden', !maySeeDues);
   });
   document.querySelectorAll('.preparer-only').forEach((element) => {
-    element.classList.toggle('hidden', !['secretary', 'assistant_secretary'].includes(user.role));
+    element.classList.toggle('hidden', !['owner', 'secretary', 'assistant_secretary'].includes(user.role));
   });
-  showWorkspaceSection('home');
+  showWorkspaceSection(requestedWorkspaceSection === 'minutes' && maySeeDues ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
   const [documents] = await Promise.all([

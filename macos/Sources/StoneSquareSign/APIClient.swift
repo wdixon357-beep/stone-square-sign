@@ -227,6 +227,13 @@ final class AppModel: ObservableObject {
         return URL(string: cleaned)
     }
 
+    var webSessionToken: String? { token }
+
+    var meetingMinutesURL: URL? {
+        guard let baseURL else { return nil }
+        return URL(string: "/?section=minutes", relativeTo: baseURL)
+    }
+
     func request<T: Decodable>(
         _ path: String,
         method: String = "GET",
