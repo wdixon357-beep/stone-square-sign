@@ -17,6 +17,7 @@ import {
 import { buildDuesLedger, duesConfigured, DUES_ROLES } from './dues.js';
 import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
+import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
 
 dotenv.config();
@@ -1784,29 +1785,52 @@ app.post('/api/minutes/:id/reopen', requireAuth, requireOwner, async (req, res, 
   }
 });
 
+const minutesArtifactContext = async (row, draft) => {
+  const preparerSignature = row.preparer_attested_at
+    ? await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [row.created_by_user_id])
+    : null;
+  const masterSignature = row.master_attested_at
+    ? await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [row.master_attested_by_user_id])
+    : null;
+  return {
+    draft,
+    status: row.status,
+    approvedByLodgeOn: row.approved_by_lodge_on,
+    preparedBy: row.created_by_name,
+    preparerRole: row.created_by_role,
+    preparedSignature: asBuffer(preparerSignature?.signature_bytes),
+    preparerAttestedAt: row.preparer_attested_at,
+    masterName: row.master_attested_by_name,
+    masterSignature: asBuffer(masterSignature?.signature_bytes),
+    masterAttestedAt: row.master_attested_at,
+  };
+};
+
+app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,
+  rateLimit({ key: 'minutes-preview', maximum: 120, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+    try {
+      const row = await getMinutesRow(req.params.id);
+      if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+      const savedDraft = normalizeMinutesDraft(JSON.parse(row.draft_json));
+      const draft = row.status === 'draft' && req.body?.draft
+        ? normalizeMinutesDraft(req.body.draft) : savedDraft;
+      if (!draft.sections.length) return res.status(400).json({ error: 'The minutes need at least one section.' });
+      const bytes = await buildMinutesPdf(await minutesArtifactContext(row, draft));
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="meeting-minutes-preview.pdf"');
+      res.send(bytes);
+    } catch (error) {
+      next(error);
+    }
+  });
+
 app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, res, next) => {
   try {
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     const draft = normalizeMinutesDraft(JSON.parse(row.draft_json));
-    const preparerSignature = row.preparer_attested_at
-      ? await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [row.created_by_user_id])
-      : null;
-    const masterSignature = row.master_attested_at
-      ? await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [row.master_attested_by_user_id])
-      : null;
-    const bytes = await buildMinutesDocx({
-      draft,
-      status: row.status,
-      approvedByLodgeOn: row.approved_by_lodge_on,
-      preparedBy: row.created_by_name,
-      preparerRole: row.created_by_role,
-      preparedSignature: asBuffer(preparerSignature?.signature_bytes),
-      preparerAttestedAt: row.preparer_attested_at,
-      masterName: row.master_attested_by_name,
-      masterSignature: asBuffer(masterSignature?.signature_bytes),
-      masterAttestedAt: row.master_attested_at,
-    });
+    const bytes = await buildMinutesDocx(await minutesArtifactContext(row, draft));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${minutesFileName(draft, row.status)}"`);
     res.send(bytes);

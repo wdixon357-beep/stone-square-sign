@@ -39,6 +39,13 @@ const minutesTestDraft = {
   present: ['Adrian Reese', 'William M. McDuffie'],
   excused: ['Brother Example'],
   visitors: [],
+  officerAttendance: [
+    { name: 'W. Aaron Dixon-Saunders', title: 'Worshipful Master', status: 'present' },
+    { name: 'William M. McDuffie', title: 'Secretary', status: 'present' },
+    { name: 'Adrian Reese', title: 'Assistant Secretary', status: 'present' },
+  ],
+  income: [{ date: 'Thursday, September 3, 2026', reference: 'EFT 42', party: 'Community Partner', description: 'Grant payment', amount: '$500.00' }],
+  expenses: [{ date: null, reference: 'Check 17', party: 'Example Vendor', description: 'Meeting supplies', amount: '$125.00' }],
   sections: [
     { heading: 'Opening', body: 'The Lodge was opened in due form. A quorum was present.' },
     { heading: 'New Business and Motions', body: 'MOTION: A motion was made and seconded to purchase supplies for $125.\nDISPOSITION: CARRIED.' },
@@ -438,6 +445,16 @@ try {
   const minutesForSecretary = await api('GET', '/api/minutes', { token: secToken });
   check('the Secretary can review the Assistant Secretary draft',
     minutesForSecretary.status === 200 && minutesForSecretary.payload.minutes.some((m) => m.id === minutesId));
+  const minutesPreview = await api('POST', `/api/minutes/${minutesId}/preview`, {
+    token: asstToken, body: { draft: generatedMinutes.payload.minutes.draft },
+  });
+  check('the generated minutes open as an in app PDF preview of the meeting template',
+    minutesPreview.status === 200 && minutesPreview.payload.subarray(0, 4).toString() === '%PDF');
+  const viewerMinutesPreview = await api('POST', `/api/minutes/${minutesId}/preview`, {
+    token: viewerToken, body: { draft: generatedMinutes.payload.minutes.draft },
+  });
+  check('a viewer cannot open the private minutes preview', viewerMinutesPreview.status === 403,
+    String(viewerMinutesPreview.status));
   const revisedDraft = structuredClone(generatedMinutes.payload.minutes.draft);
   revisedDraft.sections[0].body += ' The officers were examined in their stations and duties.';
   const savedMinutes = await api('PUT', `/api/minutes/${minutesId}`, {
@@ -469,7 +486,10 @@ try {
     ? (await mammoth.extractRawText({ buffer: draftDocx.payload })).value : '';
   check('the signed distribution copy carries attendance and still says DRAFT until the Lodge acts',
     draftDocx.status === 200 && /DRAFT/.test(draftText) && /NOT YET APPROVED BY THE LODGE/.test(draftText)
-      && /Present: Adrian Reese, William M. McDuffie/.test(draftText)
+      && /Name[\s\S]*Title[\s\S]*P[\s\S]*A[\s\S]*E[\s\S]*NR/.test(draftText)
+      && /William M. McDuffie[\s\S]*Secretary[\s\S]*X/.test(draftText)
+      && /Adrian Reese[\s\S]*Assistant Secretary[\s\S]*X/.test(draftText)
+      && /LODGE INCOME/.test(draftText) && /Community Partner/.test(draftText)
       && /Adrian Reese/.test(draftText) && /Worshipful Master/.test(draftText));
   const assistantDistributed = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: asstToken });
   check('the Assistant Secretary cannot record McDuffie\'s correspondence duty',

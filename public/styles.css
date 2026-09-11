@@ -192,6 +192,20 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
 .minutes-section-card input { margin-bottom: 9px; color: var(--navy); font-weight: 800; }
 .minutes-section-card textarea { min-height: 130px; resize: vertical; line-height: 1.5; }
 .minutes-editor-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.minutes-detail-section { display: grid; gap: 10px; }
+.minutes-detail-section h3, .minutes-document-preview h3 { margin: 0; color: var(--navy); font: 22px Georgia, serif; }
+.minutes-detail-section > p, .minutes-document-preview > p { margin: 0; color: var(--muted); font-size: 11px; }
+.minutes-officer-attendance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.minutes-officer-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 135px; align-items: center; gap: 7px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+.minutes-officer-row input { margin: 0; padding: 8px 9px; }
+.minutes-officer-row select { margin: 0; padding: 8px 10px; }
+.minutes-add-row { justify-self: start; margin-top: 2px; }
+.minutes-finance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+.minutes-finance-grid h4 { margin: 0 0 8px; color: var(--navy); }
+.minutes-finance-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+.minutes-finance-row input:last-child { grid-column: 1 / -1; }
+.minutes-document-preview { display: grid; gap: 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+#minutesPreviewFrame { height: min(720px, 76vh); background: #d7d9dc; }
 .minutes-approval-panel { padding: 18px; border: 1px solid var(--gold-soft); border-radius: 10px; background: #faf5e8; }
 .minutes-approval-panel h3 { margin: 2px 0 5px; color: var(--navy); font: 22px Georgia, serif; }
 .minutes-approval-panel p:not(.eyebrow) { color: var(--muted); font-size: 11px; }
@@ -297,6 +311,8 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
   .fixed-details { align-items: flex-start; flex-direction: column; gap: 12px; }
   .builder-grid { grid-template-columns: 1fr; }
   .minutes-meta-grid, .minutes-attendance-grid { grid-template-columns: 1fr; }
+  .minutes-officer-attendance, .minutes-finance-grid { grid-template-columns: 1fr; }
+  .minutes-officer-row { grid-template-columns: 1fr; }
   .minutes-row { grid-template-columns: 42px minmax(0, 1fr); }
   .minutes-row .status, .minutes-row-actions { grid-column: 2; justify-self: start; }
   .minutes-editor-actions { flex-direction: column; }

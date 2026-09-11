@@ -1,20 +1,21 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import {
-  AlignmentType, BorderStyle, Document, Footer, HeadingLevel, ImageRun, Packer, PageNumber,
-  Paragraph, ShadingType, Table, TableCell, TableRow, TextRun, WidthType,
+  AlignmentType, BorderStyle, Document, Footer, ImageRun, Packer, PageNumber,
+  PageBreak, Paragraph, Table, TableCell, TableRow, TextRun, VerticalAlign, WidthType,
 } from 'docx';
 
-const NAVY = '17365D';
-const RED = 'C62828';
-const GOLD = 'C79A42';
-const LIGHT_BLUE = 'E8EEF5';
-const GRAY = '777777';
-const lineBorder = { style: BorderStyle.SINGLE, size: 3, color: NAVY };
-const cellBorders = {
-  top: { style: BorderStyle.SINGLE, size: 1, color: 'AAB2BD' },
-  bottom: { style: BorderStyle.SINGLE, size: 1, color: 'AAB2BD' },
-  left: { style: BorderStyle.SINGLE, size: 1, color: 'AAB2BD' },
-  right: { style: BorderStyle.SINGLE, size: 1, color: 'AAB2BD' },
-};
+import {
+  additionalPresent, financeRows, nonOfficerExcused, officerAttendanceRows,
+} from './minutes-layout.js';
+
+const BLACK = '000000';
+const RED = 'B71C1C';
+const GRAY = '666666';
+const LIGHT_GRAY = 'E7E7E7';
+const border = { style: BorderStyle.SINGLE, size: 4, color: BLACK };
+const borders = { top: border, bottom: border, left: border, right: border };
 
 const fullDate = (value) => {
   if (!value) return 'Date not confirmed';
@@ -27,64 +28,118 @@ const fullDate = (value) => {
 
 const attestedDate = (value) => value ? new Intl.DateTimeFormat('en-US', {
   weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
-  hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York',
+  timeZone: 'America/New_York',
 }).format(new Date(value)) : '';
 
-const summaryRow = (label, value) => new TableRow({
-  children: [
-    new TableCell({
-      borders: cellBorders,
-      shading: { fill: LIGHT_BLUE, type: ShadingType.CLEAR },
-      width: { size: 28, type: WidthType.PERCENTAGE },
-      margins: { top: 90, bottom: 90, left: 110, right: 110 },
-      children: [new Paragraph({ children: [new TextRun({ text: label, bold: true, size: 21 })] })],
-    }),
-    new TableCell({
-      borders: cellBorders,
-      width: { size: 72, type: WidthType.PERCENTAGE },
-      margins: { top: 90, bottom: 90, left: 110, right: 110 },
-      children: [new Paragraph({ children: [new TextRun({ text: value || 'Not confirmed', size: 21 })] })],
-    }),
+const paragraph = (text) => new Paragraph({
+  spacing: { after: 100, line: 276 },
+  children: [new TextRun({ text: String(text || ''), size: 22 })],
+});
+
+const center = (text, size, options = {}) => new Paragraph({
+  alignment: AlignmentType.CENTER,
+  spacing: { after: options.after ?? 40 },
+  keepNext: options.keepNext ?? true,
+  children: [new TextRun({ text, size, bold: options.bold ?? true, color: options.color || BLACK, italics: options.italics })],
+});
+
+const sectionHeading = (text) => new Paragraph({
+  alignment: AlignmentType.CENTER,
+  spacing: { before: 220, after: 160 },
+  keepNext: true,
+  children: [new TextRun({ text: String(text || '').toUpperCase(), size: 26, bold: true, color: BLACK })],
+});
+
+const bodyParagraphs = (text) => String(text || '').split(/\n+/).map((line) => line.trim()).filter(Boolean).map((line) => {
+  const match = /^(MOTION|DISPOSITION):\s*(.*)$/i.exec(line);
+  return new Paragraph({
+    spacing: { after: 110, line: 288 },
+    children: match ? [
+      new TextRun({ text: `${match[1].toUpperCase()}: `, bold: true, size: 22 }),
+      new TextRun({ text: match[2], size: 22 }),
+    ] : [new TextRun({ text: line, size: 22 })],
+  });
+});
+
+const cell = (text, { bold = false, centerText = false, fill } = {}) => new TableCell({
+  borders,
+  verticalAlign: VerticalAlign.CENTER,
+  shading: fill ? { fill } : undefined,
+  margins: { top: 70, bottom: 70, left: 85, right: 85 },
+  children: [new Paragraph({
+    alignment: centerText ? AlignmentType.CENTER : AlignmentType.LEFT,
+    children: [new TextRun({ text: String(text || ''), size: 19, bold })],
+  })],
+});
+
+const detailsTable = (draft) => new Table({
+  width: { size: 100, type: WidthType.PERCENTAGE },
+  rows: [
+    new TableRow({ children: [cell('Meeting', { bold: true, fill: LIGHT_GRAY }), cell(draft.meetingType || 'Not recorded'), cell('Degree', { bold: true, fill: LIGHT_GRAY }), cell(draft.degree || 'Not recorded')] }),
+    new TableRow({ children: [cell('Opening', { bold: true, fill: LIGHT_GRAY }), cell(draft.openingTime || 'Not recorded'), cell('Closing', { bold: true, fill: LIGHT_GRAY }), cell(draft.closingTime || 'Not recorded')] }),
+    new TableRow({ children: [cell('Presiding', { bold: true, fill: LIGHT_GRAY }), cell(draft.presiding || 'Not recorded'), cell('Quorum', { bold: true, fill: LIGHT_GRAY }), cell(draft.quorum || 'Not recorded')] }),
+    new TableRow({ children: [cell('Next Stated Communication', { bold: true, fill: LIGHT_GRAY }), cell(draft.nextMeeting || 'Not recorded'), cell('', { fill: LIGHT_GRAY }), cell('')] }),
   ],
 });
 
-const bodyParagraph = (text) => {
-  const match = String(text).match(/^(MOTION|DISPOSITION):\s*(.*)$/i);
-  if (match) {
-    return new Paragraph({
-      spacing: { after: 120, line: 300 },
-      indent: { left: 360 },
+const officerTable = (draft) => new Table({
+  width: { size: 100, type: WidthType.PERCENTAGE },
+  columnWidths: [2800, 2500, 600, 600, 600, 700],
+  rows: [
+    new TableRow({ tableHeader: true, children: [
+      cell('Name', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+      cell('Title', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+      cell('P', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+      cell('A', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+      cell('E', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+      cell('NR', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+    ] }),
+    ...officerAttendanceRows(draft).map((officer) => new TableRow({
+      cantSplit: true,
       children: [
-        new TextRun({ text: `${match[1].toUpperCase()}: `, bold: true, color: NAVY, size: 22 }),
-        new TextRun({ text: match[2], size: 22 }),
+        cell(officer.name), cell(officer.title),
+        cell(officer.status === 'present' ? 'X' : '', { centerText: true }),
+        cell(officer.status === 'absent' ? 'X' : '', { centerText: true }),
+        cell(officer.status === 'excused' ? 'X' : '', { centerText: true }),
+        cell(officer.status === 'not_recorded' ? 'X' : '', { centerText: true }),
       ],
-    });
-  }
-  const bullet = text.match(/^\s*[•*-]\s+(.*)$/);
-  return new Paragraph({
-    spacing: { after: 110, line: 300 },
-    ...(bullet ? { bullet: { level: 0 } } : {}),
-    children: [new TextRun({ text: bullet ? bullet[1] : text, size: 22 })],
-  });
-};
+    })),
+  ],
+});
 
-const sectionParagraphs = (section, index) => {
-  const heading = String(section.heading || '').replace(/^\d+[.)]?\s*/, '');
-  const lines = String(section.body || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+const nameGroup = (heading, names) => [
+  sectionHeading(heading),
+  paragraph(names.length ? names.join(', ') : 'None recorded.'),
+];
+
+const financeTable = (heading, entries) => {
+  const rows = financeRows(entries);
+  if (!rows.length) return [];
   return [
-    new Paragraph({
-      heading: HeadingLevel.HEADING_1,
-      spacing: { before: 210, after: 90 },
-      border: { bottom: lineBorder },
-      children: [new TextRun({ text: `${index + 2}.  ${heading}`, bold: true, color: NAVY, size: 26 })],
+    sectionHeading(heading),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      columnWidths: [1300, 1400, 3500, 1000],
+      rows: [
+        new TableRow({ tableHeader: true, children: [
+          cell('Date', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+          cell('Check or Reference', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+          cell('Brother or Payee', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+          cell('Amount', { bold: true, centerText: true, fill: LIGHT_GRAY }),
+        ] }),
+        ...rows.map((row) => new TableRow({ cantSplit: true, children: [
+          cell(row.date, { centerText: true }), cell(row.reference, { centerText: true }),
+          cell(row.party), cell(row.amount, { centerText: true }),
+        ] })),
+      ],
     }),
-    ...lines.map(bodyParagraph),
   ];
 };
 
 const signatureCell = ({ name, role, signature, when }) => new TableCell({
-  borders: { top: lineBorder, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
+  borders: { top: border, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
   width: { size: 48, type: WidthType.PERCENTAGE },
+  verticalAlign: VerticalAlign.CENTER,
   margins: { top: 100, bottom: 80, left: 80, right: 80 },
   children: [
     new Paragraph({
@@ -93,9 +148,9 @@ const signatureCell = ({ name, role, signature, when }) => new TableCell({
         ? [new ImageRun({ data: signature, type: 'png', transformation: { width: 210, height: 52 } })]
         : [new TextRun({ text: 'Attestation pending', italics: true, color: GRAY, size: 19 })],
     }),
-    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: name || role, bold: true, size: 20 })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: role, color: NAVY, size: 18 })] }),
-    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: when ? `Attested ${attestedDate(when)}` : 'Not yet attested', color: GRAY, size: 16 })] }),
+    center(name || role, 20, { after: 20 }),
+    center(role, 18, { after: 20, color: GRAY, bold: false }),
+    center(when ? `Attested ${attestedDate(when)}` : 'Not yet attested', 16, { after: 0, color: GRAY, bold: false }),
   ],
 });
 
@@ -104,77 +159,54 @@ export const buildMinutesDocx = async ({
   preparerAttestedAt, masterName, masterSignature, masterAttestedAt,
 }) => {
   const isOfficial = status === 'approved_by_lodge';
-  const meetingDetail = [fullDate(draft.meetingDate), draft.openingTime && `opened ${draft.openingTime}`]
-    .filter(Boolean).join(', ');
-  const children = [
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 60 },
-      children: [new TextRun({ text: 'STONE SQUARE LODGE No. 22, PHA', bold: true, color: NAVY, size: 32 })],
-    }),
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 70 },
-      children: [new TextRun({ text: 'Most Worshipful Prince Hall Grand Lodge of Delaware, First District', italics: true, size: 22 })],
-    }),
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 140 },
-      children: [new TextRun({ text: 'MINUTES OF THE STATED COMMUNICATION', bold: true, size: 27 })],
-    }),
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 220 },
-      children: [new TextRun({
-        text: isOfficial
-          ? `APPROVED BY THE LODGE${approvedByLodgeOn ? ` ON ${fullDate(approvedByLodgeOn).toUpperCase()}` : ''}`
-          : 'DRAFT FOR REVIEW. NOT YET APPROVED BY THE LODGE.',
-        bold: true,
-        italics: !isOfficial,
-        color: isOfficial ? NAVY : RED,
-        size: 22,
-      })],
-    }),
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        summaryRow('Lodge', 'Stone Square Lodge No. 22, Free and Accepted Masons, Prince Hall Affiliation'),
-        summaryRow('Meeting', draft.meetingType || 'Stated Communication'),
-        summaryRow('Date and Time', meetingDetail),
-        summaryRow('Location', '208 East Lake Street, Middletown, Delaware 19709'),
-        summaryRow('Presiding', draft.presiding || 'Not confirmed'),
-        summaryRow('Quorum', draft.quorum || 'Not confirmed'),
-        summaryRow('Next Stated Communication', draft.nextMeeting || 'Not confirmed'),
+  const emblem = await fs.readFile(path.join(process.cwd(), 'assets', 'meeting-minutes-emblem.png'));
+  const noBorders = {
+    top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+    left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
+  };
+  const masthead = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: { ...noBorders, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } },
+    columnWidths: [1400, 5800, 1400],
+    rows: [new TableRow({
+      cantSplit: true,
+      children: [
+        new TableCell({ borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: emblem, type: 'png', transformation: { width: 74, height: 86 } })] })] }),
+        new TableCell({ borders: noBorders, verticalAlign: VerticalAlign.CENTER, children: [
+          center('STONE SQUARE LODGE NO. 22', 32),
+          center('208 EAST LAKE STREET', 22),
+          center('MIDDLETOWN, DELAWARE 19709', 22),
+        ] }),
+        new TableCell({ borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: emblem, type: 'png', transformation: { width: 74, height: 86 } })] })] }),
       ],
-    }),
-    new Paragraph({
-      heading: HeadingLevel.HEADING_1,
-      spacing: { before: 210, after: 90 },
-      border: { bottom: lineBorder },
-      children: [new TextRun({ text: '1.  Roll of Officers and Attendance', bold: true, color: NAVY, size: 26 })],
-    }),
-    bodyParagraph(`Present: ${draft.present.length ? draft.present.join(', ') : 'None recorded'}`),
-    bodyParagraph(`Excused: ${draft.excused.length ? draft.excused.join(', ') : 'None recorded'}`),
-    bodyParagraph(`Visitors: ${draft.visitors.length ? draft.visitors.join(', ') : 'None recorded'}`),
-    ...draft.sections.flatMap(sectionParagraphs),
-    new Paragraph({
-      spacing: { before: 260 },
-      border: { top: lineBorder },
-      children: [new TextRun({
-        text: isOfficial
-          ? 'Approved by the Lodge and retained as the official record.'
-          : 'Prepared from the meeting recording for officer review. This is not the official record and may not be distributed without the Worshipful Master\'s authorization.',
-        italics: true,
-        color: GRAY,
-        size: 19,
-      })],
-    }),
-    new Paragraph({
-      spacing: { before: 260, after: 130 },
-      alignment: AlignmentType.CENTER,
-      keepNext: true,
-      children: [new TextRun({ text: 'OFFICER ATTESTATIONS', bold: true, color: NAVY, size: 23 })],
-    }),
+    })],
+  });
+  const opening = (draft.sections || []).find((item) => /opening/i.test(item.heading));
+  const children = [
+    masthead,
+    center('MINUTES OF THE STATED COMMUNICATION', 28, { after: 55 }),
+    center(fullDate(draft.meetingDate), 22, { after: 70, bold: false }),
+    center(isOfficial
+      ? `APPROVED BY THE LODGE${approvedByLodgeOn ? ` ON ${fullDate(approvedByLodgeOn).toUpperCase()}` : ''}`
+      : 'DRAFT FOR OFFICER REVIEW. NOT YET APPROVED BY THE LODGE.', 20,
+    { after: 170, color: isOfficial ? BLACK : RED, italics: !isOfficial }),
+    detailsTable(draft),
+    sectionHeading('Opening'),
+    ...bodyParagraphs(opening?.body || 'No opening details recorded.'),
+    sectionHeading('Roll Call of Officers Present'),
+    officerTable(draft),
+    ...nameGroup('Additional Brothers Present', additionalPresent(draft)),
+    ...nameGroup('Visitors', draft.visitors || []),
+    ...nameGroup('Non Officers Excused From Meeting', nonOfficerExcused(draft)),
+    ...(draft.sections || []).filter((item) => item !== opening).flatMap((item) => [
+      sectionHeading(item.heading || 'Meeting Notes'),
+      ...bodyParagraphs(item.body || 'No details recorded.'),
+    ]),
+    ...((draft.income || []).length || (draft.expenses || []).length
+      ? [new Paragraph({ children: [new PageBreak()] })] : []),
+    ...financeTable('Lodge Income', draft.income),
+    ...financeTable('Lodge Expenses', draft.expenses),
+    sectionHeading('Officer Attestations'),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       columnWidths: [4750, 4750],
@@ -188,10 +220,8 @@ export const buildMinutesDocx = async ({
             when: preparerAttestedAt,
           }),
           signatureCell({
-            name: masterName || 'W. Aaron Dixon-Saunders',
-            role: 'Worshipful Master',
-            signature: masterSignature,
-            when: masterAttestedAt,
+            name: masterName || 'W. Aaron Dixon-Saunders', role: 'Worshipful Master',
+            signature: masterSignature, when: masterAttestedAt,
           }),
         ],
       })],
@@ -200,39 +230,22 @@ export const buildMinutesDocx = async ({
 
   const document = new Document({
     creator: 'Stone Square Lodge No. 22',
-    title: `Minutes, ${fullDate(draft.meetingDate)}`,
-    description: isOfficial ? 'Official Lodge minutes' : 'Draft Lodge minutes for review',
-    styles: {
-      default: { document: { run: { font: 'Times New Roman', size: 22 } } },
-      paragraphStyles: [{
-        id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true,
-        run: { font: 'Times New Roman', size: 26, bold: true, color: NAVY },
-      }],
-    },
+    title: `Meeting Minutes ${fullDate(draft.meetingDate)}`,
+    description: isOfficial ? 'Official Lodge minutes' : 'Draft Lodge minutes for officer review',
+    styles: { default: { document: { run: { font: 'Times New Roman', size: 22, color: BLACK } } } },
     sections: [{
       properties: {
-        page: {
-          size: { width: 12240, height: 15840 },
-          margin: { top: 720, right: 900, bottom: 720, left: 900 },
-        },
+        page: { size: { width: 12240, height: 15840 }, margin: { top: 720, right: 900, bottom: 720, left: 900 } },
       },
       footers: {
-        default: new Footer({
+        default: new Footer({ children: [new Paragraph({
+          alignment: AlignmentType.CENTER,
           children: [
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
-              children: [
-                new TextRun({ text: 'Returning to the Fundamentals, 2026 to 2027', italics: true, color: NAVY, size: 18 }),
-                new TextRun({ text: '   |   Page ', color: GRAY, size: 17 }),
-                new TextRun({ children: [PageNumber.CURRENT], color: GRAY, size: 17 }),
-              ],
-            }),
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
-              children: [new TextRun({ text: isOfficial ? 'OFFICIAL RECORD' : 'DRAFT. DO NOT DISTRIBUTE WITHOUT AUTHORIZATION.', color: isOfficial ? NAVY : RED, size: 15 })],
-            }),
+            new TextRun({ text: isOfficial ? 'OFFICIAL RECORD' : 'DRAFT. DO NOT DISTRIBUTE WITHOUT AUTHORIZATION.', bold: true, color: isOfficial ? BLACK : RED, size: 15 }),
+            new TextRun({ text: '   Page ', color: GRAY, size: 15 }),
+            new TextRun({ children: [PageNumber.CURRENT], color: GRAY, size: 15 }),
           ],
-        }),
+        })] }),
       },
       children,
     }],

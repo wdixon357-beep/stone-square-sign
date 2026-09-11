@@ -28,6 +28,7 @@ const state = {
   pendingReviewDocument: null,
   minutes: [],
   editingMinutesId: null,
+  minutesPreviewUrl: '',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -285,6 +286,14 @@ const MINUTES_STATUS = {
 
 const currentMinutes = () => state.minutes.find((item) => item.id === state.editingMinutesId);
 
+const collectMinutesFinance = (id) => [...$(id).querySelectorAll('.minutes-finance-row')].map((row) => ({
+  date: row.querySelector('[data-field="date"]').value.trim() || null,
+  reference: row.querySelector('[data-field="reference"]').value.trim() || null,
+  party: row.querySelector('[data-field="party"]').value.trim() || null,
+  description: row.querySelector('[data-field="description"]').value.trim() || null,
+  amount: row.querySelector('[data-field="amount"]').value.trim() || null,
+})).filter((row) => Object.values(row).some(Boolean));
+
 const collectMinutesDraft = () => ({
   meetingDate: $('minutesMeetingDate').value || null,
   meetingType: $('minutesMeetingType').value.trim(),
@@ -297,6 +306,13 @@ const collectMinutesDraft = () => ({
   present: $('minutesPresent').value.split('\n').map((name) => name.trim()).filter(Boolean),
   excused: $('minutesExcused').value.split('\n').map((name) => name.trim()).filter(Boolean),
   visitors: $('minutesVisitors').value.split('\n').map((name) => name.trim()).filter(Boolean),
+  officerAttendance: [...$('minutesOfficerAttendance').querySelectorAll('.minutes-officer-row')].map((row) => ({
+    name: row.querySelector('[data-field="name"]').value.trim(),
+    title: row.querySelector('[data-field="title"]').value.trim(),
+    status: row.querySelector('select').value,
+  })).filter((row) => row.name),
+  income: collectMinutesFinance('minutesIncome'),
+  expenses: collectMinutesFinance('minutesExpenses'),
   sections: [...$('minutesSections').querySelectorAll('.minutes-section-card')].map((card) => ({
     heading: card.querySelector('input').value.trim(),
     body: card.querySelector('textarea').value.trim(),
@@ -371,6 +387,71 @@ const sectionEditor = (section, index) => {
   return card;
 };
 
+const officerAttendanceEditor = (entry) => {
+  const row = document.createElement('div');
+  row.className = 'minutes-officer-row';
+  const name = document.createElement('input');
+  name.type = 'text';
+  name.dataset.field = 'name';
+  name.placeholder = 'Officer name';
+  name.value = entry.name || '';
+  const title = document.createElement('input');
+  title.type = 'text';
+  title.dataset.field = 'title';
+  title.placeholder = 'Office or pro tem role';
+  title.value = entry.title || '';
+  const select = document.createElement('select');
+  [['present', 'Present'], ['absent', 'Absent'], ['excused', 'Excused'], ['not_recorded', 'Not recorded']]
+    .forEach(([value, text]) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      option.selected = value === entry.status;
+      select.append(option);
+    });
+  row.append(name, title, select);
+  return row;
+};
+
+const financeEditor = (entry = {}) => {
+  const row = document.createElement('div');
+  row.className = 'minutes-finance-row';
+  const fields = [
+    ['date', 'Date'], ['reference', 'Check or reference'], ['party', 'Brother or payee'],
+    ['amount', 'Amount'], ['description', 'Description'],
+  ];
+  fields.forEach(([field, placeholder]) => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.dataset.field = field;
+    input.placeholder = placeholder;
+    input.value = entry[field] || '';
+    row.append(input);
+  });
+  return row;
+};
+
+const fillFinanceEditor = (id, entries = []) => {
+  const values = entries.length ? entries : [{}];
+  $(id).replaceChildren(...values.map(financeEditor));
+};
+
+const refreshMinutesPreview = async () => {
+  const frame = $('minutesPreviewFrame');
+  setMessage($('minutesEditorMessage'), 'Building the document preview.');
+  try {
+    const blob = await apiFetch(`/api/minutes/${state.editingMinutesId}/preview`, {
+      method: 'POST', body: JSON.stringify({ draft: collectMinutesDraft() }),
+    });
+    if (state.minutesPreviewUrl) URL.revokeObjectURL(state.minutesPreviewUrl);
+    state.minutesPreviewUrl = URL.createObjectURL(blob);
+    frame.src = state.minutesPreviewUrl;
+    setMessage($('minutesEditorMessage'), 'Document preview updated.');
+  } catch (error) {
+    setMessage($('minutesEditorMessage'), error.message, true);
+  }
+};
+
 const updateMinutesEditorControls = (item) => {
   const role = state.user?.role;
   const editable = item.status === 'draft';
@@ -386,8 +467,11 @@ const updateMinutesEditorControls = (item) => {
   $('minutesApprovalPanel').classList.toggle('hidden',
     !['owner', 'secretary'].includes(role) || !['ready_for_distribution', 'distributed'].includes(item.status));
   $('downloadMinutes').textContent = item.status === 'approved_by_lodge' ? 'Download official Word record' : 'Download Word draft';
-  $('minutesEditorForm').querySelectorAll('input, textarea').forEach((field) => {
+  $('minutesEditorForm').querySelectorAll('input, textarea, select').forEach((field) => {
     if (!['minutesApprovalDate', 'minutesApprovalNote'].includes(field.id)) field.disabled = !editable;
+  });
+  ['addMinutesOfficer', 'addMinutesIncome', 'addMinutesExpense'].forEach((id) => {
+    $(id).classList.toggle('hidden', !editable);
   });
 };
 
@@ -407,6 +491,9 @@ const openMinutesEditor = (id) => {
   $('minutesPresent').value = (draft.present || []).join('\n');
   $('minutesExcused').value = (draft.excused || []).join('\n');
   $('minutesVisitors').value = (draft.visitors || []).join('\n');
+  $('minutesOfficerAttendance').replaceChildren(...(draft.officerAttendance || []).map(officerAttendanceEditor));
+  fillFinanceEditor('minutesIncome', draft.income || []);
+  fillFinanceEditor('minutesExpenses', draft.expenses || []);
   $('minutesApprovalDate').value = item.approvedByLodgeOn || '';
   $('minutesApprovalNote').value = item.approvalNote || '';
   $('minutesSections').replaceChildren(...draft.sections.map(sectionEditor));
@@ -431,6 +518,7 @@ const openMinutesEditor = (id) => {
   setMessage($('minutesEditorMessage'), '');
   updateMinutesEditorControls(item);
   show($('minutesEditorModal'));
+  refreshMinutesPreview();
 };
 
 const refreshOpenMinutes = async (message) => {
@@ -453,6 +541,12 @@ const minutesAction = async (path, body, message) => {
   } catch (error) {
     setMessage($('minutesEditorMessage'), error.message, true);
   }
+};
+
+const saveMinutesCorrections = async () => {
+  await apiFetch(`/api/minutes/${state.editingMinutesId}`, {
+    method: 'PUT', body: JSON.stringify({ draft: collectMinutesDraft() }),
+  });
 };
 
 /* What the District Deputy decided, and the proof of it.
@@ -769,22 +863,36 @@ $('generateMinutes').addEventListener('click', async () => {
   }
 });
 
-$('closeMinutesEditor').addEventListener('click', () => hide($('minutesEditorModal')));
+$('closeMinutesEditor').addEventListener('click', () => {
+  hide($('minutesEditorModal'));
+  if (state.minutesPreviewUrl) URL.revokeObjectURL(state.minutesPreviewUrl);
+  state.minutesPreviewUrl = '';
+  $('minutesPreviewFrame').removeAttribute('src');
+});
+$('refreshMinutesPreview').addEventListener('click', refreshMinutesPreview);
+$('addMinutesOfficer').addEventListener('click', () => {
+  $('minutesOfficerAttendance').append(officerAttendanceEditor({ status: 'not_recorded' }));
+});
+$('addMinutesIncome').addEventListener('click', () => $('minutesIncome').append(financeEditor()));
+$('addMinutesExpense').addEventListener('click', () => $('minutesExpenses').append(financeEditor()));
 $('minutesEditorForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    await apiFetch(`/api/minutes/${state.editingMinutesId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ draft: collectMinutesDraft() }),
-    });
+    await saveMinutesCorrections();
     await refreshOpenMinutes('Corrections saved.');
   } catch (error) {
     setMessage($('minutesEditorMessage'), error.message, true);
   }
 });
-$('submitMinutesReview').addEventListener('click', () => minutesAction(
-  'preparer-attest', null, 'Your attestation is recorded. The draft is ready for the Worshipful Master.',
-));
+$('submitMinutesReview').addEventListener('click', async () => {
+  try {
+    await saveMinutesCorrections();
+    await minutesAction('preparer-attest', null,
+      'Your corrections and attestation are recorded. The draft is ready for the Worshipful Master.');
+  } catch (error) {
+    setMessage($('minutesEditorMessage'), error.message, true);
+  }
+});
 $('authorizeMinutes').addEventListener('click', () => minutesAction(
   'master-attest', null, 'Your attestation is recorded. The signed draft is ready for McDuffie to distribute.',
 ));

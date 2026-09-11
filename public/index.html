@@ -368,7 +368,29 @@
               <div><label for="minutesExcused">Excused</label><textarea id="minutesExcused" rows="4"></textarea></div>
               <div><label for="minutesVisitors">Visitors</label><textarea id="minutesVisitors" rows="4"></textarea></div>
             </div>
+            <section class="minutes-detail-section">
+              <h3>Officer roll</h3>
+              <p>Correct a name or title when needed, and record any officer serving pro tem.</p>
+              <div id="minutesOfficerAttendance" class="minutes-officer-attendance"></div>
+              <button id="addMinutesOfficer" class="secondary small minutes-add-row" type="button">Add officer or pro tem</button>
+            </section>
             <div id="minutesSections" class="minutes-sections"></div>
+            <section class="minutes-detail-section">
+              <h3>Income and expenses stated in the meeting</h3>
+              <p>These rows appear only when the transcript records an actual transaction.</p>
+              <div class="minutes-finance-grid">
+                <div><h4>Lodge income</h4><div id="minutesIncome"></div><button id="addMinutesIncome" class="secondary small minutes-add-row" type="button">Add income row</button></div>
+                <div><h4>Lodge expenses</h4><div id="minutesExpenses"></div><button id="addMinutesExpense" class="secondary small minutes-add-row" type="button">Add expense row</button></div>
+              </div>
+            </section>
+            <section class="minutes-document-preview">
+              <div class="panel-title">
+                <div><p class="eyebrow">DOCUMENT PREVIEW</p><h3>Review the filled meeting template</h3></div>
+                <button id="refreshMinutesPreview" class="secondary" type="button">Update preview</button>
+              </div>
+              <p>The preview uses the fields currently shown above, including corrections that have not been saved yet.</p>
+              <iframe id="minutesPreviewFrame" class="pdf-frame" title="Meeting minutes document preview"></iframe>
+            </section>
             <div class="minutes-editor-actions">
               <button id="saveMinutes" class="secondary" type="submit">Save corrections</button>
               <button id="downloadMinutes" class="secondary" type="button">Download Word draft</button>
