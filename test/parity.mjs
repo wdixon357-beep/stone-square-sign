@@ -93,9 +93,10 @@ check('the Worshipful Master can open the minutes generator on the web',
   /'owner', 'secretary', 'assistant_secretary'/.test(read('public/app.js'))
   && read('server.js').includes("app.post('/api/minutes/generate', requireAuth, requireMinutesAccess"));
 check('the Mac app opens the authenticated minutes workspace',
-  client.includes("/?section=minutes")
-  && macMinutes.includes("localStorage.setItem('stone-square-sign-token'")
-  && macViews.includes('MeetingMinutesView()'));
+  macMinutes.includes("/api/minutes")
+  && macMinutes.includes('forHTTPHeaderField: "Authorization"')
+  && !macMinutes.includes("WKWebView")
+  && macViews.includes('MeetingMinutesView(workspace: minutesWorkspace)'));
 
 const builder = read('public/index.html');
 const macBuilder = macViews;

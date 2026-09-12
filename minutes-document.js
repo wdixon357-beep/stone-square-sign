@@ -1,13 +1,10 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-
 import {
   AlignmentType, BorderStyle, Document, Footer, ImageRun, Packer, PageNumber,
-  PageBreak, Paragraph, Table, TableCell, TableRow, TextRun, VerticalAlign, WidthType,
+  Paragraph, Table, TableCell, TableRow, TextRun, VerticalAlign, WidthType,
 } from 'docx';
 
 import {
-  additionalPresent, financeRows, nonOfficerExcused, officerAttendanceRows,
+  additionalPresent, nonOfficerExcused, officerAttendanceRows,
 } from './minutes-layout.js';
 
 const BLACK = '000000';
@@ -44,10 +41,10 @@ const center = (text, size, options = {}) => new Paragraph({
 });
 
 const sectionHeading = (text) => new Paragraph({
-  alignment: AlignmentType.CENTER,
-  spacing: { before: 220, after: 160 },
+  alignment: AlignmentType.LEFT,
+  spacing: { before: 220, after: 100 },
   keepNext: true,
-  children: [new TextRun({ text: String(text || '').toUpperCase(), size: 26, bold: true, color: BLACK })],
+  children: [new TextRun({ text: String(text || '').toUpperCase(), size: 23, bold: true, color: '10263D' })],
 });
 
 const bodyParagraphs = (text) => String(text || '').split(/\n+/).map((line) => line.trim()).filter(Boolean).map((line) => {
@@ -78,7 +75,6 @@ const detailsTable = (draft) => new Table({
     new TableRow({ children: [cell('Meeting', { bold: true, fill: LIGHT_GRAY }), cell(draft.meetingType || 'Not recorded'), cell('Degree', { bold: true, fill: LIGHT_GRAY }), cell(draft.degree || 'Not recorded')] }),
     new TableRow({ children: [cell('Opening', { bold: true, fill: LIGHT_GRAY }), cell(draft.openingTime || 'Not recorded'), cell('Closing', { bold: true, fill: LIGHT_GRAY }), cell(draft.closingTime || 'Not recorded')] }),
     new TableRow({ children: [cell('Presiding', { bold: true, fill: LIGHT_GRAY }), cell(draft.presiding || 'Not recorded'), cell('Quorum', { bold: true, fill: LIGHT_GRAY }), cell(draft.quorum || 'Not recorded')] }),
-    new TableRow({ children: [cell('Next Stated Communication', { bold: true, fill: LIGHT_GRAY }), cell(draft.nextMeeting || 'Not recorded'), cell('', { fill: LIGHT_GRAY }), cell('')] }),
   ],
 });
 
@@ -107,34 +103,10 @@ const officerTable = (draft) => new Table({
   ],
 });
 
-const nameGroup = (heading, names) => [
+const nameGroup = (heading, names) => names.length ? [
   sectionHeading(heading),
-  paragraph(names.length ? names.join(', ') : 'None recorded.'),
-];
-
-const financeTable = (heading, entries) => {
-  const rows = financeRows(entries);
-  if (!rows.length) return [];
-  return [
-    sectionHeading(heading),
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [1300, 1400, 3500, 1000],
-      rows: [
-        new TableRow({ tableHeader: true, children: [
-          cell('Date', { bold: true, centerText: true, fill: LIGHT_GRAY }),
-          cell('Check or Reference', { bold: true, centerText: true, fill: LIGHT_GRAY }),
-          cell('Brother or Payee', { bold: true, centerText: true, fill: LIGHT_GRAY }),
-          cell('Amount', { bold: true, centerText: true, fill: LIGHT_GRAY }),
-        ] }),
-        ...rows.map((row) => new TableRow({ cantSplit: true, children: [
-          cell(row.date, { centerText: true }), cell(row.reference, { centerText: true }),
-          cell(row.party), cell(row.amount, { centerText: true }),
-        ] })),
-      ],
-    }),
-  ];
-};
+  paragraph(names.join('; ')),
+] : [];
 
 const signatureCell = ({ name, role, signature, when }) => new TableCell({
   borders: { top: border, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
@@ -156,32 +128,10 @@ const signatureCell = ({ name, role, signature, when }) => new TableCell({
 
 export const buildMinutesDocx = async ({
   draft, status, approvedByLodgeOn, preparedBy, preparerRole, preparedSignature,
-  preparerAttestedAt, masterName, masterSignature, masterAttestedAt,
+  preparerAttestedAt, masterName, masterSignature, masterAttestedAt, masterChanges = [],
 }) => {
   const isOfficial = status === 'approved_by_lodge';
-  const emblem = await fs.readFile(path.join(process.cwd(), 'assets', 'meeting-minutes-emblem.png'));
-  const noBorders = {
-    top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
-    left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
-  };
-  const masthead = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: { ...noBorders, insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE } },
-    columnWidths: [1400, 5800, 1400],
-    rows: [new TableRow({
-      cantSplit: true,
-      children: [
-        new TableCell({ borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: emblem, type: 'png', transformation: { width: 74, height: 86 } })] })] }),
-        new TableCell({ borders: noBorders, verticalAlign: VerticalAlign.CENTER, children: [
-          center('STONE SQUARE LODGE NO. 22', 32),
-          center('208 EAST LAKE STREET', 22),
-          center('MIDDLETOWN, DELAWARE 19709', 22),
-        ] }),
-        new TableCell({ borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: emblem, type: 'png', transformation: { width: 74, height: 86 } })] })] }),
-      ],
-    })],
-  });
-  const opening = (draft.sections || []).find((item) => /opening/i.test(item.heading));
+  const masthead = center('STONE SQUARE LODGE NO. 22', 28, { color: '10263D', after: 150 });
   const children = [
     masthead,
     center(`MINUTES OF THE ${String(draft.meetingType || 'STATED COMMUNICATION').toUpperCase()}`, 28, { after: 55 }),
@@ -191,22 +141,18 @@ export const buildMinutesDocx = async ({
       : 'DRAFT FOR OFFICER REVIEW. NOT YET APPROVED BY THE LODGE.', 20,
     { after: 170, color: isOfficial ? BLACK : RED, italics: !isOfficial }),
     detailsTable(draft),
-    sectionHeading('Opening'),
-    ...bodyParagraphs(opening?.body || 'No opening details recorded.'),
-    sectionHeading('Roll Call of Officers Present'),
+    sectionHeading('Officer Attendance'),
     officerTable(draft),
     ...nameGroup('Additional Brothers Present', additionalPresent(draft)),
     ...nameGroup('Visitors', draft.visitors || []),
     ...nameGroup('Non Officers Excused From Meeting', nonOfficerExcused(draft)),
-    ...(draft.sections || []).filter((item) => item !== opening).flatMap((item) => [
+    ...(draft.sections || []).filter((item) => String(item.body || '').trim()).flatMap((item) => [
       sectionHeading(item.heading || 'Meeting Notes'),
-      ...bodyParagraphs(item.body || 'No details recorded.'),
+      ...bodyParagraphs(item.body),
     ]),
-    ...((draft.income || []).length || (draft.expenses || []).length
-      ? [new Paragraph({ children: [new PageBreak()] })] : []),
-    ...financeTable('Lodge Income', draft.income),
-    ...financeTable('Lodge Expenses', draft.expenses),
+    ...(draft.nextMeeting ? [sectionHeading('Next Meeting'), paragraph(draft.nextMeeting)] : []),
     sectionHeading('Officer Attestations'),
+    ...(masterChanges.length ? [paragraph("The preparing officer attested to the submitted version. The Worshipful Master's corrections and the original signed submission are retained in the record.")] : []),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       columnWidths: [4750, 4750],
@@ -215,7 +161,7 @@ export const buildMinutesDocx = async ({
         children: [
           signatureCell({
             name: preparedBy,
-            role: preparerRole === 'assistant_secretary' ? 'Assistant Secretary' : 'Secretary',
+            role: preparerRole === 'assistant_secretary' ? 'Assistant Secretary' : preparerRole === 'owner' ? 'Worshipful Master, Preparing Officer' : 'Secretary',
             signature: preparedSignature,
             when: preparerAttestedAt,
           }),
@@ -232,7 +178,7 @@ export const buildMinutesDocx = async ({
     creator: 'Stone Square Lodge No. 22',
     title: `Meeting Minutes ${fullDate(draft.meetingDate)}`,
     description: isOfficial ? 'Official Lodge minutes' : 'Draft Lodge minutes for officer review',
-    styles: { default: { document: { run: { font: 'Times New Roman', size: 22, color: BLACK } } } },
+    styles: { default: { document: { run: { font: 'Calibri', size: 22, color: BLACK } } } },
     sections: [{
       properties: {
         page: { size: { width: 12240, height: 15840 }, margin: { top: 720, right: 900, bottom: 720, left: 900 } },

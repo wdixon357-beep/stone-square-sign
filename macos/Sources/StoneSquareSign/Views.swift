@@ -150,19 +150,19 @@ struct AuthenticationView: View {
                         .font(.caption.weight(.bold))
                         .tracking(3)
                         .foregroundStyle(SignTheme.gold)
-                    Text("Documents move.\nRecords remain.")
+                    Text("Stone Square\nLodge Dashboard")
                         .font(.system(size: 54, weight: .medium, design: .serif))
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .minimumScaleFactor(0.72)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("A private signing desk for Lodge officers and retained records.")
+                    Text("Meeting records, reports and documents for the officers of Stone Square Lodge No. 22.")
                         .font(.title3)
                         .foregroundStyle(.white.opacity(0.68))
                         .frame(maxWidth: 460, alignment: .leading)
                     HStack(spacing: 28) {
-                        LoginStep(number: "01", text: "Upload")
-                        LoginStep(number: "02", text: "Identify")
+                        LoginStep(number: "01", text: "Prepare")
+                        LoginStep(number: "02", text: "Review")
                         LoginStep(number: "03", text: "Sign")
                     }
                     .padding(.top, 32)
@@ -271,6 +271,7 @@ struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
     @State private var selection: AppSection? = .home
     @StateObject private var reportBrowser = ReportBrowserModel()
+    @StateObject private var minutesWorkspace = MinutesWorkspace()
 
     var body: some View {
         NavigationSplitView {
@@ -332,7 +333,7 @@ struct WorkspaceView: View {
             case .reportGenerator:
                 ReportGeneratorView(browser: reportBrowser)
             case .minutes:
-                MeetingMinutesView()
+                MeetingMinutesView(workspace: minutesWorkspace)
             case .candidateTracker:
                 NativeCandidateTrackerView()
             case .createDispensation: DispensationBuilderView()

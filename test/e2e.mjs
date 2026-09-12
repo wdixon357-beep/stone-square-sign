@@ -437,6 +437,19 @@ try {
   check('the Worshipful Master can turn a Plaud transcript into a draft',
     ownerGeneratedMinutes.status === 201 && ownerGeneratedMinutes.payload.minutes?.status === 'draft',
     `${ownerGeneratedMinutes.status} ${JSON.stringify(ownerGeneratedMinutes.payload).slice(0, 160)}`);
+  const ownerMinutesId = ownerGeneratedMinutes.payload.minutes.id;
+  const prohibitedDelete = await api('DELETE', `/api/minutes/${ownerMinutesId}`, { token: secToken });
+  check('a secretary cannot delete another preparer draft', prohibitedDelete.status === 403);
+  const viewerDelete = await api('DELETE', `/api/minutes/${ownerMinutesId}`, { token: viewerToken });
+  check('a viewer cannot delete minutes', viewerDelete.status === 403);
+  const reorganized = await api('POST', `/api/minutes/${ownerMinutesId}/reorganize`, { token: wmToken, body: {} });
+  check('the original source can be reorganized for unsaved review', reorganized.status === 200 && Array.isArray(reorganized.payload.draft.sections));
+  const deleteDraft = await api('DELETE', `/api/minutes/${ownerMinutesId}`, { token: wmToken });
+  check('the Worshipful Master can delete an unsigned draft', deleteDraft.status === 200 && deleteDraft.payload.deleted);
+  const afterDelete = await api('GET', '/api/minutes', { token: wmToken });
+  check('a deleted draft is removed from the minutes list', !afterDelete.payload.minutes.some(m => m.id === ownerMinutesId));
+  const deletedPreview = await api('POST', `/api/minutes/${ownerMinutesId}/preview`, { token: wmToken, body: {} });
+  check('a deleted draft cannot be retrieved through preview', deletedPreview.status === 404);
   const mailBeforeMinutes = deliveredMail.length;
   const minutesForm = new FormData();
   minutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '
@@ -477,6 +490,16 @@ try {
   check('Adrian can attest and send the corrected draft to the Worshipful Master',
     submittedMinutes.status === 200 && submittedMinutes.payload.minutes.status === 'awaiting_master_attestation'
       && Boolean(submittedMinutes.payload.minutes.preparerAttestedAt));
+  const editedByMaster = structuredClone(revisedDraft);
+  editedByMaster.sections[0].body += ' The Master corrected the meeting record during review.';
+  const blockedPreparerEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: asstToken, body: { draft: editedByMaster } });
+  check('a preparer cannot alter the record after attesting', blockedPreparerEdit.status === 409);
+  const masterEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: wmToken, body: { draft: editedByMaster } });
+  check('the Master can correct minutes during review without erasing the first attestation', masterEdit.status === 200 && Boolean(masterEdit.payload.minutes.preparerAttestedAt));
+  check('review corrections preserve exact submitted and revised text', masterEdit.payload.minutes.masterChanges.some(change => change.before.includes('officers were examined') && !change.before.includes('Master corrected') && change.after.includes('Master corrected')));
+  check('the original submitted draft remains available', masterEdit.payload.minutes.submittedDraft.sections[0].body === revisedDraft.sections[0].body);
+  const correctedPreview = await api('POST', `/api/minutes/${minutesId}/preview`, { token: wmToken, body: { draft: editedByMaster } });
+  check('the Master can preview corrections before the second attestation', correctedPreview.status === 200);
   const assistantAuthorization = await api('POST', `/api/minutes/${minutesId}/master-attest`, { token: asstToken });
   check('only the Worshipful Master can complete the second attestation', assistantAuthorization.status === 403,
     String(assistantAuthorization.status));
@@ -499,7 +522,7 @@ try {
       && /Name[\s\S]*Title[\s\S]*P[\s\S]*A[\s\S]*E[\s\S]*NR/.test(draftText)
       && /William M. McDuffie[\s\S]*Secretary[\s\S]*X/.test(draftText)
       && /Adrian Reese[\s\S]*Assistant Secretary[\s\S]*X/.test(draftText)
-      && /LODGE INCOME/.test(draftText) && /Community Partner/.test(draftText)
+      && !/LODGE INCOME/.test(draftText) && !/Community Partner/.test(draftText)
       && /Adrian Reese/.test(draftText) && /Worshipful Master/.test(draftText));
   const assistantDistributed = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: asstToken });
   check('the Assistant Secretary cannot record McDuffie\'s correspondence duty',
@@ -514,6 +537,8 @@ try {
   check('formal Lodge approval is recorded separately from distribution authorization',
     approvedMinutes.status === 200 && approvedMinutes.payload.minutes.status === 'approved_by_lodge'
       && approvedMinutes.payload.minutes.approvedByLodgeOn === '2026-09-17');
+  const deleteSigned = await api('DELETE', `/api/minutes/${minutesId}`, { token: wmToken });
+  check('signed and approved minutes cannot be deleted', deleteSigned.status === 409);
   const officialDocx = await api('GET', `/api/minutes/${minutesId}/docx`, { token: wmToken });
   const officialText = officialDocx.status === 200
     ? (await mammoth.extractRawText({ buffer: officialDocx.payload })).value : '';
@@ -521,11 +546,24 @@ try {
     officialDocx.status === 200 && /APPROVED BY THE LODGE/.test(officialText)
       && !/NOT YET APPROVED/.test(officialText));
   const minutesNotices = deliveredMail.slice(mailBeforeMinutes);
-  check('the workflow notifies only the Master and the Secretary',
-    minutesNotices.length === 2
+  check('the workflow notifies the Master, preparer and Secretary',
+    minutesNotices.length === 3
       && minutesNotices.some((message) => /wm@stonesquare22pha\.org/i.test(message))
       && minutesNotices.some((message) => /mcduff8995@example\.org/i.test(message)),
     `${minutesNotices.length} notices`);
+
+  const ownSource = new FormData();
+  ownSource.append('transcriptText', 'Meeting date: 2026-09-03. The Lodge opened at 7:30 PM. The committee reported. The Lodge closed at 9:00 PM.');
+  const ownMinutes = await api('POST', '/api/minutes/generate', { token: wmToken, body: ownSource, raw: true });
+  const ownId = ownMinutes.payload.minutes?.id;
+  const ownAttestation = await api('POST', `/api/minutes/${ownId}/preparer-attest`, { token: wmToken });
+  check('the Master can prepare and attest to his own minutes', ownAttestation.status === 200 && ownAttestation.payload.minutes.preparerAttestedAt);
+  const ownApproval = await api('POST', `/api/minutes/${ownId}/master-attest`, { token: wmToken });
+  check('the Master can complete his own minutes through both signature stages', ownApproval.status === 200 && ownApproval.payload.minutes.masterAttestedAt && ownApproval.payload.minutes.preparerAttestedAt);
+  check('successful review notices do not show a failure warning', ownApproval.payload.notificationWarnings?.length === 0 && ownAttestation.payload.notificationWarnings?.length === 0);
+  await api('POST', `/api/minutes/${ownId}/reopen`, { token: wmToken });
+  const deleteReopened = await api('DELETE', `/api/minutes/${ownId}`, { token: wmToken });
+  check('reopening a signed record never makes its signature history deletable', deleteReopened.status === 409);
 
 
   /* Either/or signing.

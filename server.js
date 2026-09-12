@@ -297,8 +297,8 @@ const requireSecretaryOrOwner = (req, res, next) => {
 };
 
 const requireMinutesPreparer = (req, res, next) => {
-  if (!OFFICE_ROLES.has(req.user.role)) {
-    return res.status(403).json({ error: 'The Secretary or Assistant Secretary prepares and attests to the draft.' });
+  if (!MINUTES_ROLES.has(req.user.role)) {
+    return res.status(403).json({ error: 'Only the Worshipful Master or a Secretary can attest to a draft.' });
   }
   next();
 };
@@ -939,7 +939,7 @@ const minutesUpload = multer({
   fileFilter: (_req, file, callback) => {
     const name = file.originalname.toLowerCase();
     if (!name.endsWith('.txt') && !name.endsWith('.docx') && !name.endsWith('.pdf')) {
-      return callback(new Error('Upload a Plaud transcript as a TXT, DOCX, or PDF file.'));
+      return callback(new Error('Upload notes or a transcript as a TXT, DOCX, or PDF file.'));
     }
     callback(null, true);
   },
@@ -954,6 +954,9 @@ const transcriptFromUpload = async (file) => {
 };
 
 const minutesForResponse = (row) => ({
+  createdByUserId: row.created_by_user_id,
+  masterChanges: row.master_changes_json ? JSON.parse(row.master_changes_json) : [],
+  submittedDraft: row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null,
   id: row.id,
   meetingDate: row.meeting_date,
   sourceName: row.source_name,
@@ -987,7 +990,7 @@ const getMinutesRow = (id) => dbGet(
    LEFT JOIN users authorizer ON authorizer.id = m.authorized_by_user_id
    LEFT JOIN users distributor ON distributor.id = m.distributed_by_user_id
    LEFT JOIN users master ON master.id = m.master_attested_by_user_id
-   WHERE m.id = ?`,
+   WHERE m.id = ? AND m.status <> 'deleted'`,
   [id],
 );
 
@@ -1017,6 +1020,9 @@ app.get('/', async (_req, res, next) => {
     next(error);
   }
 });
+// Expose only the PDF renderer's browser assets, never the rest of node_modules.
+app.use('/pdfjs/build', express.static(path.join(APP_DIR, 'node_modules/pdfjs-dist/build'), { index: false, maxAge: '1d' }));
+app.use('/pdfjs/standard_fonts', express.static(path.join(APP_DIR, 'node_modules/pdfjs-dist/standard_fonts'), { index: false, maxAge: '1d' }));
 app.use(express.static(path.join(APP_DIR, 'public'), {
   index: false,
   etag: false,
@@ -1584,6 +1590,7 @@ app.get('/api/minutes', requireAuth, requireMinutesAccess, async (_req, res, nex
        LEFT JOIN users authorizer ON authorizer.id = m.authorized_by_user_id
        LEFT JOIN users distributor ON distributor.id = m.distributed_by_user_id
        LEFT JOIN users master ON master.id = m.master_attested_by_user_id
+       WHERE m.status <> 'deleted'
        ORDER BY COALESCE(m.meeting_date, m.created_at) DESC`,
     );
     res.json({ minutes: rows.map(minutesForResponse) });
@@ -1598,8 +1605,8 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
     try {
       const uploadedText = await transcriptFromUpload(req.file);
       const transcript = uploadedText || String(req.body.transcriptText || '').trim();
-      if (!transcript) return res.status(400).json({ error: 'Choose a Plaud transcript or paste its text.' });
-      const draft = await generateMinutesDraft(transcript);
+      if (!transcript) return res.status(400).json({ error: 'Choose meeting notes or a transcript, or paste the text.' });
+      const draft = await generateMinutesDraft(transcript, { sourceType: req.body.sourceType });
       const id = crypto.randomUUID();
       const time = nowIso();
       await dbRun(
@@ -1607,7 +1614,7 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
           (id, meeting_date, source_name, transcript_text, draft_json, status,
            created_by_user_id, updated_by_user_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
-        [id, draft.meetingDate, req.file?.originalname || 'Pasted Plaud transcript', transcript,
+        [id, draft.meetingDate, req.file?.originalname || (draft.sourceType === 'compiled_notes' ? 'Pasted meeting notes' : 'Pasted transcript'), transcript,
           JSON.stringify(draft), req.user.id, req.user.id, time, time],
       );
       await dbRun(
@@ -1621,25 +1628,88 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
     }
   });
 
+// Remove an unsigned working draft from the active list while retaining its source
+// and audit trail. A signed record cannot be deleted, even after reopening it.
+app.delete('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (req.user.role !== 'owner' && row.created_by_user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Only the preparing officer or the Worshipful Master can delete this draft.' });
+    }
+    const time = nowIso();
+    const removed = await withTransaction(async () => {
+      const result = await dbRun(
+        `UPDATE meeting_minutes SET status = 'deleted', updated_at = ?, updated_by_user_id = ?
+         WHERE id = ? AND status = 'draft' AND preparer_attested_at IS NULL
+           AND master_attested_at IS NULL AND authorized_at IS NULL AND approved_by_lodge_on IS NULL
+           AND NOT EXISTS (SELECT 1 FROM meeting_minutes_attestations WHERE minutes_id = meeting_minutes.id)
+           AND NOT EXISTS (SELECT 1 FROM audit_events WHERE action IN ('minutes_preparer_attested', 'minutes_master_attested', 'minutes_lodge_approval_recorded') AND details_json::jsonb ->> 'minutesId' = ?)`,
+        [time, req.user.id, row.id, row.id],
+      );
+      if (result.changes) await dbRun(
+        `INSERT INTO audit_events (user_id, action, details_json, created_at) VALUES (?, 'minutes_draft_deleted', ?, ?)`,
+        [req.user.id, JSON.stringify({ minutesId: row.id }), time],
+      );
+      return result.changes;
+    });
+    if (!removed) return res.status(409).json({ error: 'Only an unsigned working draft can be deleted. Signed and approved records are retained.' });
+    res.json({ deleted: true });
+  } catch (error) { next(error); }
+});
+
+// Reorganizing returns an unsaved replacement for review. It never overwrites
+// corrections or changes signatures, approvals, or the original source.
+app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, async (req, res, next) => {
+  try {
+    const row = await getMinutesRow(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
+    if (row.status !== 'draft') return res.status(409).json({ error: 'Reopen this record before preparing corrections.' });
+    const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType });
+    res.json({ draft });
+  } catch (error) { next(error); }
+});
+
+const minutesChanges = (submitted, reviewed) => {
+  const before = normalizeMinutesDraft(submitted), after = normalizeMinutesDraft(reviewed);
+  const changes = [];
+  const labels = { meetingDate: 'Meeting date', meetingType: 'Meeting type', degree: 'Degree', openingTime: 'Opening time', closingTime: 'Closing time', presiding: 'Presiding officer', quorum: 'Quorum', nextMeeting: 'Next meeting', present: 'Brothers present', excused: 'Brothers excused', visitors: 'Visitors', officerAttendance: 'Officer attendance' };
+  const display = value => typeof value === 'string' ? value : value == null ? ''
+    : Array.isArray(value) ? value.map(entry => typeof entry === 'string' ? entry
+      : `${entry.name}, ${entry.title}: ${entry.status.replaceAll('_', ' ')}`).join('\n') : String(value);
+  for (const field of ['meetingDate', 'meetingType', 'degree', 'openingTime', 'closingTime', 'presiding', 'quorum', 'nextMeeting', 'present', 'excused', 'visitors', 'officerAttendance']) {
+    if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) changes.push({ field: labels[field], before: display(before[field]), after: display(after[field]) });
+  }
+  const count = Math.max(before.sections.length, after.sections.length);
+  for (let index = 0; index < count; index++) {
+    const previous = before.sections[index], current = after.sections[index];
+    if (JSON.stringify(previous) !== JSON.stringify(current)) changes.push({ field: current?.heading || previous?.heading || `Section ${index + 1}`, before: previous ? `${previous.heading}\n${previous.body}` : '', after: current ? `${current.heading}\n${current.body}` : '' });
+  }
+  return changes;
+};
+
 app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, next) => {
   try {
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
-    if (row.status !== 'draft') {
+    const masterReview = row.status === 'awaiting_master_attestation' && req.user.role === 'owner';
+    if (row.status !== 'draft' && !masterReview) {
       return res.status(409).json({ error: 'Reopen these minutes before changing an attested or official record.' });
     }
     const draft = normalizeMinutesDraft(req.body.draft);
     if (!draft.sections.length) return res.status(400).json({ error: 'The minutes need at least one section.' });
     const time = nowIso();
-    await dbRun(
+    const changes = masterReview ? minutesChanges(JSON.parse(row.submitted_draft_json || row.draft_json), draft) : [];
+    const saved = await dbRun(
       `UPDATE meeting_minutes SET meeting_date = ?, draft_json = ?, updated_by_user_id = ?,
-       updated_at = ? WHERE id = ?`,
-      [draft.meetingDate, JSON.stringify(draft), req.user.id, time, row.id],
+       updated_at = ?, master_changes_json = ? WHERE id = ? AND status = ?`,
+      [draft.meetingDate, JSON.stringify(draft), req.user.id, time, JSON.stringify(changes), row.id, row.status],
     );
+    if (!saved.changes) return res.status(409).json({ error: 'The record changed. Refresh before saving.' });
     await dbRun(
       `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
        VALUES (?, 'minutes_draft_saved', ?, ?, ?, ?)`,
-      [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id }), time],
+      [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id, masterReview, changedFields: changes.map(change => change.field) }), time],
     );
     res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
   } catch (error) {
@@ -1655,28 +1725,41 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     if (row.created_by_user_id !== req.user.id) {
       return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
     }
-    const signature = await dbGet('SELECT 1 FROM profile_signatures WHERE user_id = ?', [req.user.id]);
+    const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     const time = nowIso();
-    await dbRun(
+    const attestation = await withTransaction(async () => {
+      const result = await dbRun(
       `UPDATE meeting_minutes SET status = 'awaiting_master_attestation', submitted_for_review_at = ?,
-       preparer_attested_at = ?,
-       updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
-      [time, time, req.user.id, time, row.id],
+       preparer_attested_at = ?, submitted_draft_json = ?, preparer_signature_bytes = ?, master_changes_json = '[]',
+       updated_by_user_id = ?, updated_at = ? WHERE id = ? AND status = 'draft' AND updated_at = ?`,
+      [time, time, row.draft_json, asBuffer(signature.signature_bytes), req.user.id, time, row.id, row.updated_at],
+    );
+      if (result.changes) await dbRun(
+        `INSERT INTO meeting_minutes_attestations (id, minutes_id, user_id, phase, draft_json, signature_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [crypto.randomUUID(), row.id, req.user.id, 'preparer', row.draft_json, asBuffer(signature.signature_bytes), time],
+      );
+      return result;
+    });
+    if (!attestation.changes) return res.status(409).json({ error: 'The draft changed. Refresh before attesting.' });
+    await dbRun(
+      `INSERT INTO audit_events (user_id, action, details_json, created_at) VALUES (?, 'minutes_preparer_attested', ?, ?)`,
+      [req.user.id, JSON.stringify({ minutesId: row.id }), time],
     );
     const owner = await dbGet("SELECT email FROM users WHERE role = 'owner' AND access_revoked_at IS NULL ORDER BY id LIMIT 1");
+    let noticeSent = false;
     if (owner?.email) {
       try {
-        await sendEmail({
+        noticeSent = await sendEmail({
           to: owner.email,
           subject: `Meeting minutes ready for review: ${row.meeting_date || 'date needs review'}`,
-          text: `${req.user.name} attested to the draft meeting minutes. They are ready for your review and attestation in the Stone Square Dashboard.`,
+          text: `${req.user.name} attested to the draft meeting minutes. They are ready for your review and attestation in the Stone Square Dashboard.\n\n${requestBaseUrl(req)}/?section=minutes`,
         });
       } catch (error) {
         console.warn('Minutes review notice failed:', error.message);
       }
     }
-    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)), notificationWarnings: noticeSent ? [] : ['The signed draft is in the Worshipful Master\'s review queue, but the email notice could not be sent.'] });
   } catch (error) {
     next(error);
   }
@@ -1687,33 +1770,43 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'awaiting_master_attestation') return res.status(409).json({ error: 'The preparing officer must attest to the draft first.' });
-    const signature = await dbGet('SELECT 1 FROM profile_signatures WHERE user_id = ?', [req.user.id]);
+    const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     const time = nowIso();
-    await dbRun(
+    const attested = await withTransaction(async () => {
+      const result = await dbRun(
       `UPDATE meeting_minutes SET status = 'ready_for_distribution', master_attested_by_user_id = ?,
-       master_attested_at = ?, authorized_by_user_id = ?, authorized_at = ?,
-       updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
-      [req.user.id, time, req.user.id, time, req.user.id, time, row.id],
+       master_attested_at = ?, master_signature_bytes = ?, authorized_by_user_id = ?, authorized_at = ?,
+       updated_by_user_id = ?, updated_at = ? WHERE id = ? AND status = 'awaiting_master_attestation' AND updated_at = ?`,
+      [req.user.id, time, asBuffer(signature.signature_bytes), req.user.id, time, req.user.id, time, row.id, row.updated_at],
     );
+      if (result.changes) await dbRun(
+        `INSERT INTO meeting_minutes_attestations (id, minutes_id, user_id, phase, draft_json, signature_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [crypto.randomUUID(), row.id, req.user.id, 'master', row.draft_json, asBuffer(signature.signature_bytes), time],
+      );
+      return result;
+    });
+    if (!attested.changes) return res.status(409).json({ error: 'The record changed. Refresh before attesting.' });
     await dbRun(
       `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
        VALUES (?, 'minutes_master_attested', ?, ?, ?, ?)`,
       [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id }), time],
     );
-    const secretary = await dbGet("SELECT email FROM users WHERE role = 'secretary' AND access_revoked_at IS NULL ORDER BY id LIMIT 1");
-    if (secretary?.email) {
+    const recipients = await dbAll("SELECT DISTINCT email FROM users WHERE access_revoked_at IS NULL AND (role = 'secretary' OR id = ?)", [row.created_by_user_id]);
+    const changes = row.master_changes_json ? JSON.parse(row.master_changes_json) : [];
+    const changedSections = changes.map(change => change.field).join(', ');
+    const notificationWarnings = [];
+    for (const recipient of recipients) {
       try {
-        await sendEmail({
-          to: secretary.email,
-          subject: `Meeting minutes ready for distribution: ${row.meeting_date || 'date needs review'}`,
-          text: 'The Worshipful Master has reviewed and attested to the meeting minutes. The signed draft is ready for the Secretary to distribute from the Stone Square Dashboard.',
+        const sent = await sendEmail({
+          to: recipient.email,
+          subject: `Meeting minutes reviewed and signed: ${row.meeting_date || 'date needs review'}`,
+          text: `The Worshipful Master reviewed and signed the meeting minutes. ${changes.length ? `Corrections were recorded in: ${changedSections}. Open the record to compare the submitted and reviewed text.` : 'No corrections were made to the submitted draft.'} The signed draft is ready for the Secretary to distribute from the Stone Square Dashboard.\n\n${requestBaseUrl(req)}/?section=minutes`,
         });
-      } catch (error) {
-        console.warn('Minutes distribution notice failed:', error.message);
-      }
+        if (!sent) notificationWarnings.push(`The reviewed record is available in the Dashboard, but the email notice to ${recipient.email} could not be sent.`);
+      } catch (error) { console.warn('Minutes review completion notice failed:', error.message); notificationWarnings.push(`The reviewed record is available in the Dashboard, but the email notice to ${recipient.email} could not be sent.`); }
     }
-    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)), notificationWarnings });
   } catch (error) {
     next(error);
   }
@@ -1774,7 +1867,7 @@ app.post('/api/minutes/:id/reopen', requireAuth, requireOwner, async (req, res, 
     const time = nowIso();
     await dbRun(
       `UPDATE meeting_minutes SET status = 'draft', submitted_for_review_at = NULL,
-       preparer_attested_at = NULL, master_attested_by_user_id = NULL, master_attested_at = NULL,
+       preparer_attested_at = NULL, master_attested_by_user_id = NULL, master_attested_at = NULL, master_signature_bytes = NULL, submitted_draft_json = NULL, master_changes_json = NULL, preparer_signature_bytes = NULL,
        authorized_by_user_id = NULL, authorized_at = NULL, distributed_by_user_id = NULL,
        distributed_at = NULL, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
       [req.user.id, time, row.id],
@@ -1798,21 +1891,24 @@ const minutesArtifactContext = async (row, draft) => {
     approvedByLodgeOn: row.approved_by_lodge_on,
     preparedBy: row.created_by_name,
     preparerRole: row.created_by_role,
-    preparedSignature: asBuffer(preparerSignature?.signature_bytes),
+    preparedSignature: asBuffer(row.preparer_signature_bytes || preparerSignature?.signature_bytes),
     preparerAttestedAt: row.preparer_attested_at,
     masterName: row.master_attested_by_name,
-    masterSignature: asBuffer(masterSignature?.signature_bytes),
+    masterSignature: asBuffer(row.master_signature_bytes || masterSignature?.signature_bytes),
+    masterChanges: row.status === 'awaiting_master_attestation' && row.submitted_draft_json
+      ? minutesChanges(JSON.parse(row.submitted_draft_json), draft)
+      : row.master_changes_json ? JSON.parse(row.master_changes_json) : [],
     masterAttestedAt: row.master_attested_at,
   };
 };
 
 app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,
-  rateLimit({ key: 'minutes-preview', maximum: 120, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+  rateLimit({ key: 'minutes-preview', maximum: 600, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
     try {
       const row = await getMinutesRow(req.params.id);
       if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
       const savedDraft = normalizeMinutesDraft(JSON.parse(row.draft_json));
-      const draft = row.status === 'draft' && req.body?.draft
+      const draft = (row.status === 'draft' || (row.status === 'awaiting_master_attestation' && req.user.role === 'owner')) && req.body?.draft
         ? normalizeMinutesDraft(req.body.draft) : savedDraft;
       if (!draft.sections.length) return res.status(400).json({ error: 'The minutes need at least one section.' });
       const bytes = await buildMinutesPdf(await minutesArtifactContext(row, draft));
@@ -2970,7 +3066,7 @@ app.use((error, _req, res, _next) => {
     });
   }
   if (error.message === 'Only PDF files are supported.'
-      || error.message === 'Upload a Plaud transcript as a TXT, DOCX, or PDF file.') {
+      || error.message === 'Upload notes or a transcript as a TXT, DOCX, or PDF file.') {
     return res.status(400).json({ error: error.message });
   }
   if (Number.isInteger(error.statusCode)) {

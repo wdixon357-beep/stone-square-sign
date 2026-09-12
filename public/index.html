@@ -25,6 +25,7 @@
     <meta name="twitter:image" content="https://stone-square-sign.onrender.com/og-image.png?v=__APP_VERSION__" />
 
     <link rel="apple-touch-icon" href="/og-image.png" />
+    <link rel="icon" href="/og-image.png" />
     <link rel="stylesheet" href="/styles.css?v=__APP_VERSION__" />
   </head>
   <body>
@@ -45,8 +46,8 @@
       <section id="authCard" class="auth-layout">
         <div class="auth-story">
           <p class="eyebrow">OFFICERS’ HUB</p>
-          <h1>Documents move.<br /><em>Records remain.</em></h1>
-          <p class="lead">Documents, minutes, reports and dues for the officers of Stone Square Lodge No. 22, in one controlled record.</p>
+          <h1>Stone Square<br /><em>Lodge Dashboard</em></h1>
+          <p class="lead">Prepare meeting records, review reports, and manage Lodge documents with the officers who share the work.</p>
           <div class="steps">
             <div><b>01</b><span>Document uploaded</span></div>
             <div><b>02</b><span>Officers identified</span></div>
@@ -189,26 +190,27 @@
               <div>
                 <p class="eyebrow">RESTRICTED OFFICER RECORD</p>
                 <h1>Meeting minutes</h1>
-              <p>The Worshipful Master, Adrian, or McDuffie can create and correct the draft. A Secretary attests, the Worshipful Master attests, and the signed draft returns to McDuffie for distribution.</p>
+              <p>The Worshipful Master, Adrian, or McDuffie can prepare the minutes. The preparing officer reviews and attests. The Worshipful Master reviews, records any corrections, and authorizes distribution.</p>
               </div>
               <button id="minutesRefresh" class="secondary" type="button">Refresh</button>
             </div>
 
             <div class="minutes-workflow" aria-label="Minutes workflow">
-              <span><b>1</b> Correct names in the Plaud transcript</span>
-              <span><b>2</b> Paste the corrected transcript</span>
+              <span><b>1</b> Prepare notes or a transcript</span>
+              <span><b>2</b> Review the organized draft</span>
               <span><b>3</b> Preparer and Master attest</span>
               <span><b>4</b> McDuffie distributes the signed draft</span>
             </div>
 
             <section class="panel minutes-generator preparer-only">
-              <div class="panel-title"><div><p class="eyebrow">NEW DRAFT</p><h2>Paste the corrected Plaud transcript</h2></div><span class="file-badge">TXT DOCX PDF</span></div>
-              <p class="helper">Correct any names Plaud heard incorrectly, then paste the transcript here. The Sign app organizes it locally without an AI service or API key. A file upload works too.</p>
-              <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose the Plaud transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
+              <div class="panel-title"><div><p class="eyebrow">NEW DRAFT</p><h2>Add your meeting source</h2></div><span class="file-badge">TXT DOCX PDF</span></div>
+              <p class="helper">Use your compiled meeting notes or a corrected Plaud transcript. Attendance and agenda sections are organized automatically. Review the draft before attesting.</p>
+              <label for="minutesSourceType">Source format</label><select id="minutesSourceType"><option value="auto">Detect automatically</option><option value="compiled_notes">Compiled meeting notes</option><option value="transcript">Meeting transcript</option></select>
+              <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose meeting notes or a transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
               <input id="minutesTranscriptFile" class="visually-hidden" type="file" accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
               <p id="minutesSelectedFile" class="selected-file">No file selected</p>
-              <label for="minutesTranscriptText">Or paste the transcript</label>
-              <textarea id="minutesTranscriptText" rows="8" placeholder="Paste the Plaud transcript here"></textarea>
+              <label for="minutesTranscriptText">Or paste your meeting notes or transcript</label>
+              <textarea id="minutesTranscriptText" rows="8" placeholder="Paste compiled notes or a corrected transcript here"></textarea>
               <div class="builder-actions"><p id="minutesMessage" class="message" role="status"></p><button id="generateMinutes" class="primary" type="button">Create draft minutes</button></div>
             </section>
 
@@ -349,8 +351,14 @@
         <div class="modal-body minutes-editor-body">
           <button id="closeMinutesEditor" class="modal-close" type="button" aria-label="Close">&times;</button>
           <p class="eyebrow">MEETING MINUTES DRAFT</p>
-          <h2 id="minutesEditorTitle">Review every section</h2>
+          <h2 id="minutesEditorTitle">Review meeting minutes</h2>
+          <div class="minutes-view-switch" role="group" aria-label="Minutes workspace view">
+            <button id="minutesEditView" class="secondary" type="button" aria-pressed="true">Edit minutes</button>
+            <button id="minutesPreviewView" class="secondary" type="button" aria-pressed="false">Document preview</button>
+          </div>
+          <button id="reorganizeMinutes" class="secondary small" type="button">Reorganize original source</button>
           <p id="minutesEditorStatus" class="minutes-status-line"></p>
+            <section id="minutesMasterChanges" class="minutes-master-changes hidden"></section>
             <div id="minutesReviewWarnings" class="minutes-review-warning hidden"></div>
           <form id="minutesEditorForm" class="minutes-editor-form">
             <div class="minutes-meta-grid">
@@ -398,7 +406,7 @@
               <button id="addMinutesOfficer" class="secondary small minutes-add-row" type="button">Add officer or pro tem</button>
             </section>
             <div id="minutesSections" class="minutes-sections"></div>
-            <section class="minutes-detail-section">
+            <section class="minutes-detail-section hidden">
               <h3>Income and expenses stated in the meeting</h3>
               <p>These rows appear only when the transcript records an actual transaction.</p>
               <div class="minutes-finance-grid">
@@ -411,14 +419,16 @@
                 <div><p class="eyebrow">DOCUMENT PREVIEW</p><h3>Review the filled meeting template</h3></div>
                 <button id="refreshMinutesPreview" class="secondary" type="button">Update preview</button>
               </div>
-              <p>The preview uses the fields currently shown above, including corrections that have not been saved yet.</p>
-              <iframe id="minutesPreviewFrame" class="pdf-frame" title="Meeting minutes document preview"></iframe>
+              <p>The preview updates automatically as you edit. Your changes are saved only when you select Save corrections.</p>
+              <p id="minutesPreviewState" class="helper" role="status"></p>
+              <a id="minutesPreviewDownload" class="secondary hidden" download="Meeting Minutes.pdf">Download this PDF</a>
+              <div id="minutesPreviewFrame" class="minutes-pdf-pages" role="region" aria-label="Meeting minutes document pages" tabindex="0"></div>
             </section>
             <div class="minutes-editor-actions">
               <button id="saveMinutes" class="secondary" type="submit">Save corrections</button>
               <button id="downloadMinutes" class="secondary" type="button">Download Word draft</button>
               <button id="submitMinutesReview" class="primary" type="button">Attest and send to Worshipful Master</button>
-              <button id="authorizeMinutes" class="primary owner-only" type="button">Attest and return to McDuffie</button>
+              <button id="authorizeMinutes" class="primary owner-only" type="button">Attest and authorize distribution</button>
               <button id="markMinutesDistributed" class="primary" type="button">Mark as distributed</button>
               <button id="reopenMinutes" class="secondary owner-only" type="button">Reopen for corrections</button>
             </div>

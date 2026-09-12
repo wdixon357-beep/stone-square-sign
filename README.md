@@ -27,23 +27,37 @@ executed PDF by email and the document is marked complete.
 Home and the sidebar open the shared Report Generator inside the web dashboard and
 Mac app. The report form stays separate from the dispensation signing queue. Brothers
 preview first, then review, type their signature and explicitly send the final report.
-Previewing, printing and saving do not trigger email. The Mac preview has its own
-window so the report form remains available.
+Previewing, printing and saving do not trigger email. The native Mac form and PDF
+preview stay together in the app workspace.
 
 ## Meeting Minutes
 
-The Secretary or Assistant Secretary can paste a corrected Plaud transcript or upload
-its TXT, DOCX or PDF export. The app structures a draft for officer review, including
-attendance, motions, decisions, assignments and dates. The local transcript organizer
-uses the Lodge's meeting sections and does not call an external generation service or
-require an API key. The transcript and resulting draft remain restricted to the
-Worshipful Master and the Secretaries inside Stone Square Sign. The PDF preview follows
-the Secretary Meeting Notes Template sent to both Secretaries on June 18, 2026.
+The Worshipful Master and the Secretaries can paste compiled meeting notes or a
+corrected transcript, or upload TXT, DOCX or PDF. Source detection preserves agenda
+blocks and topic context. The organizer uses local rules and does not call an external
+AI service or require credits. Missing meeting details stay marked for review. It does
+not promise to interpret arbitrary speech as reliably as a language model.
 
-The preparer attests first. The Worshipful Master reviews and attests next. The signed
-draft then returns to the Secretary as ready for distribution. Nothing is sent to the
-Craft automatically, and every copy remains marked DRAFT until the Lodge's formal
-approval is recorded after a communication.
+Attendance is matched to the officer roster. Financial report figures remain in the
+circulated report. The minutes record whether it was read aloud. The PDF uses the
+Lodge's navy and gold format, consolidated into occupied sections, without emblems,
+empty worksheets or a Grand Lodge Officer Remarks section. The preview refreshes
+when fields change. A bundled PDF.js renderer shows every page on phones and iPads.
+Computer screens show editing and preview side by side; smaller screens have Edit
+and Preview views. All document pages retain US Letter dimensions and fixed margins.
+The Mac client uses SwiftUI forms and PDFKit for minutes and
+reports; the website uses the same shared services through its browser interface.
+
+An unsigned draft may be deleted by its preparer or the Master. Deletion removes it
+from the active list while retaining an audit entry. Signed records cannot be deleted.
+An older draft can be reorganized from its original source into an unsaved preview.
+
+The preparer attests first. The Master may edit the submitted record during review,
+with each correction shown as submitted and reviewed text. Both signatures and the
+versions they attest to are retained as immutable snapshots. After the Master signs,
+the preparer and Secretary receive notice. The Secretary distributes the authorized
+draft. No minutes are emailed to the Craft automatically. Formal Lodge approval is
+recorded separately and removes the DRAFT marking.
 
 ## What it costs
 

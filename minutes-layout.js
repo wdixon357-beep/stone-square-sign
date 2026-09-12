@@ -19,17 +19,19 @@ const comparableName = (value) => String(value || '')
   .replace(/\b(brother|bro|worshipful|past master|pm|honorary|hpm)\b/g, '')
   .replace(/[^a-z0-9]/g, '');
 
-const namesMatch = (left, right) => {
-  const a = comparableName(left);
-  const b = comparableName(right);
-  return a && b && (a === b || a.includes(b) || b.includes(a));
+export const namesMatch = (left, right) => {
+  const tokens = value => String(value || '').toLowerCase()
+    .replace(/\b(brother|bro|worshipful|past master|pm|honorary|hpm|jr|sr|ii|iii|iv)\b/g, '')
+    .match(/[a-z]+/g)?.filter(token => token.length > 1) || [];
+  const a = tokens(left), b = tokens(right);
+  return a.length >= 2 && b.length >= 2 && a[0] === b[0] && a.at(-1) === b.at(-1);
 };
 
 export const officerAttendanceRows = (draft) => {
   const statedRows = Array.isArray(draft.officerAttendance) ? draft.officerAttendance : [];
   const regularRows = CURRENT_OFFICERS.map((officer) => {
   const stated = (draft.officerAttendance || []).find((entry) => namesMatch(entry.name, officer.name));
-    if (stated) return {
+    if (stated && stated.status !== 'not_recorded') return {
       name: stated.name || officer.name,
       title: stated.title || officer.title,
       status: stated.status || 'not_recorded',

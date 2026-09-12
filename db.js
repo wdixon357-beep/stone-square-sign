@@ -268,6 +268,15 @@ export const initSchema = async (exec = run) => {
     approved_by_lodge_on TEXT,
     approval_note TEXT
   )`);
+  await exec(`CREATE TABLE IF NOT EXISTS meeting_minutes_attestations (
+    id TEXT PRIMARY KEY,
+    minutes_id TEXT NOT NULL REFERENCES meeting_minutes(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    phase TEXT NOT NULL,
+    draft_json TEXT NOT NULL,
+    signature_bytes BYTEA NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_meeting_minutes_date
     ON meeting_minutes(meeting_date, created_at)`);
   await exec(`CREATE TABLE IF NOT EXISTS office_slots (
@@ -359,6 +368,10 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'meeting_minutes', 'preparer_attested_at', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'master_attested_by_user_id', 'INTEGER REFERENCES users(id)');
   await addColumn(exec, 'meeting_minutes', 'master_attested_at', 'TEXT');
+  await addColumn(exec, 'meeting_minutes', 'submitted_draft_json', 'TEXT');
+  await addColumn(exec, 'meeting_minutes', 'preparer_signature_bytes', 'BYTEA');
+  await addColumn(exec, 'meeting_minutes', 'master_signature_bytes', 'BYTEA');
+  await addColumn(exec, 'meeting_minutes', 'master_changes_json', 'TEXT');
 
   await exec('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
   await exec('CREATE INDEX IF NOT EXISTS idx_signers_document ON document_signers(document_id)');
