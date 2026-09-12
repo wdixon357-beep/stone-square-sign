@@ -33,6 +33,11 @@ services:
       - key: DATABASE_URL
         sync: false
 
+      # Optional Terra connection. Enter the value only in Render Environment.
+      # The application enforces a shared $5 monthly generation allowance.
+      - key: OPENAI_API_KEY
+        sync: false
+
       # The public address officers reach, used to build invitation links.
       - key: APP_BASE_URL
         sync: false

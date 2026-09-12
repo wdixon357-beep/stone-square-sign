@@ -34,9 +34,42 @@ preview stay together in the app workspace.
 
 The Worshipful Master and the Secretaries can paste compiled meeting notes or a
 corrected transcript, or upload TXT, DOCX or PDF. Source detection preserves agenda
-blocks and topic context. The organizer uses local rules and does not call an external
-AI service or require credits. Missing meeting details stay marked for review. It does
-not promise to interpret arbitrary speech as reliably as a language model.
+blocks and topic context. With `OPENAI_API_KEY` configured on the shared server,
+GPT-5.6 Terra organizes minutes and treasury source text into structured drafts.
+Without the key, the existing local organizer remains available and both clients
+show that Terra setup is pending. Missing details remain marked for review.
+
+### Terra setup and usage
+
+1. Sign in to OpenAI Platform, enable API billing and create a project API key.
+   API billing is separate from a ChatGPT subscription. For an initial trial,
+   purchase $5 in prepaid credits and disable automatic recharge.
+2. In Render, select `stone-square-sign`, open **Environment**, add
+   `OPENAI_API_KEY`, and choose **Save and deploy**. Never put the key in a source
+   file, client app, screenshot, support message or repository.
+3. Refresh Meeting Minutes or Treasurer Reports. Both clients show the connection
+   state. Validate one synthetic example before using real Lodge records.
+
+The server fixes the model to `gpt-5.6-terra`, uses the default service tier,
+sets `store:false`, and has no autonomous tools or conversation history. Only
+creating or explicitly reorganizing drafts calls OpenAI. Banking information
+saved for a later preparer, document previews, edits, signatures and downloads
+make no paid generation calls. PDFs and screenshots use the existing local text
+extraction/OCR first; Terra receives the extracted text, not the original files.
+
+A database ledger enforces a shared $5 allowance per UTC calendar month. It
+reserves conservative input and maximum output costs before each request;
+pending or uncertain charges continue to count. Repeating a completed identical
+request from the same account reuses its result. Reported usage is estimated at
+conservative rates, not a billing statement. The allowance covers this app only;
+it cannot limit other uses of the key or changes in provider pricing. Configure
+an OpenAI project budget as an additional alert, not a substitute for this limit.
+
+Structured output and exact source quotes help reviewers trace extracted content.
+They do not prove every interpretation is correct. Missing or contradictory facts
+remain review items. Arithmetic, reconciliation, access checks, signatures and
+approval states remain deterministic application controls. Generation failures
+preserve the source and do not silently switch to the local organizer.
 
 Attendance is matched to the officer roster. Financial report figures remain in the
 circulated report. The minutes record whether it was read aloud. The PDF uses the

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import multer from 'multer';
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
 import { normalizeTreasury, organizeTreasury, calculateTreasury, TREASURY_ROLES } from './treasury.js';
+import { generateTreasuryDraft } from './treasury-ai.js';
 import { readTreasurySources } from './treasury-source.js';
 import { buildTreasuryPdf } from './treasury-pdf.js';
 const error = (statusCode, message) => Object.assign(new Error(message), { statusCode });
@@ -27,7 +28,7 @@ export async function initTreasurySchema() {
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_sources (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), name TEXT NOT NULL, mime TEXT NOT NULL, bytes BYTEA NOT NULL)`);
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_attestations (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), phase TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), draft_json TEXT NOT NULL, signature_bytes BYTEA NOT NULL, created_at TEXT NOT NULL)`);
 }
-export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl,broadcast}) {
+export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl,broadcast,generationFor=()=>undefined}) {
   const access=async(req,res,next)=>{try{req.treasuryAccess=await treasuryAccess(req.user);return req.treasuryAccess?next():res.status(403).json({error:'Treasurer report access has not been assigned to this account.'});}catch(e){next(e);}};
   app.use('/api/treasury',requireAuth,access,(_req,res,next)=>{res.setHeader('Cache-Control','no-store');next();});
   const route=(fn)=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
@@ -61,7 +62,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(intent==='complete'&&req.treasuryAccess!=='prepare')throw error(403,'This account can save banking information, but report preparation access is required to complete a report.');
     const deferAssignment=intent==='save';
     const source=await readTreasurySources(req.files,req.body.sourceText);
-    const draft=organizeTreasury(source.text,{sourceNames:source.names,extractionNotes:source.notes}),id=crypto.randomUUID(),time=new Date().toISOString();
+    const draft=await generateTreasuryDraft(source.text,{sourceNames:source.names,sourceNotes:source.notes,generateStructured:deferAssignment?undefined:generationFor(req.user.id)}),id=crypto.randomUUID(),time=new Date().toISOString();
     await withTransaction(async()=>{
       await dbRun('INSERT INTO treasury_reports (id,draft_json,source_text,created_by_user_id,preparer_name,preparer_role,created_at,updated_at,preparer_user_id,uploader_name,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[id,JSON.stringify(draft),source.text,req.user.id,deferAssignment?'':req.user.name,deferAssignment?'':req.user.role,time,time,deferAssignment?null:req.user.id,req.user.name,deferAssignment?'awaiting_preparer':'draft']);
       for(const f of req.files||[])await dbRun('INSERT INTO treasury_sources (id,report_id,name,mime,bytes) VALUES (?,?,?,?,?)',[crypto.randomUUID(),id,f.originalname.slice(0,150),f.mimetype,f.buffer]);
@@ -82,6 +83,17 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       if(!result.changes)throw error(409,'This report changed. Reopen it before assigning.');
       await audit(req,row.id,'assigned',{previousPreparerUserId:row.preparer_user_id,preparerUserId:preparer.id});
     });broadcast('treasury_changed');res.json({report:serial(await fetchRecord(row.id))});
+  }));
+  // Return an unsaved replacement. Existing corrections and signatures stay intact.
+  app.post('/api/treasury/:id/organize',rateLimit({key:'treasury-generate',maximum:12,windowMs:3600000}),route(async(req,res)=>{
+    const row=await record(req);revision(req,row);
+    if(!editable(row,req.user))throw error(403,'Only the assigned preparer or Worshipful Master can organize an unsigned draft.');
+    const previous=JSON.parse(row.draft_json);
+    const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence/i.test(note)),generateStructured:generationFor(req.user.id)});
+    const current=await record(req);revision(req,current);
+    if(!editable(current,req.user))throw error(409,'This report changed while its source was being organized. Reopen it before continuing.');
+    await audit(req,row.id,'source_organized');
+    res.json({draft});
   }));
   app.get('/api/treasury/:id/source',route(async(req,res)=>{
     const row=await record(req);const files=await dbAll('SELECT id,name,mime FROM treasury_sources WHERE report_id=? ORDER BY name',[row.id]);res.json({text:row.source_text,files});

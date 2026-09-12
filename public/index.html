@@ -220,6 +220,7 @@
             <section class="panel minutes-generator preparer-only">
               <div class="panel-title"><div><p class="eyebrow">NEW DRAFT</p><h2>Add your meeting source</h2></div><span class="file-badge">TXT DOCX PDF</span></div>
               <p class="helper">Use your compiled meeting notes or a corrected Plaud transcript. Attendance and agenda sections are organized automatically. Review the draft before attesting.</p>
+              <p id="minutesGenerationStatus" class="helper generation-status" role="status"></p>
               <label for="minutesSourceType">Source format</label><select id="minutesSourceType"><option value="auto">Detect automatically</option><option value="compiled_notes">Compiled meeting notes</option><option value="transcript">Meeting transcript</option></select>
               <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose meeting notes or a transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
               <input id="minutesTranscriptFile" class="visually-hidden" type="file" accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
@@ -371,6 +372,7 @@
             <button id="minutesEditView" class="secondary" type="button" aria-pressed="true">Edit minutes</button>
             <button id="minutesPreviewView" class="secondary" type="button" aria-pressed="false">Document preview</button>
           </div>
+          <p id="minutesEditorGenerationStatus" class="helper generation-status" role="status"></p>
           <button id="reorganizeMinutes" class="secondary small" type="button">Reorganize original source</button>
           <p id="minutesEditorStatus" class="minutes-status-line"></p>
             <section id="minutesMasterChanges" class="minutes-master-changes hidden"></section>

@@ -43,6 +43,38 @@ final class MinutesConflictFixture: URLProtocol {
     override func stopLoading() {}
 }
 
+final class GenerationFixture: URLProtocol {
+    static var response = Data()
+    static var requests: [(method: String, path: String, body: Data)] = []
+    static var beforeReply: (@MainActor (URLRequest) -> Void)?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var data = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }; data.append(buffer, count: count)
+            }
+        }
+        let body = data
+        Task { @MainActor in
+            Self.requests.append((request.httpMethod ?? "GET", request.url!.path, body))
+            Self.beforeReply?(request)
+            let payload = request.url!.path == "/api/generation/status"
+                ? Data(#"{"configured":true,"model":"gpt-5.6-terra","monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8)
+                : Self.response
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: payload)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    override func stopLoading() {}
+}
+
 @main struct NativeReportTests {
     @MainActor static func main() async throws {
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -104,5 +136,62 @@ final class MinutesConflictFixture: URLProtocol {
         precondition(minutes.draft == changedDraft && minutes.dirty && minutes.selected?.draft == minutesRecord.draft)
         precondition(minutes.message == "The record changed. Refresh before saving." && !minutes.busy)
         print("PASS: conflicting minutes save retains unsaved input and displays the server error")
+
+        let generationConfig = URLSessionConfiguration.ephemeral
+        generationConfig.protocolClasses = [GenerationFixture.self]
+        let generationSession = URLSession(configuration: generationConfig)
+        defer { generationSession.invalidateAndCancel() }
+        let organizing = MinutesWorkspace(session: generationSession)
+        organizing.baseURL = URL(string: "https://generation-fixture.invalid"); organizing.token = "synthetic-token"
+        let status = await GenerationStatus.load(using: organizing)
+        precondition(status?.explanation.hasPrefix("Terra enabled.") == true && status?.allowance(forOwner: true)?.contains("$4.75 remaining of $5.00") == true)
+        precondition(status?.allowance(forOwner: false) == nil)
+        print("PASS: native generation status discloses enabled processing and shows allowance only to the owner")
+        let localStatus = try JSONDecoder().decode(GenerationStatus.self, from: Data(#"{"configured":false,"monthlyLimitDollars":5}"#.utf8))
+        precondition(localStatus.explanation == "Local organizer active. Terra setup is pending." && localStatus.allowance(forOwner: true) == nil)
+        let unavailableStatus = await GenerationStatus.load(using: minutes)
+        precondition(unavailableStatus == nil)
+        print("PASS: unconfigured and unavailable generation states remain distinct without inventing an allowance")
+
+        organizing.selected = minutesRecord; organizing.draft = changedDraft
+        GenerationFixture.response = try JSONEncoder().encode(["draft": minutesRecord.draft])
+        await organizing.reorganize()
+        let minutesRequest = GenerationFixture.requests.last { $0.path.hasSuffix("/reorganize") }!
+        let minutesRequestBody = try JSONSerialization.jsonObject(with: minutesRequest.body) as! [String: String]
+        precondition(minutesRequest.method == "POST" && minutesRequestBody["expectedUpdatedAt"] == minutesRecord.updatedAt)
+        precondition(organizing.draft == minutesRecord.draft && organizing.dirty && organizing.selected?.updatedAt == minutesRecord.updatedAt)
+        print("PASS: minutes reorganization sends the opened version and leaves the replacement unsaved")
+        organizing.close(); organizing.selected = minutesRecord; organizing.draft = changedDraft; organizing.dirty = true
+        GenerationFixture.beforeReply = { request in
+            if request.url!.path.hasSuffix("/reorganize") { organizing.selected?.updatedAt = "2026-09-12T19:00:00.000Z" }
+        }
+        await organizing.reorganize()
+        precondition(organizing.draft == changedDraft && organizing.dirty)
+        print("PASS: late minutes generation cannot overwrite an editor whose record version changed")
+        organizing.close(); GenerationFixture.beforeReply = nil
+
+        let treasuryDraft = TreasuryDraft(version: 1, periodStart: "", periodEnd: "", presentedOn: "", bankName: "", accounts: [], transactions: [], funds: [], obligations: [], fundsReviewed: false, obligationsReviewed: false, sourceReviewed: false, remarks: "Synthetic saved report.", unmappedLines: [], sourceNames: [], extractionNotes: [])
+        let treasuryRecord = TreasuryRecord(id: "synthetic-treasury", status: "draft", revision: 3, createdByUserId: 9, preparerUserId: 9, uploadedBy: "QA Uploader", createdBy: "QA Preparer", preparerRole: "treasury_preparer", draft: treasuryDraft)
+        let treasury = TreasuryWorkspace(session: generationSession)
+        treasury.transport.baseURL = URL(string: "https://generation-fixture.invalid"); treasury.transport.token = "synthetic-token"
+        treasury.selected = treasuryRecord; treasury.draft = treasuryDraft
+        var replacement = treasuryDraft; replacement.remarks = "Synthetic organized report."
+        GenerationFixture.response = try JSONEncoder().encode(["draft": replacement])
+        await treasury.reorganize()
+        let treasuryRequest = GenerationFixture.requests.last { $0.path.hasSuffix("/organize") }!
+        let treasuryRequestBody = try JSONSerialization.jsonObject(with: treasuryRequest.body) as! [String: Int]
+        precondition(treasuryRequest.method == "POST" && treasuryRequestBody["revision"] == 3)
+        precondition(treasury.draft == replacement && treasury.dirty && treasury.selected?.draft == treasuryDraft && treasury.selected?.revision == 3)
+        print("PASS: treasury reorganization sends the revision and preserves the saved report until a separate save")
+        treasury.close(); treasury.selected = treasuryRecord; treasury.draft = treasuryDraft
+        GenerationFixture.beforeReply = { request in
+            if request.url!.path.hasSuffix("/organize") { treasury.selected?.revision = 4 }
+        }
+        await treasury.reorganize()
+        precondition(treasury.draft == treasuryDraft && treasury.selected?.revision == 4)
+        print("PASS: late treasury generation cannot replace a newer report revision")
+        treasury.close(); GenerationFixture.beforeReply = nil
+        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/generation/status" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
+        print("PASS: reorganization fixtures make no save, sign, delivery or new-report requests")
     }
 }

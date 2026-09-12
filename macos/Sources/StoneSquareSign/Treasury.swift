@@ -21,6 +21,7 @@ struct TreasuryDraft: Codable, Equatable {
 struct TreasuryRecord: Codable, Identifiable { var id: String; var status: String; var revision: Int; var createdByUserId: Int; var preparerUserId: Int?; var uploadedBy: String; var createdBy: String; var preparerRole: String; var draft: TreasuryDraft }
 struct TreasuryPayload: Decodable { var report: TreasuryRecord; var notificationWarnings: [String]? }
 struct TreasuryList: Decodable { var reports: [TreasuryRecord] }
+struct ReorganizedTreasuryPayload: Decodable { var draft: TreasuryDraft }
 
 struct TreasuryPreparer: Codable, Identifiable { var id: Int; var name: String; var role: String }
 struct TreasuryPreparers: Codable { var preparers: [TreasuryPreparer] }
@@ -37,11 +38,14 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
     @Published var preparers: [TreasuryPreparer] = []; @Published var selectedPreparer = 0
     @Published var originalText = ""; @Published var sourceFiles: [TreasurySourceFile] = []; @Published var accessUsers: [TreasuryAccessUser] = []
     @Published var serviceUpdateRequired = false
+    @Published var generationStatus: GenerationStatus?
     private var owner = false
-    let transport = MinutesWorkspace()
+    let transport: MinutesWorkspace
     private var previewTask: Task<Void,Never>?; private var generation = 0
+    init(session: URLSession = .shared) { transport = MinutesWorkspace(session: session) }
     func configure(_ model: AppModel) { transport.configure(model); owner = model.user?.role == "owner" }
     func refresh() async {
+        await refreshGenerationStatus()
         do {
             records = try JSONDecoder().decode(TreasuryList.self, from: await transport.request("/api/treasury")).reports
             serviceUpdateRequired = false
@@ -49,7 +53,8 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
             serviceUpdateRequired = true; message = detail
         } catch { message = error.localizedDescription }
     }
-    func open(_ report: TreasuryRecord) { selectedPreparer=report.preparerUserId ?? 0; originalText="";sourceFiles=[]; Task { await loadSources(report.id) }; selected = report; draft = report.draft; dirty = false; pdf = nil; preview() }
+    func refreshGenerationStatus() async { generationStatus = await GenerationStatus.load(using: transport) }
+    func open(_ report: TreasuryRecord) { selectedPreparer=report.preparerUserId ?? 0; originalText="";sourceFiles=[]; Task { await loadSources(report.id); await refreshGenerationStatus() }; selected = report; draft = report.draft; dirty = false; pdf = nil; preview() }
     func loadSources(_ id: String) async {
         do {
             let source=try JSONDecoder().decode(TreasurySourcePayload.self,from:await transport.request("/api/treasury/\(id)/source"))
@@ -99,6 +104,19 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
             if report.status == "awaiting_preparer" {close();message="Banking information saved. No preparing officer has been assigned. An authorized preparer can start the report when ready."}
             else {open(report);message="Review the prefilled information and complete your report."}
         } catch { message = error.localizedDescription }
+        await refreshGenerationStatus()
+    }
+    func reorganize() async {
+        guard !busy, let record = selected, record.status == "draft" else { return }
+        busy = true; defer { busy = false }
+        do {
+            let data = try await transport.request("/api/treasury/\(record.id)/organize", method: "POST", body: JSONEncoder().encode(["revision": record.revision]))
+            let replacement = try JSONDecoder().decode(ReorganizedTreasuryPayload.self, from: data).draft
+            guard selected?.id == record.id, selected?.revision == record.revision else { await refreshGenerationStatus(); return }
+            draft = replacement; dirty = true; preview()
+            message = "Reorganized from the original banking records. Review the draft before saving."
+        } catch { message = error.localizedDescription }
+        await refreshGenerationStatus()
     }
     func save() async -> Bool {
         guard let selected, let draft else { return false }
@@ -139,6 +157,7 @@ struct TreasuryView: View {
     @ObservedObject var workspace: TreasuryWorkspace
     @State private var deleting: TreasuryRecord?; @State private var leave = false
     @State private var editorSection = 0
+    @State private var confirmReorganize = false
     var editable: Bool { guard let r = workspace.selected else { return false }; return r.status == "draft" && (r.preparerUserId == model.user?.id || model.user?.role == "owner") }
     func text(_ path: WritableKeyPath<TreasuryDraft,String>) -> Binding<String> { Binding(get:{workspace.draft?[keyPath:path] ?? ""},set:{workspace.draft?[keyPath:path]=$0}) }
     func flag(_ path: WritableKeyPath<TreasuryDraft,Bool>) -> Binding<Bool> { Binding(get:{workspace.draft?[keyPath:path] ?? false},set:{workspace.draft?[keyPath:path]=$0}) }
@@ -159,10 +178,15 @@ struct TreasuryView: View {
         .onChange(of:workspace.draft) { old,new in if old != nil && new != nil { workspace.dirty = new != workspace.selected?.draft; workspace.preview() } }
         .alert("Delete this unsigned report?",isPresented:Binding(get:{deleting != nil},set:{if !$0 { deleting = nil }})) { Button("Delete",role:.destructive) { if let record = deleting { Task { await workspace.remove(record) } } }; Button("Cancel",role:.cancel) {} }
         .alert("Leave unsaved changes?",isPresented:$leave) { Button("Leave changes",role:.destructive) { workspace.close() }; Button("Keep editing",role:.cancel) {} }
+        .alert("Replace unsaved report entries?", isPresented: $confirmReorganize) {
+            Button("Reorganize original source") { Task { await workspace.reorganize() } }
+            Button("Keep editing", role: .cancel) {}
+        } message: { Text("This replaces your unsaved entries with a new draft from the original banking records. Review the result before saving.") }
     }
     var sourceView: some View {
         Form { Section {
             GroupBox("Bank statements, screenshots or typed notes") { VStack(alignment:.leading,spacing:12) {
+                GenerationStatusView(status: workspace.generationStatus)
                 Button("Choose files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.files=panel.urls } }
                 ForEach(workspace.files,id:\.self) { Text($0.lastPathComponent).font(.caption) }
                 if !workspace.files.isEmpty { Button("Clear selected files") { workspace.files=[] } }
@@ -172,7 +196,7 @@ struct TreasuryView: View {
                     Text("Save banking information for a report").tag("save")
                     if ["owner","treasurer","assistant_treasurer","treasury_preparer","secretary","assistant_secretary"].contains(model.user?.role ?? "") {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
-                Text("Save the information for later, or open the prefilled report and complete it yourself.").font(.caption)
+                Text("Save the information for later, or open the prefilled report and complete it yourself. Saving banking information for later does not use the generation allowance.").font(.caption)
                 Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent)
             }.padding(12) }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
@@ -189,6 +213,15 @@ struct TreasuryView: View {
                 }.pickerStyle(.segmented).padding(16)
                 Divider()
                 Form {
+                    Section {
+                        GenerationStatusView(status: workspace.generationStatus)
+                        if editable {
+                            Button("Reorganize original source") {
+                                if workspace.dirty { confirmReorganize = true }
+                                else { Task { await workspace.reorganize() } }
+                            }
+                        }
+                    }
                     if editorSection == 0 {
                         Section { handoff }
                         Section("Source records") {

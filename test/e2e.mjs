@@ -444,7 +444,7 @@ try {
   check('a secretary cannot delete another preparer draft', prohibitedDelete.status === 403);
   const viewerDelete = await api('DELETE', `/api/minutes/${ownerMinutesId}`, { token: viewerToken });
   check('a viewer cannot delete minutes', viewerDelete.status === 403);
-  const reorganized = await api('POST', `/api/minutes/${ownerMinutesId}/reorganize`, { token: wmToken, body: {} });
+  const reorganized = await api('POST', `/api/minutes/${ownerMinutesId}/reorganize`, { token: wmToken, body: {expectedUpdatedAt:ownerGeneratedMinutes.payload.minutes.updatedAt} });
   check('the original source can be reorganized for unsaved review', reorganized.status === 200 && Array.isArray(reorganized.payload.draft.sections));
   const deleteDraft = await api('DELETE', `/api/minutes/${ownerMinutesId}`, { token: wmToken });
   check('the Worshipful Master can delete an unsigned draft', deleteDraft.status === 200 && deleteDraft.payload.deleted);

@@ -21,6 +21,7 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
+import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
 import { closingReviewIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
 
@@ -1655,7 +1656,7 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
       const uploadedText = await transcriptFromUpload(req.file);
       const transcript = uploadedText || String(req.body.transcriptText || '').trim();
       if (!transcript) return res.status(400).json({ error: 'Choose meeting notes or a transcript, or paste the text.' });
-      const draft = await generateMinutesDraft(transcript, { sourceType: req.body.sourceType });
+      const draft = await generateMinutesDraft(transcript, { sourceType: req.body.sourceType, generateStructured: generationFor(req.user.id) });
       const id = crypto.randomUUID();
       const time = nowIso();
       await dbRun(
@@ -1709,12 +1710,15 @@ app.delete('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, re
 
 // Reorganizing returns an unsaved replacement for review. It never overwrites
 // corrections or changes signatures, approvals, or the original source.
-app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, async (req, res, next) => {
+app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 3600000 }), async (req, res, next) => {
   try {
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'draft') return res.status(409).json({ error: 'Reopen this record before preparing corrections.' });
-    const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType });
+    if (req.body.expectedUpdatedAt !== row.updated_at) return res.status(409).json({ error: 'The record changed. Refresh before reorganizing.' });
+    const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType, generateStructured: generationFor(req.user.id) });
+    const current = await getMinutesRow(row.id);
+    if (!current || current.status !== 'draft' || current.updated_at !== row.updated_at) return res.status(409).json({ error: 'The record changed while its source was being organized. Reopen it before continuing.' });
     res.json({ draft });
   } catch (error) { next(error); }
 });
@@ -3118,7 +3122,11 @@ app.get('/', (_req, res) => res.sendFile(path.join(APP_DIR, 'public', 'index.htm
 
 mountActivityRoutes(app, { requireAuth, requireOwner, rateLimit });
 
-mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast });
+app.get('/api/generation/status', requireAuth, async (req, res, next) => {
+  try { res.setHeader('Cache-Control', 'no-store'); res.json(await generationStatus({ includeBudget: req.user.role === 'owner' })); } catch (error) { next(error); }
+});
+
+mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 
 app.use((error, _req, res, _next) => {
   console.error(error);
@@ -3143,6 +3151,7 @@ validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
 await initTreasurySchema();
+await initGenerationSchema();
 await initActivitySchema();
 
 app.listen(PORT, '0.0.0.0', () => {

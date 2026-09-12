@@ -44,6 +44,7 @@ final class MinutesWorkspace: ObservableObject {
     @Published var previewMessage = ""
     @Published var busy = false
     @Published var dirty = false
+    @Published var generationStatus: GenerationStatus?
     var baseURL: URL?
     var token = ""
     private var previewTask: Task<Void, Never>?
@@ -75,12 +76,15 @@ final class MinutesWorkspace: ObservableObject {
         return data
     }
     func refresh() async {
+        await refreshGenerationStatus()
         do { records = try JSONDecoder().decode(MinutesListPayload.self, from: await request("/api/minutes")).minutes }
         catch { message = error.localizedDescription }
     }
+    func refreshGenerationStatus() async { generationStatus = await GenerationStatus.load(using: self) }
     func open(_ record: MinutesRecord) {
         previewTask?.cancel(); revision += 1
         selected = record; draft = record.draft; pdf = nil; message = ""; dirty = false
+        Task { await refreshGenerationStatus() }
         updatePreview()
     }
     func close() { previewTask?.cancel(); revision += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
@@ -105,6 +109,7 @@ final class MinutesWorkspace: ObservableObject {
             let record = try JSONDecoder().decode(MinutesPayload.self, from: result).minutes
             await refresh(); source = ""; self.fileURL = nil; open(record)
         } catch { message = error.localizedDescription }
+        await refreshGenerationStatus()
     }
     func save() async {
         guard let record = selected, let draft else { return }
@@ -125,10 +130,13 @@ final class MinutesWorkspace: ObservableObject {
         guard let record = selected else { return }
         busy = true; defer { busy = false }
         do {
-            let data = try await request("/api/minutes/\(record.id)/reorganize", method: "POST", body: Data("{}".utf8))
-            draft = try JSONDecoder().decode(ReorganizedPayload.self, from: data).draft
+            let data = try await request("/api/minutes/\(record.id)/reorganize", method: "POST", body: JSONEncoder().encode(["expectedUpdatedAt": record.updatedAt]))
+            let replacement = try JSONDecoder().decode(ReorganizedPayload.self, from: data).draft
+            guard selected?.id == record.id, selected?.updatedAt == record.updatedAt else { await refreshGenerationStatus(); return }
+            draft = replacement
             dirty = true; updatePreview(); message = "Reorganized from the original source. Review before saving."
         } catch { message = error.localizedDescription }
+        await refreshGenerationStatus()
     }
     func action(_ action: String, body: [String: String] = [:]) async {
         guard let record = selected else { return }
@@ -247,6 +255,7 @@ struct MeetingMinutesView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("New draft").font(.headline)
                         Text("Use compiled meeting notes or a corrected transcript. Attendance and agenda sections are organized for your review.").foregroundStyle(.secondary)
+                        GenerationStatusView(status: workspace.generationStatus)
                         Picker("Source format", selection: $workspace.sourceType) {
                             Text("Detect automatically").tag("auto"); Text("Compiled meeting notes").tag("compiled_notes"); Text("Meeting transcript").tag("transcript")
                         }.frame(maxWidth: 380)
@@ -286,6 +295,7 @@ struct MeetingMinutesView: View {
         HSplitView {
             Form {
                 Section {
+                    GenerationStatusView(status: workspace.generationStatus)
                     HStack {
                         Text(workspace.draft?.sourceType == "compiled_notes" ? "Compiled meeting notes" : "Meeting transcript").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         Spacer()

@@ -393,7 +393,9 @@ const refreshMinutesReviewAlerts = async () => {
 };
 setInterval(() => { if (state.token && state.user?.role === 'owner') refreshMinutesReviewAlerts(); }, 20000);
 
+const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch));
 const renderMinutes = async () => {
+  void refreshGenerationStatus($('minutesGenerationStatus'));
   try {
     const payload = await apiFetch('/api/minutes');
     state.minutes = payload.minutes || [];
@@ -575,6 +577,7 @@ const refreshMinutesPreview = async () => {
 };
 
 const updateMinutesEditorControls = (item) => {
+  void refreshGenerationStatus($('minutesEditorGenerationStatus'));
   const role = state.user?.role;
   const editable = item.status === 'draft' || (item.status === 'awaiting_master_attestation' && role === 'owner');
   $('minutesEditorStatus').textContent = `${MINUTES_STATUS[item.status] || item.status} · ${item.draft.sourceType === 'compiled_notes' ? 'Compiled meeting notes' : 'Transcript'}`;
@@ -1006,6 +1009,8 @@ $('generateMinutes').addEventListener('click', async () => {
     setMessage($('minutesMessage'), 'Choose notes or a transcript, or paste the text.', true);
     return;
   }
+  const sourceControls = ['minutesTranscriptFile', 'minutesTranscriptText', 'minutesSourceType'].map(id => $(id));
+  sourceControls.forEach(control => { control.disabled = true; });
   button.disabled = true;
   button.textContent = 'Creating draft...';
   setMessage($('minutesMessage'), 'Organizing the meeting source into the Lodge minutes template.');
@@ -1022,6 +1027,7 @@ $('generateMinutes').addEventListener('click', async () => {
   } finally {
     button.disabled = false;
     button.textContent = 'Create draft minutes';
+    sourceControls.forEach(control => { control.disabled = false; });
   }
 });
 
@@ -1076,12 +1082,18 @@ $('minutesEditorForm').addEventListener('input', scheduleMinutesPreview);
 $('minutesEditorForm').addEventListener('change', scheduleMinutesPreview);
 $('reorganizeMinutes').addEventListener('click', async () => {
   if (!confirm('Reorganize the original source into a fresh preview? Current corrections will be replaced in this editor. The saved record changes only when you save.')) return;
+  const id = state.editingMinutesId;
+  const before = JSON.stringify(collectMinutesDraft());
+  const button = $('reorganizeMinutes'); button.disabled = true;
   try {
-    const payload = await apiFetch(`/api/minutes/${state.editingMinutesId}/reorganize`, { method: 'POST', body: '{}' });
+    const payload = await apiFetch(`/api/minutes/${id}/reorganize`, { method: 'POST', body: JSON.stringify({ expectedUpdatedAt: state.editingMinutesUpdatedAt }) });
+    if (state.editingMinutesId !== id) return;
+    if (JSON.stringify(collectMinutesDraft()) !== before) throw new Error('You edited the minutes while the source was being organized. Your latest edits have been kept.');
     currentMinutes().draft = payload.draft;
     openMinutesEditor(state.editingMinutesId);
     setMessage($('minutesEditorMessage'), 'Source reorganized. Review the preview, then save your corrections.');
   } catch (error) { setMessage($('minutesEditorMessage'), error.message, true); }
+  finally { button.disabled = false; }
 });
 $('minutesEditorForm').addEventListener('submit', async (event) => {
   event.preventDefault();
