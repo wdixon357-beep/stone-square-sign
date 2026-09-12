@@ -172,6 +172,7 @@ struct ReportGeneratorView: View {
                     Button("Try again") { Task { await browser.loadIfNeeded() } }.disabled(browser.busy)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                GeometryReader { available in
                 HSplitView {
                     VStack(spacing: 0) {
                         Picker("Report stage", selection: $step) {
@@ -224,8 +225,13 @@ struct ReportGeneratorView: View {
                             Spacer()
                             if step < 2 { Button(step == 0 ? "Write report" : "Review report") { step += 1 }.buttonStyle(.borderedProminent) }
                         }.padding(16)
-                    }.frame(minWidth: 340, idealWidth: 450)
-                    previewPane.frame(minWidth: 320, idealWidth: 480)
+                    }.frame(minWidth: 340, maxWidth: .infinity)
+                    previewPane.frame(minWidth: 320, maxWidth: .infinity)
+                }
+                // Use the window's proposed space. The two panes' intrinsic
+                // widths must not make the surrounding navigation view wider
+                // than the window when it is resized.
+                .frame(width: available.size.width, height: available.size.height)
                 }.disabled(browser.busy)
                 Divider()
                 HStack(spacing: 8) {

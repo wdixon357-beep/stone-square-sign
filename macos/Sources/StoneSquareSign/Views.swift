@@ -57,21 +57,6 @@ struct RootView: View {
             } else { AuthenticationView() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if model.user != nil, model.showSignInNotice, let session = model.signInSession {
-                HStack(alignment: .top, spacing: 16) {
-                    Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(session.title).font(.headline)
-                        Text(session.explanation).font(.callout).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Got it") { model.showSignInNotice = false }
-                        .accessibilityLabel("Dismiss sign-in notice")
-                }
-                .padding(16)
-                .background(SignTheme.gold.opacity(0.12))
-            }
-        }
         .overlay(alignment: .bottom) {
             if !model.message.isEmpty {
                 Label(
@@ -85,23 +70,6 @@ struct RootView: View {
                 .background(.regularMaterial, in: Capsule())
                 .shadow(radius: 12)
                 .padding(.bottom, 18)
-            }
-        }
-        .overlay(alignment: .top) {
-            if let version = model.availableUpdateVersion {
-                HStack(spacing: 16) {
-                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(SignTheme.gold)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Stone Square Sign update available").font(.headline)
-                        Text("Version \(version) is ready.").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Button("Dismiss") { model.dismissAvailableUpdate() }
-                        .buttonStyle(.bordered).tint(.accentColor)
-                }
-                .padding(13)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                .shadow(radius: 18)
-                .padding(.top, 14)
             }
         }
         .task {
@@ -290,32 +258,10 @@ struct WorkspaceView: View {
             }
             .background(.bar)
         } detail: {
-            switch selection {
-            case .home:
-                LandingDashboardView(
-                    openDispensations: { selection = .documents },
-                    openCandidateTracker: { selection = .candidateTracker },
-                    openReports: { selection = .reportGenerator },
-                    openMinutes: { selection = .minutes },
-                    openTreasury: { selection = .treasury }
-                )
-            case .reportGenerator:
-                ReportGeneratorView(browser: reportBrowser)
-            case .minutes:
-                MeetingMinutesView(workspace: minutesWorkspace)
-            case .treasury:
-                TreasuryView(workspace: treasuryWorkspace)
-            case .candidateTracker:
-                NativeCandidateTrackerView()
-            case .createDispensation: DispensationBuilderView()
-            case .access: OfficerAccessView()
-            case .activity: if model.user?.role == "owner" {OfficerActivityView()}
-            case .dues: DuesView()
-            case .approvals: ApprovalsView()
-            case .proposalReview: ProposalReviewView()
-            case .profile: SignatureProfileView()
-            case .settings: SettingsView()
-            default: DocumentsView()
+            VStack(spacing: 0) {
+                WorkspaceNotices()
+                workspaceContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .task { activityPresence.start(model);await model.refresh() }
@@ -325,6 +271,82 @@ struct WorkspaceView: View {
             guard let requested else { return }
             selection = requested
             model.requestedSection = nil
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceContent: some View {
+        switch selection {
+        case .home:
+            LandingDashboardView(
+                openDispensations: { selection = .documents },
+                openCandidateTracker: { selection = .candidateTracker },
+                openReports: { selection = .reportGenerator },
+                openMinutes: { selection = .minutes },
+                openTreasury: { selection = .treasury }
+            )
+        case .reportGenerator:
+            ReportGeneratorView(browser: reportBrowser)
+        case .minutes:
+            MeetingMinutesView(workspace: minutesWorkspace)
+        case .treasury:
+            TreasuryView(workspace: treasuryWorkspace)
+        case .candidateTracker:
+            NativeCandidateTrackerView()
+        case .createDispensation: DispensationBuilderView()
+        case .access: OfficerAccessView()
+        case .activity: if model.user?.role == "owner" {OfficerActivityView()}
+        case .dues: DuesView()
+        case .approvals: ApprovalsView()
+        case .proposalReview: ProposalReviewView()
+        case .profile: SignatureProfileView()
+        case .settings: SettingsView()
+        default: DocumentsView()
+        }
+    }
+}
+
+/// Persistent notices reserve their own space above the selected workspace.
+struct WorkspaceNotices: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if model.showSignInNotice, let session = model.signInSession {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: "checkmark.shield.fill")
+                        .foregroundStyle(.green)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(session.title).font(.headline).lineLimit(2)
+                        Text(session.explanation).font(.callout).foregroundStyle(.secondary).lineLimit(3)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Got it") { model.showSignInNotice = false }
+                        .fixedSize()
+                        .accessibilityLabel("Dismiss sign-in notice")
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(SignTheme.gold.opacity(0.10))
+                Divider()
+            }
+            if let version = model.availableUpdateVersion {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(SignTheme.gold)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Stone Square Sign update available").font(.headline)
+                        Text("Version \(version) is ready.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Dismiss") { model.dismissAvailableUpdate() }.fixedSize()
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 16)
+                .background(Color(nsColor: .controlBackgroundColor))
+                Divider()
+            }
         }
     }
 }
