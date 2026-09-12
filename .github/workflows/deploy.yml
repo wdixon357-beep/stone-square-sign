@@ -23,9 +23,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -51,21 +59,5 @@ jobs:
             exit 1
           fi
 
-      # Waiting for a browser file alone is not enough. A server-only fix leaves app.js
-      # unchanged, so compare both the client hash and the server's package version.
       - name: Wait until the officers are served this commit
-        run: |
-          want_hash=$(sha256sum public/app.js | cut -c1-16)
-          want_version=$(node -p "require('./package.json').version")
-          for i in $(seq 1 40); do
-            live_hash=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/app.js | sha256sum | cut -c1-16)
-            live_version=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/api/version \
-              | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
-            if [ "$live_hash" = "$want_hash" ] && [ "$live_version" = "$want_version" ]; then
-              echo "Serving this commit after about $((i * 30)) seconds."
-              exit 0
-            fi
-            sleep 30
-          done
-          echo "::error::Twenty minutes on and the officers are still not being served this commit. Check the Render build log."
-          exit 1
+        run: node scripts/check-production.mjs --wait-ms=1200000 --track-main

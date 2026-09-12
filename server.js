@@ -1056,7 +1056,7 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/version', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.json({ version: APP_VERSION });
+  res.json({ version: APP_VERSION, commit: process.env.RENDER_GIT_COMMIT || null });
 });
 
 app.get('/api/setup', async (_req, res, next) => {

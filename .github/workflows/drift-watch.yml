@@ -1,66 +1,46 @@
-# Says out loud when production has fallen behind main.
-#
-# The real damage on 17 August was not the broken deploy, it was the nine days of
-# silence after it. Nothing anywhere compared what the officers were being served
-# against what had been written, so a dead dashboard and six undelivered commits looked
-# exactly like a healthy Saturday.
-#
-# This runs every morning and after every push, compares the file the public actually
-# receives against the one on main, and fails the run when they differ. It needs no
-# credential and no Render access, so it keeps working whatever happens to the host and
-# whatever happens to the deploy hook.
-
+# Verify production after deployment, never concurrently with the push that starts it.
+# The daily check remains independent so an undeployed or rolled-back release is visible.
 name: Is production actually current
 
 on:
   schedule:
-    - cron: '15 11 * * *'   # 7:15am Eastern, before he starts the day
-  push:
+    - cron: '15 11 * * *'
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-drift
+  cancel-in-progress: true
 
 jobs:
   drift:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
-      - name: Is the deployed page the page in main
+      - name: Choose the current deployment
+        id: target
+        env:
+          TRIGGER_COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
-          fail=0
-          for f in public/app.js public/index.html public/styles.css; do
-            live=$(curl -sS --max-time 60 "https://stone-square-sign.onrender.com/${f#public/}" | sha256sum | cut -c1-16)
-            repo=$(sha256sum "$f" | cut -c1-16)
-            if [ "$live" = "$repo" ]; then
-              echo "  ok    $f"
-            else
-              echo "::error::$f on the live site does not match main. The officers are on an older build."
-              fail=1
-            fi
-          done
-          want_version=$(node -p "require('./package.json').version")
-          live_version=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/api/version \
-            | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
-          if [ "$live_version" = "$want_version" ]; then
-            echo "  ok    server version $want_version"
+          current=$(git rev-parse HEAD)
+          if [ -n "$TRIGGER_COMMIT" ] && [ "$TRIGGER_COMMIT" != "$current" ]; then
+            echo "A newer commit has its own deployment check."
+            echo "current=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::live server version is $live_version; main expects $want_version."
-            fail=1
+            echo "current=true" >> "$GITHUB_OUTPUT"
           fi
-          exit $fail
 
-      - name: Can an officer actually load the dashboard
-        run: |
-          html=$(curl -sS --max-time 60 https://stone-square-sign.onrender.com/)
-          missing=0
-          # Every id the page script binds must be in the page it serves. One missing
-          # element throws before the app ever starts, which is exactly what happened.
-          for id in $(grep -oE "\\\$\('[a-zA-Z][A-Za-z0-9_-]*'\)" public/app.js | grep -oE "'[^']+'" | tr -d "'" | sort -u); do
-            case "$(grep -c "id=\"$id\"" public/app.js)" in *) ;; esac
-            if ! printf '%s' "$html" | grep -q "id=\"$id\""; then
-              if grep -q "\$('$id')?\." public/app.js; then continue; fi
-              echo "::error::the live page is missing #$id, so its script dies before the app starts"
-              missing=1
-            fi
-          done
-          exit $missing
+      - name: Verify the deployed server and every dashboard module
+        if: steps.target.outputs.current == 'true'
+        # Scheduled/manual checks also allow an in-flight deployment to settle.
+        run: node scripts/check-production.mjs --wait-ms=1200000 --track-main
