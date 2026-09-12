@@ -66,6 +66,10 @@ The Lodge closed at 9:18 PM.`;
   assert.ok(!draft.sections.some(s => /Grand Lodge Officers|^WM|PM Stone|Building and Grounds/.test(s.heading)));
   assert.match(section('Committee Reports'), /WM additions/);
   assert.equal(draft.actionItems.length, 0, 'no duplicated or inferred action table');
+  const notRead = await generateMinutesDraft('1. Opening\nThe Lodge opened at 7:30 PM.\n2. Treasurer Report\nThe report was not read. The circulated balance was $500.\n3. Closing\nThe Lodge closed at 9:00 PM.');
+  assert.equal(notRead.sections.find(s=>s.heading==="Treasurer's Report").body, "The Treasurer's report was not read aloud.");
+  const futureReport = await generateMinutesDraft('1. Opening\nThe Lodge opened at 7:30 PM.\n2. Treasurer Report\nThe report will be read at the next meeting.\n3. Closing\nThe Lodge closed at 9:00 PM.');
+  assert.notEqual(futureReport.sections.find(s=>s.heading==="Treasurer's Report").body, "The Treasurer's report was read aloud.");
   const pdf = await PDFDocument.load(await buildMinutesPdf({draft, status:'draft', preparedBy:'Test Officer', preparerRole:'owner'}));
   assert.ok(pdf.getPageCount() <= 5, 'compact minutes do not use empty worksheet pages');
   // The only images allowed in minutes are explicitly supplied signatures.

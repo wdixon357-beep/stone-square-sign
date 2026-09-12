@@ -525,7 +525,7 @@ const updateMinutesEditorControls = (item) => {
     || ['draft', 'approved_by_lodge'].includes(item.status));
   $('minutesApprovalPanel').classList.toggle('hidden',
     !['owner', 'secretary'].includes(role) || !['ready_for_distribution', 'distributed'].includes(item.status));
-  $('downloadMinutes').textContent = item.status === 'approved_by_lodge' ? 'Download official Word record' : 'Download Word draft';
+  $('downloadMinutes').textContent = item.status === 'approved_by_lodge' ? 'Download official Word record' : 'Download saved Word draft';
   $('minutesEditorForm').querySelectorAll('input, textarea, select').forEach((field) => {
     if (!['minutesApprovalDate', 'minutesApprovalNote'].includes(field.id)) field.disabled = !editable;
   });

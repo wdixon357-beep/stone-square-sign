@@ -135,8 +135,11 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   for (const block of blocks) {
     if (block.heading === "Treasurer's Report") {
       const report = block.lines.join(' ');
-      const read = /\b(?:read(?: aloud)?|presented)\b/i.test(report);
-      add(block.heading, read ? "The Treasurer's report was read aloud." : "The Treasurer's report was referenced. Confirm whether it was read aloud.");
+      const notRead = /\b(?:not|never)\s+(?:been\s+)?(?:read|presented)\b|\b(?:wasn't|wasnt)\s+(?:read|presented)\b|\bno\s+(?:treasurer'?s?\s+)?report\s+(?:was\s+)?(?:read|presented)\b/i.test(report);
+      const futureRead = /\b(?:will|would|should|to)\s+(?:be\s+)?(?:read|presented)\b/i.test(report);
+      const read = !notRead && !futureRead && /\b(?:read(?: aloud)?|presented)\b/i.test(report);
+      add(block.heading, notRead ? "The Treasurer's report was not read aloud."
+        : read ? "The Treasurer's report was read aloud." : "The Treasurer's report was referenced. Confirm whether it was read aloud.");
       // Report figures live in the circulated financial report, never in inferred transactions.
       continue;
     }
