@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {measuredSeconds} from '../activity.js';
+const now=Date.now(),previous={last_heartbeat_at:new Date(now-30000).toISOString(),was_active:true};
+assert.equal(measuredSeconds(previous,true,now),30);
+assert.equal(measuredSeconds(previous,false,now),0);
+assert.equal(measuredSeconds({...previous,was_active:false},true,now),0);
+assert.equal(measuredSeconds({...previous,last_heartbeat_at:new Date(now-180000).toISOString()},true,now),0);
+assert.equal(measuredSeconds({...previous,last_heartbeat_at:null},true,now),0);
+assert.equal(measuredSeconds({...previous,last_heartbeat_at:new Date(now+1000).toISOString()},true,now),0);
+console.log('PASS Active time excludes idle, first observations, clock reversal and disconnected gaps');
+const base='http://127.0.0.1:3548';
+const server=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:'3548',NODE_ENV:'test',DATABASE_URL:'',PGLITE_DIR:'',OWNER_EMAIL:'activity-owner@example.org',APP_BASE_URL:base,SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:'',LODGE_ACCESS_CODE:'',DDGM_EMAIL:'unused@example.org'},stdio:'ignore'});
+let passed=0;const check=(name,ok)=>{assert.ok(ok,name);passed++;console.log('PASS '+name)};
+async function api(path,token,method='GET',body,client='web'){const form=body instanceof FormData;const r=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`}:{ }),...(body&&!form?{'Content-Type':'application/json'}:{}),'X-Stone-Square-Client':client},body:body?(form?body:JSON.stringify(body)):undefined});return{status:r.status,data:r.headers.get('content-type')?.includes('json')?await r.json():await r.text()};}
+try{
+ for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100));}
+ const password='Local activity test password';const owner=(await api('/api/auth/register',null,'POST',{email:'activity-owner@example.org',name:'WM QA Owner',password})).data;
+ async function officer(role){const email=role+'@example.org';const invite=(await api('/api/officers/invite',owner.token,'POST',{email,name:'QA '+role,role})).data;return(await api('/api/auth/register',null,'POST',{email,name:'QA '+role,password,invitationToken:new URL(invite.inviteUrl).searchParams.get('invite')})).data;}
+ const treasurer=await officer('treasurer'),member=await officer('member');
+ check('Registration reports the actual 90-day session expiration', owner.session.lifetimeDays === 90 && Math.abs(Date.parse(owner.session.expiresAt) - Date.now() - 90*86400000) < 10000);
+ const restored = (await api('/api/auth/me', owner.token)).data;
+ check('Remembered sign-in returns the same policy and expiration', restored.session.lifetimeDays === 90 && restored.session.expiresAt === owner.session.expiresAt);
+ check('Anonymous cannot read officer activity',(await api('/api/admin/activity')).status===401);
+ check('Treasurer cannot read other officers activity',(await api('/api/admin/activity',treasurer.token)).status===403);
+ check('Basic member cannot read officer activity',(await api('/api/admin/activity',member.token)).status===403);
+ for(const path of ['/api/documents','/api/minutes','/api/treasury','/api/approvals','/api/officers','/api/submission-profiles','/api/proposals'])check('WM can open '+path,(await api(path,owner.token)).status===200);
+ const dues=await api('/api/dues',owner.token);check('WM passes the dues access gate with missing test connection',dues.status===503&&dues.data.configured===false);
+ check('WM can prepare proposals',(await api('/api/proposals',owner.token,'POST',{})).status===400);
+ await api('/api/activity/heartbeat',treasurer.token,'POST',{active:true,area:'treasury',activeSeconds:999999},'mac');
+ await new Promise(r=>setTimeout(r,1100));await api('/api/activity/heartbeat',treasurer.token,'POST',{active:true,area:'treasury'},'mac');
+ let activity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
+ check('WM sees sign-in and Mac client',activity.sessions.length===1&&activity.sessions[0].startedAt&&activity.sessions[0].client==='Mac app');
+ check('Server measures time instead of trusting supplied totals',activity.sessions[0].activeSeconds>=1&&activity.sessions[0].activeSeconds<10);
+ check('User filter limits sessions and actions',activity.sessions.every(s=>s.userId===treasurer.user.id)&&activity.events.every(e=>e.userId===treasurer.user.id));
+ check('Work area appears in history',activity.events.some(e=>e.action==='workspace_opened'&&e.detail==='Treasurer Reports'));
+ const banking=new FormData();banking.set('intent','save');banking.set('sourceText','Period: August 2026\nChecking\nBeginning balance: $100.00\nEnding balance: $100.00\nNo receipts or payments.');
+ const created=await api('/api/treasury/generate',treasurer.token,'POST',banking);check('Report activity fixture saves',created.status===201);
+ const named=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
+ check('Actions identify the report in readable language',named.events.some(e=>e.action==='treasury_created'&&e.detail.includes('Treasurer report')&&e.detail.includes('Aug 31, 2026')));
+ check('Session response excludes credentials and raw financial details',!JSON.stringify(activity).includes(treasurer.token)&&!JSON.stringify(activity).includes('auth_hash')&&!JSON.stringify(activity).includes('details_json'));
+ const elapsed=activity.sessions[0].activeSeconds;
+ await api('/api/activity/heartbeat',treasurer.token,'POST',{active:false,area:'treasury'},'mac');await new Promise(r=>setTimeout(r,1100));await api('/api/activity/heartbeat',treasurer.token,'POST',{active:false,area:'treasury'},'mac');
+ activity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
+ check('Idle polling adds no active time',activity.sessions[0].activeSeconds===elapsed&&activity.sessions[0].status==='Idle');
+ await api('/api/auth/logout',treasurer.token,'POST',{});
+ activity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
+ check('Sign-out closes history while preserving duration',activity.sessions[0].status==='Ended'&&activity.sessions[0].endedAt&&activity.sessions[0].activeSeconds===elapsed&&activity.events.some(e=>e.action==='signed_out'));
+ check('Signed-out credential no longer works',(await api('/api/activity/heartbeat',treasurer.token,'POST',{active:true})).status===401);
+ check('WM administrator cannot be demoted',(await api('/api/admin/accounts/'+owner.user.id+'/role',owner.token,'PUT',{role:'member'})).status===403);
+ check('Member cannot change account roles',(await api('/api/admin/accounts/'+member.user.id+'/role',member.token,'PUT',{role:'treasurer'})).status===403);
+ check('WM can assign report preparation access',(await api('/api/admin/accounts/'+member.user.id+'/role',owner.token,'PUT',{role:'assistant_treasurer'})).status===200);
+ check('Role change ends old sign-ins',(await api('/api/auth/me',member.token)).status===401);
+ const updated=(await api('/api/auth/login',null,'POST',{email:'member@example.org',password},'mac')).data;
+ check('Password sign-in reports a fresh 90-day session', updated.session.lifetimeDays === 90 && Math.abs(Date.parse(updated.session.expiresAt) - Date.now() - 90*86400000) < 10000);
+ check('Changed role is effective on next sign-in',updated.user.role==='assistant_treasurer'&&updated.user.treasuryAccess==='prepare');
+ activity=(await api('/api/admin/activity',owner.token)).data;
+ check('Role change is retained in action history',activity.events.some(e=>e.action==='officer_role_changed'&&e.detail.includes('assistant treasurer')));
+ check('Activity filter rejects neither empty nor invalid day values',(await api('/api/admin/activity?days=invalid',owner.token)).status===200);
+ console.log(`${passed} officer activity and WM access checks passed.`);
+}finally{server.kill();}

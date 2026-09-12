@@ -13,12 +13,13 @@ enum ClientError: LocalizedError {
     case invalidResponse
     case server(String)
     case unauthorized(String)
+    case serviceUpdateRequired(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidServer: return "Enter a valid signing service address."
         case .invalidResponse: return "The signing service returned an invalid response."
-        case .server(let message), .unauthorized(let message): return message
+        case .server(let message), .unauthorized(let message), .serviceUpdateRequired(let message): return message
         }
     }
 }
@@ -165,6 +166,8 @@ enum BiometricCredentialStore {
 final class AppModel: ObservableObject {
     @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
     @Published var user: User?
+    @Published var signInSession: SignInSession?
+    @Published var showSignInNotice = false
     @Published var restoringSession = false
     @Published var sessionConnectionError: String?
     var hasSavedSession: Bool { token != nil }
@@ -248,6 +251,7 @@ final class AppModel: ObservableObject {
         request.httpMethod = method
         request.httpBody = body
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue("mac", forHTTPHeaderField: "X-Stone-Square-Client")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
@@ -284,6 +288,8 @@ final class AppModel: ObservableObject {
         defer { restoringSession = false }
         do {
             let response: MeResponse = try await request("/api/auth/me")
+            signInSession = response.session
+            showSignInNotice = response.session != nil
             user = response.user
             await refresh(silent: true)
             startLiveQueue()
@@ -304,6 +310,8 @@ final class AppModel: ObservableObject {
             let response: AuthResponse = try await self.request("/api/auth/login", method: "POST", body: body)
             self.token = response.token
             try self.saveLogin(response.token)
+            self.signInSession = response.session
+            self.showSignInNotice = response.session != nil
             self.user = response.user
             await self.refresh(silent: true)
             self.startLiveQueue()
@@ -326,6 +334,8 @@ final class AppModel: ObservableObject {
                     "Touch ID could not be used and has been switched off. Sign in with your password, then turn Touch ID back on in Service Settings.")
             }
             let response: MeResponse = try await self.request("/api/auth/me")
+            self.signInSession = response.session
+            self.showSignInNotice = response.session != nil
             self.user = response.user
             await self.refresh(silent: true)
             self.startLiveQueue()
@@ -359,6 +369,8 @@ final class AppModel: ObservableObject {
             let response: AuthResponse = try await self.request("/api/auth/register", method: "POST", body: body)
             self.token = response.token
             try self.saveLogin(response.token)
+            self.signInSession = response.session
+            self.showSignInNotice = response.session != nil
             self.user = response.user
             await self.refresh(silent: true)
             self.startLiveQueue()
@@ -981,11 +993,14 @@ final class AppModel: ObservableObject {
     }
 
     func signOut(localOnly: Bool = false) {
+        signInSession = nil
+        showSignInNotice = false
         liveTask?.cancel()
         heartbeatTask?.cancel()
         isLive = false
-        if !localOnly {
-            Task { let _: EmptyResponse? = try? await request("/api/auth/logout", method: "POST") }
+        if !localOnly, let token, let baseURL, let url=URL(string:"/api/auth/logout",relativeTo:baseURL) {
+            var logout=URLRequest(url:url);logout.httpMethod="POST";logout.setValue("Bearer \(token)",forHTTPHeaderField:"Authorization");logout.setValue("mac",forHTTPHeaderField:"X-Stone-Square-Client")
+            Task { _ = try? await session.data(for:logout) }
         }
         token = nil
         TokenStore.delete()

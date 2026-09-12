@@ -32,6 +32,7 @@ final class ReportBrowserModel: ObservableObject {
     @Published var busy = false
     @Published var error: String?
     @Published var message = ""
+    @Published var draftSaved = false
     var clientId = UUID().uuidString
     private var previewKey: Data?
     var officers: [[String: String]] { schema["officers"] as? [[String: String]] ?? [] }
@@ -42,9 +43,12 @@ final class ReportBrowserModel: ObservableObject {
     var reportFields: [NativeReportField] { (types[type]?["fields"] as? [[String: Any]] ?? []).map(NativeReportField.init) }
     var reviewStatement: String { schema["reviewStatement"] as? String ?? "I have reviewed this report and confirm its accuracy." }
     var previewCurrent: Bool { previewKey == contentKey() && pdf != nil }
-    var persistenceURL: URL? { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("Stone Square Sign/report-draft.json") }
+    let persistenceURL: URL?
+    private let session: URLSession
 
-    init() {
+    init(persistenceURL: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("Stone Square Sign/report-draft.json"), session: URLSession = .shared) {
+        self.persistenceURL = persistenceURL
+        self.session = session
         guard let url = persistenceURL, let data = try? Data(contentsOf: url),
               let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let timestamp = raw["savedAt"] as? Double, Date().timeIntervalSince1970 - timestamp < 7 * 86400 else { return }
@@ -52,6 +56,7 @@ final class ReportBrowserModel: ObservableObject {
         email = raw["email"] as? String ?? ""; phone = raw["phone"] as? String ?? ""
         type = raw["type"] as? String ?? "officer"; fields = raw["fields"] as? [String: String] ?? [:]
         clientId = raw["clientId"] as? String ?? UUID().uuidString
+        draftSaved = true
     }
     func payload() -> [String: Any] {
         ["isOfficer": isOfficer, "office": office, "name": name, "email": email, "phone": phone,
@@ -63,18 +68,22 @@ final class ReportBrowserModel: ObservableObject {
     }
     func changed() {
         reviewed = false; previewKey = nil
+        draftSaved = false
         var object = payload(); object["reviewed"] = false; object["signatureName"] = ""; object["savedAt"] = Date().timeIntervalSince1970
         if let url = persistenceURL, let data = try? JSONSerialization.data(withJSONObject: object) {
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try? data.write(to: url, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            do {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try data.write(to: url, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                draftSaved = true
+            } catch { self.error = "This draft could not be saved on this Mac. Keep the report open and save a PDF when ready." }
         }
     }
     func loadIfNeeded() async {
         guard schema.isEmpty else { return }
         busy = true; defer { busy = false }
         do {
-            let (data, response) = try await URLSession.shared.data(from: Self.reportURL.deletingLastPathComponent().appendingPathComponent("api/report").appending(queryItems: [URLQueryItem(name: "schema", value: "1")]))
+            let (data, response) = try await session.data(from: Self.reportURL.deletingLastPathComponent().appendingPathComponent("api/report").appending(queryItems: [URLQueryItem(name: "schema", value: "1")]))
             guard let response = response as? HTTPURLResponse, response.statusCode == 200,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["types"] != nil else { throw ClientError.invalidResponse }
             schema = object; error = nil
@@ -89,6 +98,7 @@ final class ReportBrowserModel: ObservableObject {
                 throw ClientError.server("\(field.label) is required.")
             }
         }
+        if signing && !previewCurrent { throw ClientError.server("Update and review the preview before signing this report.") }
         if signing && (!reviewed || signatureName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
             throw ClientError.server("Review the report, check the confirmation, and type your name before sending.")
         }
@@ -103,7 +113,7 @@ final class ReportBrowserModel: ObservableObject {
             request.httpMethod = "POST"; request.timeoutInterval = 90
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: payload())
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
             guard (200..<300).contains(response.statusCode) else {
                 let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -137,54 +147,99 @@ struct ReportGeneratorView: View {
     private func fieldBinding(_ id: String) -> Binding<String> {
         Binding(get: { browser.fields[id] ?? "" }, set: { browser.fields[id] = $0; browser.changed() })
     }
+    @State private var step = 0
+    private var reportTitle: String { browser.types[browser.type]?["name"] as? String ?? "Lodge report" }
+    private var requiredFields: [NativeReportField] { browser.reportFields.filter { $0.required } }
+    private var completedFields: Int { requiredFields.filter { !(browser.fields[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) { Text("Report Generator").font(.title2.weight(.semibold)); Text("Prepare a Lodge report for review").font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 14) {
+                Image(systemName: "doc.text.fill").font(.title2).foregroundStyle(SignTheme.gold)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Report Generator").font(.title2.weight(.semibold))
+                    Text("Prepare, review and send a Lodge report").font(.callout).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Button("Start over") { confirmReset = true }
-                Button("Preview report") { Task { await browser.prepare(send: false) } }.buttonStyle(.borderedProminent)
-            }.padding(20)
+                if browser.busy { ProgressView().controlSize(.small) }
+                Button { confirmReset = true } label: { Label("New report", systemImage: "square.and.pencil") }
+                    .disabled(browser.busy)
+            }.padding(22)
             Divider()
             if browser.schema.isEmpty {
-                ContentUnavailableView("Report form", systemImage: "doc.text", description: Text(browser.error ?? "Loading report fields…"))
-                Button("Try again") { Task { await browser.loadIfNeeded() } }
+                VStack(spacing: 16) {
+                    ContentUnavailableView("Report workspace", systemImage: "doc.text", description: Text(browser.error ?? "Loading report fields…"))
+                    Button("Try again") { Task { await browser.loadIfNeeded() } }.disabled(browser.busy)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HSplitView {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            identity
-                            GroupBox("Report details") {
-                                VStack(alignment: .leading, spacing: 14) {
+                    VStack(spacing: 0) {
+                        Picker("Report stage", selection: $step) {
+                            Text("1. Details").tag(0)
+                            Text("2. Content").tag(1)
+                            Text("3. Review").tag(2)
+                        }.pickerStyle(.segmented).padding(18)
+                        Divider()
+                        Form {
+                            if step == 0 {
+                                Section {
+                                    identity
+                                } header: { Text("Preparing officer") }
+                                Section {
                                     Picker("Report type", selection: $browser.type) {
                                         ForEach(["officer", "committee", "event", "formal"].filter { browser.isOfficer || $0 != "officer" }, id: \.self) { key in
                                             Text(browser.types[key]?["name"] as? String ?? key.capitalized).tag(key)
                                         }
                                     }
+                                    Text("Your selected report determines the sections in the document.").font(.caption).foregroundStyle(.secondary)
+                                } header: { Text("Document") }
+                            } else if step == 1 {
+                                Section {
                                     ForEach(browser.reportFields) { field in reportField(field) }
-                                }.padding(12)
-                            }
-                            GroupBox("Review and sign") {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    Toggle(browser.reviewStatement, isOn: $browser.reviewed).toggleStyle(.checkbox)
+                                } header: { Text(reportTitle) }
+                            } else {
+                                Section {
+                                    LabeledContent("Report", value: reportTitle)
+                                    LabeledContent("Prepared by", value: browser.name.isEmpty ? "Choose your name in Details" : browser.name)
+                                    LabeledContent("Delivery", value: browser.recipient)
+                                } header: { Text("Final review") }
+                                Section {
+                                    Label(browser.previewCurrent ? "Preview matches this report" : "Update the preview before signing", systemImage: browser.previewCurrent ? "checkmark.circle.fill" : "doc.badge.clock")
+                                        .foregroundStyle(browser.previewCurrent ? Color.green : Color.secondary)
+                                    Toggle(browser.reviewStatement, isOn: $browser.reviewed).toggleStyle(.checkbox).disabled(!browser.previewCurrent)
                                     TextField("Type your name to sign", text: $browser.signatureName)
-                                    Text("Send final report emails your signed copy to \(browser.recipient).").font(.caption).foregroundStyle(.secondary)
-                                    Button("Send final report") { confirmSend = true }.buttonStyle(.borderedProminent).disabled(!browser.reviewed || browser.signatureName.isEmpty)
-                                }.padding(12)
+                                    Text("Your signature is applied only when you confirm Send final report.").font(.caption).foregroundStyle(.secondary)
+                                } header: { Text("Your signature") }
+                                Section {
+                                    Button { confirmSend = true } label: { Label("Send final report", systemImage: "paperplane") }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(!browser.previewCurrent || !browser.reviewed || browser.signatureName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    Text("Emails the signed report to \(browser.recipient).").font(.caption).foregroundStyle(.secondary)
+                                }
                             }
-                        }.padding(20).textFieldStyle(.roundedBorder)
-                    }.frame(minWidth: 340, idealWidth: 460)
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack { Text("Document preview").font(.headline); Spacer(); Button("Save PDF") { if let pdf = browser.pdf { saveDocument(pdf, name: "Lodge Report.pdf", type: .pdf) } }.disabled(browser.pdf == nil || !browser.previewCurrent) }
-                        if browser.pdf != nil && !browser.previewCurrent { Text("The report has changed. Update the preview before saving.").font(.caption).foregroundStyle(.orange) }
-                        if browser.pdf == nil { ContentUnavailableView("Report preview", systemImage: "doc.richtext", description: Text("Complete the report fields, then select Preview report.")) }
-                        else { LodgeDocumentPreview(data: browser.pdf) }
-                    }.padding(14).frame(minWidth: 280, idealWidth: 480)
-                }
+                        }.formStyle(.grouped).textFieldStyle(.roundedBorder)
+                        Divider()
+                        HStack {
+                            if step > 0 { Button("Back") { step -= 1 } }
+                            Spacer()
+                            if step < 2 { Button(step == 0 ? "Write report" : "Review report") { step += 1 }.buttonStyle(.borderedProminent) }
+                        }.padding(16)
+                    }.frame(minWidth: 340, idealWidth: 450)
+                    previewPane.frame(minWidth: 320, idealWidth: 480)
+                }.disabled(browser.busy)
+                Divider()
+                HStack(spacing: 8) {
+                    Image(systemName: "externaldrive").foregroundStyle(.secondary)
+                    Text(browser.draftSaved ? "Draft saved on this Mac" : "Draft not saved yet").font(.caption)
+                    Spacer()
+                    Text("\(completedFields) of \(requiredFields.count) required sections completed").font(.caption).foregroundStyle(.secondary)
+                }.padding(.horizontal, 20).padding(.vertical, 10)
             }
-            if let error = browser.error { Text(error).foregroundStyle(.red).font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading) }
+            if let error = browser.error, !browser.schema.isEmpty {
+                Label(error, systemImage: "exclamationmark.circle.fill").foregroundStyle(.red).font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            }
             if !browser.message.isEmpty { Text(browser.message).font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading) }
-        }.background(Color(nsColor: .windowBackgroundColor)).disabled(browser.busy)
+        }.background(Color(nsColor: .windowBackgroundColor))
         .task { await browser.loadIfNeeded() }
         .onChange(of: browser.name) { _, _ in browser.signatureName = ""; browser.changed() }
         .onChange(of: browser.email) { _, _ in browser.changed() }
@@ -195,23 +250,49 @@ struct ReportGeneratorView: View {
             Button("Send final report") { Task { await browser.prepare(send: true) } }; Button("Cancel", role: .cancel) {}
         } message: { Text("The current report will be signed with the name you entered and emailed to \(browser.recipient).") }
         .alert("Start a new report?", isPresented: $confirmReset) {
-            Button("Clear report", role: .destructive) { browser.startOver() }; Button("Cancel", role: .cancel) {}
+            Button("Clear report", role: .destructive) { browser.startOver(); step = 0 }; Button("Cancel", role: .cancel) {}
         } message: { Text("The saved report fields will be cleared. Your contact details remain available.") }
     }
-    private var identity: some View {
-        GroupBox("Prepared by") {
-            VStack(alignment: .leading, spacing: 12) {
-                Toggle("I am a Lodge officer", isOn: $browser.isOfficer).toggleStyle(.checkbox)
-                if browser.isOfficer {
-                    Picker("Officer", selection: $browser.name) {
-                        Text("Choose your name").tag("")
-                        ForEach(browser.officers, id: \.self) { officer in Text("\(officer["name"] ?? "") · \(officer["office"] ?? "")").tag(officer["name"] ?? "") }
-                    }
-                } else { TextField("Your name", text: $browser.name) }
-                TextField("Email address", text: $browser.email)
-                TextField("Phone (optional)", text: $browser.phone)
-            }.padding(12)
-        }
+
+    private var previewPane: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Document preview").font(.headline)
+                    Text(browser.pdf == nil ? "Your formatted report" : browser.previewCurrent ? "Current version" : "Changes need a new preview")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { if let pdf = browser.pdf { saveDocument(pdf, name: "Lodge Report.pdf", type: .pdf) } } label: { Image(systemName: "square.and.arrow.down") }
+                    .help("Save PDF").accessibilityLabel("Save PDF").disabled(!browser.previewCurrent)
+            }.padding(18)
+            Divider()
+            if browser.pdf == nil {
+                ContentUnavailableView("See your report here", systemImage: "doc.richtext", description: Text("Complete the details and content, then build the preview. Review the document before signing."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                LodgeDocumentPreview(data: browser.pdf).padding(12)
+            }
+            Divider()
+            HStack {
+                if let data = browser.pdf, let document = PDFDocument(data: data) { Text("\(document.pageCount) \(document.pageCount == 1 ? "page" : "pages")").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                Button(browser.pdf == nil ? "Build preview" : "Update preview") { Task { await browser.prepare(send: false) } }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
+            }.padding(16)
+        }.background(SignTheme.navy.opacity(0.035))
+    }
+
+    @ViewBuilder private var identity: some View {
+        Toggle("I am a Lodge officer", isOn: $browser.isOfficer).toggleStyle(.checkbox)
+        if browser.isOfficer {
+            Picker("Officer", selection: $browser.name) {
+                Text("Choose your name").tag("")
+                ForEach(browser.officers, id: \.self) { officer in Text("\(officer["name"] ?? "") · \(officer["office"] ?? "")").tag(officer["name"] ?? "") }
+            }
+        } else { TextField("Your name", text: $browser.name) }
+        TextField("Email address", text: $browser.email)
+        TextField("Phone (optional)", text: $browser.phone)
     }
     @ViewBuilder private func reportField(_ field: NativeReportField) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -231,7 +312,7 @@ struct ReportGeneratorView: View {
                 }
                 TextField("Something else", text: fieldBinding(field.id + "Other"))
             } else if ["long", "list", "budget"].contains(field.kind) {
-                TextEditor(text: fieldBinding(field.id)).font(.body).frame(minHeight: 95).padding(5).background(Color(nsColor: .textBackgroundColor))
+                TextEditor(text: fieldBinding(field.id)).font(.body).scrollContentBackground(.hidden).frame(minHeight: 140).padding(8).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7)).overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.secondary.opacity(0.2))).accessibilityLabel(field.label)
             } else {
                 TextField(field.kind == "date" ? "YYYY-MM-DD" : field.kind == "time" ? "HH:MM" : field.kind == "money" ? "$0.00" : field.label, text: fieldBinding(field.id))
             }

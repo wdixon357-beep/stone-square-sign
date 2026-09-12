@@ -58,11 +58,15 @@ final class MinutesWorkspace: ObservableObject {
         request.httpMethod = method; request.httpBody = body; request.timeoutInterval = 90
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue("mac",forHTTPHeaderField:"X-Stone-Square-Client")
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
+            if response.statusCode == 404 && path == "/api/treasury" {
+                throw ClientError.serviceUpdateRequired("Treasurer Reports is installed on this Mac. The shared Lodge service must be updated before banking records and reports can be opened here.")
+            }
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            throw ClientError.server(object?["error"] as? String ?? "The minutes request could not be completed.")
+            throw ClientError.server(object?["error"] as? String ?? "The request could not be completed. Try again.")
         }
         return data
     }
@@ -198,23 +202,17 @@ struct MeetingMinutesView: View {
     private var status: String { (workspace.selected?.status ?? "draft").replacingOccurrences(of: "_", with: " ").capitalized }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Meeting Minutes").font(.title2.weight(.semibold))
-                    Text(workspace.selected == nil ? "Prepare and manage the Lodge meeting record" : status).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
+            NativeWorkspaceHeader(title: "Meeting Minutes", subtitle: workspace.selected == nil ? "Prepare and manage the Lodge meeting record" : status, symbol: "text.document.fill") {
                 if workspace.selected != nil {
                     if workspace.dirty { Text("Unsaved changes").font(.caption).foregroundStyle(.secondary) }
                     Button("Back to records") { if workspace.dirty { confirmClose = true } else { workspace.close() } }
                     if editable { Button("Save corrections") { Task { await workspace.save() } }.buttonStyle(.borderedProminent) }
                 } else { Button("Refresh", systemImage: "arrow.clockwise") { Task { await workspace.refresh() } } }
-            }.padding(20).background(LinearGradient(colors: [SignTheme.ivory.opacity(0.6), SignTheme.gold.opacity(0.08)], startPoint: .leading, endPoint: .trailing))
-            Divider()
+            }
             if workspace.selected != nil, workspace.draft != nil { editor } else { recordList }
             if !workspace.message.isEmpty { Text(workspace.message).font(.callout).textSelection(.enabled).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar) }
         }
-        .background(LinearGradient(colors: [Color(nsColor: .windowBackgroundColor), SignTheme.ivory.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .background(Color(nsColor: .windowBackgroundColor))
         .opacity(appeared ? 1 : 0)
         .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.24)) { appeared = true } }
         .disabled(workspace.busy)
@@ -282,8 +280,8 @@ struct MeetingMinutesView: View {
     }
     private var editor: some View {
         HSplitView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+            Form {
+                Section {
                     HStack {
                         Text(workspace.draft?.sourceType == "compiled_notes" ? "Compiled meeting notes" : "Meeting transcript").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         Spacer()
@@ -339,8 +337,8 @@ struct MeetingMinutesView: View {
                         DisclosureGroup("Private officer review") { ForEach(workspace.draft?.sensitiveReview ?? [], id: \.self) { Text($0).font(.caption) } }
                     }
                     workflow
-                }.padding(20)
-            }.frame(minWidth: 340, idealWidth: 480)
+                }
+            }.formStyle(.grouped).frame(minWidth: 340, idealWidth: 480)
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Text("Document preview").font(.headline); Spacer(); Button("Save PDF") { if let pdf = workspace.pdf { saveDocument(pdf, name: "Meeting Minutes.pdf", type: .pdf) } }.disabled(workspace.pdf == nil || workspace.previewMessage != "Preview matches the current fields.") }
                 Text(workspace.previewMessage).font(.caption).foregroundStyle(.secondary)

@@ -30,6 +30,8 @@ const state = {
   editingMinutesId: null,
   minutesPreviewUrl: '',
 };
+let treasuryWorkspace;
+let activityWorkspace,activityTracker;
 const requestedWorkspaceSection = new URLSearchParams(window.location.search).get('section');
 
 const $ = (id) => document.getElementById(id);
@@ -71,7 +73,7 @@ const apiFetch = async (path, init = {}) => {
   });
   const type = response.headers.get('content-type') || '';
   const payload = type.includes('application/json') ? await response.json() : await response.blob();
-  if (!response.ok) throw new Error(payload.error || 'The request could not be completed.');
+  if (!response.ok) throw Object.assign(new Error(payload.error || 'The request could not be completed.'), { status: response.status });
   return payload;
 };
 
@@ -94,6 +96,9 @@ const roleLabel = (role) => ({
   owner: 'Worshipful Master / Administrator',
   secretary: 'Secretary',
   assistant_secretary: 'Assistant Secretary',
+  treasurer: 'Treasurer',
+  assistant_treasurer: 'Assistant Treasurer',
+  member: 'Lodge Member',
   viewer: 'Lodge Viewer',
   warden: 'Warden',
 }[role] || 'Signer');
@@ -131,10 +136,21 @@ const easternGreeting = () => {
 
 /* Who is ever asked for a saved signature. An allowlist, so a new role is never trapped
  * behind the forced signature modal that has no dismiss control. */
-const CAN_SIGN = new Set(['owner', 'secretary', 'assistant_secretary', 'signer']);
+const CAN_SIGN = new Set(['owner', 'secretary', 'assistant_secretary', 'signer', 'treasurer', 'assistant_treasurer']);
 
-const enterWorkspace = async (user) => {
+const enterWorkspace = async (user, session) => {
   state.user = user;
+  const sessionDays = Number(session?.lifetimeDays);
+  const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
+  $('sessionNotice').classList.toggle('hidden', !hasSessionPolicy);
+  $('sessionDetails').classList.toggle('hidden', !hasSessionPolicy);
+  if (hasSessionPolicy) $('sessionNoticeTitle').textContent = `You will stay signed in for ${sessionDays} days on this device.`;
+  if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.token&&state.user)});}
+  if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
+  const maySeeTreasury = Boolean(user.treasuryAccess);
+  document.querySelectorAll('.treasury-only').forEach(el => el.classList.toggle('hidden', !maySeeTreasury));
+  ['reportsNav','reportsMenuCard'].forEach(id => $(id).classList.toggle('hidden',user.role==='member'));
+  $('profileButton').classList.toggle('hidden',!CAN_SIGN.has(user.role));
   $('whoami').textContent = user.name;
   $('userRole').textContent = roleLabel(user.role);
   $('userInitials').textContent = initials(user.name);
@@ -147,14 +163,14 @@ const enterWorkspace = async (user) => {
   /* A Warden proposes and nothing else. He never sees the queue or the approvals record,
    * and the server refuses him on both regardless of what the page shows. */
   document.querySelectorAll('.warden-only').forEach((element) => {
-    element.classList.toggle('hidden', user.role !== 'warden');
+    element.classList.toggle('hidden', !['owner','warden'].includes(user.role));
   });
   if (user.role === 'warden') {
     const line = document.querySelector('.landing-head p');
     if (line) line.textContent = 'Put an event to the Worshipful Master for a dispensation.';
   }
   document.querySelectorAll('.signer-only').forEach((element) => {
-    element.classList.toggle('hidden', user.role === 'warden');
+    element.classList.toggle('hidden', ['warden','treasurer','assistant_treasurer','member'].includes(user.role));
   });
   /* Dues names the men who are behind, so a viewer is not shown the tile at all.
    * The server refuses him regardless; this avoids dangling a locked door. */
@@ -168,7 +184,7 @@ const enterWorkspace = async (user) => {
   document.querySelectorAll('.preparer-only').forEach((element) => {
     element.classList.toggle('hidden', !['owner', 'secretary', 'assistant_secretary'].includes(user.role));
   });
-  showWorkspaceSection(requestedWorkspaceSection === 'minutes' && maySeeDues ? 'minutes' : 'home');
+  showWorkspaceSection(requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeDues ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
   await refreshMinutesReviewAlerts();
@@ -237,7 +253,15 @@ const loadSubmissionProfiles = async () => {
   applySubmissionProfiles();
 };
 
-const showWorkspaceSection = (section) => {
+const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
+  if(section==='activity'&&state.user?.role!=='owner')section='home';
+  activityTracker?.visit(section);
+  $('activitySection').classList.toggle('hidden',section!=='activity');
+  $('activityNav').classList.toggle('active',section==='activity');
+  if(section==='activity')activityWorkspace?.load();
+  $('treasurySection').classList.toggle('hidden', section !== 'treasury');
+  $('treasuryNav').classList.toggle('active', section === 'treasury');
+  if (section === 'treasury' && !skipLoad) treasuryWorkspace?.list();
   const reports = section === 'reports';
   $('reportsSection').classList.toggle('hidden', !reports);
   $('reportsNav').classList.toggle('active', reports);
@@ -930,6 +954,10 @@ $('proposalForm')?.addEventListener('submit', async (event) => {
 
 $('approvalsNav').addEventListener('click', () => showWorkspaceSection('approvals'));
 $('approvalsRefresh').addEventListener('click', () => renderApprovals());
+$('activityNav').addEventListener('click',()=>showWorkspaceSection('activity'));
+$('activityMenuCard').addEventListener('click',()=>showWorkspaceSection('activity'));
+$('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'));
+$('treasuryMenuCard').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
 $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
 $('minutesNav').addEventListener('click', () => showWorkspaceSection('minutes'));
@@ -1368,8 +1396,10 @@ const renderOfficers = async () => {
     const entries = [
       seat('secretary', 'William McDuffie'),
       seat('assistant_secretary', 'Adrian Reese'),
-      ...officers.filter((officer) => officer.role === 'viewer').map((o) => ({ ...o, state: 'active' })),
-      ...pending.filter((invite) => invite.role === 'viewer').map((i) => ({ ...i, state: 'pending' })),
+      seat('treasurer', 'Treasurer'),
+      seat('assistant_treasurer', 'Assistant Treasurer'),
+      ...officers.filter((officer) => ['viewer','warden','member'].includes(officer.role)).map((o) => ({ ...o, state: 'active' })),
+      ...pending.filter((invite) => ['viewer','warden','member'].includes(invite.role)).map((i) => ({ ...i, state: 'pending' })),
     ];
     entries.forEach((officer) => {
       const row = window.document.createElement('div');
@@ -1417,6 +1447,12 @@ const renderOfficers = async () => {
 };
 
 $('showLogin').addEventListener('click', () => setActiveTab('login'));
+$('reconnectSession').addEventListener('click', () => window.location.reload());
+$('dismissSessionNotice').addEventListener('click', () => hide($('sessionNotice')));
+$('sessionDetails').addEventListener('click', () => {
+  show($('sessionNotice'));
+  $('sessionNotice').scrollIntoView({ block: 'nearest' });
+});
 $('showRegister').addEventListener('click', () => setActiveTab('register'));
 $('showReset').addEventListener('click', () => setActiveTab('reset'));
 
@@ -1432,7 +1468,7 @@ $('loginForm').addEventListener('submit', async (event) => {
     });
     state.token = payload.token;
     localStorage.setItem('stone-square-sign-token', payload.token);
-    await enterWorkspace(payload.user);
+    await enterWorkspace(payload.user, payload.session);
   } catch (error) {
     setMessage(authMessage, error.message, true);
   }
@@ -1455,7 +1491,7 @@ $('registerForm').addEventListener('submit', async (event) => {
     state.token = payload.token;
     localStorage.setItem('stone-square-sign-token', payload.token);
     history.replaceState({}, '', '/');
-    await enterWorkspace(payload.user);
+    await enterWorkspace(payload.user, payload.session);
   } catch (error) {
     setMessage(authMessage, error.message, true);
   }
@@ -2054,10 +2090,16 @@ const initialize = async () => {
   if (state.token) {
     try {
       const payload = await apiFetch('/api/auth/me');
-      await enterWorkspace(payload.user);
-    } catch (_error) {
-      localStorage.removeItem('stone-square-sign-token');
-      state.token = '';
+      await enterWorkspace(payload.user, payload.session);
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) {
+        localStorage.removeItem('stone-square-sign-token');
+        state.token = '';
+        setMessage(authMessage, error.message, true);
+      } else {
+        setMessage(authMessage, 'We could not reconnect. Your sign-in is still saved. Try reconnecting when your connection returns.', true);
+        show($('reconnectSession'));
+      }
     }
   }
 };

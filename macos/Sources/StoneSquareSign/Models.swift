@@ -6,12 +6,19 @@ struct User: Codable, Identifiable, Equatable {
     let name: String
     let role: String
     let hasSignature: Bool
+    var treasuryAccess: String? = nil
+    var canSign: Bool { ["owner","secretary","assistant_secretary","signer","treasurer","assistant_treasurer"].contains(role) }
+    var canUseTreasury: Bool { treasuryAccess != nil || ["owner","secretary","assistant_secretary","treasurer","assistant_treasurer"].contains(role) }
 
     var roleLabel: String {
         switch role {
         case "owner": return "Worshipful Master / Administrator"
         case "secretary": return "Secretary"
         case "assistant_secretary": return "Assistant Secretary"
+        case "treasurer": return "Treasurer"
+        case "assistant_treasurer": return "Assistant Treasurer"
+        case "member": return "Lodge Member"
+        case "warden": return "Warden"
         case "viewer": return "Lodge Viewer"
         default: return "Signer"
         }
@@ -60,8 +67,14 @@ struct Officer: Codable, Identifiable {
     let email: String
 }
 
-struct AuthResponse: Codable { let token: String; let user: User }
-struct MeResponse: Codable { let user: User }
+struct SignInSession: Codable {
+    let lifetimeDays: Int
+    let expiresAt: String
+    var title: String { "You will stay signed in for \(lifetimeDays) days on this Mac." }
+    var explanation: String { "Your sign-in renews automatically when you use this Mac near the end of that period. Sign out when you are finished on a shared device." }
+}
+struct AuthResponse: Codable { let token: String; let user: User; var session: SignInSession? = nil }
+struct MeResponse: Codable { let user: User; var session: SignInSession? = nil }
 struct DocumentsResponse: Codable { let documents: [LodgeDocument] }
 /* An invitation the Master has created that the officer has not taken up yet. Its own state,
  * distinct from having no invitation at all. */
@@ -157,7 +170,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case approvals, home, reportGenerator, minutes, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
+enum AppSection: Hashable { case activity, approvals, home, reportGenerator, minutes, treasury, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,

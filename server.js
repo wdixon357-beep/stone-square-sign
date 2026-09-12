@@ -1,3 +1,4 @@
+import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -21,6 +22,7 @@ import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
 import { closingReviewIssues } from './minutes-format.js';
+import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
 
 dotenv.config();
 
@@ -191,7 +193,7 @@ const extractTextFromPdf = async (buffer) => {
   }
 };
 
-const createAuthToken = async (userId) => {
+const createAuthToken = async (userId, req) => {
   const token = generateToken();
   const expiresAt = SESSION_POLICY.expiresAt();
   await dbRun('INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)', [
@@ -199,7 +201,8 @@ const createAuthToken = async (userId) => {
     hashSecret(token),
     expiresAt,
   ]);
-  return token;
+  await startActivitySession(userId, hashSecret(token), req);
+  return { token, session: { lifetimeDays: SESSION_POLICY.lifetimeDays, expiresAt } };
 };
 
 const userForResponse = async (user) => {
@@ -210,6 +213,7 @@ const userForResponse = async (user) => {
     name: user.name,
     role: user.role,
     hasSignature: Boolean(saved),
+    treasuryAccess: await treasuryAccess(user),
   };
 };
 
@@ -233,7 +237,7 @@ const WARDEN_EMAILS = new Set(
     .map((address) => address.trim().toLowerCase())
     .filter(Boolean),
 );
-const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'viewer', 'warden'];
+const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'viewer', 'warden', 'member'];
 
 const requireAuth = async (req, res, next) => {
   try {
@@ -250,12 +254,14 @@ const requireAuth = async (req, res, next) => {
     if (!row) return res.status(401).json({ error: 'Your sign in has expired.' });
     if (row.access_revoked_at) return res.status(403).json({ error: 'Your access has been revoked by the Worshipful Master.' });
     if (Date.now() > new Date(row.expires_at).getTime()) {
+      await endActivitySession(tokenHash, 'Sign-in expired');
       await dbRun('DELETE FROM sessions WHERE token = ?', [tokenHash]);
       return res.status(401).json({ error: 'Your sign in has expired.' });
     }
     if (SESSION_POLICY.shouldRefresh(row.expires_at)) {
+      row.expires_at = SESSION_POLICY.expiresAt();
       await dbRun('UPDATE sessions SET expires_at = ? WHERE token = ?', [
-        SESSION_POLICY.expiresAt(), tokenHash,
+        row.expires_at, tokenHash,
       ]);
     }
     req.user = row;
@@ -308,6 +314,7 @@ const requireMinutesPreparer = (req, res, next) => {
 /* Only the two Wardens named in WARDEN_EMAILS may hold the role, checked on every request
  * rather than only at invite time, so removing an address revokes access immediately. */
 const requireWarden = (req, res, next) => {
+  if(req.user.role==='owner')return next();
   if (req.user.role !== 'warden' || !WARDEN_EMAILS.has(String(req.user.email || '').toLowerCase())) {
     return res.status(403).json({ error: 'This is for the Senior and Junior Wardens.' });
   }
@@ -388,6 +395,7 @@ const WARDEN_EVENTS = new Set(['proposals_changed', 'connected']);
 const broadcast = (type, data = {}) => {
   const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of realtimeClients) {
+    if (client.role === 'member' && !['connected','treasury_changed'].includes(type)) continue;
     if (type === 'minutes_review_changed' && client.role !== 'owner') continue;
     if (client.role === 'warden' && !WARDEN_EVENTS.has(type)) continue;
     client.response.write(event);
@@ -507,7 +515,7 @@ const requestBaseUrl = (req) =>
 const runMigrations = () => initSchema();
 
 const participantForDocument = async (document, user) => {
-  if (user.role === 'viewer') return true;
+  if (user.role === 'owner' || user.role === 'viewer') return true;
   if (document.owner_user_id === user.id) return true;
   return Boolean(await dbGet(
     `SELECT 1 FROM document_signers
@@ -1232,7 +1240,7 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
       return activatedUserId;
     });
     const user = await dbGet('SELECT id, email, name, role FROM users WHERE id = ?', [userId]);
-    const token = await createAuthToken(userId);
+    const { token, session } = await createAuthToken(userId, req);
     const responseUser = await userForResponse(user);
     await addAudit({
       userId,
@@ -1241,7 +1249,7 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
       userAgent: req.get('user-agent') || '',
     });
     broadcast('queue_changed', { reason: 'account_activated' });
-    res.status(201).json({ token, user: responseUser });
+    res.status(201).json({ token, user: responseUser, session });
   } catch (error) {
     if (isUniqueViolation(error)) {
       return res.status(409).json({ error: 'That email address is already registered.' });
@@ -1258,9 +1266,9 @@ app.post('/api/auth/login', rateLimit({ key: 'login', maximum: 10, windowMs: 15 
     if (!user || user.access_revoked_at || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ error: 'Email or password is incorrect.' });
     }
-    const token = await createAuthToken(user.id);
+    const { token, session } = await createAuthToken(user.id, req);
     await addAudit({ userId: user.id, action: 'signed_in', ip: req.ip, userAgent: req.get('user-agent') || '' });
-    res.json({ token, user: await userForResponse(user) });
+    res.json({ token, user: await userForResponse(user), session });
   } catch (error) {
     next(error);
   }
@@ -1268,6 +1276,8 @@ app.post('/api/auth/login', rateLimit({ key: 'login', maximum: 10, windowMs: 15 
 
 app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
   try {
+    await endActivitySession(req.authTokenHash, 'Signed out');
+    await addAudit({ userId:req.user.id, action:'signed_out', ip:req.ip, userAgent:req.get('user-agent')||'' });
     await dbRun('DELETE FROM sessions WHERE token = ?', [req.authTokenHash]);
     res.json({ ok: true });
   } catch (error) {
@@ -1277,7 +1287,7 @@ app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
 
 app.get('/api/auth/me', requireAuth, async (req, res, next) => {
   try {
-    res.json({ user: await userForResponse(req.user) });
+    res.json({ user: await userForResponse(req.user), session: { lifetimeDays: SESSION_POLICY.lifetimeDays, expiresAt: req.user.expires_at } });
   } catch (error) {
     next(error);
   }
@@ -1338,6 +1348,7 @@ app.post('/api/auth/reset-password', rateLimit({ key: 'reset-submit', maximum: 8
       const consumed = await dbRun('UPDATE reset_codes SET used = 1 WHERE id = ? AND used = 0', [reset.id]);
       if (consumed.changes !== 1) throw httpError(400, 'The reset code is invalid or expired.');
       await dbRun('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, user.id]);
+      await endUserActivity(user.id, 'Password reset');
       await dbRun('DELETE FROM sessions WHERE user_id = ?', [user.id]);
       await addAudit({ userId: user.id, action: 'password_reset_completed', ip: req.ip });
     });
@@ -1371,7 +1382,8 @@ app.get('/api/events', requireAuth, (req, res) => {
   });
 });
 
-app.get('/api/profile/signature', requireAuth, requireDocumentAccess, async (req, res, next) => {
+const requireSignatureProfile = (req, res, next) => ['treasurer', 'assistant_treasurer'].includes(req.user.role) ? next() : requireDocumentAccess(req, res, next);
+app.get('/api/profile/signature', requireAuth, requireSignatureProfile, async (req, res, next) => {
   try {
     const signature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     const bytes = asBuffer(signature?.signature_bytes);
@@ -1385,7 +1397,7 @@ app.get('/api/profile/signature', requireAuth, requireDocumentAccess, async (req
   }
 });
 
-app.put('/api/profile/signature', requireAuth, requireDocumentAccess, rateLimit({ key: 'signature-profile', maximum: 12, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+app.put('/api/profile/signature', requireAuth, requireSignatureProfile, rateLimit({ key: 'signature-profile', maximum: 12, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
   try {
     const signatureData = String(req.body?.signatureData || '');
     const signatureType = ['drawn', 'typed', 'initials'].includes(req.body?.signatureType) ? req.body.signatureType : 'drawn';
@@ -1421,7 +1433,7 @@ app.get('/api/officers', requireAuth, requireOwner, async (_req, res, next) => {
   try {
     const officers = await dbAll(
       `SELECT role, name, email, created_at FROM users
-       WHERE role IN ('secretary', 'assistant_secretary', 'viewer', 'warden')
+       WHERE role IN ('secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'viewer', 'warden', 'member')
        AND email NOT LIKE '%.local' AND access_revoked_at IS NULL
        ORDER BY role DESC`,
     );
@@ -1485,7 +1497,7 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
       emailSent = await sendEmail({
         to: email,
         subject: 'Your Stone Square Sign account invitation',
-        text: `${name},\n\nYou have been invited to Stone Square Sign as ${{ viewer: 'a Lodge Viewer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary', warden: 'a Warden' }[role] || 'a signer'}. ${{ viewer: 'You can review document status and signing progress, but cannot upload, create, or sign documents.', warden: 'You can propose a dispensation to the Worshipful Master for his approval. You will not be asked to sign anything.' }[role] || 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
+        text: `${name},\n\nYou have been invited to Stone Square Sign as ${{ member: 'a Lodge Member', viewer: 'a Lodge Viewer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary', treasurer: 'Treasurer', assistant_treasurer: 'Assistant Treasurer', warden: 'a Warden' }[role] || 'a signer'}. ${{ member: 'Your account provides sign-in access. Additional work areas are assigned separately by the administrator.', treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', assistant_treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', viewer: 'You can review document status and signing progress, but cannot upload, create, or sign documents.', warden: 'You can propose a dispensation to the Worshipful Master for his approval. You will not be asked to sign anything.' }[role] || 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
       });
     } catch (error) {
       console.warn('Invitation email failed:', error.message);
@@ -1501,6 +1513,30 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
   } catch (error) {
     next(error);
   }
+});
+
+app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res,next)=>{
+ try{
+  const id=Number(req.params.id),role=String(req.body.role||'');
+  if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({error:'Choose an active account.'});
+  if(!INVITABLE_ROLES.includes(role))return res.status(400).json({error:'Choose an available account role.'});
+  await withTransaction(async()=>{
+   const account=await dbGet('SELECT id,name,email,role,access_revoked_at FROM users WHERE id=? FOR UPDATE',[id]);
+   if(!account||account.access_revoked_at)throw httpError(404,'Active account not found.');
+   if(account.role==='owner'||id===req.user.id)throw httpError(403,'The Worshipful Master administrator account is permanent.');
+   if(role==='warden'&&!WARDEN_EMAILS.has(account.email))throw httpError(403,'This email is not configured for a Warden seat.');
+   await lockOfficeRole(role);
+   if(OFFICE_ROLES.has(role)){
+    if(await dbGet("SELECT 1 FROM users WHERE role=? AND id<>? AND access_revoked_at IS NULL AND email NOT LIKE '%.local'",[role,id]))throw httpError(409,'That office already has an active account.');
+    if(await dbGet('SELECT 1 FROM invitations WHERE role=? AND used_at IS NULL AND expires_at>? AND email<>?',[role,nowIso(),account.email]))throw httpError(409,'That office already has a pending invitation.');
+   }
+   if(account.role===role)return;
+   await dbRun('UPDATE users SET role=? WHERE id=?',[role,id]);
+   await endUserActivity(id,'Account permissions changed');
+   await dbRun('DELETE FROM sessions WHERE user_id=?',[id]);
+   await addAudit({userId:req.user.id,action:'officer_role_changed',ip:req.ip,details:{userId:id,name:account.name,before:account.role,after:role}});
+  });res.json({ok:true});
+ }catch(e){next(e)}
 });
 
 app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 'revoke-access', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
@@ -1519,6 +1555,7 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
     }
     const revokedAt = nowIso();
     await dbRun('UPDATE users SET access_revoked_at = ? WHERE id = ?', [revokedAt, account.id]);
+    await endUserActivity(account.id, 'Access revoked');
     await dbRun('DELETE FROM sessions WHERE user_id = ?', [account.id]);
     await dbRun('DELETE FROM reset_codes WHERE user_id = ?', [account.id]);
     await dbRun('DELETE FROM invitations WHERE email = ? AND used_at IS NULL', [email]);
@@ -1957,6 +1994,7 @@ app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, 
 });
 
 app.get('/api/documents', requireAuth, async (req, res, next) => {
+  if(req.user.role==='member')return res.status(403).json({error:'Document access has not been assigned to this account.'});
   try {
     const rows = await dbAll(
       `SELECT d.id, d.title, d.original_name, d.status, d.created_at, d.updated_at,
@@ -1964,7 +2002,7 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
               d.approval_status, d.approved_by, d.approved_on, d.approval_source,
               u.name AS owner_name, u.email AS owner_email
        FROM documents d LEFT JOIN users u ON u.id = d.owner_user_id
-       WHERE ? = 'viewer' OR d.owner_user_id = ? OR EXISTS (
+       WHERE ? IN ('owner','viewer') OR d.owner_user_id = ? OR EXISTS (
          SELECT 1 FROM document_signers ds
          WHERE ds.document_id = d.id
          AND (ds.user_id = ? OR (ds.user_id IS NULL AND ds.signer_role = ?))
@@ -2090,6 +2128,7 @@ app.get('/api/documents/:id/file', requireAuth, requireDocumentAccess, async (re
     // once anyone has signed, the executed copy is the one worth showing
     const bytes = asBuffer(document.signed_bytes) || asBuffer(document.file_bytes);
     if (!bytes?.length) return res.status(404).json({ error: 'Document file is missing.' });
+    await addAudit({userId:req.user.id,documentId:document.id,action:'document_opened',ip:req.ip});
     res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
     res.type('application/pdf').send(bytes);
   } catch (error) {
@@ -2110,6 +2149,7 @@ app.get('/api/documents/:id/original', requireAuth, requireDocumentAccess, async
     const bytes = asBuffer(document.file_bytes);
     if (!bytes?.length) return res.status(404).json({ error: 'Document file is missing.' });
     const safeName = document.original_name.replace(/[\r\n"]/g, '').replace(/[^a-zA-Z0-9._ -]/g, '_');
+    await addAudit({userId:req.user.id,documentId:document.id,action:'document_opened',ip:req.ip});
     res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
     res.type('application/pdf').send(bytes);
   } catch (error) {
@@ -2491,7 +2531,7 @@ app.put('/api/proposals/:id', requireAuth, requireWarden, async (req, res, next)
   try {
     const row = await dbGet('SELECT * FROM dispensation_proposals WHERE id = ?', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Proposal not found.' });
-    if (row.proposer_user_id !== req.user.id) {
+    if (row.proposer_user_id !== req.user.id && req.user.role !== 'owner') {
       return res.status(403).json({ error: 'You can only change a proposal you made.' });
     }
     if (row.status !== 'changes_requested') {
@@ -3077,6 +3117,10 @@ app.get('/api/documents/:id/audit', requireAuth, requireDocumentAccess, async (r
 
 app.get('/', (_req, res) => res.sendFile(path.join(APP_DIR, 'public', 'index.html')));
 
+mountActivityRoutes(app, { requireAuth, requireOwner, rateLimit });
+
+mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast });
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   if (error instanceof multer.MulterError) {
@@ -3099,6 +3143,8 @@ app.use((error, _req, res, _next) => {
 validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
+await initTreasurySchema();
+await initActivitySchema();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Stone Square Sign is running at http://localhost:${PORT}`);

@@ -3,6 +3,7 @@ import Foundation
 final class SessionFixture: URLProtocol {
     static var status = 503
     static var offline = false
+    static var payload = "{\"error\":\"fixture response\"}"
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -12,7 +13,7 @@ final class SessionFixture: URLProtocol {
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data("{\"error\":\"fixture response\"}".utf8))
+        client?.urlProtocol(self, didLoad: Data(Self.payload.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
@@ -37,6 +38,18 @@ final class SessionFixture: URLProtocol {
             let _: MeResponse = try await model.request("/api/auth/me")
             preconditionFailure("401 must fail")
         } catch ClientError.unauthorized { print("PASS: explicit credential rejection remains distinguishable from outages") }
+        SessionFixture.status = 200
+        SessionFixture.payload = #"{"user":{"id":9999,"email":"session-qa@example.org","name":"QA Member","role":"member","hasSignature":false},"session":{"lifetimeDays":90,"expiresAt":"2026-12-11T12:00:00.000Z"},"documents":[]}"#
+        await model.restoreSession()
+        precondition(model.user?.id == 9999 && model.signInSession?.lifetimeDays == 90 && model.showSignInNotice)
+        precondition(model.signInSession?.title.contains("90 days") == true)
+        print("PASS: restored Mac account displays the service's 90-day sign-in notice")
+        model.showSignInNotice = false
+        precondition(model.signInSession?.lifetimeDays == 90 && !model.showSignInNotice)
+        print("PASS: dismissing the Mac notice retains sign-in details for Settings")
+        let legacy = try JSONDecoder().decode(MeResponse.self, from: Data(#"{"user":{"id":9999,"email":"session-qa@example.org","name":"QA Member","role":"member","hasSignature":false}}"#.utf8))
+        precondition(legacy.session == nil)
+        print("PASS: Mac remains compatible with services that do not yet return session details")
         session.invalidateAndCancel()
     }
 }

@@ -2,13 +2,35 @@ import AppKit
 import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
-import WebKit
 
 enum SignTheme {
-    static let navy = Color(red: 0.03, green: 0.11, blue: 0.19)
-    static let blue = Color(red: 0.05, green: 0.24, blue: 0.39)
+    static let navy = Color(nsColor: .labelColor)
+    static let blue = Color.accentColor
     static let gold = Color(red: 0.78, green: 0.60, blue: 0.26)
-    static let ivory = Color(red: 0.96, green: 0.94, blue: 0.89)
+    static let ivory = Color(nsColor: .windowBackgroundColor)
+}
+
+struct NativeWorkspaceHeader<Actions: View>: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    @ViewBuilder var actions: Actions
+    init(title: String, subtitle: String, symbol: String, @ViewBuilder actions: () -> Actions) {
+        self.title = title; self.subtitle = subtitle; self.symbol = symbol; self.actions = actions()
+    }
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Image(systemName: symbol).font(.title2).foregroundStyle(SignTheme.gold)
+                VStack(alignment: .leading, spacing: 4) { Text(title).font(.title2.weight(.semibold)); Text(subtitle).font(.callout).foregroundStyle(.secondary) }
+                Spacer(); actions
+            }.padding(22)
+            Divider()
+        }
+    }
+}
+extension NativeWorkspaceHeader where Actions == EmptyView {
+    init(title: String, subtitle: String, symbol: String) { self.init(title: title, subtitle: subtitle, symbol: symbol) { EmptyView() } }
 }
 
 struct RootView: View {
@@ -35,6 +57,21 @@ struct RootView: View {
             } else { AuthenticationView() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.user != nil, model.showSignInNotice, let session = model.signInSession {
+                HStack(alignment: .top, spacing: 16) {
+                    Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(session.title).font(.headline)
+                        Text(session.explanation).font(.callout).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Got it") { model.showSignInNotice = false }
+                        .accessibilityLabel("Dismiss sign-in notice")
+                }
+                .padding(16)
+                .background(SignTheme.gold.opacity(0.12))
+            }
+        }
         .overlay(alignment: .bottom) {
             if !model.message.isEmpty {
                 Label(
@@ -59,10 +96,10 @@ struct RootView: View {
                         Text("Version \(version) is ready.").font(.caption).foregroundStyle(.secondary)
                     }
                     Button("Dismiss") { model.dismissAvailableUpdate() }
-                        .buttonStyle(.bordered).tint(SignTheme.navy)
+                        .buttonStyle(.bordered).tint(.accentColor)
                 }
                 .padding(13)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 .shadow(radius: 18)
                 .padding(.top, 14)
             }
@@ -72,7 +109,7 @@ struct RootView: View {
             model.startUpdateChecks()
         }
         .onChange(of: model.user) { _, user in
-            showRequiredSignature = user?.hasSignature == false && user?.role != "viewer"
+            showRequiredSignature = user?.hasSignature == false && user?.canSign == true
             checkPendingSignatureNotice()
         }
         .onChange(of: model.documents.filter { $0.needsSignature && !$0.isTerminal }.count) { _, _ in
@@ -112,7 +149,7 @@ struct RootView: View {
 
     private func checkPendingSignatureNotice() {
         guard let user = model.user,
-              (user.hasSignature || user.role == "viewer"),
+              (user.hasSignature || !user.canSign),
               pendingNoticeUserId != user.id else { return }
         let pending = user.role == "owner" || user.role == "viewer"
             ? model.documents.filter { !$0.isTerminal }
@@ -133,111 +170,39 @@ struct AuthenticationView: View {
     @State private var code = ""
 
     var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 0) {
-            ZStack(alignment: .bottomLeading) {
-                LinearGradient(
-                    colors: [SignTheme.navy, SignTheme.blue],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                Circle()
-                    .fill(SignTheme.gold.opacity(0.16))
-                    .frame(width: 420)
-                    .offset(x: 240, y: -190)
-                VStack(alignment: .leading, spacing: 24) {
-                    Text("STONE SQUARE 22")
-                        .font(.caption.weight(.bold))
-                        .tracking(3)
-                        .foregroundStyle(SignTheme.gold)
-                    Text("Stone Square\nLodge Dashboard")
-                        .font(.system(size: 54, weight: .medium, design: .serif))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.72)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("Meeting records, reports and documents for the officers of Stone Square Lodge No. 22.")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.68))
-                        .frame(maxWidth: 460, alignment: .leading)
-                    HStack(spacing: 28) {
-                        LoginStep(number: "01", text: "Prepare")
-                        LoginStep(number: "02", text: "Review")
-                        LoginStep(number: "03", text: "Sign")
-                    }
-                    .padding(.top, 32)
-                }
-                .padding(58)
-            }
-            .frame(minWidth: 560, maxHeight: .infinity)
-
-            VStack(spacing: 26) {
-                Picker("Access", selection: $mode) {
-                    Text("Sign in").tag(0)
-                    Text("Owner setup").tag(1)
-                    Text("Reset").tag(2)
-                }
-                .pickerStyle(.segmented)
-
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(mode == 0 ? "Sign in to continue" : mode == 1 ? "Create owner account" : "Reset by email")
-                        .font(.system(size: 30, weight: .semibold, design: .serif))
-                        .foregroundStyle(SignTheme.navy)
-                    if mode == 0 && model.biometricLoginEnabled {
-                        Button {
-                            Task { await model.signInWithBiometrics() }
-                        } label: {
-                            Label("Sign in with Touch ID", systemImage: "touchid")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(SignTheme.navy)
-                        .controlSize(.large)
-                        .disabled(model.isBusy)
-                        HStack { Rectangle().frame(height: 1); Text("or use password"); Rectangle().frame(height: 1) }
-                            .foregroundStyle(.tertiary)
-                            .font(.caption)
-                    }
+        VStack(spacing: 20) {
+            Image(systemName: "building.columns.circle.fill").font(.system(size: 52)).foregroundStyle(SignTheme.gold)
+            Text("Stone Square Lodge Dashboard").font(.title2.weight(.semibold))
+            Text("Sign in to your Lodge workspace").foregroundStyle(.secondary)
+            Picker("Access", selection: $mode) {
+                Text("Sign in").tag(0); Text("Owner setup").tag(1); Text("Reset password").tag(2)
+            }.pickerStyle(.segmented)
+            Form {
+                Section {
                     if mode == 1 { TextField("Full name", text: $name).textContentType(.name) }
                     TextField("Email address", text: $email).textContentType(.emailAddress)
-                    if mode == 2 {
-                        TextField("Six digit code", text: $code)
-                        SecureField("New password", text: $password)
-                    } else {
-                        SecureField(mode == 1 ? "Create password" : "Password", text: $password)
-                    }
-                    Button(action: submit) {
-                        HStack {
-                            Spacer()
-                            if model.isBusy { ProgressView().controlSize(.small) }
-                            Text(buttonTitle)
-                            Spacer()
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(SignTheme.navy)
-                    .controlSize(.large)
-                    .disabled(model.isBusy)
-                    if mode == 2 {
-                        Button("Send reset code") {
-                            Task { await model.requestReset(email: email) }
-                        }
-                        .buttonStyle(.link)
-                    }
-                    Divider().padding(.vertical, 4)
-                    TextField("Signing service address", text: $model.serverAddress)
-                        .font(.caption)
-                        .textFieldStyle(.roundedBorder)
-                    Text("Defaults to the hosted Lodge service at \(defaultServerAddress). Only change this if you are running a server on this Mac for development.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if mode == 2 { TextField("Six digit code", text: $code) }
+                    SecureField(mode == 2 ? "New password" : mode == 1 ? "Create password" : "Password", text: $password)
+                    if mode == 2 { Button("Send reset code") { Task { await model.requestReset(email: email) } } }
                 }
+                Section {
+                    DisclosureGroup("Connection settings") {
+                        TextField("Signing service address", text: $model.serverAddress)
+                        Text("Use the shared Lodge service for your account.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }.formStyle(.grouped).textFieldStyle(.roundedBorder).frame(height: mode == 2 ? 250 : 230)
+            if mode == 0 && model.biometricLoginEnabled {
+                Button("Sign in with Touch ID", systemImage: "touchid") { Task { await model.signInWithBiometrics() } }
             }
-            .frame(width: 420)
-            .padding(54)
+            HStack {
+                if model.isBusy { ProgressView().controlSize(.small) }
+                Spacer()
+                Button(buttonTitle, action: submit).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-        }
+        }.padding(32).frame(width: 470).disabled(model.isBusy)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var buttonTitle: String {
@@ -253,25 +218,13 @@ struct AuthenticationView: View {
     }
 }
 
-struct LoginStep: View {
-    let number: String
-    let text: String
-    var body: some View {
-        VStack(alignment: .leading) {
-            Text(number).foregroundStyle(SignTheme.gold).font(.headline)
-            Text(text).foregroundStyle(.white.opacity(0.65)).font(.caption)
-        }
-        .frame(width: 90, alignment: .leading)
-        .padding(.top, 10)
-        .overlay(alignment: .top) { Divider().overlay(.white.opacity(0.2)) }
-    }
-}
-
 struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
     @State private var selection: AppSection? = .home
     @StateObject private var reportBrowser = ReportBrowserModel()
     @StateObject private var minutesWorkspace = MinutesWorkspace()
+    @StateObject private var treasuryWorkspace = TreasuryWorkspace()
+    @StateObject private var activityPresence = ActivityPresence()
 
     var body: some View {
         NavigationSplitView {
@@ -296,24 +249,26 @@ struct WorkspaceView: View {
                     }
                 }
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
-                Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator)
+                if model.user?.role != "member" { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
                 if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
                     Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes)
                 }
-                Label("Live Queue", systemImage: "list.number").tag(AppSection.documents)
-                Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker)
+                if model.user?.canUseTreasury == true { Label("Treasurer Reports", systemImage: "chart.bar.doc.horizontal.fill").tag(AppSection.treasury) }
+                if model.user?.role != "member" { Label("Live Queue", systemImage: "list.number").tag(AppSection.documents) }
+                if model.user?.role != "member" { Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker) }
                 if model.user?.role == "owner" {
                         Label("Create Dispensation", systemImage: "doc.badge.plus").tag(AppSection.createDispensation)
                         Label("Warden Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                         Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
+                        Label("Officer Activity",systemImage:"clock.arrow.circlepath").tag(AppSection.activity)
                     }
-                    Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals)
+                    if model.user?.role != "member" { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
                     if model.user?.role == "owner" {
                     }
                     if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
                         Label("Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.dues)
                     }
-                    Label("Signature Profile", systemImage: "signature").tag(AppSection.profile)
+                    if model.user?.canSign == true { Label("Signature Profile", systemImage: "signature").tag(AppSection.profile) }
                     Label("Service Settings", systemImage: "network").tag(AppSection.settings)
                 }
                 .scrollContentBackground(.hidden)
@@ -328,11 +283,12 @@ struct WorkspaceView: View {
                     Text(model.user?.name ?? "").font(.callout.weight(.semibold))
                     Text(model.user?.roleLabel ?? "").font(.caption).foregroundStyle(.secondary)
                     Text("Automatic login on this Mac").font(.caption2).foregroundStyle(.secondary).padding(.top, 5)
+                    Text("Sign-ins and actions are recorded for Lodge administration. Active time is estimated.").font(.caption2).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
             }
-            .background(SignTheme.navy.opacity(0.055))
+            .background(.bar)
         } detail: {
             switch selection {
             case .home:
@@ -340,16 +296,20 @@ struct WorkspaceView: View {
                     openDispensations: { selection = .documents },
                     openCandidateTracker: { selection = .candidateTracker },
                     openReports: { selection = .reportGenerator },
-                    openMinutes: { selection = .minutes }
+                    openMinutes: { selection = .minutes },
+                    openTreasury: { selection = .treasury }
                 )
             case .reportGenerator:
                 ReportGeneratorView(browser: reportBrowser)
             case .minutes:
                 MeetingMinutesView(workspace: minutesWorkspace)
+            case .treasury:
+                TreasuryView(workspace: treasuryWorkspace)
             case .candidateTracker:
                 NativeCandidateTrackerView()
             case .createDispensation: DispensationBuilderView()
             case .access: OfficerAccessView()
+            case .activity: if model.user?.role == "owner" {OfficerActivityView()}
             case .dues: DuesView()
             case .approvals: ApprovalsView()
             case .proposalReview: ProposalReviewView()
@@ -358,7 +318,9 @@ struct WorkspaceView: View {
             default: DocumentsView()
             }
         }
-        .task { await model.refresh() }
+        .task { activityPresence.start(model);await model.refresh() }
+        .onDisappear {activityPresence.stop()}
+        .onChange(of:selection){_,section in activityPresence.visit(section)}
         .onChange(of: model.requestedSection) { _, requested in
             guard let requested else { return }
             selection = requested
@@ -391,11 +353,9 @@ struct NativeCandidateTrackerView: View {
         "Healing": "Healing requests, requirements, and Lodge action",
     ]
 
-    private let trackerGreen = Color(red: 14 / 255, green: 75 / 255, blue: 53 / 255)
-    private let trackerGreenLight = Color(red: 28 / 255, green: 102 / 255, blue: 76 / 255)
+    private let trackerGreen = Color.accentColor
     private let trackerGold = Color(red: 196 / 255, green: 154 / 255, blue: 67 / 255)
-    private let trackerPaper = Color(red: 247 / 255, green: 246 / 255, blue: 241 / 255)
-    private let trackerLine = Color(red: 220 / 255, green: 226 / 255, blue: 221 / 255)
+    private let trackerLine = Color(nsColor: .separatorColor)
 
     private var canEdit: Bool {
         model.user?.role == "owner"
@@ -443,21 +403,38 @@ struct NativeCandidateTrackerView: View {
         model.candidateRecords.filter { !$0.owner.isEmpty }.count
     }
 
+    @State private var selectedRecordID: String?
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 20) {
-                trackerHeader
-                welcomePanel
-                overviewPanel
-                categoryTabs
-                workspacePanel
+        VStack(spacing: 0) {
+            NativeWorkspaceHeader(title: "Candidate Tracker", subtitle: "Candidate and membership records", symbol: "person.text.rectangle") {
+                Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadCandidateRecords() } }
+                if canEdit { Button("Add record", systemImage: "plus") { editingRecord = .blank(category: category); creatingRecord = true }.buttonStyle(.borderedProminent) }
             }
-            .frame(maxWidth: 1180)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 22)
-            .frame(maxWidth: .infinity)
-        }
-        .background(trackerPaper.ignoresSafeArea())
+            HStack(spacing: 12) {
+                Picker("Section", selection: $category) { ForEach(categories, id: \.self) { Text($0).tag($0) } }.frame(maxWidth: 270)
+                TextField("Search records", text: $query).textFieldStyle(.roundedBorder)
+                Picker("Owner", selection: $ownerFilter) { ForEach(ownerOptions, id: \.self) { Text($0).tag($0) } }.frame(maxWidth: 200)
+                Picker("Status", selection: $statusFilter) { ForEach(statusOptions, id: \.self) { Text($0).tag($0) } }.frame(maxWidth: 190)
+                Button("Clear") { query = ""; ownerFilter = "All owners"; statusFilter = "All statuses" }
+            }.padding(16)
+            Divider()
+            Table(filteredRecords, selection: $selectedRecordID) {
+                TableColumn("Name", value: \.name)
+                TableColumn("Status", value: \.status)
+                TableColumn("Owner", value: \.owner)
+                TableColumn("Next step", value: \.nextStep)
+            }.overlay {
+                if model.candidateTrackerLoading && model.candidateRecords.isEmpty { ProgressView("Loading records…") }
+                else if filteredRecords.isEmpty { ContentUnavailableView("No matching records", systemImage: "person.text.rectangle", description: Text("Choose another section or adjust the filters.")) }
+            }
+            if let record = filteredRecords.first(where: { $0.id == selectedRecordID }) {
+                Divider()
+                ScrollView { recordCard(record).padding(16) }.frame(height: 245)
+            }
+            Divider()
+            HStack { Text("\(filteredRecords.count) records"); Spacer(); Text(categoryDescriptions[category] ?? "") }.font(.caption).foregroundStyle(.secondary).padding(12)
+        }.background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: category) { _, _ in statusFilter = "All statuses"; selectedRecordID = nil }
         .task {
             if model.candidateRecords.isEmpty { await model.loadCandidateRecords() }
             while !Task.isCancelled {
@@ -475,210 +452,6 @@ struct NativeCandidateTrackerView: View {
             CandidateRecordEditorView(record: record, isNew: creatingRecord, categories: categories)
                 .environmentObject(model)
         }
-    }
-
-    private var trackerHeader: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 13).fill(trackerGreen)
-                RoundedRectangle(cornerRadius: 13).stroke(trackerGold.opacity(0.7), lineWidth: 2)
-                Text("22").font(.title3.weight(.heavy)).foregroundStyle(.white)
-            }
-            .frame(width: 48, height: 48)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("STONE SQUARE LODGE NO. 22")
-                    .font(.caption2.weight(.bold)).tracking(1.6).foregroundStyle(trackerGreenLight)
-                Text("Candidate & Membership Tracker")
-                    .font(.title3.weight(.bold)).foregroundStyle(SignTheme.navy)
-            }
-            Spacer()
-            Label("Restricted", systemImage: "lock.fill")
-                .font(.caption.weight(.semibold)).foregroundStyle(trackerGreen)
-                .padding(.horizontal, 11).padding(.vertical, 8)
-                .background(Color(red: 233 / 255, green: 244 / 255, blue: 238 / 255), in: Capsule())
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(model.user?.name ?? "Lodge Officer").font(.caption.weight(.bold))
-                Text(model.user?.email ?? "").font(.caption2).foregroundStyle(.secondary)
-            }
-            Button {
-                Task { await model.loadCandidateRecords() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.bordered)
-            .help("Refresh Candidate Tracker")
-        }
-        .padding(18)
-        .background(.white, in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(trackerLine))
-    }
-
-    private var welcomePanel: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            HStack(spacing: 28) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("WELCOME")
-                        .font(.caption2.weight(.bold)).tracking(1.8).foregroundStyle(trackerGreenLight)
-                    Text("\(greeting(for: context.date)), \(model.user?.name ?? "Lodge Officer").")
-                        .font(.system(size: 31, weight: .medium, design: .serif))
-                        .foregroundStyle(SignTheme.navy)
-                }
-                Spacer()
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("CURRENT DATE AND TIME")
-                        .font(.caption2.weight(.bold)).tracking(1.2).foregroundStyle(.secondary)
-                    Text(Self.longDateFormatter.string(from: context.date))
-                        .font(.callout.weight(.semibold))
-                    Text(Self.timeFormatter.string(from: context.date))
-                        .font(.title3.weight(.bold)).foregroundStyle(trackerGreenLight)
-                        .monospacedDigit()
-                }
-                .padding(.horizontal, 20).padding(.vertical, 14)
-                .background(.white.opacity(0.74), in: RoundedRectangle(cornerRadius: 15))
-                .overlay(RoundedRectangle(cornerRadius: 15).stroke(trackerGreen.opacity(0.12)))
-            }
-            .padding(26)
-            .background(
-                LinearGradient(
-                    colors: [Color(red: 1, green: 253 / 255, blue: 247 / 255), Color(red: 248 / 255, green: 241 / 255, blue: 223 / 255)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                ),
-                in: RoundedRectangle(cornerRadius: 22)
-            )
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(trackerGold.opacity(0.35)))
-        }
-    }
-
-    private var overviewPanel: some View {
-        HStack(spacing: 34) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("WORKING ROSTER · 2026 TO 2027")
-                    .font(.caption2.weight(.bold)).tracking(1.7).foregroundStyle(trackerGold)
-                Text("Keep every man moving forward.")
-                    .font(.system(size: 38, weight: .medium, design: .serif))
-                    .foregroundStyle(.white)
-                Text("One secure place for apprentices, prospects, demits, reclamations, and healing requests.")
-                    .font(.callout).foregroundStyle(.white.opacity(0.82)).lineSpacing(4)
-            }
-            Spacer(minLength: 24)
-            HStack(spacing: 10) {
-                trackerStat(title: "TOTAL RECORDS", value: model.candidateRecords.count, attention: false)
-                trackerStat(title: "NEEDS ATTENTION", value: attentionCount, attention: true)
-                trackerStat(title: "ASSIGNED", value: assignedCount, attention: false)
-            }
-        }
-        .padding(32)
-        .background(
-            LinearGradient(colors: [trackerGreen, Color(red: 23 / 255, green: 61 / 255, blue: 48 / 255)], startPoint: .leading, endPoint: .trailing),
-            in: RoundedRectangle(cornerRadius: 24)
-        )
-        .overlay(alignment: .bottomTrailing) {
-            Text("22").font(.system(size: 150, weight: .black)).foregroundStyle(.white.opacity(0.035)).offset(x: 4, y: 42)
-        }
-    }
-
-    private var categoryTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(categories, id: \.self) { item in
-                    Button {
-                        category = item
-                        statusFilter = "All statuses"
-                    } label: {
-                        HStack(spacing: 9) {
-                            Text(shortCategory(item)).font(.caption.weight(.bold))
-                            Text("\(model.candidateRecords.filter { $0.category == item }.count)")
-                                .font(.caption2.weight(.bold))
-                                .frame(minWidth: 21, minHeight: 21)
-                                .background(category == item ? .white.opacity(0.18) : trackerPaper, in: Capsule())
-                        }
-                        .foregroundStyle(category == item ? .white : .secondary)
-                        .padding(.horizontal, 13).padding(.vertical, 11)
-                        .background(category == item ? trackerGreen : .white, in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(category == item ? trackerGreen : trackerLine))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private var workspacePanel: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(category)
-                        .font(.system(size: 30, weight: .medium, design: .serif)).foregroundStyle(SignTheme.navy)
-                    Text(categoryDescriptions[category] ?? "Candidate and membership records")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if canEdit {
-                    Button {
-                        editingRecord = .blank(category: category)
-                        creatingRecord = true
-                    } label: {
-                        Label("Add record", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent).tint(trackerGreen)
-                }
-            }
-            Divider()
-
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search names, contact details, status, or notes", text: $query)
-                        .textFieldStyle(.plain)
-                }
-                .padding(.horizontal, 12).frame(height: 42)
-                .background(.white, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(trackerLine))
-
-                Picker("Owner", selection: $ownerFilter) {
-                    ForEach(ownerOptions, id: \.self) { Text($0).tag($0) }
-                }
-                .labelsHidden().frame(width: 185)
-
-                Picker("Status", selection: $statusFilter) {
-                    ForEach(statusOptions, id: \.self) { Text($0).tag($0) }
-                }
-                .labelsHidden().frame(width: 210)
-
-                Button("Clear") {
-                    query = ""
-                    ownerFilter = "All owners"
-                    statusFilter = "All statuses"
-                }
-                .buttonStyle(.bordered)
-            }
-
-            if model.candidateTrackerLoading && model.candidateRecords.isEmpty {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Loading Candidate Tracker...").foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 180)
-            } else if filteredRecords.isEmpty {
-                ContentUnavailableView(
-                    query.isEmpty ? "No records in this section" : "No matching records",
-                    systemImage: "person.text.rectangle",
-                    description: Text(query.isEmpty ? "Choose another section or add a record." : "Try a different name, status, owner, or next step.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 180)
-            } else {
-                LazyVStack(spacing: 12) {
-                    ForEach(filteredRecords) { record in
-                        recordCard(record)
-                    }
-                }
-            }
-        }
-        .padding(28)
-        .background(.white, in: RoundedRectangle(cornerRadius: 22))
-        .overlay(RoundedRectangle(cornerRadius: 22).stroke(trackerLine))
     }
 
     private func recordCard(_ record: CandidateRecord) -> some View {
@@ -723,7 +496,7 @@ struct NativeCandidateTrackerView: View {
                     Text(record.nextStep).font(.callout).lineSpacing(3)
                 }
                 .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(red: 252 / 255, green: 250 / 255, blue: 244 / 255))
+                .background(Color(nsColor: .controlBackgroundColor))
                 .overlay(alignment: .leading) { Rectangle().fill(trackerGold).frame(width: 3) }
             }
 
@@ -739,18 +512,8 @@ struct NativeCandidateTrackerView: View {
             }
         }
         .padding(19)
-        .background(.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(trackerLine))
-    }
-
-    private func trackerStat(title: String, value: Int, attention: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(title).font(.caption2.weight(.bold)).foregroundStyle(.white.opacity(0.78))
-            Text("\(value)").font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
-        }
-        .padding(16).frame(width: 116, height: 106, alignment: .leading)
-        .background(attention ? trackerGold.opacity(0.23) : .white.opacity(0.08), in: RoundedRectangle(cornerRadius: 15))
-        .overlay(RoundedRectangle(cornerRadius: 15).stroke(attention ? trackerGold.opacity(0.55) : .white.opacity(0.14)))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(trackerLine))
     }
 
     private func trackerDetail(_ title: String, _ value: String) -> some View {
@@ -786,35 +549,7 @@ struct NativeCandidateTrackerView: View {
         name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
     }
 
-    private func shortCategory(_ value: String) -> String {
-        switch value {
-        case "Entered Apprentices": return "EAs"
-        case "Degree History": return "History"
-        case "Website & Social Media Contacts": return "Web / Social"
-        case "Demits In": return "Demits"
-        default: return value
-        }
-    }
 
-    private func greeting(for date: Date) -> String {
-        switch Calendar.current.component(.hour, from: date) {
-        case 0..<12: return "Good morning"
-        case 12..<18: return "Good afternoon"
-        default: return "Good evening"
-        }
-    }
-
-    private static let longDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d, yyyy"
-        return formatter
-    }()
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .medium
-        return formatter
-    }()
 }
 
 struct CandidateRecordEditorView: View {
@@ -841,7 +576,7 @@ struct CandidateRecordEditorView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(isNew ? "Add candidate record" : "Edit candidate record")
-                        .font(.system(size: 30, weight: .semibold, design: .serif))
+                        .font(.title2.weight(.semibold))
                         .foregroundStyle(SignTheme.navy)
                     Text("Changes appear in the Mac app and tracker URL.").foregroundStyle(.secondary)
                 }
@@ -885,120 +620,12 @@ struct CandidateRecordEditorView: View {
                         if await model.saveCandidateRecord(record, isNew: isNew) { dismiss() }
                     }
                 }
-                .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                .buttonStyle(.borderedProminent).tint(.accentColor)
                 .disabled(record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.candidateTrackerLoading)
             }
             .padding(20)
         }
         .frame(minWidth: 720, minHeight: 720)
-    }
-}
-
-struct CandidateTrackerView: View {
-    @EnvironmentObject var model: AppModel
-    @State private var signInURL: URL?
-    @State private var isLoading = true
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("CANDIDATE MANAGEMENT")
-                        .font(.caption2.weight(.bold))
-                        .tracking(2)
-                        .foregroundStyle(SignTheme.gold)
-                    Text("Candidate Tracker")
-                        .font(.system(size: 32, weight: .semibold, design: .serif))
-                        .foregroundStyle(SignTheme.navy)
-                    Text("Secure tracker access remains inside Stone Square Sign.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Label("Secure connection", systemImage: "lock.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-            }
-            .padding(24)
-            .background(SignTheme.ivory.opacity(0.5))
-            Divider()
-            if let signInURL {
-                EmbeddedCandidateTracker(url: signInURL)
-            } else if isLoading {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Opening Candidate Tracker securely...")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(spacing: 14) {
-                    Image(systemName: "exclamationmark.lock.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(SignTheme.gold)
-                    Text("Candidate Tracker could not be opened.")
-                        .font(.headline)
-                    Text(model.message.isEmpty ? "Check the signing service connection and try again." : model.message)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    Button("Try again") {
-                        Task { await openTracker() }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(30)
-            }
-        }
-        .task {
-            if signInURL == nil {
-                await openTracker()
-            }
-        }
-    }
-
-    private func openTracker() async {
-        isLoading = true
-        signInURL = await model.candidateTrackerSignInURL()
-        isLoading = false
-    }
-}
-
-struct EmbeddedCandidateTracker: NSViewRepresentable {
-    let url: URL
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.uiDelegate = context.coordinator
-        webView.navigationDelegate = context.coordinator
-        webView.allowsMagnification = true
-        webView.load(URLRequest(url: url))
-        return webView
-    }
-
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        if webView.url == nil && !webView.isLoading {
-            webView.load(URLRequest(url: url))
-        }
-    }
-
-    final class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate {
-        func webView(
-            _ webView: WKWebView,
-            createWebViewWith configuration: WKWebViewConfiguration,
-            for navigationAction: WKNavigationAction,
-            windowFeatures: WKWindowFeatures
-        ) -> WKWebView? {
-            if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
-                webView.load(URLRequest(url: url))
-            }
-            return nil
-        }
     }
 }
 
@@ -1066,24 +693,14 @@ struct DispensationBuilderView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("OFFICIAL GRAND LODGE TEMPLATE")
-                        .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
-                    Text("Create a dispensation")
-                        .font(.system(size: 40, weight: .semibold, design: .serif))
-                        .foregroundStyle(SignTheme.navy)
-                    Text(step == 0 ? "Paste the event information to begin." : step == 1 ? "Answer only the remaining Lodge questions." : "Review the summary and actual PDF before sending it for signature.")
-                        .foregroundStyle(.secondary)
-                }
-                Text("STEP \(step + 1) OF 3")
-                    .font(.caption2.weight(.bold)).tracking(1.5).foregroundStyle(SignTheme.gold)
+                NativeWorkspaceHeader(title: "Create Dispensation", subtitle: "Prepare the request and review the official document", symbol: "doc.badge.plus").padding(.horizontal, -22)
                 HStack(spacing: 30) {
                     Label("Stone Square Lodge No. 22", systemImage: "building.columns.fill")
                     Label(model.user?.name ?? "Worshipful Master", systemImage: "signature")
                 }
                 .font(.headline).foregroundStyle(SignTheme.navy)
                 .padding(20).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
 
                 if step == 0 {
                     VStack(alignment: .leading, spacing: 12) {
@@ -1095,18 +712,18 @@ struct DispensationBuilderView: View {
                             .font(.body)
                             .frame(minHeight: 165)
                             .padding(8)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 8))
+                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
                             .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator) }
                         Button("Read and review pasted details", systemImage: "text.magnifyingglass") { parsePastedDetails() }
-                            .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                            .buttonStyle(.borderedProminent).tint(.accentColor)
                             .disabled(model.isBusy || pastedDetails.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     .padding(20)
-                    .background(SignTheme.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                    .background(SignTheme.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                 } else if step == 1 {
                     VStack(alignment: .leading, spacing: 18) {
                         Text("Remaining questions")
-                            .font(.system(size: 28, weight: .semibold, design: .serif)).foregroundStyle(SignTheme.navy)
+                            .font(.title2.weight(.semibold)).foregroundStyle(SignTheme.navy)
                         Text("The event information you approved is already saved. The officer will enter their own name and address when signing.")
                             .foregroundStyle(.secondary)
                         Form {
@@ -1127,16 +744,16 @@ struct DispensationBuilderView: View {
                             Button("Back to pasted details") { step = 0 }
                             Spacer()
                             Button("Review summary and PDF", systemImage: "doc.text.magnifyingglass") { createPreview() }
-                                .buttonStyle(.borderedProminent).tint(SignTheme.navy).controlSize(.large)
+                                .buttonStyle(.borderedProminent).tint(.accentColor).controlSize(.large)
                                 .disabled(model.isBusy || !personalInfoConfirmed || worshipfulMasterAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
                     .padding(22)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
                 } else {
                     VStack(alignment: .leading, spacing: 18) {
                         Text("Final review")
-                            .font(.system(size: 28, weight: .semibold, design: .serif)).foregroundStyle(SignTheme.navy)
+                            .font(.title2.weight(.semibold)).foregroundStyle(SignTheme.navy)
                         VStack(spacing: 0) {
                             ReviewField(label: "Title", value: title)
                             ReviewField(label: "Request", value: requestDetails)
@@ -1150,24 +767,24 @@ struct DispensationBuilderView: View {
                         if let previewDocument {
                             PDFKitContainer(document: previewDocument)
                                 .frame(minHeight: 560)
-                                .background(.white, in: RoundedRectangle(cornerRadius: 10))
+                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                                 .overlay { RoundedRectangle(cornerRadius: 10).stroke(.separator) }
                         }
                         HStack {
                             Button("Back to remaining questions") { step = 1 }
                             Spacer()
                             Button("Send for officer signature", systemImage: "paperplane.fill") { create() }
-                                .buttonStyle(.borderedProminent).tint(SignTheme.navy).controlSize(.large)
+                                .buttonStyle(.borderedProminent).tint(.accentColor).controlSize(.large)
                                 .disabled(model.isBusy || previewDocument == nil)
                         }
                     }
                     .padding(22)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
                 }
             }
-            .padding(38)
+            .padding(22)
         }
-        .background(SignTheme.ivory.opacity(0.45))
+        .background(Color(nsColor: .windowBackgroundColor))
         .task { applySavedProfiles() }
         .onChange(of: worshipfulMasterAddress) { _, _ in personalInfoConfirmed = false }
         .sheet(isPresented: $showingPasteReview) {
@@ -1270,7 +887,7 @@ struct LandingDashboardView: View {
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
     let openMinutes: () -> Void
-    @State private var pulse = false
+    let openTreasury: () -> Void
 
     private var awaitingCount: Int {
         if model.user?.role == "owner" || model.user?.role == "viewer" {
@@ -1289,120 +906,39 @@ struct LandingDashboardView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("STONE SQUARE DOCUMENT CENTER")
-                        .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
-                    Text("\(easternGreeting), \(model.user?.name ?? "")")
-                        .font(.system(size: 44, weight: .semibold, design: .serif)).foregroundStyle(SignTheme.navy)
-                    Text("Choose the Lodge document area you want to open.")
-                        .font(.title3).foregroundStyle(.secondary)
-                    Text(model.user?.roleLabel ?? "")
-                        .font(.caption.weight(.bold)).foregroundStyle(SignTheme.blue)
-                }
-
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 18)], spacing: 18) {
-                    Button(action: openReports) {
-                        LandingDocumentCard(title: "Report Generator", description: "Prepare, preview and send a Lodge report", systemImage: "doc.text", comingSoon: false, awaiting: false, pulse: false)
-                    }.buttonStyle(.plain)
-                    Button(action: openDispensations) {
-                        LandingDocumentCard(
-                            title: "Dispensations",
-                            description: awaitingCount > 0
-                                ? "\(awaitingCount) document\(awaitingCount == 1 ? "" : "s") awaiting action"
-                                : "Open the document queue",
-                            systemImage: "doc.text.fill",
-                            comingSoon: false,
-                            awaiting: awaitingCount > 0,
-                            pulse: pulse
-                        )
+        VStack(spacing: 0) {
+            NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
+            List {
+                Section("Reports and records") {
+                    if model.user?.role != "member" {
+                        homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports)
+                        homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) awaiting action" : "Open the document queue", "doc.text.fill", action: openDispensations)
                     }
-                    .buttonStyle(.plain)
                     if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
-                        Button(action: openMinutes) {
-                            LandingDocumentCard(
-                                title: "Meeting Minutes",
-                                description: "Create, review, preview, and attest to meeting minutes",
-                                systemImage: "text.document.fill",
-                                comingSoon: false,
-                                awaiting: false,
-                                pulse: false
-                            )
-                        }
-                        .buttonStyle(.plain)
+                        homeRow("Meeting Minutes", "Prepare, review and attest to meeting records", "text.document.fill", action: openMinutes)
                     }
-                    LandingDocumentCard(
-                        title: "Treasurer Reports",
-                        description: "Coming soon",
-                        systemImage: "chart.bar.doc.horizontal.fill",
-                        comingSoon: true,
-                        awaiting: false,
-                        pulse: false
-                    )
-                Button(action: openCandidateTracker) {
-                    LandingDocumentCard(
-                        title: "Candidate Tracker",
-                        description: "Open the Candidate Tracker",
-                            systemImage: "person.text.rectangle.fill",
-                            comingSoon: false,
-                            awaiting: false,
-                            pulse: false
-                        )
+                    if model.user?.canUseTreasury == true {
+                        homeRow("Treasurer Reports", "Upload banking records, prepare and review", "chart.bar.doc.horizontal.fill", action: openTreasury)
                     }
-                    .buttonStyle(.plain)
+                    if model.user?.role != "member" {
+                        homeRow("Candidate Tracker", "Open candidate and membership records", "person.text.rectangle", action: openCandidateTracker)
+                    }
                 }
-            }
-            .padding(42)
-        }
-        .background(
-            ZStack {
-                SignTheme.ivory.opacity(0.42)
-                Circle().fill(SignTheme.gold.opacity(0.07)).frame(width: 520).offset(x: 390, y: -270)
-            }
-        )
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true)) { pulse = true }
-        }
+                Section("Your account") {
+                    LabeledContent("Signed in as", value: model.user?.name ?? "")
+                    LabeledContent("Access", value: model.user?.roleLabel ?? "")
+                }
+            }.listStyle(.inset).environment(\.defaultMinListRowHeight, 48)
+        }.background(Color(nsColor: .windowBackgroundColor))
     }
-}
-
-struct LandingDocumentCard: View {
-    let title: String
-    let description: String
-    let systemImage: String
-    let comingSoon: Bool
-    let awaiting: Bool
-    let pulse: Bool
-
-    var body: some View {
-        HStack(spacing: 20) {
-            Image(systemName: systemImage)
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(comingSoon ? Color.secondary : awaiting ? Color.white : SignTheme.gold)
-                .frame(width: 62, height: 62)
-                .background(comingSoon ? Color.gray.opacity(0.12) : awaiting ? SignTheme.blue : SignTheme.navy, in: RoundedRectangle(cornerRadius: 14))
-            VStack(alignment: .leading, spacing: 7) {
-                Text(title).font(.title3.weight(.bold)).foregroundStyle(comingSoon ? Color.secondary : SignTheme.navy)
-                Text(description).font(.callout).foregroundStyle(awaiting ? SignTheme.blue : Color.secondary)
-            }
-            Spacer()
-            if comingSoon {
-                Text("COMING SOON").font(.caption2.weight(.bold)).tracking(1).foregroundStyle(.secondary)
-            } else {
-                Image(systemName: "chevron.right").font(.headline).foregroundStyle(awaiting ? SignTheme.blue : Color.secondary)
-            }
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
-        .background(comingSoon ? Color.gray.opacity(0.07) : Color.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(awaiting ? SignTheme.blue.opacity(pulse ? 1 : 0.35) : Color.gray.opacity(0.2), lineWidth: awaiting ? 3 : 1)
-        }
-        .shadow(color: awaiting ? SignTheme.blue.opacity(pulse ? 0.25 : 0.05) : .clear, radius: 18)
-        .scaleEffect(awaiting && pulse ? 1.012 : 1)
-        .opacity(comingSoon ? 0.68 : 1)
+    private func homeRow(_ title: String, _ detail: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: symbol).font(.title3).foregroundStyle(Color.accentColor).frame(width: 28)
+                VStack(alignment: .leading, spacing: 4) { Text(title).font(.headline); Text(detail).font(.callout).foregroundStyle(.secondary) }
+                Spacer(); Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }.padding(.vertical, 8).contentShape(Rectangle())
+        }.buttonStyle(.plain)
     }
 }
 
@@ -1415,7 +951,7 @@ struct LocationConfirmationView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("ADDRESS CHECK").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
             Text("Is this the correct event address?")
-                .font(.system(size: 30, weight: .semibold, design: .serif)).foregroundStyle(SignTheme.navy)
+                .font(.title2.weight(.semibold)).foregroundStyle(SignTheme.navy)
             VStack(alignment: .leading, spacing: 8) {
                 Text(match.displayName).font(.headline)
                 Text(match.streetAddress)
@@ -1429,7 +965,7 @@ struct LocationConfirmationView: View {
                 Button("No, keep my current address", action: reject)
                 Spacer()
                 Button("Yes, use this address", action: useAddress)
-                    .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                    .buttonStyle(.borderedProminent).tint(.accentColor)
             }
         }
         .padding(30)
@@ -1470,7 +1006,7 @@ struct DispensationPasteReviewView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("PASTED DETAILS REVIEW").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
             Text("Does this look correct?")
-                .font(.system(size: 30, weight: .semibold, design: .serif)).foregroundStyle(SignTheme.navy)
+                .font(.title2.weight(.semibold)).foregroundStyle(SignTheme.navy)
             ScrollView {
                 VStack(spacing: 0) {
                     ReviewField(label: "Title", value: result.fields.title)
@@ -1500,7 +1036,7 @@ struct DispensationPasteReviewView: View {
                 Button("No, go back", action: reject)
                 Spacer()
                 Button("Yes, use these details", action: useDetails)
-                    .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                    .buttonStyle(.borderedProminent).tint(.accentColor)
             }
         }
         .padding(30)
@@ -1528,59 +1064,23 @@ struct DocumentsView: View {
     @State private var viewingDocument: LodgeDocument?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("REAL TIME SIGNING QUEUE")
-                            .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
-                        Text("Lodge documents")
-                            .font(.system(size: 40, weight: .semibold, design: .serif))
-                            .foregroundStyle(SignTheme.navy)
-                        Text("New requests and signatures load automatically.").foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if model.user?.role == "owner" {
-                        Button("Upload Lodge Document", systemImage: "arrow.up.doc.fill") {
-                            showImporter = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(SignTheme.navy)
-                        .controlSize(.large)
-                    }
-                }
-                HStack(spacing: 16) {
-                    MetricBox(label: "All records", value: model.documents.count)
-                    MetricBox(label: "Awaiting signatures", value: model.documents.filter { !$0.isTerminal }.count)
-                    MetricBox(label: "Completed", value: model.documents.filter(\.isComplete).count)
-                }
-                VStack(spacing: 0) {
-                    if model.documents.isEmpty {
-                        ContentUnavailableView(
-                            "The queue is clear",
-                            systemImage: "checkmark.seal",
-                            description: Text("New dispensations will appear here automatically.")
-                        )
-                        .frame(minHeight: 320)
-                    } else {
-                        ForEach(Array(model.documents.enumerated()), id: \.element.id) { index, document in
-                            DocumentRow(
-                                document: document,
-                                queueNumber: document.isTerminal ? nil : index + 1,
-                                open: { viewingDocument = document },
-                                sign: { signingDocument = document }
-                            )
-                            if document.id != model.documents.last?.id { Divider() }
-                        }
-                    }
-                }
-                .padding(20)
-                .background(.background, in: RoundedRectangle(cornerRadius: 14))
-                .overlay { RoundedRectangle(cornerRadius: 14).stroke(.separator.opacity(0.5)) }
+        VStack(spacing: 0) {
+            NativeWorkspaceHeader(title: "Lodge Documents", subtitle: "Requests, signatures and completed records", symbol: "doc.on.doc") {
+                if model.user?.role == "owner" { Button("Upload document", systemImage: "arrow.up.doc") { showImporter = true }.buttonStyle(.borderedProminent) }
             }
-            .padding(36)
-        }
-        .background(SignTheme.ivory.opacity(0.45))
+            HStack(spacing: 16) {
+                MetricBox(label: "All records", value: model.documents.count)
+                MetricBox(label: "Awaiting signatures", value: model.documents.filter { !$0.isTerminal }.count)
+                MetricBox(label: "Completed", value: model.documents.filter(\.isComplete).count)
+            }.padding(16)
+            Divider()
+            List {
+                if model.documents.isEmpty { ContentUnavailableView("The queue is clear", systemImage: "checkmark.seal", description: Text("New dispensations will appear here automatically.")) }
+                ForEach(Array(model.documents.enumerated()), id: \.element.id) { index, document in
+                    DocumentRow(document: document, queueNumber: document.isTerminal ? nil : index + 1, open: { viewingDocument = document }, sign: { signingDocument = document })
+                }
+            }.listStyle(.inset)
+        }.background(Color(nsColor: .windowBackgroundColor))
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf]) { result in
             if case .success(let url) = result { Task { await model.upload(url: url) } }
         }
@@ -1596,12 +1096,12 @@ struct MetricBox: View {
         HStack {
             Text(label).font(.callout.weight(.medium)).foregroundStyle(.secondary)
             Spacer()
-            Text("\(value)").font(.system(size: 30, weight: .medium, design: .serif)).foregroundStyle(SignTheme.navy)
+            Text("\(value)").font(.title2.weight(.semibold)).foregroundStyle(SignTheme.navy)
         }
-        .padding(20)
+        .padding(12)
         .frame(maxWidth: .infinity)
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45)) }
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator.opacity(0.45)) }
     }
 }
 
@@ -1664,7 +1164,7 @@ struct DocumentRow: View {
                 }
                 if document.needsSignature && !document.isTerminal {
                     Button("Review and sign", action: sign)
-                        .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                        .buttonStyle(.borderedProminent).tint(.accentColor)
                 }
                 if model.user?.role == "owner" && document.isComplete && document.isDispensation {
                     Button("Draft in my mail app") {
@@ -1675,7 +1175,7 @@ struct DocumentRow: View {
                         Button("Send to the District Deputy") {
                             Task { await model.submitToDistrictDeputy(documentId: document.id) }
                         }
-                        .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                        .buttonStyle(.borderedProminent).tint(.accentColor)
                     } else {
                         Button("Send again") {
                             Task {
@@ -1777,11 +1277,7 @@ struct OfficerAccessView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Officer access")
-                    .font(.system(size: 40, weight: .semibold, design: .serif))
-                    .foregroundStyle(SignTheme.navy)
-                Text("Create one private invitation for each officer. They choose their own password.")
-                    .foregroundStyle(.secondary)
+                NativeWorkspaceHeader(title: "Officer Access", subtitle: "Invitations and account access", symbol: "person.badge.key").padding(.horizontal, -22)
                 /* One card per man, in one grid, so a Lodge Viewer reads exactly the way the
                  * two Secretaries do. Viewers previously had nowhere to appear at all, which made
                  * an invited Brother invisible until he signed in. */
@@ -1789,12 +1285,14 @@ struct OfficerAccessView: View {
                     [(model.seatName(role: "secretary", fallback: "William McDuffie"),
                       "Secretary", model.seatState(role: "secretary")),
                      (model.seatName(role: "assistant_secretary", fallback: "Adrian Reese"),
-                      "Assistant Secretary", model.seatState(role: "assistant_secretary"))]
-                    + model.officers.filter { $0.role == "viewer" }
-                        .map { ($0.name, "Lodge Viewer", OfficerSeatState.active) }
-                    + model.pendingInvitations.filter { $0.role == "viewer" }
-                        .map { ($0.name, "Lodge Viewer", OfficerSeatState.pending) }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 16)], spacing: 16) {
+                      "Assistant Secretary", model.seatState(role: "assistant_secretary")),
+                     (model.seatName(role: "treasurer", fallback: "Treasurer"), "Treasurer", model.seatState(role: "treasurer")),
+                     (model.seatName(role: "assistant_treasurer", fallback: "Assistant Treasurer"), "Assistant Treasurer", model.seatState(role: "assistant_treasurer"))]
+                    + model.officers.filter { ["viewer","member","warden"].contains($0.role) }
+                        .map { ($0.name, $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.active) }
+                    + model.pendingInvitations.filter { ["viewer","member","warden"].contains($0.role) }
+                        .map { ($0.name, $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.pending) }
+                VStack(spacing: 0) {
                     ForEach(Array(seats.enumerated()), id: \.offset) { _, seat in
                         OfficerCard(name: seat.name, office: seat.office, state: seat.state)
                     }
@@ -1803,7 +1301,10 @@ struct OfficerAccessView: View {
                     Picker("Office", selection: $role) {
                         Text("Secretary").tag("secretary")
                         Text("Assistant Secretary").tag("assistant_secretary")
+                    Text("Treasurer").tag("treasurer")
+                    Text("Assistant Treasurer").tag("assistant_treasurer")
                         Text("Lodge Viewer").tag("viewer")
+                        Text("Lodge Member (permissions assigned separately)").tag("member")
                     }
                     TextField("Full name", text: $name)
                     TextField("Email address", text: $email)
@@ -1814,7 +1315,7 @@ struct OfficerAccessView: View {
                             }
                         }
                     }
-                    .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                    .buttonStyle(.borderedProminent).tint(.accentColor)
                     if !privateLink.isEmpty {
                         TextField("Private link", text: $privateLink)
                         Button("Copy private link") {
@@ -1857,8 +1358,8 @@ struct OfficerAccessView: View {
                         }
                     }
                     .padding(20)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay { RoundedRectangle(cornerRadius: 14).stroke(.separator.opacity(0.5)) }
+                    .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator.opacity(0.5)) }
                 }
 
                 if !model.officers.isEmpty {
@@ -1888,16 +1389,16 @@ struct OfficerAccessView: View {
                                 }
                             }
                             .padding(14)
-                            .background(.background, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay { RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.4)) }
+                            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator.opacity(0.4)) }
                         }
                     }
                     .frame(maxWidth: 760, alignment: .leading)
                 }
             }
-            .padding(38)
+            .padding(22)
         }
-        .background(SignTheme.ivory.opacity(0.45))
+        .background(Color(nsColor: .windowBackgroundColor))
         .alert("Revoke access for \(revokeTargetName)?", isPresented: $showRevokeConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Revoke access", role: .destructive) {
@@ -1937,8 +1438,8 @@ struct OfficerCard: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity)
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.4)) }
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator.opacity(0.4)) }
     }
 }
 
@@ -1949,26 +1450,22 @@ struct SignatureProfileView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text("Signature profile")
-                .font(.system(size: 40, weight: .semibold, design: .serif))
-                .foregroundStyle(SignTheme.navy)
-            Text("This saved signature is applied only after you review a document and confirm consent.")
-                .foregroundStyle(.secondary)
+            NativeWorkspaceHeader(title: "Signature Profile", subtitle: "Applied only after document review and your consent", symbol: "signature").padding(.horizontal, -22)
             Group {
                 if let image { Image(nsImage: image).resizable().scaledToFit().padding(24) }
                 else { ContentUnavailableView("No signature saved", systemImage: "signature") }
             }
             .frame(maxWidth: 680, minHeight: 210)
-            .background(.white, in: RoundedRectangle(cornerRadius: 14))
-            .overlay { RoundedRectangle(cornerRadius: 14).stroke(.separator.opacity(0.5)) }
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator.opacity(0.5)) }
             Button(model.user?.hasSignature == true ? "Change signature" : "Create signature") {
                 showEditor = true
             }
-            .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+            .buttonStyle(.borderedProminent).tint(.accentColor)
             Spacer()
         }
-        .padding(38)
-        .background(SignTheme.ivory.opacity(0.45))
+        .padding(22)
+        .background(Color(nsColor: .windowBackgroundColor))
         .task { image = try? await model.signatureImage() }
         .sheet(isPresented: $showEditor, onDismiss: {
             Task { image = try? await model.signatureImage() }
@@ -1988,7 +1485,11 @@ struct SettingsView: View {
             }
             Section("Automatic login") {
                 Label("This Mac opens your saved account automatically", systemImage: "desktopcomputer")
-                Text("No password or Touch ID is needed when opening the app. Connection interruptions keep your login saved.")
+                if let session = model.signInSession {
+                    Text(session.title).font(.headline)
+                    Text(session.explanation).font(.callout)
+                }
+                Text("Connection interruptions keep your login saved. Signing out, resetting your password, or losing account access ends the saved sign-in.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -2021,7 +1522,7 @@ struct SignatureApprovalView: View {
             Text("ELECTRONIC SIGNATURE")
                 .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
             Text("Sign \(document.displayTitle)")
-                .font(.system(size: 30, weight: .semibold, design: .serif))
+                .font(.title2.weight(.semibold))
                 .foregroundStyle(SignTheme.navy)
             Text("Review the PDF before applying your saved signature. The action is added to the document audit history.")
                 .foregroundStyle(.secondary)
@@ -2031,7 +1532,7 @@ struct SignatureApprovalView: View {
                 } else { ProgressView() }
             }
             .frame(maxWidth: .infinity, minHeight: 170)
-            .background(.white, in: RoundedRectangle(cornerRadius: 9))
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 9))
             .overlay { RoundedRectangle(cornerRadius: 9).stroke(.gray.opacity(0.4)) }
             Toggle(
                 "I agree that this electronic signature represents my signature on this document.",
@@ -2053,7 +1554,7 @@ struct SignatureApprovalView: View {
                 Button("Apply saved signature") {
                     Task { if await model.sign(document: document) { dismiss() } }
                 }
-                .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                .buttonStyle(.borderedProminent).tint(.accentColor)
                 .disabled(!consent || signatureImage == nil || !profileReady || model.isBusy)
             }
         }
@@ -2088,7 +1589,7 @@ struct SignatureSetupView: View {
             Text("SIGNATURE PROFILE")
                 .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
             Text(required ? "Create your signature to continue" : "Change your saved signature")
-                .font(.system(size: 30, weight: .semibold, design: .serif))
+                .font(.title2.weight(.semibold))
                 .foregroundStyle(SignTheme.navy)
             Text(required
                  ? "Draw your signature, choose a cursive style, or create your initials."
@@ -2103,7 +1604,7 @@ struct SignatureSetupView: View {
             if mode == 0 {
                 DrawingPad(paths: $paths, currentPath: $currentPath)
                     .frame(height: 200)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 9))
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 9))
                     .overlay { RoundedRectangle(cornerRadius: 9).stroke(.gray.opacity(0.5)) }
                 Button("Clear drawing") { paths = []; currentPath = [] }
             } else {
@@ -2128,9 +1629,9 @@ struct SignatureSetupView: View {
                                         .frame(height: 72)
                                     Text(typedSignatureStyles[style].label.uppercased())
                                         .font(.caption2.weight(.bold)).tracking(0.8)
-                                        .foregroundStyle(.secondary).padding(.horizontal, 9).padding(.bottom, 7)
+                                        .foregroundStyle(Color.black.opacity(0.65)).padding(.horizontal, 9).padding(.bottom, 7)
                                 }
-                                    .background(.white, in: RoundedRectangle(cornerRadius: 8))
+                                    .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
                                     .overlay {
                                         RoundedRectangle(cornerRadius: 8)
                                             .stroke(selectedStyle == style ? SignTheme.gold : .gray.opacity(0.3), lineWidth: selectedStyle == style ? 2 : 1)
@@ -2146,7 +1647,7 @@ struct SignatureSetupView: View {
                 if !required { Button("Cancel") { dismiss() } }
                 Spacer()
                 Button("Save my signature") { save() }
-                    .buttonStyle(.borderedProminent).tint(SignTheme.navy)
+                    .buttonStyle(.borderedProminent).tint(.accentColor)
                     .disabled(model.isBusy || (mode == 0 ? paths.isEmpty : signatureInput.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         }
@@ -2304,21 +1805,10 @@ struct DuesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("RESTRICTED TO THE WORSHIPFUL MASTER AND THE SECRETARIES")
-                            .font(.caption2).tracking(1.4).foregroundStyle(.secondary)
-                        Text("Dues").font(.largeTitle.weight(.semibold))
-                        if let ledger = model.dues {
-                            Text("\(ledger.duesYear) dues, \(lodgeMoney(ledger.rateCents)) each, reconciled live against both Zeffy campaigns.")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Button("Refresh") { Task { await model.loadDues() } }
-                        .disabled(model.duesLoading)
-                }
-
+                NativeWorkspaceHeader(title: "Dues", subtitle: "Payments, balances and reconciliation", symbol: "dollarsign.circle") {
+                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadDues() } }.disabled(model.duesLoading)
+                }.padding(.horizontal, -22)
+                if let ledger = model.dues { Text("\(ledger.duesYear) dues, \(lodgeMoney(ledger.rateCents)) each, reconciled against both Zeffy campaigns.").font(.callout).foregroundStyle(.secondary) }
                 if model.duesLoading && model.dues == nil {
                     ProgressView("Reading payments from Zeffy…").frame(maxWidth: .infinity)
                 }
@@ -2442,15 +1932,7 @@ struct ApprovalsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("WHAT THE DISTRICT DEPUTY DECIDED")
-                        .font(.caption.weight(.bold)).foregroundStyle(SignTheme.gold).tracking(1.4)
-                    Text("Approvals")
-                        .font(.system(size: 34, weight: .semibold, design: .serif))
-                        .foregroundStyle(SignTheme.navy)
-                    Text("Every dispensation ruled on, with who granted it, when, and how it was given.")
-                        .foregroundStyle(.secondary)
-                }
+                NativeWorkspaceHeader(title: "Approvals", subtitle: "Decisions and endorsed dispensation records", symbol: "checkmark.seal").padding(.horizontal, -22)
                 if model.approvalsLoading && model.approvals.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 40)
                 } else if !model.approvalsError.isEmpty {
@@ -2490,13 +1972,13 @@ struct ApprovalsView: View {
                         }
                     }
                     .padding(20)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay { RoundedRectangle(cornerRadius: 14).stroke(.separator.opacity(0.5)) }
+                    .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator.opacity(0.5)) }
                 }
             }
-            .padding(38)
+            .padding(22)
         }
-        .background(SignTheme.ivory.opacity(0.45))
+        .background(Color(nsColor: .windowBackgroundColor))
         .task { await model.loadApprovals() }
     }
 }
@@ -2514,15 +1996,7 @@ struct ProposalReviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("WHAT THE WARDENS HAVE PUT UP")
-                        .font(.caption.weight(.bold)).foregroundStyle(SignTheme.gold).tracking(1.4)
-                    Text("Warden Proposals")
-                        .font(.system(size: 34, weight: .semibold, design: .serif))
-                        .foregroundStyle(SignTheme.navy)
-                    Text("Approving one creates the dispensation exactly as if you had built it yourself, and it goes to both Secretaries.")
-                        .foregroundStyle(.secondary)
-                }
+                NativeWorkspaceHeader(title: "Warden Proposals", subtitle: "Review proposals and respond to the preparing Warden", symbol: "square.and.pencil").padding(.horizontal, -22)
                 if model.proposalsLoading && model.proposals.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 40)
                 } else if !model.proposalsError.isEmpty {
@@ -2581,7 +2055,7 @@ struct ProposalReviewView: View {
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(nsColor: .controlBackgroundColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
             }
