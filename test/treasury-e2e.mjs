@@ -34,7 +34,9 @@ try{
  check('Signed report cannot be changed' ,(await api(`/api/treasury/${r.id}`,owner.token,'PUT',{draft:revised,revision:r.revision})).status===403);check('Signed report cannot be deleted',(await api(`/api/treasury/${r.id}`,owner.token,'DELETE')).status===409);
  response=await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision});check('Secretary records distribution without WM review',response.status===200&&response.data.report.status==='distributed');
  const upload=new FormData();upload.append('files',new Blob([notes]),'notes.txt');r=(await api('/api/treasury/generate',treasurer.token,'POST',upload)).data.report;check('TXT upload preserves original extracted source',(await api(`/api/treasury/${r.id}/source`,treasurer.token)).data.text===notes);check('Unsigned report deletes',(await api(`/api/treasury/${r.id}`,treasurer.token,'DELETE')).status===200);
- const assistant=await officer('assistant_treasurer'),member=await officer('member');
+ const assistant=await officer('treasury_preparer'),member=await officer('member');
+ check('Report preparer cannot access minutes',(await api('/api/minutes',assistant.token)).status===403);
+ check('Report preparer cannot access dispensations',(await api('/api/documents',assistant.token)).status===403);
  check('Basic member has no treasury permission',(await api('/api/treasury',member.token)).status===403);
  check('Basic member has no document access',(await api('/api/documents',member.token)).status===403);
  check('Basic member cannot save signatures',(await api('/api/profile/signature',member.token,'PUT',{})).status===403);
@@ -49,9 +51,9 @@ try{
  check('Private source URL is protected',(await api(`/api/treasury/${shared.id}/source`,member.token)).status===404);
  check('Cannot assign a basic member as preparer',(await api(`/api/treasury/${shared.id}/assign`,secretary.token,'POST',{revision:shared.revision,preparerUserId:member.user.id})).status===400);
  const assigned=await api(`/api/treasury/${shared.id}/assign`,secretary.token,'POST',{revision:shared.revision,preparerUserId:assistant.user.id});shared=assigned.data.report;
- check('Secretary hands records to Assistant Treasurer',assigned.status===200&&shared.preparerUserId===assistant.user.id&&shared.createdByUserId===secretary.user.id&&shared.preparerRole==='assistant_treasurer');
+ check('Secretary hands records to Treasury Report Preparer',assigned.status===200&&shared.preparerUserId===assistant.user.id&&shared.createdByUserId===secretary.user.id&&shared.preparerRole==='treasury_preparer');
  check('Stale assignment is rejected',(await api(`/api/treasury/${shared.id}/assign`,secretary.token,'POST',{revision:1,preparerUserId:treasurer.user.id})).status===409);
- check('Assistant Treasurer sees assigned draft',(await api('/api/treasury',assistant.token)).data.reports.some(r=>r.id===shared.id&&r.preparerUserId===assistant.user.id));
+ check('Treasury Report Preparer sees assigned draft',(await api('/api/treasury',assistant.token)).data.reports.some(r=>r.id===shared.id&&r.preparerUserId===assistant.user.id));
  const originals=(await api(`/api/treasury/${shared.id}/source`,assistant.token)).data;
  check('Assigned preparer reads original notes and file list',originals.text.includes(notes)&&originals.files[0].name==='banking-notes.txt');
  const originalFile=await api(`/api/treasury/${shared.id}/sources/${originals.files[0].id}`,assistant.token);
@@ -64,7 +66,7 @@ try{
  const finalized=await api(`/api/treasury/${shared.id}/preparer-attest`,assistant.token,'POST',{revision:shared.revision});shared=finalized.data.report;
  check('Assigned preparer signs and finalizes without bank login',finalized.status===200&&shared.status==='ready_for_distribution');
  const signedPdf=await api(`/api/treasury/${shared.id}/preview`,assistant.token,'POST',{});const signedParser=new PDFParse({data:signedPdf.data});const signedText=(await signedParser.getText()).text;await signedParser.destroy();
- check('PDF names the actual preparer and office',signedText.includes('Test assistant_treasurer')&&signedText.includes('Assistant Treasurer')&&!signedText.includes('Test secretary'));
+ check('PDF names the actual preparer and office',signedText.includes('Test treasury_preparer')&&signedText.includes('Treasury Report Preparer')&&!signedText.includes('Test secretary'));
  check('Final report cannot be reassigned',(await api(`/api/treasury/${shared.id}/assign`,owner.token,'POST',{revision:shared.revision,preparerUserId:treasurer.user.id})).status===409);
  const ownUpload=new FormData();ownUpload.set('sourceText',notes);
  const uploadOnly=(await api('/api/treasury/generate',member.token,'POST',ownUpload)).data.report;

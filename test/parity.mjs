@@ -151,8 +151,8 @@ check('both clients say plainly when an approval has no endorsed copy behind it'
   && /No approval document on file/.test(macViews));
 
 check('both clients show a Brother invited as a viewer, not only the two Secretaries',
-  read('public/app.js').includes("['viewer','warden','member'].includes(invite.role)")
-  && macViews.includes('["viewer","member","warden"].contains($0.role)')
+  /\['viewer','warden','member'(?:,'treasury_preparer')?\]\.includes\(invite.role\)/.test(read('public/app.js'))
+  && /\["viewer","member","warden"(?:,"treasury_preparer")?\]\.contains\(\$0.role\)/.test(macViews)
   && macViews.includes('pendingInvitations.filter'));
 
 /* A workspace section has to live inside <div class="content">. Put one outside and it

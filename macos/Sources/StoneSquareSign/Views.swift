@@ -1288,10 +1288,10 @@ struct OfficerAccessView: View {
                       "Assistant Secretary", model.seatState(role: "assistant_secretary")),
                      (model.seatName(role: "treasurer", fallback: "Treasurer"), "Treasurer", model.seatState(role: "treasurer")),
                      (model.seatName(role: "assistant_treasurer", fallback: "Assistant Treasurer"), "Assistant Treasurer", model.seatState(role: "assistant_treasurer"))]
-                    + model.officers.filter { ["viewer","member","warden"].contains($0.role) }
-                        .map { ($0.name, $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.active) }
-                    + model.pendingInvitations.filter { ["viewer","member","warden"].contains($0.role) }
-                        .map { ($0.name, $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.pending) }
+                    + model.officers.filter { ["viewer","member","warden","treasury_preparer"].contains($0.role) }
+                        .map { ($0.name, $0.role == "treasury_preparer" ? "Treasury Report Preparer" : $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.active) }
+                    + model.pendingInvitations.filter { ["viewer","member","warden","treasury_preparer"].contains($0.role) }
+                        .map { ($0.name, $0.role == "treasury_preparer" ? "Treasury Report Preparer" : $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.pending) }
                 VStack(spacing: 0) {
                     ForEach(Array(seats.enumerated()), id: \.offset) { _, seat in
                         OfficerCard(name: seat.name, office: seat.office, state: seat.state)
@@ -1303,6 +1303,7 @@ struct OfficerAccessView: View {
                         Text("Assistant Secretary").tag("assistant_secretary")
                     Text("Treasurer").tag("treasurer")
                     Text("Assistant Treasurer").tag("assistant_treasurer")
+                    Text("Treasury Report Preparer").tag("treasury_preparer")
                         Text("Lodge Viewer").tag("viewer")
                         Text("Lodge Member (permissions assigned separately)").tag("member")
                     }

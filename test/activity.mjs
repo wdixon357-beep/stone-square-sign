@@ -10,7 +10,7 @@ assert.equal(measuredSeconds({...previous,last_heartbeat_at:null},true,now),0);
 assert.equal(measuredSeconds({...previous,last_heartbeat_at:new Date(now+1000).toISOString()},true,now),0);
 console.log('PASS Active time excludes idle, first observations, clock reversal and disconnected gaps');
 const base='http://127.0.0.1:3548';
-const server=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:'3548',NODE_ENV:'test',DATABASE_URL:'',PGLITE_DIR:'',OWNER_EMAIL:'activity-owner@example.org',APP_BASE_URL:base,SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:'',LODGE_ACCESS_CODE:'',DDGM_EMAIL:'unused@example.org'},stdio:'ignore'});
+const server=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:'3548',NODE_ENV:'test',SESSION_DAYS:'7',SESSION_REFRESH_DAYS:'3',DATABASE_URL:'',PGLITE_DIR:'',OWNER_EMAIL:'activity-owner@example.org',APP_BASE_URL:base,SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:'',LODGE_ACCESS_CODE:'',DDGM_EMAIL:'unused@example.org'},stdio:'ignore'});
 let passed=0;const check=(name,ok)=>{assert.ok(ok,name);passed++;console.log('PASS '+name)};
 async function api(path,token,method='GET',body,client='web'){const form=body instanceof FormData;const r=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`}:{ }),...(body&&!form?{'Content-Type':'application/json'}:{}),'X-Stone-Square-Client':client},body:body?(form?body:JSON.stringify(body)):undefined});return{status:r.status,data:r.headers.get('content-type')?.includes('json')?await r.json():await r.text()};}
 try{

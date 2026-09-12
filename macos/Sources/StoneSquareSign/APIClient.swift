@@ -407,6 +407,10 @@ final class AppModel: ObservableObject {
 
     func refresh(silent: Bool = false) async {
         await refreshMinutesReviewAlerts()
+        guard ["owner", "secretary", "assistant_secretary", "signer", "viewer", "warden"].contains(user?.role ?? "") else {
+            documents = []
+            return
+        }
         do {
             let response: DocumentsResponse = try await request("/api/documents")
             documents = response.documents

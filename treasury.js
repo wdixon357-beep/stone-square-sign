@@ -1,6 +1,6 @@
 // All arithmetic uses integer cents. Unknown values remain unknown.
-export const TREASURY_ROLES = new Set(['owner', 'treasurer', 'assistant_treasurer', 'secretary', 'assistant_secretary']);
-export const TREASURY_OFFICES = { owner: 'Worshipful Master', treasurer: 'Treasurer', assistant_treasurer: 'Assistant Treasurer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary' };
+export const TREASURY_ROLES = new Set(['owner', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'secretary', 'assistant_secretary']);
+export const TREASURY_OFFICES = { owner: 'Worshipful Master', treasurer: 'Treasurer', assistant_treasurer: 'Assistant Treasurer', treasury_preparer: 'Treasury Report Preparer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary' };
 const text = (v, max = 1500) => String(v ?? '').trim().slice(0, max);
 export const money = v => {
   if (v === null || v === undefined || String(v).trim() === '') return null;

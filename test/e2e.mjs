@@ -1092,10 +1092,14 @@ try {
     notADispensation.status === 409, String(notADispensation.status));
 
   console.log('\nPending invitations');
+  const mailBeforePrivateInvitation = deliveredMail.length;
   const invited = await api('POST', '/api/officers/invite', {
-    token: wmToken, body: { role: 'viewer', name: 'Waiting Brother', email: 'waiting@example.org' },
+    token: wmToken, body: { role: 'viewer', name: 'Waiting Brother', email: 'waiting@example.org', sendEmail: false },
   });
   check('the owner invites a Brother', invited.status === 201, JSON.stringify(invited.payload).slice(0, 200));
+  check('a private invitation can be prepared without emailing anyone',
+    invited.payload.emailSent === false && deliveredMail.length === mailBeforePrivateInvitation,
+    'Private link preparation must not send mail');
   const roster = await api('GET', '/api/officers', { token: wmToken });
   check('the invitation shows as pending, not as still needing one',
     (roster.payload.pending || []).some((p) => p.email === 'waiting@example.org'),

@@ -1,7 +1,7 @@
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=value=>value?new Intl.DateTimeFormat('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZone:'America/New_York',timeZoneName:'short'}).format(new Date(value)):'Not recorded';
 const duration=n=>n<60?`${n} sec`:`${Math.floor(n/60)} min${n%60?' '+n%60+' sec':''}`;
-const roles=[['member','Lodge Member'],['viewer','Lodge Viewer'],['secretary','Secretary'],['assistant_secretary','Assistant Secretary'],['treasurer','Treasurer'],['assistant_treasurer','Assistant Treasurer'],['warden','Warden']];
+const roles=[['member','Lodge Member'],['viewer','Lodge Viewer'],['secretary','Secretary'],['assistant_secretary','Assistant Secretary'],['treasurer','Treasurer'],['assistant_treasurer','Assistant Treasurer'],['treasury_preparer','Treasury Report Preparer'],['warden','Warden']];
 export class ActivityTracker{
  constructor({api,signedIn}){this.api=api;this.signedIn=signedIn;this.area='home';this.lastInput=Date.now();for(const event of ['pointerdown','keydown','scroll','touchstart'])document.addEventListener(event,()=>{this.lastInput=Date.now();},{passive:true,capture:true});document.addEventListener('visibilitychange',()=>this.beat());window.addEventListener('blur',()=>this.beat());window.addEventListener('focus',()=>this.beat());setInterval(()=>this.beat(),30000);}
  visit(area){this.area=area;this.beat();}

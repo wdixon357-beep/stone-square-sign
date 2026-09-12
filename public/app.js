@@ -98,6 +98,7 @@ const roleLabel = (role) => ({
   assistant_secretary: 'Assistant Secretary',
   treasurer: 'Treasurer',
   assistant_treasurer: 'Assistant Treasurer',
+  treasury_preparer: 'Treasury Report Preparer',
   member: 'Lodge Member',
   viewer: 'Lodge Viewer',
   warden: 'Warden',
@@ -136,7 +137,7 @@ const easternGreeting = () => {
 
 /* Who is ever asked for a saved signature. An allowlist, so a new role is never trapped
  * behind the forced signature modal that has no dismiss control. */
-const CAN_SIGN = new Set(['owner', 'secretary', 'assistant_secretary', 'signer', 'treasurer', 'assistant_treasurer']);
+const CAN_SIGN = new Set(['owner', 'secretary', 'assistant_secretary', 'signer', 'treasurer', 'assistant_treasurer', 'treasury_preparer']);
 
 const enterWorkspace = async (user, session) => {
   state.user = user;
@@ -170,7 +171,7 @@ const enterWorkspace = async (user, session) => {
     if (line) line.textContent = 'Put an event to the Worshipful Master for a dispensation.';
   }
   document.querySelectorAll('.signer-only').forEach((element) => {
-    element.classList.toggle('hidden', ['warden','treasurer','assistant_treasurer','member'].includes(user.role));
+    element.classList.toggle('hidden', ['warden','treasurer','assistant_treasurer','treasury_preparer','member'].includes(user.role));
   });
   /* Dues names the men who are behind, so a viewer is not shown the tile at all.
    * The server refuses him regardless; this avoids dangling a locked door. */
@@ -1156,6 +1157,7 @@ const startRealtime = async () => {
 };
 
 const renderDocuments = async () => {
+  if (!['owner','secretary','assistant_secretary','signer','viewer','warden'].includes(state.user?.role)) return [];
   try {
     const { documents } = await apiFetch('/api/documents');
     $('metricAll').textContent = documents.length;
@@ -1398,8 +1400,8 @@ const renderOfficers = async () => {
       seat('assistant_secretary', 'Adrian Reese'),
       seat('treasurer', 'Treasurer'),
       seat('assistant_treasurer', 'Assistant Treasurer'),
-      ...officers.filter((officer) => ['viewer','warden','member'].includes(officer.role)).map((o) => ({ ...o, state: 'active' })),
-      ...pending.filter((invite) => ['viewer','warden','member'].includes(invite.role)).map((i) => ({ ...i, state: 'pending' })),
+      ...officers.filter((officer) => ['viewer','warden','member','treasury_preparer'].includes(officer.role)).map((o) => ({ ...o, state: 'active' })),
+      ...pending.filter((invite) => ['viewer','warden','member','treasury_preparer'].includes(invite.role)).map((i) => ({ ...i, state: 'pending' })),
     ];
     entries.forEach((officer) => {
       const row = window.document.createElement('div');

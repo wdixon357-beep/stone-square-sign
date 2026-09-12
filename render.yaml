@@ -87,9 +87,6 @@ services:
       - key: DUES_YEAR
         value: "2026-2027"
 
-      - key: SESSION_DAYS
-        value: "90"
-      - key: SESSION_REFRESH_DAYS
-        value: "30"
+      # Sign-in lifetime is fixed at 90 days by the application.
       - key: MAX_UPLOAD_BYTES
         value: "12582912"

@@ -7,8 +7,8 @@ struct User: Codable, Identifiable, Equatable {
     let role: String
     let hasSignature: Bool
     var treasuryAccess: String? = nil
-    var canSign: Bool { ["owner","secretary","assistant_secretary","signer","treasurer","assistant_treasurer"].contains(role) }
-    var canUseTreasury: Bool { treasuryAccess != nil || ["owner","secretary","assistant_secretary","treasurer","assistant_treasurer"].contains(role) }
+    var canSign: Bool { ["owner","secretary","assistant_secretary","signer","treasurer","assistant_treasurer","treasury_preparer"].contains(role) }
+    var canUseTreasury: Bool { treasuryAccess != nil || ["owner","secretary","assistant_secretary","treasurer","assistant_treasurer","treasury_preparer"].contains(role) }
 
     var roleLabel: String {
         switch role {
@@ -17,6 +17,7 @@ struct User: Codable, Identifiable, Equatable {
         case "assistant_secretary": return "Assistant Secretary"
         case "treasurer": return "Treasurer"
         case "assistant_treasurer": return "Assistant Treasurer"
+        case "treasury_preparer": return "Treasury Report Preparer"
         case "member": return "Lodge Member"
         case "warden": return "Warden"
         case "viewer": return "Lodge Viewer"

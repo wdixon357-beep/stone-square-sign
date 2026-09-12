@@ -33,10 +33,9 @@ const DISPENSATION_TEMPLATE = path.join(APP_DIR, 'assets', 'grand-lodge-dispensa
 const APP_VERSION = JSON.parse(await fs.readFile(path.join(APP_DIR, 'package.json'), 'utf8')).version;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
-const SESSION_POLICY = createSessionPolicy({
-  lifetimeDays: process.env.SESSION_DAYS,
-  refreshWindowDays: process.env.SESSION_REFRESH_DAYS,
-});
+// The Lodge's 90-day sign-in policy is part of the release. Legacy hosting
+// settings must not silently shorten it to the former seven-day lifetime.
+const SESSION_POLICY = createSessionPolicy();
 const CANDIDATE_TRACKER_URL = String(
   process.env.CANDIDATE_TRACKER_URL || 'https://tracker.stonesquare22pha.org/',
 ).replace(/\/$/, '');
@@ -237,7 +236,7 @@ const WARDEN_EMAILS = new Set(
     .map((address) => address.trim().toLowerCase())
     .filter(Boolean),
 );
-const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'viewer', 'warden', 'member'];
+const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member'];
 
 const requireAuth = async (req, res, next) => {
   try {
@@ -1382,7 +1381,7 @@ app.get('/api/events', requireAuth, (req, res) => {
   });
 });
 
-const requireSignatureProfile = (req, res, next) => ['treasurer', 'assistant_treasurer'].includes(req.user.role) ? next() : requireDocumentAccess(req, res, next);
+const requireSignatureProfile = (req, res, next) => ['treasurer', 'assistant_treasurer', 'treasury_preparer'].includes(req.user.role) ? next() : requireDocumentAccess(req, res, next);
 app.get('/api/profile/signature', requireAuth, requireSignatureProfile, async (req, res, next) => {
   try {
     const signature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
@@ -1433,7 +1432,7 @@ app.get('/api/officers', requireAuth, requireOwner, async (_req, res, next) => {
   try {
     const officers = await dbAll(
       `SELECT role, name, email, created_at FROM users
-       WHERE role IN ('secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'viewer', 'warden', 'member')
+       WHERE role IN ('secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member')
        AND email NOT LIKE '%.local' AND access_revoked_at IS NULL
        ORDER BY role DESC`,
     );
@@ -1494,10 +1493,10 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
     const inviteUrl = `${requestBaseUrl(req)}/?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
     let emailSent = false;
     try {
-      emailSent = await sendEmail({
+      emailSent = req.body?.sendEmail === false ? false : await sendEmail({
         to: email,
         subject: 'Your Stone Square Sign account invitation',
-        text: `${name},\n\nYou have been invited to Stone Square Sign as ${{ member: 'a Lodge Member', viewer: 'a Lodge Viewer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary', treasurer: 'Treasurer', assistant_treasurer: 'Assistant Treasurer', warden: 'a Warden' }[role] || 'a signer'}. ${{ member: 'Your account provides sign-in access. Additional work areas are assigned separately by the administrator.', treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', assistant_treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', viewer: 'You can review document status and signing progress, but cannot upload, create, or sign documents.', warden: 'You can propose a dispensation to the Worshipful Master for his approval. You will not be asked to sign anything.' }[role] || 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
+        text: `${name},\n\nYou have been invited to Stone Square Sign as ${{ member: 'a Lodge Member', viewer: 'a Lodge Viewer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary', treasurer: 'Treasurer', assistant_treasurer: 'Assistant Treasurer', treasury_preparer: 'a Treasury Report Preparer', warden: 'a Warden' }[role] || 'a signer'}. ${{ member: 'Your account provides sign-in access. Additional work areas are assigned separately by the administrator.', treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', assistant_treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', treasury_preparer: 'You can prepare and sign treasurer reports using banking records supplied in the Dashboard. This does not provide access to the bank account.', viewer: 'You can review document status and signing progress, but cannot upload, create, or sign documents.', warden: 'You can propose a dispensation to the Worshipful Master for his approval. You will not be asked to sign anything.' }[role] || 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
       });
     } catch (error) {
       console.warn('Invitation email failed:', error.message);
@@ -1994,7 +1993,7 @@ app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, 
 });
 
 app.get('/api/documents', requireAuth, async (req, res, next) => {
-  if(req.user.role==='member')return res.status(403).json({error:'Document access has not been assigned to this account.'});
+  if(!['owner','secretary','assistant_secretary','signer','viewer','warden'].includes(req.user.role))return res.status(403).json({error:'Document access has not been assigned to this account.'});
   try {
     const rows = await dbAll(
       `SELECT d.id, d.title, d.original_name, d.status, d.created_at, d.updated_at,

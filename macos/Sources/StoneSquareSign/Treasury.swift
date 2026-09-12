@@ -170,7 +170,7 @@ struct TreasuryView: View {
                 TextEditor(text:$workspace.source).font(.body).frame(minHeight:160).border(Color.gray.opacity(0.25))
                 Picker("What would you like to do?",selection:$workspace.uploadIntent) {
                     Text("Save banking information for a report").tag("save")
-                    if ["owner","treasurer","assistant_treasurer","secretary","assistant_secretary"].contains(model.user?.role ?? "") {Text("I’m completing the report").tag("complete")}
+                    if ["owner","treasurer","assistant_treasurer","treasury_preparer","secretary","assistant_secretary"].contains(model.user?.role ?? "") {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
                 Text("Save the information for later, or open the prefilled report and complete it yourself.").font(.caption)
                 Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent)
@@ -223,7 +223,7 @@ struct TreasuryView: View {
             if record.status == "awaiting_preparer" {
                 Text("Banking information saved").font(.headline)
                 Text("These records are available for an authorized preparer. No one has been assigned automatically.").font(.callout)
-                if ["owner","treasurer","assistant_treasurer","secretary","assistant_secretary"].contains(model.user?.role ?? "") { Button("I’m completing this report") { workspace.selectedPreparer=model.user?.id ?? 0;Task {await workspace.assign()} }.buttonStyle(.borderedProminent) }
+                if ["owner","treasurer","assistant_treasurer","treasury_preparer","secretary","assistant_secretary"].contains(model.user?.role ?? "") { Button("I’m completing this report") { workspace.selectedPreparer=model.user?.id ?? 0;Task {await workspace.assign()} }.buttonStyle(.borderedProminent) }
             } else {Text("Preparing officer: \(record.createdBy)").font(.headline)}
             if ["draft","awaiting_preparer"].contains(record.status) && (record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id || model.user?.role == "owner") {
                 DisclosureGroup(record.status == "awaiting_preparer" ? "Assign a preparing officer (optional)" : "Change preparing officer") { assignmentPicker }
