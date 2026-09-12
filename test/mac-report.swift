@@ -18,6 +18,31 @@ final class ReportFixture: URLProtocol {
     override func stopLoading() {}
 }
 
+final class MinutesConflictFixture: URLProtocol {
+    static var saveBody: Data?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        if request.httpMethod == "PUT" {
+            if let body = request.httpBody { Self.saveBody = body }
+            else if let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; data.append(buffer, count: count)
+                }
+                Self.saveBody = data
+            }
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 409, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"error":"The record changed. Refresh before saving."}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 @main struct NativeReportTests {
     @MainActor static func main() async throws {
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -59,5 +84,25 @@ final class ReportFixture: URLProtocol {
         model.startOver()
         precondition(model.fields.isEmpty && model.pdf == nil && !model.reviewed && model.signatureName.isEmpty && model.name == "QA Officer")
         print("PASS: new report clears content and signature while retaining contact details")
+
+        let minutesRecord = try JSONDecoder().decode(MinutesRecord.self, from: Data(#"{"id":"synthetic-minutes","status":"draft","createdBy":"QA Officer","updatedAt":"2026-09-12T18:00:00.000Z","draft":{"meetingType":"Stated Communication","present":[],"excused":[],"visitors":[],"officerAttendance":[],"income":[],"expenses":[],"sections":[{"heading":"Opening","body":"Synthetic saved content."}],"warnings":[],"sensitiveReview":[],"actionItems":[]}}"#.utf8))
+        let minutesConfig = URLSessionConfiguration.ephemeral
+        minutesConfig.protocolClasses = [MinutesConflictFixture.self]
+        let minutesSession = URLSession(configuration: minutesConfig)
+        defer { minutesSession.invalidateAndCancel() }
+        let minutes = MinutesWorkspace(session: minutesSession)
+        minutes.baseURL = URL(string: "https://minutes-fixture.invalid")
+        minutes.token = "synthetic-token"
+        minutes.selected = minutesRecord
+        var changedDraft = minutesRecord.draft
+        changedDraft.sections[0].body = "Synthetic unsaved correction."
+        minutes.draft = changedDraft; minutes.dirty = true
+        await minutes.save()
+        let sent = try JSONSerialization.jsonObject(with: MinutesConflictFixture.saveBody!) as! [String: Any]
+        precondition(sent["expectedUpdatedAt"] as? String == minutesRecord.updatedAt && sent["draft"] is [String: Any])
+        print("PASS: minutes save includes the version opened by the officer")
+        precondition(minutes.draft == changedDraft && minutes.dirty && minutes.selected?.draft == minutesRecord.draft)
+        precondition(minutes.message == "The record changed. Refresh before saving." && !minutes.busy)
+        print("PASS: conflicting minutes save retains unsaved input and displays the server error")
     }
 }

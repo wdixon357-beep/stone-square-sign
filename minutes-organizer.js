@@ -15,8 +15,8 @@ const sentenceParts = text => text.split(/(?<=[.!?])\s+(?=[A-Z])/).reduce((parts
 }, []);
 
 const headings = [
-  ['Opening', /^(?:opening(?: of the lodge)?|call to order)$/i],
-  ['Roll Call and Quorum', /^(?:roll call(?: of officers)?|quorum)$/i],
+  ['Opening', /^(?:opening(?: of the lodge)?|open on|call to order)$/i],
+  ['Roll Call and Quorum', /^(?:roll call(?: of officers| and quorum)?|quorum)$/i],
   [SICKNESS_HEADING, isSicknessHeading],
   ['Reading of the Minutes', /^(?:(?:reading and approval|approval|reading) of (?:the )?(?:previous |current )?minutes|minutes of (?:the )?previous meeting|previous minutes)$/i],
   ["Treasurer's Report", /^(?:treasurer'?s? report|financial report)(?:\s*\(.*\))?$/i],
@@ -33,9 +33,31 @@ const headings = [
 ];
 const knownHeading = line => headings.find(([, matcher]) => typeof matcher === 'function'
   ? matcher(line) : matcher.test(undecorated(line).replace(/:$/, '')))?.[0];
+const emptyAttendance = value => /^(?:none(?: reported| present)?|no (?:one|visitors?|visiting brothers?|guests?|absences|excused brothers?)(?: were present| present| reported)?|n\/?a|not applicable)[.!]?$/i.test(String(value || '').trim());
 const names = text => [...new Set(clean(text)
   .replace(/,\s*(PM|HPM|Jr\.?|Sr\.?|II|III|IV)(?=\s*(?:[,;]|$))/gi, ' $1')
-  .replace(/\s+(?:and|&)\s+/gi, ';').split(/\s*[;,|]\s*/).map(clean).map(name => name.replace(/\b[a-z][a-z]+\b/g, word => word[0].toUpperCase() + word.slice(1))).filter(Boolean))];
+  .replace(/\s+(?:and|&)\s+/gi, ';').split(/\s*[;,|]\s*/).map(clean).filter(name => !emptyAttendance(name))
+  .map(name => name.replace(/\b[a-z][a-z]+\b/g, word => word[0].toUpperCase() + word.slice(1))).filter(Boolean))];
+const isLetterhead = line => /^stone square lodge(?:\s+(?:no\.?|#)\s*\d+)?(?:\s*[,•]\s*(?:f\.?\s*&\s*a\.?\s*m\.?|p\.?h\.?a\.?|prince hall affiliation))*\s*\.?$/i.test(line);
+
+function unknownHeading(line, markedHeadings) {
+  const label = undecorated(line).replace(/:$/, '').trim();
+  if (knownHeading(line) || isLetterhead(label) || emptyAttendance(label) || label.length > 100 || label.split(/\s+/).length > 12
+    || !/[A-Za-z]/.test(label) || /[.!?:;$\d]/.test(label)) return false;
+  // Speaker names and terse motion outcomes remain part of their topic.
+  if (/^(?:(?:WM|SW|JW|PM|HPM|Bro(?:ther)?|Worshipful Master|Past Master)\b|motion\b|no (?:vote|motion|decision|action|errors?|omissions?)\b)/i.test(label)) return false;
+  if (/^(?:(?:not )?(?:approved|adopted|passed|failed|carried|withdrawn|tabled)(?: unanimously| without objection)?|all in favor|none opposed|no opposition)$/i.test(label)) return false;
+  return markedHeadings.has(line) || label.length >= 4 && label === label.toUpperCase();
+}
+
+function possibleUppercaseAttendanceName(line, markedHeadings) {
+  if (markedHeadings.has(line) || knownHeading(line) || line !== line.toUpperCase()) return false;
+  // Within an explicit attendance list, capitalization alone does not distinguish
+  // a name from a heading. Keep plausible names, but stop at familiar agenda terms.
+  if (/^(?:officer installation|installation of officers|community (?:service|outreach|events)|masonic education|charity reports?|scholarship (?:reports?|committee)|building (?:maintenance|and grounds)|candidate (?:progress|tracker)|degree instruction|attendance review|lodge business|upcoming activities)$/i.test(line)) return false;
+  const words = line.split(/\s+/);
+  return words.length >= 2 && words.length <= 5 && words.every(word => /^[\p{L}\p{M}]+(?:['-][\p{L}\p{M}]+)*$/u.test(word));
+}
 const date = text => {
   const iso = /\b(20\d{2})-(\d\d?)-(\d\d?)\b/.exec(text);
   const num = /\b(\d\d?)\/(\d\d?)\/(20\d{2})\b/.exec(text);
@@ -50,13 +72,15 @@ const date = text => {
     ? `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}` : null;
 };
 const meetingDate = lines => {
-  const labeled = lines.find(line => /^(?:meeting date|date)\s*:/i.test(line));
+  const labeled = lines.find(line => /^(?:meeting date|date(?: of (?:the )?meeting)?)\s*:/i.test(line));
   if (labeled) return date(labeled);
-  const title = lines.slice(0, 5).find(line => !/\bnext\b/i.test(line) && (
-    /(?:minutes (?:of|for)|meeting (?:of|on)|communication (?:of|on)|lodge.*held.*on)/i.test(line)
-    || /^(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d/i.test(line)));
+  const title = lines.find(line => !/\b(?:next|previous|last|will|would|should)\b/i.test(line)
+    && /^(?:(?:stated |regular )?(?:meeting |communication )?minutes (?:of|for)|(?:stated |regular )?(?:meeting|communication) (?:of|on)|(?:the )?lodge\b[^.!?]*\bheld\b[^.!?]*\bon\b)/i.test(line));
   if (title) return date(title);
-  const opening = lines.find(line => /^(?:on\s+)?[^.!?]*\b(?:the )?lodge (?:opened|was called to order)\b/i.test(line));
+  const headerDate = lines.slice(0, 5).find(line => /^(?:(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?,?\s+20\d{2}\.?$/i.test(line));
+  if (headerDate) return date(headerDate);
+  const opening = lines.find(line => /^open on\s*:/i.test(line)
+    || /^(?:on\s+)?[^.!?]*\b(?:the )?lodge (?:opened|was called to order)\b/i.test(line));
   return opening ? date(opening.split(/(?<=[.!?])\s/)[0]) : null;
 };
 const time = (text, words) => new RegExp(`(?:${words})[^.\\n]{0,65}?(\\d{1,2}:\\d{2}\\s*(?:AM|PM|a\\.m\\.|p\\.m\\.))`, 'i').exec(text)?.[1]?.replace(/\./g,'').toUpperCase() || null;
@@ -74,13 +98,30 @@ function narrativeHeading(sentence, active) {
   return active || 'Other Meeting Business';
 }
 
+function treasuryReading(lines) {
+  const report = String.raw`(?:(?:the|this|a)\s+)?(?:(?:treasurer'?s?|financial)\s+)?report`;
+  const positive = new RegExp(String.raw`(?:^|:\s+)${report}\s+(?:(?:was|has been|had been)\s+)?read\b|\bread\s+(?:aloud\s+)?${report}\b`, 'i');
+  const negative = new RegExp(String.raw`(?:^|:\s+)${report}\s+(?:(?:was|has|had)\s+)?(?:not|never)\s+(?:been\s+)?read\b|(?:^|:\s+)${report}\s+wasn'?t\s+read\b|(?:^|:\s+)no\s+${report}\s+(?:was\s+)?read\b`, 'i');
+  const evidence = lines.flatMap(sentenceParts).map(clean);
+  const notRead = evidence.some(line => negative.test(line) || /^(?:not|never) read(?: aloud)?(?: by .+)?\.?$/i.test(line));
+  const read = evidence.some(line => !/\b(?:will|would|should|could|can|may|must|not|never|please|to read|requested|asked|silently|privately|next meeting|last meeting|previous meeting)\b/i.test(line)
+    && !/^read\s+(?:the|this|a)\b/i.test(line)
+    && (positive.test(line) || /^read(?: aloud)?(?: by .+)?\.?$/i.test(line)));
+  // "Presented" or another item being read does not establish an aloud reading.
+  return notRead && read ? 'unconfirmed' : notRead ? 'not_read' : read ? 'read' : 'unconfirmed';
+}
+
 export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
-  const lines = source.split('\n').map(clean).filter(Boolean);
+  const rawLines = source.split('\n');
+  const lines = rawLines.map(clean).filter(Boolean);
+  const markedHeadings = new Set(rawLines.filter(line => /^\s*#{1,6}\s+\S/.test(line)
+    || /^\s*(?:\d+[.)]\s*)?(?:\*\*[^*]+\*\*|__[^_]+__)\s*:?\s*$/.test(line)).map(clean));
   const numbered = lines.filter(line => /^\d+[.)]\s/.test(line));
   const detectedType = numbered.length >= 2 || lines.filter(knownHeading).length >= 2 ? 'compiled_notes' : 'transcript';
   const type = ['compiled_notes', 'transcript'].includes(sourceType) ? sourceType : detectedType;
   const attendance = { present: [], excused: [], absent: [], visitors: [] };
   const content = [];
+  const placementWarnings = [];
   let attendanceLabel = null;
   for (const line of lines) {
     const label = /^(?:(?:brothers?|members?|officers?)\s+)?(present|excused|absent|visitors?)(?:\s+(?:brothers?|members?|officers?))?\s*:\s*(.*)$/i.exec(undecorated(line));
@@ -91,33 +132,41 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
     }
     const onlyLabel = /^(present|excused|absent|visitors?)$/i.exec(line);
     if (onlyLabel) { attendanceLabel = onlyLabel[1].toLowerCase().replace(/^visitor$/, 'visitors'); continue; }
-    if (attendanceLabel && !knownHeading(line) && !/^\d+[.)]/.test(line)
+    const ambiguousAttendanceName = attendanceLabel && unknownHeading(line, markedHeadings) && possibleUppercaseAttendanceName(line, markedHeadings);
+    if (attendanceLabel && !knownHeading(line) && (!unknownHeading(line, markedHeadings) || ambiguousAttendanceName) && !/^\d+[.)]/.test(line)
       && !/[.!?:]/.test(line.replace(/\b(?:Bro|Jr|Sr)\./g,'')) && line.split(' ').length <= 5) {
+      if (ambiguousAttendanceName) placementWarnings.push(`Uppercase entries under ${attendanceLabel} were kept as names. Confirm that none is a section heading.`);
       attendance[attendanceLabel].push(...names(line)); continue;
     }
     attendanceLabel = null;
-    if (/^(?:meeting date|date|meeting type|degree|opening time|closing time|presiding|quorum|next meeting|next stated communication)\s*:/i.test(line)) continue;
-    if (/^stone square lodge\b/i.test(line) && !/\b(?:opened|held)\b/i.test(line)) continue;
+    if (/^(?:meeting date|date(?: of (?:the )?meeting)?|meeting type|degree|opening time|closing time|presiding|quorum|next meeting|next stated communication)\s*:/i.test(line)) continue;
+    if (isLetterhead(line) || /^page\s+\d+\s+(?:of|\/)\s+\d+\s*$/i.test(line)) continue;
     content.push(line);
   }
   for (const key of Object.keys(attendance)) attendance[key] = [...new Set(attendance[key])];
   const blocks = [];
   let active = null;
-  const begin = (heading, topic = '') => { active = { heading, lines: topic ? [topic] : [] }; blocks.push(active); };
+  const begin = (heading, topic = '', preserveBlock = false) => { active = { heading, lines: topic ? [topic] : [], preserveBlock }; blocks.push(active); };
   const explicitPresence = /\b(?:include|record) (?:the )?grand lodge (?:officer|presence)\b/i.test(source);
   for (let line of content) {
     const heading = knownHeading(line);
     if (heading) { begin(heading); continue; }
-    if (/^\d+[.)]\s/.test(line) && line.length < 120) {
-      begin('New Business and Motions', undecorated(line)); continue;
-    }
     const inline = /^([^:]+):\s+(.+)$/.exec(line);
     if (inline && knownHeading(inline[1])) { begin(knownHeading(inline[1])); line = inline[2]; }
+    else if (unknownHeading(line, markedHeadings)) {
+      begin('Other Meeting Business', line, true);
+      placementWarnings.push(`Confirm the section for "${undecorated(line).replace(/:$/, '')}". Its full notes were kept in Other Meeting Business.`);
+      continue;
+    } else if (/^\d+[.)]\s/.test(line) && line.length < 120) {
+      begin('New Business and Motions', undecorated(line));
+      placementWarnings.push(`Confirm the section for numbered item "${undecorated(line)}". Its notes were kept in New Business and Motions.`);
+      continue;
+    }
     line = line.replace(/^(?:\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*)?(?:Speaker\s*\d+\s*:\s*)?/i, '');
     const sentences = sentenceParts(line).filter(sentence => explicitPresence || !containsRoutinePresence(sentence)
       || /\b(?:official visitation|grand lodge visitation)\b/i.test(sentence));
     if (!sentences.length) continue;
-    if (type === 'compiled_notes' || active && detectedType === 'compiled_notes') {
+    if (type === 'compiled_notes' || active?.preserveBlock || active && detectedType === 'compiled_notes') {
       if (!active) begin('Other Meeting Business');
       active.lines.push(sentences.join(' '));
     } else {
@@ -137,19 +186,16 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   };
   for (const block of blocks) {
     if (block.heading === "Treasurer's Report") {
-      const report = block.lines.join(' ');
-      const notRead = /\b(?:not|never)\s+(?:been\s+)?(?:read|presented)\b|\b(?:wasn't|wasnt)\s+(?:read|presented)\b|\bno\s+(?:treasurer'?s?\s+)?report\s+(?:was\s+)?(?:read|presented)\b/i.test(report);
-      const futureRead = /\b(?:will|would|should|to)\s+(?:be\s+)?(?:read|presented)\b/i.test(report);
-      const read = !notRead && !futureRead && /\b(?:read(?: aloud)?|presented)\b/i.test(report);
-      add(block.heading, notRead ? "The Treasurer's report was not read aloud."
-        : read ? "The Treasurer's report was read aloud." : "The Treasurer's report was referenced. Confirm whether it was read aloud.");
+      const reading = treasuryReading(block.lines);
+      add(block.heading, reading === 'not_read' ? "The Treasurer's report was not read aloud."
+        : reading === 'read' ? "The Treasurer's report was read aloud." : "The Treasurer's report was referenced. Confirm whether it was read aloud.");
       // Report figures live in the circulated financial report, never in inferred transactions.
       continue;
     }
     const safeLines = block.lines.map(line => {
       if (/\b(diagnos|medical condition|medication|dues status|disciplin|allegation|family dispute)/i.test(line)) {
         sensitiveReview.push(line);
-        return 'A private matter was referred for officer follow up.';
+        return 'Sensitive detail withheld pending officer review.';
       }
       return line;
     });
@@ -179,9 +225,10 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   const finalSections = [...new Set(ordered)].filter(heading => sections.has(heading)).map(heading => ({heading, body: [...new Set(sections.get(heading))].join('\n\n')}));
   const day = meetingDate(lines);
   const completedActions = lines.flatMap(sentenceParts).filter(line => !/\b(?:will|would|should|not|never|next meeting|previous meeting|last meeting)\b/i.test(line)).join('\n');
-  const openingTime = time(completedActions, 'opening time|opened|called to order');
+  const openingTime = time(completedActions, 'opening time|opened|open on|called to order');
   const closingTime = time(completedActions, 'closing time|closed|adjourned');
-  const warnings = [];
+  const warnings = [...new Set(placementWarnings)];
+  if (sensitiveReview.length) warnings.push('Review the private source details before attestation. No referral or follow-up action has been inferred.');
   if (!day) warnings.push('Enter the meeting date. Event dates in the notes are not used as the meeting date.');
   if (!openingTime) warnings.push('Confirm the opening time.');
   if (!closingTime) warnings.push('Confirm the closing time.');

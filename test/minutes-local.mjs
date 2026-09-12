@@ -53,6 +53,62 @@ The previous minutes were read and approved.`);
   const ordinaryClosing = await generateMinutesDraft('The next stated communication date was announced to the Brothers. The Chaplain gave the closing prayer. The Lodge closed at 9:00 PM.');
   assert.equal(ordinaryClosing.sections.find(section => section.heading === SICKNESS_HEADING)?.body || '', '', 'a general closing prayer does not establish a sickness report');
 
+  for (const visitorValue of ['None', 'NONE', 'N/A', 'No visitors', 'No visiting Brothers']) {
+    const noVisitors = await generateMinutesDraft(`ROLL CALL AND QUORUM\nPresent: Brother Example One\nVisitors: ${visitorValue}\nA quorum was established.\nCLOSING\nThe Lodge closed at 9:00 PM.`);
+    assert.deepEqual(noVisitors.visitors, [], 'a no-visitors marker is not a person');
+    assert.deepEqual(noVisitors.present, ['Brother Example One']);
+  }
+  const uppercaseAttendance = await generateMinutesDraft('ROLL CALL\nPresent:\nJOHN SAMPLE\nJAMES EXAMPLE\nExcused:\nDAVID TEST\nCOMMUNITY SERVICE\nA food collection was discussed.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.deepEqual(uppercaseAttendance.present, ['JOHN SAMPLE', 'JAMES EXAMPLE'], 'uppercase names remain in an explicitly labeled attendance list');
+  assert.deepEqual(uppercaseAttendance.excused, ['DAVID TEST']);
+  assert.ok(uppercaseAttendance.warnings.some(warning => /Uppercase entries under present were kept as names/.test(warning)));
+  assert.match(uppercaseAttendance.sections.find(section => section.heading === 'Other Meeting Business').body, /COMMUNITY SERVICE[^]*food collection/);
+  assert.doesNotMatch(JSON.stringify(uppercaseAttendance.sections), /JOHN SAMPLE|JAMES EXAMPLE|DAVID TEST/);
+  const markedAttendanceBoundary = await generateMinutesDraft('ROLL CALL\nPresent:\nJOHN SAMPLE\n### Planning Topics\nThe schedule was discussed.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.deepEqual(markedAttendanceBoundary.present, ['JOHN SAMPLE']);
+  assert.match(markedAttendanceBoundary.sections.find(section => section.heading === 'Other Meeting Business').body, /Planning Topics[^]*schedule was discussed/);
+  for (const heading of ['OFFICER INSTALLATION', 'INSTALLATION', '### Officer Installation', '**Officer Installation**']) {
+    const unplaced = await generateMinutesDraft(`ROLL CALL\nPresent: Brother Example One\n${heading}\nA ceremony was discussed.\nThe schedule remains to be confirmed.\nREADING OF THE MINUTES\nThe previous minutes were read.`);
+    assert.deepEqual(unplaced.present, ['Brother Example One'], 'an unknown heading is not an attendee');
+    const preserved = unplaced.sections.find(section => section.heading === 'Other Meeting Business')?.body;
+    assert.match(preserved, /installation[^]*A ceremony was discussed\.[^]*schedule remains/i);
+    assert.doesNotMatch(preserved, /previous minutes were read/);
+    assert.ok(unplaced.warnings.some(warning => /Confirm the section.*Other Meeting Business/.test(warning)), 'uncertain placement requires visible review');
+    assert.ok(!unplaced.sections.some(section => section.heading === 'Roll Call and Quorum' && /ceremony/.test(section.body)));
+  }
+  const treasuryBoundary = await generateMinutesDraft("TREASURER REPORT\nThe report was circulated. A letter was read aloud.\nCOMMUNITY SERVICE\nA food collection was planned for next month.\nVolunteers will prepare boxes.\nCLOSING\nThe Lodge closed at 9:00 PM.");
+  assert.match(treasuryBoundary.sections.find(section => section.heading === 'Other Meeting Business').body, /COMMUNITY SERVICE[^]*food collection[^]*prepare boxes/);
+  assert.match(treasuryBoundary.sections.find(section => section.heading === "Treasurer's Report").body, /Confirm whether it was read/);
+  for (const note of ['A letter was read aloud.', 'A committee report was read aloud.', 'The report was presented.', 'The Secretary was asked to read the report.', 'The report will be read aloud.', 'The report was read silently.', 'Please read the report.', 'Read the report.', 'The report was not read. The report was read aloud.']) {
+    const unconfirmed = await generateMinutesDraft(`OPENING\nThe Lodge opened at 7:30 PM.\nTREASURER REPORT\n${note}\nCLOSING\nThe Lodge closed at 9:00 PM.`);
+    assert.match(unconfirmed.sections.find(section => section.heading === "Treasurer's Report").body, /Confirm whether it was read/, 'treasury reading requires evidence tied to this report');
+  }
+  for (const note of ['The report was read aloud.', 'The Secretary read the report.', 'Read by the Secretary.']) {
+    const confirmed = await generateMinutesDraft(`OPENING\nThe Lodge opened at 7:30 PM.\nTREASURER REPORT\n${note}\nCLOSING\nThe Lodge closed at 9:00 PM.`);
+    assert.equal(confirmed.sections.find(section => section.heading === "Treasurer's Report").body, "The Treasurer's report was read aloud.");
+  }
+  const inlineHeading = await generateMinutesDraft('1. Opening\nThe Lodge opened at 7:30 PM.\n2. Committee Reports: The team inspected the roof.\n3. Closing\nThe Lodge closed at 9:00 PM.');
+  assert.match(inlineHeading.sections.find(section => section.heading === 'Committee Reports').body, /team inspected the roof/);
+  assert.ok(!inlineHeading.sections.some(section => section.heading === 'New Business and Motions'));
+  const motionOutcome = await generateMinutesDraft('NEW BUSINESS\nA motion to repair the steps was made and seconded.\nAPPROVED UNANIMOUSLY\nALL IN FAVOR\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.match(motionOutcome.sections.find(section => section.heading === 'New Business and Motions').body, /repair the steps[^]*APPROVED UNANIMOUSLY[^]*ALL IN FAVOR/);
+  assert.ok(!motionOutcome.warnings.some(warning => /Confirm the section/.test(warning)), 'uppercase outcomes remain with their motion');
+  const letterhead = await generateMinutesDraft('Stone Square Lodge No. 22\nOPENING\nThe Lodge opened at 7:30 PM.\nNEW BUSINESS\nStone Square Lodge will host a food collection next month.\nCLOSING\nThe Lodge closed at 9:00 PM.\nPage 1 of 1');
+  assert.match(letterhead.sections.find(section => section.heading === 'New Business and Motions').body, /Stone Square Lodge will host a food collection next month/);
+  assert.doesNotMatch(JSON.stringify(letterhead.sections), /Stone Square Lodge No\. 22|Page 1 of 1/);
+  const privateNote = await generateMinutesDraft('OPENING\nThe Lodge opened at 7:30 PM.\nNEW BUSINESS\nA private dues status matter was noted.\nNo action was recorded.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.deepEqual(privateNote.sensitiveReview, ['A private dues status matter was noted.']);
+  assert.doesNotMatch(JSON.stringify(privateNote.sections), /was referred|dues status/);
+  assert.match(privateNote.sections.find(section => section.heading === 'New Business and Motions').body, /withheld pending officer review[^]*No action was recorded/);
+  assert.ok(privateNote.warnings.some(warning => /private source details before attestation/.test(warning)));
+  const lateHeaderDate = await generateMinutesDraft('Example header\nExample address\nExample city\nExample contact\nExample reference\nExample document label\nMinutes for Thursday, September 17, 2026\nOPENING\nThe Lodge opened at 7:30 PM.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.equal(lateHeaderDate.meetingDate, '2026-09-17', 'an explicit meeting title beyond five header lines still supplies the date');
+  const eventDate = await generateMinutesDraft('September 25, 2026 community supper\nOPENING\nThe Lodge opened at 7:30 PM.\nNEW BUSINESS\nVolunteers will arrange the meal.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.equal(eventDate.meetingDate, null, 'a dated event near the top is not standalone meeting-date metadata');
+  const openOn = await generateMinutesDraft('Open on: Third Degree at 7:30 PM.\nA quorum was established.\nNEW BUSINESS\nThe meeting schedule was discussed.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.equal(openOn.degree, 'Third Degree');
+  assert.equal(openOn.openingTime, '7:30 PM');
+
   // Synthetic example mirrors notes, including Markdown, speaker labels, a future
   // event date, a financial report, a contextual motion, and a rejected proposal.
   const source = `****Excused: PM John Brown, david marable, Brother Marcus Green****

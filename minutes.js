@@ -1,3 +1,4 @@
+import { minutesDateValue } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS } from './minutes-layout.js';
 import { organizeMeetingSource } from './minutes-organizer.js';
@@ -117,7 +118,7 @@ const normalizeSections = (value) => {
 export const normalizeMinutesDraft = (value = {}) => ({
   organizerVersion: value.organizerVersion || 1,
   sourceType: value.sourceType === 'compiled_notes' ? 'compiled_notes' : 'transcript',
-  meetingDate: value.meetingDate || null,
+  meetingDate: minutesDateValue(value.meetingDate) || null,
   meetingType: /^(?:regular )?stated communication$/i.test(String(value.meetingType || ''))
     ? 'Stated Communication' : String(value.meetingType || 'Stated Communication').trim(),
   degree: canonicalDegree(value.degree),

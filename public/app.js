@@ -6,6 +6,9 @@ const CLIENT_BUILD_VERSION = (() => {
   }
 })();
 
+let minutesDates;
+const minutesDatesReady = import(`/minutes-dates.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`).then(module => { minutesDates = module; });
+
 const state = {
   token: localStorage.getItem('stone-square-sign-token') || '',
   user: null,
@@ -28,6 +31,7 @@ const state = {
   pendingReviewDocument: null,
   minutes: [],
   editingMinutesId: null,
+  editingMinutesUpdatedAt: null,
   minutesPreviewUrl: '',
 };
 let treasuryWorkspace;
@@ -324,7 +328,7 @@ const collectMinutesFinance = (id) => [...$(id).querySelectorAll('.minutes-finan
 const collectMinutesDraft = () => ({
   organizerVersion: currentMinutes()?.draft.organizerVersion || 2,
   sourceType: currentMinutes()?.draft.sourceType || 'transcript',
-  meetingDate: $('minutesMeetingDate').value || null,
+  meetingDate: minutesDates.minutesDateValue($('minutesMeetingDate').value) || null,
   meetingType: $('minutesMeetingType').value === 'other'
     ? $('minutesMeetingTypeOther').value.trim()
     : $('minutesMeetingType').value,
@@ -601,8 +605,10 @@ const openMinutesEditor = (id) => {
   const item = state.minutes.find((entry) => entry.id === id);
   if (!item) return;
   state.editingMinutesId = id;
+  state.editingMinutesUpdatedAt = item.updatedAt;
   const draft = item.draft;
-  $('minutesMeetingDate').value = draft.meetingDate || '';
+  $('minutesMeetingDate').value = minutesDates.formatMinutesDate(draft.meetingDate);
+  $('minutesMeetingDateCalendar').value = minutesDates.minutesDateParts(draft.meetingDate)?.iso || '';
   setMinutesMeetingType(draft.meetingType || 'Stated Communication');
   const legacyDegrees = {
     'Entered Apprentice': 'First Degree',
@@ -622,7 +628,8 @@ const openMinutesEditor = (id) => {
   $('minutesPresiding').value = draft.presiding || '';
   $('minutesQuorum').value = /^(yes|quorum present|established)$/i.test(draft.quorum || '') ? 'Yes'
     : /^(no|no quorum)$/i.test(draft.quorum || '') ? 'No' : '';
-  $('minutesNextMeeting').value = draft.nextMeeting || '';
+  $('minutesNextMeeting').value = minutesDates.formatMinutesDate(draft.nextMeeting);
+  $('minutesNextMeetingCalendar').value = minutesDates.minutesDateParts(draft.nextMeeting)?.iso || '';
   $('minutesPresent').value = (draft.present || []).join('\n');
   $('minutesExcused').value = (draft.excused || []).join('\n');
   $('minutesVisitors').value = (draft.visitors || []).join('\n');
@@ -693,9 +700,10 @@ const minutesAction = async (path, body, message) => {
 };
 
 const saveMinutesCorrections = async () => {
-  await apiFetch(`/api/minutes/${state.editingMinutesId}`, {
-    method: 'PUT', body: JSON.stringify({ draft: collectMinutesDraft() }),
+  const payload = await apiFetch(`/api/minutes/${state.editingMinutesId}`, {
+    method: 'PUT', body: JSON.stringify({ draft: collectMinutesDraft(), expectedUpdatedAt: state.editingMinutesUpdatedAt }),
   });
+  state.editingMinutesUpdatedAt = payload.minutes.updatedAt;
 };
 
 /* What the District Deputy decided, and the proof of it.
@@ -1049,6 +1057,21 @@ $('minutesMeetingType').addEventListener('change', () => {
   $('minutesMeetingTypeOther').classList.toggle('hidden', !other);
   if (other) $('minutesMeetingTypeOther').focus();
 });
+for (const id of ['minutesMeetingDate', 'minutesNextMeeting']) {
+  $(id).addEventListener('change', () => {
+    $(id).value = minutesDates.formatMinutesDate($(id).value);
+    $(`${id}Calendar`).value = minutesDates.minutesDateParts($(id).value)?.iso || '';
+  });
+  $(`${id}Calendar`).addEventListener('change', () => {
+    if (!$(`${id}Calendar`).value) {
+      const parts = minutesDates.minutesDateParts($(id).value);
+      $(id).value = id === 'minutesMeetingDate' ? '' : parts ? `${parts.prefix}${parts.suffix}`.trim() : $(id).value;
+      return;
+    }
+    const dateValue = $(`${id}Calendar`).value;
+    $(id).value = minutesDates.formatMinutesDate(id === 'minutesMeetingDate' ? dateValue : minutesDates.replaceMinutesDate($(id).value, dateValue));
+  });
+}
 $('minutesEditorForm').addEventListener('input', scheduleMinutesPreview);
 $('minutesEditorForm').addEventListener('change', scheduleMinutesPreview);
 $('reorganizeMinutes').addEventListener('click', async () => {
@@ -2090,6 +2113,7 @@ $('dispensationForm').addEventListener('invalid', (event) => {
 }, true);
 
 const initialize = async () => {
+  try { await minutesDatesReady; } catch { setMessage(authMessage, 'The minutes date controls could not load. Reload this page to reconnect.', true); return; }
   const inviteEmail = new URLSearchParams(window.location.search).get('email');
   if (inviteEmail) $('registerEmail').value = inviteEmail;
   try {

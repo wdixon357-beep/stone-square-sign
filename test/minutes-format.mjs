@@ -9,6 +9,20 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { formatMinutesDate, minutesDateParts, minutesDateValue, replaceMinutesDate } from '../public/minutes-dates.js';
+
+for (const value of ['2026-09-03', '9/3/2026', 'September 3, 2026', 'Sept. 3rd, 2026', 'Thu, Sept. 3, 2026', 'Thursday, 2026-09-03']) {
+  assert.equal(formatMinutesDate(value), 'Thursday, September 3, 2026');
+  assert.equal(minutesDateValue(value), '2026-09-03');
+}
+assert.equal(formatMinutesDate('2026-10-01 at 7:30 PM, Lodge Hall'), 'Thursday, October 1, 2026 at 7:30 PM, Lodge Hall');
+assert.equal(replaceMinutesDate('Next meeting: October 1, 2026 at 7:30 PM, Lodge Hall', '2026-10-15'), 'Next meeting: 2026-10-15 at 7:30 PM, Lodge Hall');
+for (const value of ['', 'To be scheduled', 'September 3', '2026-02-30', '2026-00-03', '2026-13-03', 'October 1, 2026 or October 8, 2026']) {
+  assert.equal(formatMinutesDate(value), value, 'no invented, rolled-over or selected dates');
+  assert.equal(minutesDateParts(value), null);
+}
+assert.equal(normalizeMinutesDraft({meetingDate:'Thursday, September 3, 2026'}).meetingDate, '2026-09-03');
+assert.equal(formatMinutesDate('2028-02-29'), 'Tuesday, February 29, 2028');
 
 const text = 'Grown Folks Friday, September 25. The chapter will assist.\nMOTION PASSED: Fish and two sides. Moved Bro. Stone, seconded PM Reed.\nRevenue split discussed; no decision.';
 const bullets = bulletItems(text);
@@ -28,7 +42,7 @@ for (const source of ['The Chaplain will give the closing prayer for the sick an
   assert.equal(detectPrayerFacts(source).closingPrayerGiven, null);
 }
 assert.deepEqual(detectPrayerFacts('The Worshipful Master asked the Chaplain to pray for the sick and distressed at closing. The Chaplain gave the closing prayer and prayed for the sick and distressed.'), {prayerRequested: true, closingPrayerGiven: true});
-const draft = normalizeMinutesDraft({meetingDate: '2026-09-17', closingTime: '9:30 PM', prayerRequested: true, closingPrayerGiven: true, sections: [{heading:'Sickness and Distress', body:'Prayers were requested for Brother Stone.'}, {heading:'Prayer and Closing', body:'The Lodge closed at 9:30 PM.'}, {heading:'New Business', body:text}], nextMeeting:'Thursday, October 1, 2026'});
+const draft = normalizeMinutesDraft({meetingDate: '2026-09-17', closingTime: '9:30 PM', prayerRequested: true, closingPrayerGiven: true, sections: [{heading:'Sickness and Distress', body:'Prayers were requested for Brother Stone.'}, {heading:'Prayer and Closing', body:'The Lodge closed at 9:30 PM.'}, {heading:'New Business', body:text}], nextMeeting:'10/1/2026 at 7:30 PM, Lodge Hall'});
 const original = JSON.stringify(draft);
 const sections = documentSections(draft);
 assert.equal(JSON.stringify(draft), original, 'formatting must not mutate a saved or signed draft');
@@ -36,6 +50,7 @@ assert.equal(sections.at(-1).heading, 'Closing of the Lodge');
 assert.equal(sections.at(-1).body, `The Lodge was closed at 9:30 PM.\n${closingPrayerText}`);
 assert.ok(sections.find(s => s.heading === 'Sickness and Distress').body.endsWith(prayerRequestText));
 assert.equal(sections.filter(s => /Closing/.test(s.heading)).length, 1);
+assert.equal(sections.find(s => s.heading === 'Next Meeting').body, 'Thursday, October 1, 2026 at 7:30 PM, Lodge Hall');
 const repeated = documentSections({...draft, sections:[{heading:'Sickness and Distress', body:'The WM asked the Chaplain to give a prayer for sickness and distress at the close of the meeting.\nPrayers for Brother Stone.'}, {heading:'Closing', body:'Closed at 9:30 PM.\nThe Chaplain offered the closing prayer and prayed for the sick and distressed.'}]});
 assert.equal(repeated.find(s=>s.heading==='Sickness and Distress').body, `Prayers for Brother Stone.\n${prayerRequestText}`);
 assert.equal(repeated.at(-1).body, `The Lodge was closed at 9:30 PM.\n${closingPrayerText}`);
@@ -73,6 +88,12 @@ try {
 } finally {await emptyPdf.destroy();}
 const ctx = {draft, status:'draft', preparedBy:'Adrian Reese', preparerRole:'assistant_secretary'};
 const pdfBytes = await buildMinutesPdf(ctx);
+const datePdf = new PDFParse({data:pdfBytes});
+try {
+  const text = (await datePdf.getText()).text;
+  assert.match(text, /Thursday, September 17, 2026/);
+  assert.match(text, /Thursday, October 1, 2026 at 7:30 PM, Lodge Hall/);
+} finally { await datePdf.destroy(); }
 const pdf = await PDFDocument.load(pdfBytes);
 const images = pdf.getPages().flatMap(p => p.node.Resources()?.lookup(PDFName.of('XObject'))?.entries() || []);
 assert.equal(images.length, 1, 'one official seal; no repeated generic emblems');
@@ -86,6 +107,8 @@ try {
   assert.match(xml, /<w:i\/>/, 'Word retains italics');
   assert.match(xml, /Assistant Secretary/);
   assert.match(xml, /Closing of the Lodge/i);
+  assert.match(xml, /Thursday, September 17, 2026/);
+  assert.match(xml, /Thursday, October 1, 2026/);
   assert.equal((xml.match(/<w:drawing>/g) || []).length, 1);
   await fs.writeFile(docx, await buildMinutesDocx({draft:emptySickness,status:'draft'}));
   const emptyXml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});

@@ -512,3 +512,9 @@ a { overflow-wrap: anywhere; }
 .session-notice button { flex-shrink: 0; }
 #sessionNotice:not(.hidden) ~ .landing-section { min-height: 0; align-content: start; }
 @media (max-width: 600px) { .session-notice { flex-direction: column; gap: 12px; padding: 16px; } }
+
+.minutes-date-control { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.minutes-date-control > input[type="text"] { flex: 1; min-width: 0; }
+.minutes-date-control > input[type="date"] { width: 42px; min-width: 42px; max-width: 42px; padding-inline: 7px; color: transparent; }
+.minutes-date-control > input[type="date"]::-webkit-datetime-edit { display: none; }
+.minutes-date-control > input[type="date"]::-webkit-calendar-picker-indicator { margin: 0; padding: 0; cursor: pointer; }

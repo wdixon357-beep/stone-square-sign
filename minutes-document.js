@@ -1,3 +1,4 @@
+import { formatMinutesDate } from './public/minutes-dates.js';
 import {
   AlignmentType, BorderStyle, Document, Footer, ImageRun, Packer, PageNumber,
   Paragraph, Table, TableCell, TableRow, TextRun, VerticalAlign, WidthType,
@@ -16,14 +17,7 @@ const LIGHT_GRAY = 'EAF0F5';
 const border = { style: BorderStyle.SINGLE, size: 4, color: BLACK };
 const borders = { top: border, bottom: border, left: border, right: border };
 
-const fullDate = (value) => {
-  if (!value) return 'Date not confirmed';
-  const [year, month, day] = String(value).split('-').map(Number);
-  if (!year || !month || !day) return String(value);
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC',
-  }).format(new Date(Date.UTC(year, month - 1, day)));
-};
+const fullDate = (value) => formatMinutesDate(value, 'Date not confirmed');
 
 const attestedDate = (value) => value ? new Intl.DateTimeFormat('en-US', {
   weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',

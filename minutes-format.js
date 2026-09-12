@@ -1,3 +1,4 @@
+import { formatMinutesDate } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 
 // One presentation model for the live PDF and Word record. Formatting never
@@ -40,7 +41,7 @@ export function documentSections(draft) {
   if (draft.prayerRequested === true) sick.body += `\n${prayerRequestText}`;
   else if (draft.prayerRequested !== false) sick.body += '\nPrayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.';
   if (!sick.body.trim()) sick.body = 'No entry recorded.';
-  if (draft.nextMeeting) result.push({heading: 'Next Meeting', body: draft.nextMeeting});
+  if (draft.nextMeeting) result.push({heading: 'Next Meeting', body: formatMinutesDate(draft.nextMeeting)});
   let closingBody = closing.map(s => s.body).join('\n').trim();
   if (typeof draft.closingPrayerGiven === 'boolean') closingBody = closingBody.replaceAll(closingPrayerText, '')
     .replace(/(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer and prayed for the sick and distressed\.?/gi, '').trim();

@@ -1,3 +1,4 @@
+import { formatMinutesDate } from './public/minutes-dates.js';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import { bulletItems, documentSections, preparerOffice } from './minutes-format.js';
@@ -25,14 +26,7 @@ const clean = (value) => String(value || '')
   .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, '')
   .trim();
 
-const fullDate = (value) => {
-  if (!value) return 'Date needs review';
-  const [year, month, day] = String(value).split('-').map(Number);
-  if (!year || !month || !day) return clean(value);
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC',
-  }).format(new Date(Date.UTC(year, month - 1, day)));
-};
+const fullDate = (value) => formatMinutesDate(value, 'Date needs review');
 
 const attestedDate = (value) => value ? new Intl.DateTimeFormat('en-US', {
   weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',

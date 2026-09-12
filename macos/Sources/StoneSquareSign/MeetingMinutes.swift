@@ -22,13 +22,14 @@ struct MinutesDraft: Codable, Equatable {
 struct MinutesChange: Codable, Hashable { let field: String; let before: String; let after: String }
 struct MinutesRecord: Codable, Identifiable {
     var masterChanges: [MinutesChange]?; var submittedDraft: MinutesDraft?
-    var id: String; var draft: MinutesDraft; var status: String; var createdBy: String
+    var id: String; var draft: MinutesDraft; var status: String; var createdBy: String; var updatedAt: String
     var createdByUserId: Int?; var preparerRole: String?; var preparerAttestedAt: String?; var masterAttestedAt: String?
     var approvedByLodgeOn: String?; var approvalNote: String?
 }
 struct MinutesListPayload: Decodable { let minutes: [MinutesRecord] }
 struct MinutesPayload: Decodable { let minutes: MinutesRecord; let notificationWarnings: [String]? }
 struct ReorganizedPayload: Decodable { let draft: MinutesDraft }
+struct MinutesSavePayload: Encodable { let draft: MinutesDraft; let expectedUpdatedAt: String }
 
 @MainActor
 final class MinutesWorkspace: ObservableObject {
@@ -47,6 +48,9 @@ final class MinutesWorkspace: ObservableObject {
     var token = ""
     private var previewTask: Task<Void, Never>?
     private var revision = 0
+    private let session: URLSession
+
+    init(session: URLSession = .shared) { self.session = session }
 
     func configure(_ model: AppModel) {
         baseURL = URL(string: model.serverAddress.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -59,7 +63,7 @@ final class MinutesWorkspace: ObservableObject {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("mac",forHTTPHeaderField:"X-Stone-Square-Client")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 404 && path == "/api/treasury" {
@@ -106,7 +110,7 @@ final class MinutesWorkspace: ObservableObject {
         guard let record = selected, let draft else { return }
         busy = true; defer { busy = false }
         do {
-            let body = try JSONEncoder().encode(["draft": draft])
+            let body = try JSONEncoder().encode(MinutesSavePayload(draft: draft, expectedUpdatedAt: record.updatedAt))
             let result = try await request("/api/minutes/\(record.id)", method: "PUT", body: body)
             selected = try JSONDecoder().decode(MinutesPayload.self, from: result).minutes
             self.draft = selected?.draft; dirty = false; await refresh(); message = "Corrections saved."
@@ -349,7 +353,7 @@ struct MeetingMinutesView: View {
     private var metadata: some View {
         GroupBox("Meeting details") {
             VStack(alignment: .leading, spacing: 12) {
-                TextField("Meeting date (YYYY-MM-DD)", text: text(\.meetingDate))
+                MinutesDateField(title: "Meeting date", value: text(\.meetingDate), preservingDetails: false)
                 Picker("Meeting type", selection: Binding(get: { workspace.draft?.meetingType == "Stated Communication" ? "Stated Communication" : "Other" }, set: { workspace.draft?.meetingType = $0 == "Other" ? "" : $0 })) {
                     Text("Stated Communication").tag("Stated Communication"); Text("Other").tag("Other")
                 }
@@ -361,7 +365,7 @@ struct MeetingMinutesView: View {
                 HStack { TextField("Opening time", text: text(\.openingTime)); TextField("Closing time", text: text(\.closingTime)) }
                 TextField("Presiding officer", text: text(\.presiding))
                 Picker("Quorum", selection: text(\.quorum)) { Text("Needs review").tag(""); Text("Yes").tag("Yes"); Text("No").tag("No") }
-                TextField("Next meeting", text: text(\.nextMeeting))
+                MinutesDateField(title: "Next meeting date", value: text(\.nextMeeting), preservingDetails: true)
                 Divider()
                 Text("Prayer and closing").font(.headline).foregroundStyle(SignTheme.navy)
                 Text("Confirm the prayer details for this meeting. The closing section uses the closing time above.").font(.caption).foregroundStyle(.secondary)
@@ -406,5 +410,50 @@ struct MeetingMinutesView: View {
                 }
             }
         }.buttonStyle(.bordered)
+    }
+}
+
+private struct MinutesDateField: View {
+    let title: String
+    @Binding var value: String
+    let preservingDetails: Bool
+    @State private var choosingDate = false
+    @State private var pendingDate = Date()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption)
+            HStack {
+                TextField("Weekday, Month day, year", text: Binding(
+                    get: { MinutesDateText.display(value) },
+                    set: { value = $0 }
+                ))
+                .labelsHidden()
+                .accessibilityLabel(title)
+                Button {
+                    pendingDate = MinutesDateText.match(value)?.date ?? Date()
+                    choosingDate = true
+                } label: { Image(systemName: "calendar") }
+                    .accessibilityLabel("Choose \(title.lowercased())")
+                    .help("Choose \(title.lowercased())")
+                    .popover(isPresented: $choosingDate) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text(title).font(.headline)
+                            DatePicker("Date", selection: $pendingDate, displayedComponents: .date)
+                                .datePickerStyle(.graphical)
+                                .environment(\.calendar, MinutesDateText.calendar)
+                                .environment(\.timeZone, MinutesDateText.calendar.timeZone)
+                            HStack {
+                                Button("Cancel") { choosingDate = false }
+                                Spacer()
+                                Button("Use date") {
+                                    value = MinutesDateText.replacingDate(in: value, with: pendingDate, preservingDetails: preservingDetails)
+                                    choosingDate = false
+                                }.buttonStyle(.borderedProminent)
+                            }
+                        }.padding(18).frame(width: 310)
+                    }
+            }
+        }
     }
 }

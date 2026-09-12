@@ -377,7 +377,7 @@
             <div id="minutesReviewWarnings" class="minutes-review-warning hidden"></div>
           <form id="minutesEditorForm" class="minutes-editor-form">
             <div class="minutes-meta-grid">
-              <div><label for="minutesMeetingDate">Meeting date</label><input id="minutesMeetingDate" type="date" /></div>
+              <div><label for="minutesMeetingDate">Meeting date</label><div class="minutes-date-control"><input id="minutesMeetingDate" type="text" placeholder="Thursday, September 3, 2026" /><input id="minutesMeetingDateCalendar" type="date" aria-label="Choose meeting date" title="Choose meeting date" /></div></div>
               <div>
                 <label for="minutesMeetingType">Meeting type</label>
                 <select id="minutesMeetingType">
@@ -407,7 +407,7 @@
                   <option value="No">No</option>
                 </select>
               </div>
-              <div><label for="minutesNextMeeting">Next meeting</label><input id="minutesNextMeeting" type="text" /></div>
+              <div><label for="minutesNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesNextMeeting" type="text" placeholder="Thursday, October 1, 2026" /><input id="minutesNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
             </div>
             <div class="minutes-attendance-grid">
               <div><label for="minutesPresent">Present</label><textarea id="minutesPresent" rows="4"></textarea></div>
