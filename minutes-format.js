@@ -22,7 +22,7 @@ export function detectPrayerFacts(source) {
   const sentences = String(source || '').split(/\n|(?<=[.!?])\s+(?=[A-Z])/);
   const past = sentence => !/\b(?:not|never|didn't|did not|will|would|should|next meeting|previous meeting|last meeting)\b/i.test(sentence);
   return {
-    prayerRequested: sentences.some(s => past(s) && /\b(?:Worshipful Master|WM)\b.*\b(?:asked|requested|directed)\b.*\bChaplain\b.*\b(?:sick|distress)\w*/i.test(s)) ? true : null,
+    prayerRequested: sentences.some(s => past(s) && /\b(?:Worshipful Master|WM)\b.*\b(?:asked|requested|directed)\b.*\bChaplain\b.*\b(?:sick|distress)\w*/i.test(s) && /\b(?:close|closing|end of (?:the )?meeting)\b/i.test(s)) ? true : null,
     closingPrayerGiven: sentences.some(s => past(s) && /\bChaplain\b.*\b(?:gave|offered|delivered|led)\b.*\bclosing prayer\b.*\b(?:sick|distress)\w*/i.test(s)) ? true : null,
   };
 }
@@ -34,14 +34,16 @@ export function documentSections(draft) {
   let sick = result.find(s => /^sick(?:ness)? and distress$/i.test(s.heading.trim()));
   if (!sick) { sick = {heading: 'Sickness and Distress', body: ''}; result.push(sick); }
   // Remove only our exact standard wording when the officer changes a control.
-  sick.body = sick.body.replaceAll(prayerRequestText, '').trim();
+  if (typeof draft.prayerRequested === 'boolean') sick.body = sick.body.replaceAll(prayerRequestText, '').replace(/(?:The )?(?:Worshipful Master|WM) (?:asked|requested|directed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the close of the meeting|the end of the meeting|closing)\.?/gi, '').trim();
   if (draft.prayerRequested === true) sick.body += `\n${prayerRequestText}`;
   else if (draft.prayerRequested !== false) sick.body += '\nPrayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.';
   if (draft.nextMeeting) result.push({heading: 'Next Meeting', body: draft.nextMeeting});
-  let closingBody = closing.map(s => s.body).join('\n').replaceAll(closingPrayerText, '').trim();
+  let closingBody = closing.map(s => s.body).join('\n').trim();
+  if (typeof draft.closingPrayerGiven === 'boolean') closingBody = closingBody.replaceAll(closingPrayerText, '')
+    .replace(/(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer and prayed for the sick and distressed\.?/gi, '').trim();
   // Replace an isolated closing-time statement with the reviewed time. Retain
   // any additional ceremonial or business details in the source sentence.
-  closingBody = closingBody.split('\n').filter(line => !/^\s*(?:the )?lodge (?:was )?(?:closed|adjourned)(?: at [\d: .APMapm]+)?\.?\s*$/i.test(line)).join('\n').trim();
+  if (draft.closingTime) closingBody = closingBody.split('\n').filter(line => !/^\s*(?:(?:the )?lodge (?:was )?)?(?:closed|adjourned)(?: at [\d: .APMapm]+)?\.?\s*$/i.test(line)).join('\n').trim();
   const closure = draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.` : 'Closing time: confirm and enter the time the Lodge was closed.';
   const prayer = draft.closingPrayerGiven === true ? closingPrayerText : draft.closingPrayerGiven === false ? '' : 'Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.';
   result.push({heading: 'Closing of the Lodge', body: [closingBody, closure, prayer].filter(Boolean).join('\n')});

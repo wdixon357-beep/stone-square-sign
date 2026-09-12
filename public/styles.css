@@ -424,6 +424,7 @@ body { background: radial-gradient(ellipse at 12% 0%, #ead8ae66, transparent 48%
 @keyframes workspace-appear { from { opacity: 0; } to { opacity: 1; } }
 .auth-layout, .workspace, .minutes-editor-body { animation: workspace-appear 240ms ease-out; }
 .primary, .secondary { transition: background-color 160ms ease, box-shadow 160ms ease; }
+.minutes-view-switch .secondary { transition: box-shadow 160ms ease; }
 .primary:hover { box-shadow: 0 5px 15px #10263d25; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
