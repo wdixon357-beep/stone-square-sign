@@ -1289,9 +1289,9 @@ struct OfficerAccessView: View {
                      (model.seatName(role: "treasurer", fallback: "Treasurer"), "Treasurer", model.seatState(role: "treasurer")),
                      (model.seatName(role: "assistant_treasurer", fallback: "Assistant Treasurer"), "Assistant Treasurer", model.seatState(role: "assistant_treasurer"))]
                     + model.officers.filter { ["viewer","member","warden","treasury_preparer"].contains($0.role) }
-                        .map { ($0.name, $0.role == "treasury_preparer" ? "Treasury Report Preparer" : $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.active) }
+                        .map { ($0.name, User.roleLabel(for: $0.role), OfficerSeatState.active) }
                     + model.pendingInvitations.filter { ["viewer","member","warden","treasury_preparer"].contains($0.role) }
-                        .map { ($0.name, $0.role == "treasury_preparer" ? "Treasury Report Preparer" : $0.role == "member" ? "Lodge Member" : $0.role == "warden" ? "Warden" : "Lodge Viewer", OfficerSeatState.pending) }
+                        .map { ($0.name, User.roleLabel(for: $0.role), OfficerSeatState.pending) }
                 VStack(spacing: 0) {
                     ForEach(Array(seats.enumerated()), id: \.offset) { _, seat in
                         OfficerCard(name: seat.name, office: seat.office, state: seat.state)
@@ -1343,7 +1343,7 @@ struct OfficerAccessView: View {
                                     .foregroundStyle(.orange)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(invite.name).font(.headline)
-                                    Text("\(invite.role == "viewer" ? "Lodge Viewer" : invite.role == "secretary" ? "Secretary" : "Assistant Secretary") · \(invite.email)")
+                                    Text("\(User.roleLabel(for: invite.role)) · \(invite.email)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -1378,7 +1378,7 @@ struct OfficerAccessView: View {
                                     .foregroundStyle(SignTheme.gold)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(officer.name).font(.headline)
-                                    Text("\(officer.role == "viewer" ? "Lodge Viewer" : officer.role == "secretary" ? "Secretary" : "Assistant Secretary") · \(officer.email)")
+                                    Text("\(User.roleLabel(for: officer.role)) · \(officer.email)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

@@ -10,7 +10,9 @@ struct User: Codable, Identifiable, Equatable {
     var canSign: Bool { ["owner","secretary","assistant_secretary","signer","treasurer","assistant_treasurer","treasury_preparer"].contains(role) }
     var canUseTreasury: Bool { treasuryAccess != nil || ["owner","secretary","assistant_secretary","treasurer","assistant_treasurer","treasury_preparer"].contains(role) }
 
-    var roleLabel: String {
+    var roleLabel: String { Self.roleLabel(for: role) }
+
+    static func roleLabel(for role: String) -> String {
         switch role {
         case "owner": return "Worshipful Master / Administrator"
         case "secretary": return "Secretary"
