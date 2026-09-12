@@ -8,6 +8,7 @@ import express from 'express';
 import multer from 'multer';
 import mammoth from 'mammoth';
 import nodemailer from 'nodemailer';
+import { minutesReviewAlert } from './minutes-alerts.js';
 import { PDFParse } from 'pdf-parse';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
@@ -19,6 +20,7 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
+import { closingReviewIssues } from './minutes-format.js';
 
 dotenv.config();
 
@@ -386,6 +388,7 @@ const WARDEN_EVENTS = new Set(['proposals_changed', 'connected']);
 const broadcast = (type, data = {}) => {
   const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of realtimeClients) {
+    if (type === 'minutes_review_changed' && client.role !== 'owner') continue;
     if (client.role === 'warden' && !WARDEN_EVENTS.has(type)) continue;
     client.response.write(event);
   }
@@ -1577,6 +1580,16 @@ app.get('/api/dues', requireAuth, requireDuesAccess, async (req, res, next) => {
 /* Meeting minutes stay inside the same officer sign in as the signing queue. Uploading a
  * Plaud transcript creates working material only. The application never emails minutes.
  * Authorization to distribute and later approval by the Lodge are separate recorded facts. */
+app.get('/api/minutes/review-alerts', requireAuth, requireOwner, async (_req, res, next) => {
+  try {
+    const rows = await dbAll(`SELECT m.id, m.meeting_date, m.submitted_for_review_at, u.name AS created_by_name
+      FROM meeting_minutes m JOIN users u ON u.id = m.created_by_user_id
+      WHERE m.status = 'awaiting_master_attestation' ORDER BY m.submitted_for_review_at DESC`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ alerts: rows.map(minutesReviewAlert) });
+  } catch (error) { next(error); }
+});
+
 app.get('/api/minutes', requireAuth, requireMinutesAccess, async (_req, res, next) => {
   try {
     const rows = await dbAll(
@@ -1673,11 +1686,11 @@ app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, async
 const minutesChanges = (submitted, reviewed) => {
   const before = normalizeMinutesDraft(submitted), after = normalizeMinutesDraft(reviewed);
   const changes = [];
-  const labels = { meetingDate: 'Meeting date', meetingType: 'Meeting type', degree: 'Degree', openingTime: 'Opening time', closingTime: 'Closing time', presiding: 'Presiding officer', quorum: 'Quorum', nextMeeting: 'Next meeting', present: 'Brothers present', excused: 'Brothers excused', visitors: 'Visitors', officerAttendance: 'Officer attendance' };
+  const labels = { meetingDate: 'Meeting date', meetingType: 'Meeting type', degree: 'Degree', openingTime: 'Opening time', closingTime: 'Closing time', prayerRequested: 'Prayer requested by the Worshipful Master', closingPrayerGiven: 'Closing prayer for the sick and distressed', presiding: 'Presiding officer', quorum: 'Quorum', nextMeeting: 'Next meeting', present: 'Brothers present', excused: 'Brothers excused', visitors: 'Visitors', officerAttendance: 'Officer attendance' };
   const display = value => typeof value === 'string' ? value : value == null ? ''
     : Array.isArray(value) ? value.map(entry => typeof entry === 'string' ? entry
-      : `${entry.name}, ${entry.title}: ${entry.status.replaceAll('_', ' ')}`).join('\n') : String(value);
-  for (const field of ['meetingDate', 'meetingType', 'degree', 'openingTime', 'closingTime', 'presiding', 'quorum', 'nextMeeting', 'present', 'excused', 'visitors', 'officerAttendance']) {
+      : `${entry.name}, ${entry.title}: ${entry.status.replaceAll('_', ' ')}`).join('\n') : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
+  for (const field of ['meetingDate', 'meetingType', 'degree', 'openingTime', 'closingTime', 'prayerRequested', 'closingPrayerGiven', 'presiding', 'quorum', 'nextMeeting', 'present', 'excused', 'visitors', 'officerAttendance']) {
     if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) changes.push({ field: labels[field], before: display(before[field]), after: display(after[field]) });
   }
   const count = Math.max(before.sections.length, after.sections.length);
@@ -1725,6 +1738,8 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     if (row.created_by_user_id !== req.user.id) {
       return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
     }
+    const closingIssues = closingReviewIssues(JSON.parse(row.draft_json));
+    if (closingIssues.length) return res.status(409).json({ error: closingIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     const time = nowIso();
@@ -1746,14 +1761,16 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
       `INSERT INTO audit_events (user_id, action, details_json, created_at) VALUES (?, 'minutes_preparer_attested', ?, ?)`,
       [req.user.id, JSON.stringify({ minutesId: row.id }), time],
     );
+    broadcast('minutes_review_changed');
+    const alert = minutesReviewAlert(row);
     const owner = await dbGet("SELECT email FROM users WHERE role = 'owner' AND access_revoked_at IS NULL ORDER BY id LIMIT 1");
     let noticeSent = false;
     if (owner?.email) {
       try {
         noticeSent = await sendEmail({
           to: owner.email,
-          subject: `Meeting minutes ready for review: ${row.meeting_date || 'date needs review'}`,
-          text: `${req.user.name} attested to the draft meeting minutes. They are ready for your review and attestation in the Stone Square Dashboard.\n\n${requestBaseUrl(req)}/?section=minutes`,
+          subject: alert.title,
+          text: `${alert.title}.\n\n${req.user.name} submitted the minutes for your review and attestation. Open Meeting Minutes in the Stone Square Dashboard to review the draft.\n\n${requestBaseUrl(req)}${alert.url}`,
         });
       } catch (error) {
         console.warn('Minutes review notice failed:', error.message);
@@ -1770,6 +1787,8 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'awaiting_master_attestation') return res.status(409).json({ error: 'The preparing officer must attest to the draft first.' });
+    const closingIssues = closingReviewIssues(JSON.parse(row.draft_json));
+    if (closingIssues.length) return res.status(409).json({ error: closingIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     const time = nowIso();
@@ -1792,6 +1811,7 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
        VALUES (?, 'minutes_master_attested', ?, ?, ?, ?)`,
       [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id }), time],
     );
+    broadcast('minutes_review_changed');
     const recipients = await dbAll("SELECT DISTINCT email FROM users WHERE access_revoked_at IS NULL AND (role = 'secretary' OR id = ?)", [row.created_by_user_id]);
     const changes = row.master_changes_json ? JSON.parse(row.master_changes_json) : [];
     const changedSections = changes.map(change => change.field).join(', ');
@@ -1872,6 +1892,7 @@ app.post('/api/minutes/:id/reopen', requireAuth, requireOwner, async (req, res, 
        distributed_at = NULL, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
       [req.user.id, time, row.id],
     );
+    broadcast('minutes_review_changed');
     res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
   } catch (error) {
     next(error);

@@ -404,9 +404,9 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
 
 /* Officer workspace: quiet typography, clear controls and a live document pane. */
 :root { --paper: #fff; --background: #f3f5f8; }
-body { background: #f3f5f8; }
+body { background: radial-gradient(ellipse at 12% 0%, #ead8ae66, transparent 48%), linear-gradient(140deg, #fbf9f3, #edf3f5); }
 .grain { display: none; }
-.auth-story { background: #10263d; }
+.auth-story { background: radial-gradient(ellipse at 95% 5%, #b38c3c44, transparent 55%), linear-gradient(145deg, #10263d, #174454); }
 .auth-story::after { display: none; }
 .auth-story h1 { font: 600 clamp(36px, 4vw, 58px)/1.12 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -.035em; }
 .auth-story h1 em { font-style: normal; color: #d5bc85; }
@@ -414,8 +414,20 @@ body { background: #f3f5f8; }
 .auth-layout, .workspace { box-shadow: 0 12px 40px #10263d0a; }
 .content h1 { font: 600 32px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -.025em; }
 .content h2, .modal-body h2 { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-weight: 600; }
-.content { background: #f8f9fb; }
-.panel, .minutes-section-card { border-color: #dce2e9; border-radius: 10px; box-shadow: none; }
+.content { background: linear-gradient(160deg, #fffdf7, #f1f6f7); }
+.panel, .minutes-section-card { border-color: #deded5; border-radius: 12px; box-shadow: 0 4px 16px #10263d05; }
+.minutes-section-card { border-left: 3px solid #c79a42; }
+.minutes-section-card textarea { background: #fffefb; }
+.minutes-closing-review { padding: 18px; border-radius: 12px; background: #eef5f2; border-left: 3px solid #39725e; }
+.minutes-closing-review p { font-size: 13px; line-height: 1.6; }
+.sidebar { background: linear-gradient(165deg, #0b263d, #15414a); }
+@keyframes workspace-appear { from { opacity: 0; } to { opacity: 1; } }
+.auth-layout, .workspace, .minutes-editor-body { animation: workspace-appear 240ms ease-out; }
+.primary, .secondary { transition: background-color 160ms ease, box-shadow 160ms ease; }
+.primary:hover { box-shadow: 0 5px 15px #10263d25; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
 .minutes-row { background: white; padding: 18px; border: 1px solid #e2e6eb; border-radius: 9px; margin-bottom: 9px; }
 .danger-text { color: #a92f39 !important; }
 .minutes-generator > .helper { max-width: 760px; font-size: 13px; line-height: 1.6; }
@@ -441,7 +453,7 @@ body { background: #f3f5f8; }
 .minutes-master-changes pre { white-space: pre-wrap; font: 13px/1.6 -apple-system, sans-serif; padding: 12px; background: white; }
 
 /* One document layout, with controls and page previews sized for each screen. */
-html { background: #f3f5f8; }
+html { background: #f6f3ec; }
 body:has(.modal:not(.hidden)) { overflow: hidden; }
 input, select, textarea { min-width: 0; max-width: 100%; }
 a { overflow-wrap: anywhere; }

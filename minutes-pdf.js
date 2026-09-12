@@ -1,4 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { readFile } from 'node:fs/promises';
+import { bulletItems, documentSections, preparerOffice } from './minutes-format.js';
 
 import {
   additionalPresent, nonOfficerExcused, officerAttendanceRows,
@@ -45,6 +47,8 @@ export const buildMinutesPdf = async ({
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const italic = await pdf.embedFont(StandardFonts.HelveticaOblique);
+  const boldItalic = await pdf.embedFont(StandardFonts.HelveticaBoldOblique);
+  const seal = await pdf.embedPng(await readFile(new URL('./assets/lodge-seal.png', import.meta.url)));
   const preparerInk = preparedSignature ? await pdf.embedPng(preparedSignature) : null;
   const masterInk = masterSignature ? await pdf.embedPng(masterSignature) : null;
   const dateLabel = fullDate(draft.meetingDate);
@@ -122,7 +126,8 @@ export const buildMinutesPdf = async ({
       page.drawText(line, { x: LEFT, y, size: 10, font: bold, color: NAVY });
     }
     y -= 9;
-    page.drawLine({ start: { x: LEFT, y }, end: { x: LEFT + WIDTH, y }, thickness: 0.8, color: NAVY });
+    page.drawLine({ start: { x: LEFT, y }, end: { x: LEFT + WIDTH, y }, thickness: 0.6, color: LINE });
+    page.drawLine({ start: { x: LEFT, y }, end: { x: LEFT + 58, y }, thickness: 2, color: GOLD });
     y -= 17;
   };
 
@@ -170,10 +175,68 @@ export const buildMinutesPdf = async ({
     y -= 14;
   };
 
+  const layoutBullet = (item) => {
+    const size = 10, available = WIDTH - 20;
+    const tokens = []; let token = [];
+    for (const run of item.runs) {
+      const font = run.bold ? (run.italic ? boldItalic : bold) : (run.italic ? italic : regular);
+      // Join punctuation to its word even when the underline or font changes.
+      for (const char of clean(`|${run.text}|`).slice(1, -1)) {
+        const space = /\s/.test(char);
+        if (token.length && space !== /\s/.test(token[0].text)) { tokens.push(token); token = []; }
+        token.push({text: char, font, underline: run.underline, width: font.widthOfTextAtSize(char, size)});
+      }
+    }
+    if (token.length) tokens.push(token);
+    const lines = []; let line = [], width = 0;
+    for (const token of tokens) {
+      const tokenWidth = token.reduce((sum, part) => sum + part.width, 0);
+      const chunks = tokenWidth > available ? token.map(part => [part]) : [token];
+      for (const parts of chunks) {
+        const partWidth = parts.reduce((sum, part) => sum + part.width, 0);
+        if (width && width + partWidth > available) { lines.push(line); line = []; width = 0; }
+        if (!width && parts.every(part => /\s/.test(part.text))) continue;
+        line.push(...parts); width += partWidth;
+      }
+    }
+    if (line.length) lines.push(line);
+    // Coalesce adjacent characters to retain text extraction and compact PDFs.
+    return lines.map(line => line.reduce((parts, char) => {
+      const last = parts.at(-1);
+      if (last && last.font === char.font && last.underline === char.underline) { last.text += char.text; last.width += char.width; }
+      else parts.push({...char});
+      return parts;
+    }, []));
+  };
+
+  const bullets = (text) => {
+    const size = 10, lineHeight = 14, indent = LEFT + 15;
+    for (const item of bulletItems(text)) {
+      const lines = layoutBullet(item);
+      ensure(Math.min(lines.length, 3) * lineHeight + 8);
+      lines.forEach((parts, index) => {
+        ensure(lineHeight + 3);
+        if (index === 0) page.drawCircle({x: LEFT + 4, y: y + 3, size: 1.8, color: GOLD});
+        let x = indent;
+        for (const part of parts) {
+          page.drawText(part.text, {x, y, size, font: part.font, color: INK});
+          if (part.underline && part.text.trim()) page.drawLine({start: {x, y: y - 1.5}, end: {x: x + part.width, y: y - 1.5}, thickness: 0.45, color: INK});
+          x += part.width;
+        }
+        y -= lineHeight;
+      });
+      y -= 8;
+    }
+  };
+
   startPage('Stone Square Lodge No. 22');
+  page.drawImage(seal, {x: LEFT + WIDTH - 60, y: y - 33, width: 60, height: 60});
   page.drawText('Meeting Minutes', { x: LEFT, y, size: 24, font: bold, color: NAVY });
   y -= 24;
-  paragraphs(`${meetingType} | ${dateLabel}`, { size: 11, color: GRAY });
+  for (const line of wrap(`${meetingType} | ${dateLabel}`, regular, 10, WIDTH - 76)) {
+    page.drawText(line, {x: LEFT, y, size: 10, font: regular, color: GRAY}); y -= 14;
+  }
+  y -= 14;
   table(['Meeting Detail', 'Information'], [
     ['Degree', clean(draft.degree) || 'Needs review'],
     ['Opening / Closing', `${clean(draft.openingTime) || 'Needs review'} / ${clean(draft.closingTime) || 'Needs review'}`],
@@ -185,31 +248,33 @@ export const buildMinutesPdf = async ({
     officer.name, officer.title, ({present: 'Present', absent: 'Absent', excused: 'Excused'})[officer.status] || 'Not recorded',
   ]), [220, 200, 102], { size: 8 });
   const additional = additionalPresent(draft);
-  if (additional.length) paragraphs(`Additional Brothers present: ${additional.join('; ')}`);
+  if (additional.length) { ruleHeading('Additional Brothers Present'); bullets(additional.join('\n')); }
   const excused = nonOfficerExcused(draft);
-  if (excused.length) paragraphs(`Other Brothers excused: ${excused.join('; ')}`);
-  if (draft.visitors?.length) paragraphs(`Visitors: ${draft.visitors.join('; ')}`);
+  if (excused.length) { ruleHeading('Other Brothers Excused'); bullets(excused.join('\n')); }
+  if (draft.visitors?.length) { ruleHeading('Visitors'); bullets(draft.visitors.join('\n')); }
 
   // Render the editor's sections in order. No separate inferred financial ledger,
   // speculative motion results, empty worksheets, or repeated remarks pages.
-  for (const section of draft.sections || []) {
+  for (const section of documentSections(draft)) {
     if (!clean(section.body)) continue;
-    ensure(65);
+    const closingHeight = section.heading === 'Closing of the Lodge'
+      ? bulletItems(section.body).reduce((sum, item) => sum + layoutBullet(item).length * 14 + 8, 32) + (masterChanges.length ? 260 : 220) : 65;
+    ensure(closingHeight);
     const title = clean(section.heading).replace(/^Grand Lodge Officers?'? Remarks$/i, 'Communications');
     ruleHeading(title || 'Meeting Business');
-    paragraphs(section.body, { size: 10 });
+    bullets(section.body);
   }
-  if (draft.nextMeeting) { ruleHeading('Next Meeting'); paragraphs(draft.nextMeeting, { size: 10 }); }
-  ensure(masterChanges.length ? 240 : 200);
+  ensure(masterChanges.length ? 260 : 220);
   ruleHeading('Attestation and Distribution');
-  const preparerTitle = preparerRole === 'assistant_secretary' ? 'Assistant Secretary'
-    : preparerRole === 'owner' ? 'Worshipful Master, Preparing Officer' : 'Secretary';
+  const preparerTitle = preparerOffice(preparedBy, preparerRole);
   paragraphs(isOfficial
     ? `Approved by the Lodge${approvedByLodgeOn ? ` on ${fullDate(approvedByLodgeOn)}` : ''}.`
     : masterAttestedAt ? "The Worshipful Master has authorized distribution of this draft. Formal Lodge approval remains pending."
       : "Working draft for officer review. Distribution requires the Worshipful Master's authorization.", { size: 9 });
   if (masterChanges.length) paragraphs("The preparing officer attested to the submitted version. The Worshipful Master's corrections and the original signed submission are retained in the record.", { size: 8 });
-  const signatureY = y - 76;
+  const signatureY = y - 94;
+  page.drawText('PREPARING OFFICER', {x: 61, y: y - 12, size: 8, font: bold, color: NAVY});
+  page.drawText('WORSHIPFUL MASTER REVIEW', {x: 333, y: y - 12, size: 8, font: bold, color: NAVY});
   if (preparerInk) page.drawImage(preparerInk, { x: 65, y: signatureY + 15, width: 195, height: 50 });
   if (masterInk) page.drawImage(masterInk, { x: 337, y: signatureY + 15, width: 195, height: 50 });
   page.drawLine({ start: { x: 55, y: signatureY }, end: { x: 277, y: signatureY }, thickness: 0.8, color: INK });

@@ -312,3 +312,10 @@ struct WardenProposal: Codable, Identifiable {
 struct ProposalsResponse: Codable { let proposals: [WardenProposal] }
 
 struct ApprovalsResponse: Codable { let approvals: [DispensationApproval] }
+
+struct MinutesReviewAlert: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let submittedBy: String
+}
+struct MinutesReviewAlertsPayload: Decodable { let alerts: [MinutesReviewAlert] }

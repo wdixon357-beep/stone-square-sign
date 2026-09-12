@@ -171,6 +171,7 @@ const enterWorkspace = async (user) => {
   showWorkspaceSection(requestedWorkspaceSection === 'minutes' && maySeeDues ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
+  await refreshMinutesReviewAlerts();
   const [documents] = await Promise.all([
     renderDocuments(),
     user.role === 'owner' ? renderOfficers() : Promise.resolve(),
@@ -305,6 +306,8 @@ const collectMinutesDraft = () => ({
   degree: $('minutesDegree').value.trim() || null,
   openingTime: $('minutesOpeningTime').value.trim() || null,
   closingTime: $('minutesClosingTime').value.trim() || null,
+  prayerRequested: $('minutesPrayerRequested').value === '' ? null : $('minutesPrayerRequested').value === 'true',
+  closingPrayerGiven: $('minutesClosingPrayerGiven').value === '' ? null : $('minutesClosingPrayerGiven').value === 'true',
   presiding: $('minutesPresiding').value.trim() || null,
   quorum: $('minutesQuorum').value.trim() || null,
   nextMeeting: $('minutesNextMeeting').value.trim() || null,
@@ -335,6 +338,31 @@ const setMinutesMeetingType = (value) => {
   $('minutesMeetingTypeOther').value = stated ? '' : value;
   $('minutesMeetingTypeOther').classList.toggle('hidden', stated);
 };
+
+const refreshMinutesReviewAlerts = async () => {
+  const container = $('minutesReviewAlerts');
+  if (state.user?.role !== 'owner') { container.replaceChildren(); hide(container); return; }
+  const token = state.token;
+  try {
+    const { alerts } = await apiFetch('/api/minutes/review-alerts');
+    if (state.token !== token || state.user?.role !== 'owner') return;
+    container.replaceChildren(...alerts.map((alert) => {
+      const button = document.createElement('button');
+      button.className = 'secondary';
+      button.style.cssText = 'display:block;width:100%;text-align:left;white-space:normal;margin-bottom:12px';
+      button.textContent = `${alert.title}. Submitted by ${alert.submittedBy}. Open for review.`;
+      button.addEventListener('click', async () => {
+        showWorkspaceSection('minutes');
+        await renderMinutes();
+        const record = state.minutes.find(item => item.id === alert.id);
+        if (record) openMinutesEditor(record.id);
+      });
+      return button;
+    }));
+    container.classList.toggle('hidden', !alerts.length);
+  } catch { /* Keep existing alerts visible until the next successful refresh. */ }
+};
+setInterval(() => { if (state.token && state.user?.role === 'owner') refreshMinutesReviewAlerts(); }, 20000);
 
 const renderMinutes = async () => {
   try {
@@ -555,6 +583,8 @@ const openMinutesEditor = (id) => {
   $('minutesDegree').value = legacyDegrees[draft.degree] || draft.degree || '';
   $('minutesOpeningTime').value = draft.openingTime || '';
   $('minutesClosingTime').value = draft.closingTime || '';
+  $('minutesPrayerRequested').value = typeof draft.prayerRequested === 'boolean' ? String(draft.prayerRequested) : '';
+  $('minutesClosingPrayerGiven').value = typeof draft.closingPrayerGiven === 'boolean' ? String(draft.closingPrayerGiven) : '';
   $('minutesPresiding').value = draft.presiding || '';
   $('minutesQuorum').value = /^(yes|quorum present|established)$/i.test(draft.quorum || '') ? 'Yes'
     : /^(no|no quorum)$/i.test(draft.quorum || '') ? 'No' : '';
@@ -1066,6 +1096,7 @@ const startRealtime = async () => {
       });
       if (!response.ok || !response.body) throw new Error('Live connection unavailable.');
       setLiveState(true);
+      await refreshMinutesReviewAlerts();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -1076,6 +1107,7 @@ const startRealtime = async () => {
         const events = buffer.split('\n\n');
         buffer = events.pop() || '';
         events.forEach((event) => {
+          if (event.includes('event: minutes_review_changed')) refreshMinutesReviewAlerts();
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();
           }

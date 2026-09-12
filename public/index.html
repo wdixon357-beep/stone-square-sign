@@ -131,6 +131,7 @@
         </aside>
 
         <div class="content">
+          <section id="minutesReviewAlerts" class="hidden" role="status" aria-live="polite" aria-label="Minutes awaiting your review"></section>
           <section id="landingSection" class="landing-section">
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
             <div class="document-menu">
@@ -406,6 +407,14 @@
               <button id="addMinutesOfficer" class="secondary small minutes-add-row" type="button">Add officer or pro tem</button>
             </section>
             <div id="minutesSections" class="minutes-sections"></div>
+            <section class="minutes-detail-section minutes-closing-review">
+              <h3>Prayer and closing</h3>
+              <p>The closing section uses the closing time entered above. Confirm these details so the standard prayer wording accurately reflects this meeting.</p>
+              <div class="minutes-meta-grid">
+                <div><label for="minutesPrayerRequested">Did the Worshipful Master ask the Chaplain to pray for the sick and distressed at closing?</label><select id="minutesPrayerRequested"><option value="">Needs confirmation</option><option value="true">Yes</option><option value="false">No</option></select></div>
+                <div><label for="minutesClosingPrayerGiven">Did the Chaplain give the closing prayer and pray for the sick and distressed?</label><select id="minutesClosingPrayerGiven"><option value="">Needs confirmation</option><option value="true">Yes</option><option value="false">No</option></select></div>
+              </div>
+            </section>
             <section class="minutes-detail-section hidden">
               <h3>Income and expenses stated in the meeting</h3>
               <p>These rows appear only when the transcript records an actual transaction.</p>
@@ -419,7 +428,7 @@
                 <div><p class="eyebrow">DOCUMENT PREVIEW</p><h3>Review the filled meeting template</h3></div>
                 <button id="refreshMinutesPreview" class="secondary" type="button">Update preview</button>
               </div>
-              <p>The preview updates automatically as you edit. Your changes are saved only when you select Save corrections.</p>
+              <p>Each section is organized into bullets with bold labels, italic review notes and underlined dates and times. The preview updates as you edit. Select Save corrections to save your changes.</p>
               <p id="minutesPreviewState" class="helper" role="status"></p>
               <a id="minutesPreviewDownload" class="secondary hidden" download="Meeting Minutes.pdf">Download this PDF</a>
               <div id="minutesPreviewFrame" class="minutes-pdf-pages" role="region" aria-label="Meeting minutes document pages" tabindex="0"></div>

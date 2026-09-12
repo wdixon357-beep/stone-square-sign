@@ -283,6 +283,18 @@ struct WorkspaceView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(22)
                 List(selection: $selection) {
+                if model.user?.role == "owner" {
+                    ForEach(model.minutesReviewAlerts) { alert in
+                        Button {
+                            selection = .minutes
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label(alert.title, systemImage: "bell.badge.fill")
+                                Text("Submitted by \(alert.submittedBy)").font(.caption)
+                            }
+                        }
+                    }
+                }
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
                 Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator)
                 if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {

@@ -13,6 +13,7 @@ struct MinutesDraft: Codable, Equatable {
     var sourceType: String?
     var meetingDate: String?; var meetingType: String; var degree: String?
     var openingTime: String?; var closingTime: String?; var presiding: String?; var quorum: String?; var nextMeeting: String?
+    var prayerRequested: Bool?; var closingPrayerGiven: Bool?
     var present: [String]; var excused: [String]; var visitors: [String]
     var officerAttendance: [MinutesAttendance]
     var income: [MinutesFinance]; var expenses: [MinutesFinance]
@@ -178,6 +179,8 @@ struct LodgeDocumentPreview: NSViewRepresentable {
 
 struct MeetingMinutesView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
     @ObservedObject var workspace: MinutesWorkspace
     @State private var deleting: MinutesRecord?
     @State private var confirmReorganize = false
@@ -206,12 +209,14 @@ struct MeetingMinutesView: View {
                     Button("Back to records") { if workspace.dirty { confirmClose = true } else { workspace.close() } }
                     if editable { Button("Save corrections") { Task { await workspace.save() } }.buttonStyle(.borderedProminent) }
                 } else { Button("Refresh", systemImage: "arrow.clockwise") { Task { await workspace.refresh() } } }
-            }.padding(20)
+            }.padding(20).background(LinearGradient(colors: [SignTheme.ivory.opacity(0.6), SignTheme.gold.opacity(0.08)], startPoint: .leading, endPoint: .trailing))
             Divider()
             if workspace.selected != nil, workspace.draft != nil { editor } else { recordList }
             if !workspace.message.isEmpty { Text(workspace.message).font(.callout).textSelection(.enabled).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar) }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(LinearGradient(colors: [Color(nsColor: .windowBackgroundColor), SignTheme.ivory.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .opacity(appeared ? 1 : 0)
+        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.24)) { appeared = true } }
         .disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh() }
         .onChange(of: workspace.draft) { old, new in
@@ -359,7 +364,20 @@ struct MeetingMinutesView: View {
                 TextField("Presiding officer", text: text(\.presiding))
                 Picker("Quorum", selection: text(\.quorum)) { Text("Needs review").tag(""); Text("Yes").tag("Yes"); Text("No").tag("No") }
                 TextField("Next meeting", text: text(\.nextMeeting))
+                Divider()
+                Text("Prayer and closing").font(.headline).foregroundStyle(SignTheme.navy)
+                Text("Confirm the prayer details for this meeting. The closing section uses the closing time above.").font(.caption).foregroundStyle(.secondary)
+                prayerPicker("Worshipful Master requested prayer for the sick and distressed at closing", key: \.prayerRequested)
+                prayerPicker("Chaplain gave the closing prayer and prayed for the sick and distressed", key: \.closingPrayerGiven)
             }.textFieldStyle(.roundedBorder).padding(10)
+        }
+    }
+    private func prayerPicker(_ label: String, key: WritableKeyPath<MinutesDraft, Bool?>) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label).font(.caption)
+            Picker(label, selection: Binding(get: { workspace.draft?[keyPath: key].map { $0 ? "yes" : "no" } ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 == "yes" })) {
+                Text("Needs confirmation").tag(""); Text("Yes").tag("yes"); Text("No").tag("no")
+            }.labelsHidden()
         }
     }
     private func namesEditor(_ label: String, binding: Binding<String>) -> some View {

@@ -33,6 +33,8 @@ const minutesTestDraft = {
   degree: 'Third Degree of Masonry',
   openingTime: '7:30 PM',
   closingTime: '9:04 PM',
+  prayerRequested: true,
+  closingPrayerGiven: true,
   presiding: 'Worshipful Master W. Aaron Dixon-Saunders',
   quorum: 'Established',
   nextMeeting: 'Thursday, September 17, 2026 at 7:30 PM',
@@ -479,6 +481,9 @@ try {
   check('a viewer cannot open the private minutes preview', viewerMinutesPreview.status === 403,
     String(viewerMinutesPreview.status));
   const revisedDraft = structuredClone(generatedMinutes.payload.minutes.draft);
+  await api('PUT', `/api/minutes/${minutesId}`, {token: asstToken, body: {draft: {...revisedDraft, closingTime: null, prayerRequested: null, closingPrayerGiven: null}}});
+  const incompleteClosing = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token: asstToken});
+  check('unconfirmed closing details cannot be signed as a complete record', incompleteClosing.status === 409 && /closing time/.test(incompleteClosing.payload.error) && /Chaplain/.test(incompleteClosing.payload.error));
   revisedDraft.sections[0].body += ' The officers were examined in their stations and duties.';
   const savedMinutes = await api('PUT', `/api/minutes/${minutesId}`, {
     token: asstToken, body: { draft: revisedDraft },
@@ -486,17 +491,42 @@ try {
   check('Adrian can correct and save the generated draft',
     savedMinutes.status === 200
       && savedMinutes.payload.minutes.draft.sections[0].body.includes('officers were examined'));
+  const alertStreamAbort = new AbortController();
+  const ownerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${wmToken}` }, signal: alertStreamAbort.signal });
+  const viewerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${viewerToken}` }, signal: alertStreamAbort.signal });
+  let ownerEvents = '', viewerEvents = '';
+  const collectEvents = async (response, accept) => {
+    try { for await (const bytes of response.body) accept(Buffer.from(bytes).toString()); } catch { /* Test closes streams. */ }
+  };
+  const streamReaders = [collectEvents(ownerStream, text => { ownerEvents += text; }), collectEvents(viewerStream, text => { viewerEvents += text; })];
   const submittedMinutes = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  check('submission immediately signals the Master live connection only', ownerEvents.includes('event: minutes_review_changed') && !viewerEvents.includes('event: minutes_review_changed'));
+  alertStreamAbort.abort();
+  await Promise.all(streamReaders);
   check('Adrian can attest and send the corrected draft to the Worshipful Master',
     submittedMinutes.status === 200 && submittedMinutes.payload.minutes.status === 'awaiting_master_attestation'
       && Boolean(submittedMinutes.payload.minutes.preparerAttestedAt));
+  const reviewAlerts = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
+  check('the Master has a persistent dated alert for Adrian submission', reviewAlerts.status === 200
+    && reviewAlerts.payload.alerts.some(a => a.id === minutesId && a.title.includes('Thursday, September 3, 2026') && a.submittedBy === 'Adrian Reese'));
+  const privateAlerts = await api('GET', '/api/minutes/review-alerts', { token: viewerToken });
+  const secretaryAlerts = await api('GET', '/api/minutes/review-alerts', { token: secToken });
+  check('review alerts are private to the Master', privateAlerts.status === 403 && secretaryAlerts.status === 403);
+  check('the immediate review email names the meeting date and preparer', deliveredMail.slice(mailBeforeMinutes)
+    .some(m => m.replace(/\r?\n\s+/g, ' ').includes('Meeting minutes awaiting your review: Thursday, September 3, 2026') && m.includes('Adrian Reese')));
+  const mailBeforeDuplicate = deliveredMail.length;
+  const duplicateSubmit = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
+  check('repeat submission does not send duplicate alerts', duplicateSubmit.status === 409 && deliveredMail.length === mailBeforeDuplicate);
   const editedByMaster = structuredClone(revisedDraft);
   editedByMaster.sections[0].body += ' The Master corrected the meeting record during review.';
+  editedByMaster.prayerRequested = false;
   const blockedPreparerEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: asstToken, body: { draft: editedByMaster } });
   check('a preparer cannot alter the record after attesting', blockedPreparerEdit.status === 409);
   const masterEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: wmToken, body: { draft: editedByMaster } });
   check('the Master can correct minutes during review without erasing the first attestation', masterEdit.status === 200 && Boolean(masterEdit.payload.minutes.preparerAttestedAt));
   check('review corrections preserve exact submitted and revised text', masterEdit.payload.minutes.masterChanges.some(change => change.before.includes('officers were examined') && !change.before.includes('Master corrected') && change.after.includes('Master corrected')));
+  check('prayer corrections are outlined for the preparing officer', masterEdit.payload.minutes.masterChanges.some(change => change.field === 'Prayer requested by the Worshipful Master' && change.before === 'Yes' && change.after === 'No'));
   check('the original submitted draft remains available', masterEdit.payload.minutes.submittedDraft.sections[0].body === revisedDraft.sections[0].body);
   const correctedPreview = await api('POST', `/api/minutes/${minutesId}/preview`, { token: wmToken, body: { draft: editedByMaster } });
   check('the Master can preview corrections before the second attestation', correctedPreview.status === 200);
@@ -514,6 +544,8 @@ try {
   check('the Worshipful Master can attest and return the signed draft to McDuffie',
     authorizedMinutes.status === 200 && authorizedMinutes.payload.minutes.status === 'ready_for_distribution'
       && Boolean(authorizedMinutes.payload.minutes.masterAttestedAt));
+  const clearedAlerts = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
+  check('the review alert clears after the Master completes review', !clearedAlerts.payload.alerts.some(a => a.id === minutesId));
   const draftDocx = await api('GET', `/api/minutes/${minutesId}/docx`, { token: secToken });
   const draftText = draftDocx.status === 200
     ? (await mammoth.extractRawText({ buffer: draftDocx.payload })).value : '';
@@ -551,6 +583,20 @@ try {
       && minutesNotices.some((message) => /wm@stonesquare22pha\.org/i.test(message))
       && minutesNotices.some((message) => /mcduff8995@example\.org/i.test(message)),
     `${minutesNotices.length} notices`);
+
+  const secretarySource = new FormData();
+  secretarySource.append('transcriptText', 'The Lodge opened in due form with a quorum present. The Secretary recorded the business of the meeting, the motion and its disposition. The Lodge closed in due form after completing its business.');
+  const secretaryDraft = await api('POST', '/api/minutes/generate', { token: secToken, body: secretarySource, raw: true });
+  const secretaryMinutesId = secretaryDraft.payload.minutes?.id;
+  const beforeSecretaryNotice = deliveredMail.length;
+  const secretarySubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
+  const secretaryPending = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
+  check('McDuffie submission creates the same dated alert and immediate email', secretarySubmission.status === 200
+    && secretaryPending.payload.alerts.some(a => a.id === secretaryMinutesId && a.submittedBy === 'William M. McDuffie' && a.title.includes('Thursday, September 3, 2026'))
+    && deliveredMail.length === beforeSecretaryNotice + 1);
+  await api('POST', `/api/minutes/${secretaryMinutesId}/reopen`, { token: wmToken });
+  const afterReopen = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
+  check('returning minutes to draft removes the pending review alert', !afterReopen.payload.alerts.some(a => a.id === secretaryMinutesId));
 
   const ownSource = new FormData();
   ownSource.append('transcriptText', 'Meeting date: 2026-09-03. The Lodge opened at 7:30 PM. The committee reported. The Lodge closed at 9:00 PM.');

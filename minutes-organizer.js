@@ -1,4 +1,5 @@
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
+import { detectPrayerFacts } from './minutes-format.js';
 
 // Preserve agenda blocks before interpreting their contents. In compiled notes the
 // author has already supplied context; a speaker's name must never start a section.
@@ -175,8 +176,9 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   const ordered = [...headings.map(([heading]) => heading), 'Other Meeting Business'];
   const finalSections = [...new Set(ordered)].filter(heading => sections.has(heading)).map(heading => ({heading, body: [...new Set(sections.get(heading))].join('\n\n')}));
   const day = meetingDate(lines);
-  const openingTime = time(source, 'opening time|opened|called to order');
-  const closingTime = time(source, 'closing time|closed|adjourned|closing');
+  const completedActions = lines.flatMap(sentenceParts).filter(line => !/\b(?:will|would|should|not|never|next meeting|previous meeting|last meeting)\b/i.test(line)).join('\n');
+  const openingTime = time(completedActions, 'opening time|opened|called to order');
+  const closingTime = time(completedActions, 'closing time|closed|adjourned');
   const warnings = [];
   if (!day) warnings.push('Enter the meeting date. Event dates in the notes are not used as the meeting date.');
   if (!openingTime) warnings.push('Confirm the opening time.');
@@ -189,7 +191,8 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
       : attendance.present.some(name => namesMatch(name, officer.name)) ? 'present'
         : attendance.absent.some(name => namesMatch(name, officer.name)) ? 'absent' : 'not_recorded'}));
   return {
-    organizerVersion: 2, sourceType: type, meetingDate: day,
+    organizerVersion: 3, sourceType: type, meetingDate: day,
+    ...detectPrayerFacts(source),
     meetingType: /\bmeeting type\s*:\s*([^\n.]+)/i.exec(source)?.[1]?.trim() || 'Stated Communication',
     degree, openingTime, closingTime,
     presiding: /\b(?:presiding|presided by)\s*:\s*([^\n]+)/i.exec(source)?.[1]?.trim() || null,

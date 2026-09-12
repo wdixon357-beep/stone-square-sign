@@ -163,6 +163,7 @@ enum BiometricCredentialStore {
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
     @Published var user: User?
     @Published var restoringSession = false
     @Published var sessionConnectionError: String?
@@ -382,7 +383,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshMinutesReviewAlerts() async {
+        guard user?.role == "owner" else { minutesReviewAlerts = []; return }
+        let currentToken = token
+        do {
+            let response: MinutesReviewAlertsPayload = try await request("/api/minutes/review-alerts")
+            guard token == currentToken, user?.role == "owner" else { return }
+            minutesReviewAlerts = response.alerts
+        } catch { /* Preserve pending alerts if connectivity is temporarily unavailable. */ }
+    }
+
     func refresh(silent: Bool = false) async {
+        await refreshMinutesReviewAlerts()
         do {
             let response: DocumentsResponse = try await request("/api/documents")
             documents = response.documents
@@ -430,8 +442,12 @@ final class AppModel: ObservableObject {
                         throw ClientError.invalidResponse
                     }
                     self.isLive = true
+                    await self.refreshMinutesReviewAlerts()
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
+                        if line == "event: minutes_review_changed" {
+                            await self.refreshMinutesReviewAlerts()
+                        }
                         if line == "event: queue_changed" || line == "event: profile_changed" {
                             await self.refresh(silent: true)
                         }
@@ -977,6 +993,7 @@ final class AppModel: ObservableObject {
         biometricLoginEnabled = false
         UserDefaults.standard.set(false, forKey: "biometric-login-enabled")
         user = nil
+        minutesReviewAlerts = []
         documents = []
         officers = []
         pendingInvitations = []

@@ -2,6 +2,8 @@ import {
   AlignmentType, BorderStyle, Document, Footer, ImageRun, Packer, PageNumber,
   Paragraph, Table, TableCell, TableRow, TextRun, VerticalAlign, WidthType,
 } from 'docx';
+import { readFile } from 'node:fs/promises';
+import { bulletItems, documentSections, preparerOffice } from './minutes-format.js';
 
 import {
   additionalPresent, nonOfficerExcused, officerAttendanceRows,
@@ -10,7 +12,7 @@ import {
 const BLACK = '000000';
 const RED = 'B71C1C';
 const GRAY = '666666';
-const LIGHT_GRAY = 'E7E7E7';
+const LIGHT_GRAY = 'EAF0F5';
 const border = { style: BorderStyle.SINGLE, size: 4, color: BLACK };
 const borders = { top: border, bottom: border, left: border, right: border };
 
@@ -44,19 +46,17 @@ const sectionHeading = (text) => new Paragraph({
   alignment: AlignmentType.LEFT,
   spacing: { before: 220, after: 100 },
   keepNext: true,
+  border: {bottom: {style: BorderStyle.SINGLE, size: 8, color: 'C9A23B', space: 5}},
   children: [new TextRun({ text: String(text || '').toUpperCase(), size: 23, bold: true, color: '10263D' })],
 });
 
-const bodyParagraphs = (text) => String(text || '').split(/\n+/).map((line) => line.trim()).filter(Boolean).map((line) => {
-  const match = /^(MOTION|DISPOSITION):\s*(.*)$/i.exec(line);
-  return new Paragraph({
-    spacing: { after: 110, line: 288 },
-    children: match ? [
-      new TextRun({ text: `${match[1].toUpperCase()}: `, bold: true, size: 22 }),
-      new TextRun({ text: match[2], size: 22 }),
-    ] : [new TextRun({ text: line, size: 22 })],
-  });
-});
+const bodyParagraphs = (text, keepNext = false) => bulletItems(text).map(item => new Paragraph({
+  keepNext,
+  bullet: {level: 0},
+  indent: {left: 260, hanging: 200},
+  spacing: {after: 130, line: 288},
+  children: item.runs.map(run => new TextRun({text: run.text, size: 22, bold: run.bold, italics: run.italic, underline: run.underline ? {} : undefined})),
+}));
 
 const cell = (text, { bold = false, centerText = false, fill } = {}) => new TableCell({
   borders,
@@ -105,23 +105,24 @@ const officerTable = (draft) => new Table({
 
 const nameGroup = (heading, names) => names.length ? [
   sectionHeading(heading),
-  paragraph(names.join('; ')),
+  ...bodyParagraphs(names.join('\n')),
 ] : [];
 
-const signatureCell = ({ name, role, signature, when }) => new TableCell({
+const signatureCell = ({ name, role, signature, when, label }) => new TableCell({
   borders: { top: border, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
   width: { size: 48, type: WidthType.PERCENTAGE },
   verticalAlign: VerticalAlign.CENTER,
   margins: { top: 100, bottom: 80, left: 80, right: 80 },
   children: [
+    center(label, 18, {color: '10263D', after: 100}),
     new Paragraph({
       alignment: AlignmentType.CENTER,
       children: signature
         ? [new ImageRun({ data: signature, type: 'png', transformation: { width: 210, height: 52 } })]
         : [new TextRun({ text: 'Attestation pending', italics: true, color: GRAY, size: 19 })],
     }),
-    center(name || role, 20, { after: 20 }),
-    center(role, 18, { after: 20, color: GRAY, bold: false }),
+    center(name || 'Preparing Officer', 20, { after: 20 }),
+    ...(role ? [center(role, 18, { after: 20, color: GRAY, bold: false })] : []),
     center(when ? `Attested ${attestedDate(when)}` : 'Not yet attested', 16, { after: 0, color: GRAY, bold: false }),
   ],
 });
@@ -133,6 +134,7 @@ export const buildMinutesDocx = async ({
   const isOfficial = status === 'approved_by_lodge';
   const masthead = center('STONE SQUARE LODGE NO. 22', 28, { color: '10263D', after: 150 });
   const children = [
+    new Paragraph({alignment: AlignmentType.CENTER, keepNext: true, spacing: {after: 100}, children: [new ImageRun({data: await readFile(new URL('./assets/lodge-seal.png', import.meta.url)), type: 'png', transformation: {width: 66, height: 66}})]}),
     masthead,
     center(`MINUTES OF THE ${String(draft.meetingType || 'STATED COMMUNICATION').toUpperCase()}`, 28, { after: 55 }),
     center(fullDate(draft.meetingDate), 22, { after: 70, bold: false }),
@@ -146,11 +148,10 @@ export const buildMinutesDocx = async ({
     ...nameGroup('Additional Brothers Present', additionalPresent(draft)),
     ...nameGroup('Visitors', draft.visitors || []),
     ...nameGroup('Non Officers Excused From Meeting', nonOfficerExcused(draft)),
-    ...(draft.sections || []).filter((item) => String(item.body || '').trim()).flatMap((item) => [
+    ...documentSections(draft).flatMap((item) => [
       sectionHeading(item.heading || 'Meeting Notes'),
-      ...bodyParagraphs(item.body),
+      ...bodyParagraphs(item.body, item.heading === 'Closing of the Lodge'),
     ]),
-    ...(draft.nextMeeting ? [sectionHeading('Next Meeting'), paragraph(draft.nextMeeting)] : []),
     sectionHeading('Officer Attestations'),
     ...(masterChanges.length ? [paragraph("The preparing officer attested to the submitted version. The Worshipful Master's corrections and the original signed submission are retained in the record.")] : []),
     new Table({
@@ -161,11 +162,13 @@ export const buildMinutesDocx = async ({
         children: [
           signatureCell({
             name: preparedBy,
-            role: preparerRole === 'assistant_secretary' ? 'Assistant Secretary' : preparerRole === 'owner' ? 'Worshipful Master, Preparing Officer' : 'Secretary',
+            label: 'PREPARING OFFICER',
+            role: preparerOffice(preparedBy, preparerRole),
             signature: preparedSignature,
             when: preparerAttestedAt,
           }),
           signatureCell({
+            label: 'WORSHIPFUL MASTER REVIEW',
             name: masterName || 'W. Aaron Dixon-Saunders', role: 'Worshipful Master',
             signature: masterSignature, when: masterAttestedAt,
           }),

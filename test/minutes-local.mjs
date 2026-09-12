@@ -72,10 +72,12 @@ The Lodge closed at 9:18 PM.`;
   assert.notEqual(futureReport.sections.find(s=>s.heading==="Treasurer's Report").body, "The Treasurer's report was read aloud.");
   const pdf = await PDFDocument.load(await buildMinutesPdf({draft, status:'draft', preparedBy:'Test Officer', preparerRole:'owner'}));
   assert.ok(pdf.getPageCount() <= 5, 'compact minutes do not use empty worksheet pages');
-  // The only images allowed in minutes are explicitly supplied signatures.
-  for (const page of pdf.getPages()) assert.ok(!page.node.Resources()?.toString().includes('/Subtype /Image'));
+  // Official seal, narrative formatting and signature handling are tested in minutes-format.mjs.
 
   const transcript = await generateMinutesDraft('On 09/17/2026 the Lodge opened at 7:30 PM. A quorum was established. Correspondence from the district was read. The committee reported on the building. A motion was made and seconded. The motion carried. The Lodge closed at 9:05 PM.');
+  const futureClosing = await generateMinutesDraft('The Lodge will be closed at 9:00 PM. The Chaplain will give the closing prayer for the sick and distressed.');
+  assert.equal(futureClosing.closingTime, null, 'a planned closing time is not a completed closing');
+  assert.equal(futureClosing.closingPrayerGiven, null);
   assert.equal(transcript.sourceType, 'transcript');
   assert.equal(transcript.meetingDate, '2026-09-17');
   for (const heading of ['Communications', 'Committee Reports', 'New Business and Motions']) assert.ok(transcript.sections.some(s => s.heading === heading));
