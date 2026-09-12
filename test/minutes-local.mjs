@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { generateMinutesDraft } from '../minutes.js';
+import { generateMinutesDraft, normalizeMinutesDraft } from '../minutes.js';
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = () => { throw new Error('Local minutes generation must not call an external service.'); };
@@ -65,6 +65,11 @@ The Lodge closed in due form at 9:18 PM. Next stated communication: Thursday, Oc
   assert.equal(otherMeeting.degree, 'Round Table');
   assert.equal(otherMeeting.quorum, 'No');
   assert.equal(otherMeeting.meetingType, 'Officers Planning Session');
+
+  const olderDraft = normalizeMinutesDraft({
+    sections: [{ heading: 'Opening', body: 'The Lodge opened in due form.\nGrand Secretary Mobley present as a member.' }],
+  });
+  assert.equal(olderDraft.sections[0].body, 'The Lodge opened in due form.');
 
   console.log('Local minutes generation passed without an API key or network call.');
 } finally {

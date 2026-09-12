@@ -308,6 +308,11 @@ const canonicalQuorum = (value) => {
   return null;
 };
 
+const cleanSavedSectionBody = (value) => String(value || '').split(/\n+/).filter((line) => (
+  /\b(?:grand lodge visitation|official visitation)\b/i.test(line)
+  || !/\b(?:grand secretary|grand treasurer|grand lodge officer|district deputy|grand master)\b.*\bpresent as (?:a )?member\b/i.test(line)
+)).join('\n').trim();
+
 export const normalizeMinutesDraft = (value = {}) => ({
   meetingDate: value.meetingDate || null,
   meetingType: /^(?:regular )?stated communication$/i.test(String(value.meetingType || ''))
@@ -346,7 +351,7 @@ export const normalizeMinutesDraft = (value = {}) => ({
   sections: Array.isArray(value.sections)
     ? value.sections.map((section) => ({
       heading: String(section?.heading || '').trim(),
-      body: String(section?.body || '').trim(),
+      body: cleanSavedSectionBody(section?.body),
     })).filter((section) => section.heading || section.body)
     : [],
   warnings: Array.isArray(value.warnings) ? value.warnings.map(String).filter(Boolean) : [],
