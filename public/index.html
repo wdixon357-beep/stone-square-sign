@@ -355,12 +355,35 @@
           <form id="minutesEditorForm" class="minutes-editor-form">
             <div class="minutes-meta-grid">
               <div><label for="minutesMeetingDate">Meeting date</label><input id="minutesMeetingDate" type="date" /></div>
-              <div><label for="minutesMeetingType">Meeting type</label><input id="minutesMeetingType" type="text" /></div>
-              <div><label for="minutesDegree">Degree</label><input id="minutesDegree" type="text" /></div>
+              <div>
+                <label for="minutesMeetingType">Meeting type</label>
+                <select id="minutesMeetingType">
+                  <option value="Stated Communication">Stated Communication</option>
+                  <option value="other">Other</option>
+                </select>
+                <input id="minutesMeetingTypeOther" class="hidden" type="text" aria-label="Other meeting type" placeholder="Type the meeting type" />
+              </div>
+              <div>
+                <label for="minutesDegree">Degree</label>
+                <select id="minutesDegree">
+                  <option value="">Needs review</option>
+                  <option value="First Degree">First Degree</option>
+                  <option value="Second Degree">Second Degree</option>
+                  <option value="Third Degree">Third Degree</option>
+                  <option value="Round Table">Round Table</option>
+                </select>
+              </div>
               <div><label for="minutesOpeningTime">Opening time</label><input id="minutesOpeningTime" type="text" /></div>
               <div><label for="minutesClosingTime">Closing time</label><input id="minutesClosingTime" type="text" /></div>
               <div><label for="minutesPresiding">Presiding</label><input id="minutesPresiding" type="text" /></div>
-              <div><label for="minutesQuorum">Quorum</label><input id="minutesQuorum" type="text" /></div>
+              <div>
+                <label for="minutesQuorum">Quorum</label>
+                <select id="minutesQuorum">
+                  <option value="">Needs review</option>
+                  <option value="Yes">Yes</option>
+                  <option value="No">No</option>
+                </select>
+              </div>
               <div><label for="minutesNextMeeting">Next meeting</label><input id="minutesNextMeeting" type="text" /></div>
             </div>
             <div class="minutes-attendance-grid">

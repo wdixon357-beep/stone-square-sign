@@ -73,6 +73,7 @@ const SECTION_RULES = [
   ['Roll Call and Quorum', /\b(roll call|quorum)\b/i],
   ['Sickness and Distress', /\b(sickness|distress|ill|hospital|bereave|funeral)\b/i],
   ['Praise Report', /\b(praise report|good news|recognition)\b/i],
+  ['Good of the Order', /\bgood of the order\b/i],
   ['Reading of the Minutes', /\b(previous minutes|prior minutes|minutes (?:were )?read|reading of the minutes)\b/i],
   ["Treasurer's Report", /\b(treasurer|financial report|bank balance|account balance)\b/i],
   ['Demits', /\b(demit|transfer of membership)\b/i],
@@ -86,9 +87,9 @@ const SECTION_RULES = [
   ['Elections', /\b(election|elected|nomination)\b/i],
   ['Visitors', /\b(visitor|visiting brother)\b/i],
   ["Brothers' Remarks", /\b(remarks of the brothers|brothers? remarks)\b/i],
-  ["Wardens' Remarks", /\b(warden.{0,12}remarks|senior warden|junior warden)\b/i],
+  ["Wardens' Remarks", /\b(wardens?'? remarks|remarks (?:by|from) (?:the )?(?:senior|junior) warden)\b/i],
   ["Past Masters' Remarks", /\b(past masters? remarks|past master spoke)\b/i],
-  ["Grand Lodge Officers' Remarks", /\b(grand lodge officer|district deputy|grand master)\b/i],
+  ["Grand Lodge Officers' Remarks", /\b(grand lodge officers?' remarks|remarks (?:by|from) (?:the )?(?:district deputy|grand master)|grand lodge visitation|official visitation)\b/i],
   ['Prayer and Closing', /\b(closed|closing prayer|closing)\b/i],
 ];
 
@@ -105,6 +106,7 @@ const namesMatch = (left, right) => {
 const cleanLine = (value) => String(value || '')
   .replace(/^\s*(?:speaker\s*\d+|unknown speaker)(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\s*[:\-]?\s*/i, '')
   .replace(/^\s*\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*/, '')
+  .replace(/^\s*(?:[•*]|\d{1,2}[.)])\s+/, '')
   .replace(/[\u2013\u2014]/g, ',')
   .replace(/\s+/g, ' ')
   .trim();
@@ -147,10 +149,14 @@ const timeFromText = (source, words) => {
 const headingForLine = (line) => {
   const cleaned = cleanLine(line);
   const candidate = cleaned.replace(/[:.]$/, '').trim();
-  if (!candidate || candidate.length > 70 || /[.!?]$/.test(cleaned) || candidate.split(/\s+/).length > 7) return null;
-  return SECTION_RULES.find(([heading, rule]) => (
+  if (!candidate || candidate.length > 90 || /[.!?]$/.test(cleaned) || candidate.split(/\s+/).length > 10) return null;
+  const known = SECTION_RULES.find(([heading, rule]) => (
     comparableName(candidate) === comparableName(heading) || rule.test(candidate)
-  ))?.[0] || (/^[A-Z][A-Z\s'&]{3,}$/.test(candidate) ? candidate.replace(/\s+/g, ' ') : null);
+  ))?.[0];
+  if (known) return known;
+  const headingShape = /^[A-Z][A-Za-z0-9\s'&/(),-]+$/.test(candidate)
+    && !/\b(?:was|were|will|has|have|had|is|are|asked|stated|reported|discussed|approved|received|paid|made)\b/i.test(candidate);
+  return headingShape ? candidate.replace(/\s+/g, ' ') : null;
 };
 
 const transcriptSegments = (source) => source.split(/\n+/).flatMap((rawLine) => {
@@ -171,6 +177,7 @@ const locallyOrganizedDraft = (source) => {
   let activeHeading = null;
   const sensitiveReview = [];
   const actionItems = [];
+  const explicitlyIncludeGrandLodgePresence = /\b(include|record) (?:the )?grand lodge (?:officer|visitor|presence)\b/i.test(source);
 
   for (const rawLine of source.split(/\n+/)) {
     let line = cleanLine(rawLine);
@@ -192,6 +199,9 @@ const locallyOrganizedDraft = (source) => {
     }
     for (const sentence of transcriptSegments(line)) {
       if (isMetadataLine(sentence)) continue;
+      if (!explicitlyIncludeGrandLodgePresence
+        && !/\b(?:grand lodge visitation|official visitation)\b/i.test(sentence)
+        && /\b(?:grand secretary|grand treasurer|grand lodge officer|district deputy|grand master)\b.*\bpresent as (?:a )?member\b/i.test(sentence)) continue;
       if (/\b(diagnos|medical condition|medication|dues status|disciplin|allegation|family dispute)\b/i.test(sentence)) {
         sensitiveReview.push(sentence);
         const heading = /\b(diagnos|medical|medication)\b/i.test(sentence) ? 'Sickness and Distress' : 'Other Meeting Business';
@@ -241,7 +251,11 @@ const locallyOrganizedDraft = (source) => {
   const closingTime = timeFromText(source, 'closed|closing|adjourned');
   const presidingMatch = /\b(?:presiding|presided by)\s*[:\-]?\s*([^\n.]+)/i.exec(source);
   const nextMeetingMatch = /\b(next (?:stated communication|meeting)[^\n.]*)/i.exec(source);
-  const degreeMatch = /\b(Entered Apprentice|Fellowcraft|Master Mason)\s+Degree\b/i.exec(source);
+  const meetingTypeMatch = /\bmeeting type\s*[:\-]\s*(.+?)(?=[.\n]|$)/i.exec(source);
+  const degree = /\b(round[ -]?table)\b/i.test(source) ? 'Round Table'
+    : /\b(first|entered apprentice) degree\b/i.test(source) ? 'First Degree'
+      : /\b(second|fellow ?craft) degree\b/i.test(source) ? 'Second Degree'
+        : /\b(third|master mason) degree(?: of masonry)?\b/i.test(source) ? 'Third Degree' : null;
   const warnings = ['The Sign app organized this draft locally. Compare it with the corrected Plaud transcript before attesting.'];
   if (!meetingDate) warnings.push('Confirm the meeting date.');
   if (!openingTime) warnings.push('Confirm the opening time.');
@@ -250,12 +264,15 @@ const locallyOrganizedDraft = (source) => {
 
   return normalizeMinutesDraft({
     meetingDate,
-    meetingType: /\b(emergent|special) communication\b/i.test(source) ? 'Emergent Communication' : 'Stated Communication',
-    degree: degreeMatch?.[1] || null,
+    meetingType: meetingTypeMatch?.[1]?.trim()
+      || (/\b(emergent|special) communication\b/i.exec(source)?.[0])
+      || 'Stated Communication',
+    degree,
     openingTime,
     closingTime,
     presiding: presidingMatch?.[1]?.trim() || null,
-    quorum: /\bquorum (?:was |is )?(?:present|declared|established)\b/i.test(source) ? 'Quorum present' : null,
+    quorum: /\b(?:no quorum|quorum (?:was |is )?not (?:present|established))\b/i.test(source) ? 'No'
+      : /\bquorum (?:was |is )?(?:present|declared|established)\b/i.test(source) ? 'Yes' : null,
     nextMeeting: nextMeetingMatch?.[1]?.trim() || null,
     present,
     excused,
@@ -275,14 +292,31 @@ const locallyOrganizedDraft = (source) => {
   });
 };
 
+const canonicalDegree = (value) => {
+  const degree = String(value || '').trim();
+  if (/^(?:first degree|entered apprentice(?: degree)?)$/i.test(degree)) return 'First Degree';
+  if (/^(?:second degree|fellow ?craft(?: degree)?)$/i.test(degree)) return 'Second Degree';
+  if (/^(?:third degree(?: of masonry)?|master mason(?: degree)?)$/i.test(degree)) return 'Third Degree';
+  if (/^round[ -]?table$/i.test(degree)) return 'Round Table';
+  return null;
+};
+
+const canonicalQuorum = (value) => {
+  const quorum = String(value || '').trim();
+  if (/^(?:yes|present|established|quorum present|quorum established)$/i.test(quorum)) return 'Yes';
+  if (/^(?:no|no quorum|not present|not established)$/i.test(quorum)) return 'No';
+  return null;
+};
+
 export const normalizeMinutesDraft = (value = {}) => ({
   meetingDate: value.meetingDate || null,
-  meetingType: String(value.meetingType || 'Stated Communication').trim(),
-  degree: value.degree ? String(value.degree).trim() : null,
+  meetingType: /^(?:regular )?stated communication$/i.test(String(value.meetingType || ''))
+    ? 'Stated Communication' : String(value.meetingType || 'Stated Communication').trim(),
+  degree: canonicalDegree(value.degree),
   openingTime: value.openingTime ? String(value.openingTime).trim() : null,
   closingTime: value.closingTime ? String(value.closingTime).trim() : null,
   presiding: value.presiding ? String(value.presiding).trim() : null,
-  quorum: value.quorum ? String(value.quorum).trim() : null,
+  quorum: canonicalQuorum(value.quorum),
   nextMeeting: value.nextMeeting ? String(value.nextMeeting).trim() : null,
   present: Array.isArray(value.present) ? value.present.map(String).filter(Boolean) : [],
   excused: Array.isArray(value.excused) ? value.excused.map(String).filter(Boolean) : [],

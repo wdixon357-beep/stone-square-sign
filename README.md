@@ -34,10 +34,11 @@ window so the report form remains available.
 
 The Secretary or Assistant Secretary can paste a corrected Plaud transcript or upload
 its TXT, DOCX or PDF export. The app structures a draft for officer review, including
-attendance, motions, decisions, assignments and dates. It sends the transcript to the
-OpenAI Responses API only when the officer chooses Create Draft, with response storage
-disabled. The transcript and resulting draft remain restricted to the Worshipful
-Master and the Secretaries inside Stone Square Sign.
+attendance, motions, decisions, assignments and dates. The local transcript organizer
+uses the Lodge's meeting sections and does not call an external generation service or
+require an API key. The transcript and resulting draft remain restricted to the
+Worshipful Master and the Secretaries inside Stone Square Sign. The PDF preview follows
+the Secretary Meeting Notes Template sent to both Secretaries on June 18, 2026.
 
 The preparer attests first. The Worshipful Master reviews and attests next. The signed
 draft then returns to the Secretary as ready for distribution. Nothing is sent to the
@@ -148,7 +149,7 @@ only when every signer is done, record copies are mailed, the original is still
 recoverable, and the reset form gives the same answer for a real account as for one
 that does not exist.
 
-38 checks. They should all pass before anything is deployed.
+All checks should pass before anything is deployed.
 
 ## A note on the database driver
 

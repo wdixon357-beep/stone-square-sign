@@ -184,7 +184,7 @@ export const buildMinutesDocx = async ({
   const opening = (draft.sections || []).find((item) => /opening/i.test(item.heading));
   const children = [
     masthead,
-    center('MINUTES OF THE STATED COMMUNICATION', 28, { after: 55 }),
+    center(`MINUTES OF THE ${String(draft.meetingType || 'STATED COMMUNICATION').toUpperCase()}`, 28, { after: 55 }),
     center(fullDate(draft.meetingDate), 22, { after: 70, bold: false }),
     center(isOfficial
       ? `APPROVED BY THE LODGE${approvedByLodgeOn ? ` ON ${fullDate(approvedByLodgeOn).toUpperCase()}` : ''}`

@@ -297,7 +297,9 @@ const collectMinutesFinance = (id) => [...$(id).querySelectorAll('.minutes-finan
 
 const collectMinutesDraft = () => ({
   meetingDate: $('minutesMeetingDate').value || null,
-  meetingType: $('minutesMeetingType').value.trim(),
+  meetingType: $('minutesMeetingType').value === 'other'
+    ? $('minutesMeetingTypeOther').value.trim()
+    : $('minutesMeetingType').value,
   degree: $('minutesDegree').value.trim() || null,
   openingTime: $('minutesOpeningTime').value.trim() || null,
   closingTime: $('minutesClosingTime').value.trim() || null,
@@ -324,6 +326,13 @@ const collectMinutesDraft = () => ({
 });
 
 const minutesDateLabel = (item) => item.meetingDate ? eventDayLabel(item.meetingDate) : 'Meeting date needs review';
+
+const setMinutesMeetingType = (value) => {
+  const stated = !value || value === 'Stated Communication' || value === 'Regular Stated Communication';
+  $('minutesMeetingType').value = stated ? 'Stated Communication' : 'other';
+  $('minutesMeetingTypeOther').value = stated ? '' : value;
+  $('minutesMeetingTypeOther').classList.toggle('hidden', stated);
+};
 
 const renderMinutes = async () => {
   try {
@@ -482,12 +491,23 @@ const openMinutesEditor = (id) => {
   state.editingMinutesId = id;
   const draft = item.draft;
   $('minutesMeetingDate').value = draft.meetingDate || '';
-  $('minutesMeetingType').value = draft.meetingType || '';
-  $('minutesDegree').value = draft.degree || '';
+  setMinutesMeetingType(draft.meetingType || 'Stated Communication');
+  const legacyDegrees = {
+    'Entered Apprentice': 'First Degree',
+    'Entered Apprentice Degree': 'First Degree',
+    Fellowcraft: 'Second Degree',
+    'Fellow Craft': 'Second Degree',
+    'Fellow Craft Degree': 'Second Degree',
+    'Master Mason': 'Third Degree',
+    'Master Mason Degree': 'Third Degree',
+    'Third Degree of Masonry': 'Third Degree',
+  };
+  $('minutesDegree').value = legacyDegrees[draft.degree] || draft.degree || '';
   $('minutesOpeningTime').value = draft.openingTime || '';
   $('minutesClosingTime').value = draft.closingTime || '';
   $('minutesPresiding').value = draft.presiding || '';
-  $('minutesQuorum').value = draft.quorum || '';
+  $('minutesQuorum').value = /^(yes|quorum present|established)$/i.test(draft.quorum || '') ? 'Yes'
+    : /^(no|no quorum)$/i.test(draft.quorum || '') ? 'No' : '';
   $('minutesNextMeeting').value = draft.nextMeeting || '';
   $('minutesPresent').value = (draft.present || []).join('\n');
   $('minutesExcused').value = (draft.excused || []).join('\n');
@@ -876,6 +896,11 @@ $('addMinutesOfficer').addEventListener('click', () => {
 });
 $('addMinutesIncome').addEventListener('click', () => $('minutesIncome').append(financeEditor()));
 $('addMinutesExpense').addEventListener('click', () => $('minutesExpenses').append(financeEditor()));
+$('minutesMeetingType').addEventListener('change', () => {
+  const other = $('minutesMeetingType').value === 'other';
+  $('minutesMeetingTypeOther').classList.toggle('hidden', !other);
+  if (other) $('minutesMeetingTypeOther').focus();
+});
 $('minutesEditorForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
