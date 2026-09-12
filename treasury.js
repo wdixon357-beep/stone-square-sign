@@ -125,7 +125,7 @@ export function organizeTreasury(source, options = {}) {
       ['outstandingChecks', /outstanding checks?(?: balance| total)?/i], ['bankHold', /bank hold|minimum (?:share|balance) hold|membership share/i],
       ['transfersIn', /^(?:total )?transfers? (?:in|from)|^total transferred from/i], ['transfersOut', /^(?:total )?transfers? (?:out|to)|^total transferred to/i],
       ['receipts', /^(?:plus:\s*)?(?:total )?(?:receipts|deposits|income|credits)(?: total)?\s*[:$-]|^(?:plus:\s*)?total (?:receipts|deposits|income|credits)/i],
-      ['disbursements', /^(?:less:\s*)?(?:total )?(?:disbursements|withdrawals|expenses|debits)(?: total)?\s*[:$-]|^(?:less:\s*)?total (?:disbursements|withdrawals|expenses|debits)/i],
+      ['disbursements', /^(?:less:\s*)?(?:total )?(?:payments|disbursements|withdrawals|expenses|debits)(?: total)?\s*[:$-]|^(?:less:\s*)?total (?:payments|disbursements|withdrawals|expenses|debits)/i],
     ];
     const field = fields.find(([, re]) => re.test(line));
     if (a && field && (last !== undefined || /\b(?:none|zero)\b/i.test(line))) {

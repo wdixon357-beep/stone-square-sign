@@ -39,5 +39,8 @@ assert.equal(money('not supplied'),null);assert.equal(money('0'),0);assert.equal
 assert.equal(normalizeTreasury({periodEnd:'2026-02-30'}).periodEnd,'');
 const blank=calculateTreasury({});assert.equal(blank.cash,null);assert.equal(blank.fenced,null);assert.equal(blank.obligations,null);assert.equal(blank.unrestricted,null);
 const unknown=organizeTreasury('Checking\nSome banking item $80.00\nNo amount is supplied for a second item.');assert.equal(unknown.transactions[0].kind,'review');assert.ok(unknown.unmappedLines.some(l=>l.includes('second item')));
+const summary=organizeTreasury('Checking\nPayments: $0.00\nPayments: $0.00');
+assert.equal(summary.accounts[0].disbursements,'0.00');assert.equal(summary.transactions.length,0);
+assert.equal(organizeTreasury('Checking\nTotal payments: $125.00').accounts[0].disbursements,'125.00');
 console.log('Treasurer organization, cent arithmetic, transfer separation, missing inputs and reconciliation tests passed.');
 export { notes, d as completeTreasuryFixture };
