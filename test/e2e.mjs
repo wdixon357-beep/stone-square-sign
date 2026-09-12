@@ -464,6 +464,9 @@ try {
     generatedMinutes.status === 201 && generatedMinutes.payload.minutes?.status === 'draft',
     `${generatedMinutes.status} ${JSON.stringify(generatedMinutes.payload).slice(0, 160)}`);
   const minutesId = generatedMinutes.payload.minutes?.id;
+  check('generated minutes always expose Sickness and Distress for editing', generatedMinutes.payload.minutes?.draft.sections.some(s => s.heading === 'Sickness and Distress'));
+  const emptyMinutesSave = await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken,body:{draft:{sections:[]}}});
+  check('a required empty section cannot bypass the empty-record check', emptyMinutesSave.status === 400);
   check('private transcript details are held for officer review rather than placed in the draft',
     generatedMinutes.payload.minutes?.draft?.sensitiveReview?.length === 1
       && !JSON.stringify(generatedMinutes.payload.minutes.draft.sections).includes('medical diagnosis'));
@@ -521,12 +524,17 @@ try {
   const editedByMaster = structuredClone(revisedDraft);
   editedByMaster.sections[0].body += ' The Master corrected the meeting record during review.';
   editedByMaster.prayerRequested = false;
+  editedByMaster.sections.find(s => s.heading === 'Sickness and Distress').body = 'Prayers were requested for Brother Example.';
   const blockedPreparerEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: asstToken, body: { draft: editedByMaster } });
   check('a preparer cannot alter the record after attesting', blockedPreparerEdit.status === 409);
+  const staleMasterEdit = await api('PUT', `/api/minutes/${minutesId}`, {token:wmToken,body:{draft:editedByMaster,expectedUpdatedAt:'2000-01-01T00:00:00.000Z'}});
+  check('a stale review correction cannot overwrite newer minutes', staleMasterEdit.status === 409);
   const masterEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: wmToken, body: { draft: editedByMaster } });
   check('the Master can correct minutes during review without erasing the first attestation', masterEdit.status === 200 && Boolean(masterEdit.payload.minutes.preparerAttestedAt));
   check('review corrections preserve exact submitted and revised text', masterEdit.payload.minutes.masterChanges.some(change => change.before.includes('officers were examined') && !change.before.includes('Master corrected') && change.after.includes('Master corrected')));
   check('prayer corrections are outlined for the preparing officer', masterEdit.payload.minutes.masterChanges.some(change => change.field === 'Prayer requested by the Worshipful Master' && change.before === 'Yes' && change.after === 'No'));
+  check('Sickness and Distress corrections are outlined under their own section', masterEdit.payload.minutes.masterChanges.some(change => change.field === 'Sickness and Distress' && change.after.includes('Prayers were requested for Brother Example.')));
+  check('the preparer signed snapshot is unchanged by the Sickness correction', !masterEdit.payload.minutes.submittedDraft.sections.find(s => s.heading === 'Sickness and Distress')?.body.includes('Prayers were requested for Brother Example.'));
   check('the original submitted draft remains available', masterEdit.payload.minutes.submittedDraft.sections[0].body === revisedDraft.sections[0].body);
   const correctedPreview = await api('POST', `/api/minutes/${minutesId}/preview`, { token: wmToken, body: { draft: editedByMaster } });
   check('the Master can preview corrections before the second attestation', correctedPreview.status === 200);

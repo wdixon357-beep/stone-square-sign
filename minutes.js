@@ -1,3 +1,4 @@
+import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS } from './minutes-layout.js';
 import { organizeMeetingSource } from './minutes-organizer.js';
 
@@ -92,6 +93,27 @@ const cleanSavedSectionBody = (value) => String(value || '').split(/\n+/).filter
   || !/\b(?:grand secretary|grand treasurer|grand lodge officer|district deputy|grand master)\b.*\bpresent as (?:a )?member\b/i.test(line)
 )).join('\n').trim();
 
+// Keep the required editor section available without adding a statement about
+// anyone's health or changing a signed source snapshot.
+const normalizeSections = (value) => {
+  const sections = (Array.isArray(value) ? value : []).map(section => ({
+    heading: isSicknessHeading(section?.heading) ? SICKNESS_HEADING
+      : String(section?.heading || '').trim().replace(/^Grand Lodge Officers?'? Remarks$/i, 'Communications'),
+    body: cleanSavedSectionBody(section?.body),
+  })).filter(section => section.heading || section.body);
+  const sickness = sections.filter(section => section.heading === SICKNESS_HEADING);
+  if (sickness.length) {
+    sickness[0].body = sickness.map(section => section.body).filter(Boolean).join('\n');
+    return sections.filter(section => section.heading !== SICKNESS_HEADING || section === sickness[0]);
+  }
+  const rollCall = sections.findIndex(section => /^roll call(?: and quorum)?$/i.test(section.heading));
+  const minutes = sections.findIndex(section => /^(?:reading|approval) of (?:the )?minutes$/i.test(section.heading));
+  const opening = sections.findIndex(section => /^opening$/i.test(section.heading));
+  const insertAt = rollCall >= 0 ? rollCall + 1 : minutes >= 0 ? minutes : opening >= 0 ? opening + 1 : 0;
+  sections.splice(insertAt, 0, {heading: SICKNESS_HEADING, body: ''});
+  return sections;
+};
+
 export const normalizeMinutesDraft = (value = {}) => ({
   organizerVersion: value.organizerVersion || 1,
   sourceType: value.sourceType === 'compiled_notes' ? 'compiled_notes' : 'transcript',
@@ -131,12 +153,7 @@ export const normalizeMinutesDraft = (value = {}) => ({
     description: entry?.description ? String(entry.description).trim() : null,
     amount: entry?.amount ? String(entry.amount).trim() : null,
   })) : [],
-  sections: Array.isArray(value.sections)
-    ? value.sections.map((section) => ({
-      heading: String(section?.heading || '').trim().replace(/^Grand Lodge Officers?'? Remarks$/i, 'Communications'),
-      body: cleanSavedSectionBody(section?.body),
-    })).filter((section) => section.heading || section.body)
-    : [],
+  sections: normalizeSections(value.sections),
   warnings: Array.isArray(value.warnings) ? value.warnings.map(String).filter(Boolean) : [],
   sensitiveReview: Array.isArray(value.sensitiveReview)
     ? value.sensitiveReview.map(String).filter(Boolean) : [],

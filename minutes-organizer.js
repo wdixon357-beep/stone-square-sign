@@ -1,5 +1,6 @@
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { detectPrayerFacts } from './minutes-format.js';
+import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 
 // Preserve agenda blocks before interpreting their contents. In compiled notes the
 // author has already supplied context; a speaker's name must never start a section.
@@ -16,7 +17,7 @@ const sentenceParts = text => text.split(/(?<=[.!?])\s+(?=[A-Z])/).reduce((parts
 const headings = [
   ['Opening', /^(?:opening(?: of the lodge)?|call to order)$/i],
   ['Roll Call and Quorum', /^(?:roll call(?: of officers)?|quorum)$/i],
-  ['Sickness and Distress', /^(?:sick(?:ness)? and distress|sickness|distress)$/i],
+  [SICKNESS_HEADING, isSicknessHeading],
   ['Reading of the Minutes', /^(?:(?:reading and approval|approval|reading) of (?:the )?(?:previous |current )?minutes|minutes of (?:the )?previous meeting|previous minutes)$/i],
   ["Treasurer's Report", /^(?:treasurer'?s? report|financial report)(?:\s*\(.*\))?$/i],
   ['Degree Work', /^degree work(?: and current class)?$/i],
@@ -26,11 +27,12 @@ const headings = [
   ['New Business and Motions', /^(?:new business(?: and motions)?|motions)$/i],
   ['Committee Reports', /^committee reports?$/i],
   ['Elections', /^elections?$/i],
-  ['Good of the Order', /^(?:good of the order|praise report|(?:brothers?|wardens?|past masters?)'? remarks)$/i],
+  ['Good of the Order', /^(?:good of the order|praise reports?|(?:brothers?|wardens?|past masters?)'? remarks)$/i],
   ['Upcoming Events and Reminders', /^(?:upcoming events(?: and reminders)?|announcements)$/i],
   ['Prayer and Closing', /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i],
 ];
-const knownHeading = line => headings.find(([, re]) => re.test(undecorated(line).replace(/:$/, '')))?.[0];
+const knownHeading = line => headings.find(([, matcher]) => typeof matcher === 'function'
+  ? matcher(line) : matcher.test(undecorated(line).replace(/:$/, '')))?.[0];
 const names = text => [...new Set(clean(text)
   .replace(/,\s*(PM|HPM|Jr\.?|Sr\.?|II|III|IV)(?=\s*(?:[,;]|$))/gi, ' $1')
   .replace(/\s+(?:and|&)\s+/gi, ';').split(/\s*[;,|]\s*/).map(clean).map(name => name.replace(/\b[a-z][a-z]+\b/g, word => word[0].toUpperCase() + word.slice(1))).filter(Boolean))];
@@ -63,7 +65,7 @@ const containsRoutinePresence = line => /\b(?:grand secretary|grand treasurer|gr
 function narrativeHeading(sentence, active) {
   if (/\b(opened|called to order)\b/i.test(sentence)) return 'Opening';
   if (/\b(closed|adjourned|closing prayer)\b/i.test(sentence)) return 'Prayer and Closing';
-  if (/\b(sickness|distress|prayers? for|hospital|funeral|bereavement)\b/i.test(sentence)) return 'Sickness and Distress';
+  if (/\b(sick(?:ness)?|distress(?:ed)?|prayers? for|pray(?:ed|ing)? for|prayers? (?:(?:was|were) )?requested|requested prayers?|asked for prayers?|hospital|funeral|bereavement)\b/i.test(sentence)) return SICKNESS_HEADING;
   if (/\b(treasurer'?s? report|financial reports?)\b/i.test(sentence)) return "Treasurer's Report";
   if (/\b(previous minutes|minutes (?:were )?(?:read|approved))\b/i.test(sentence)) return 'Reading of the Minutes';
   if (/\b(committee reported|committee report)\b/i.test(sentence)) return 'Committee Reports';

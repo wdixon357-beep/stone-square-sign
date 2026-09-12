@@ -448,6 +448,14 @@ const renderMinutes = async () => {
   }
 };
 
+const renumberMinutesSections = () => {
+  $('minutesSections').querySelectorAll('.minutes-section-card').forEach((card, index) => {
+    card.querySelector('label').textContent = `Agenda section ${index + 1}`;
+    card.querySelector('input').setAttribute('aria-label', `Section ${index + 1} heading`);
+    card.querySelector('textarea').setAttribute('aria-label', `Section ${index + 1} content`);
+  });
+};
+
 const sectionEditor = (section, index) => {
   const card = document.createElement('div');
   card.className = 'minutes-section-card';
@@ -463,7 +471,7 @@ const sectionEditor = (section, index) => {
   body.setAttribute('aria-label', `Section ${index + 1} content`);
   const remove = document.createElement('button');
   remove.type = 'button'; remove.className = 'text-button danger-text remove-section'; remove.textContent = 'Remove section';
-  remove.addEventListener('click', () => { card.remove(); scheduleMinutesPreview(); });
+  remove.addEventListener('click', () => { card.remove(); renumberMinutesSections(); scheduleMinutesPreview(); });
   card.append(label, heading, body, remove);
   return card;
 };
@@ -582,9 +590,10 @@ const updateMinutesEditorControls = (item) => {
   $('minutesEditorForm').querySelectorAll('input, textarea, select').forEach((field) => {
     if (!['minutesApprovalDate', 'minutesApprovalNote'].includes(field.id)) field.disabled = !editable;
   });
-  ['addMinutesOfficer', 'addMinutesIncome', 'addMinutesExpense'].forEach((id) => {
+  ['addMinutesOfficer', 'addMinutesIncome', 'addMinutesExpense', 'addMinutesSection'].forEach((id) => {
     $(id).classList.toggle('hidden', !editable);
   });
+  $('addMinutesSection').disabled = !editable;
 };
 
 const openMinutesEditor = (id) => {
@@ -1026,6 +1035,15 @@ $('addMinutesOfficer').addEventListener('click', () => {
 });
 $('addMinutesIncome').addEventListener('click', () => $('minutesIncome').append(financeEditor()));
 $('addMinutesExpense').addEventListener('click', () => $('minutesExpenses').append(financeEditor()));
+$('addMinutesSection').addEventListener('click', () => {
+  const item = currentMinutes();
+  if (!item || !(item.status === 'draft' || (item.status === 'awaiting_master_attestation' && state.user?.role === 'owner'))) return;
+  const container = $('minutesSections');
+  const card = sectionEditor({ heading: 'Meeting Business', body: '' }, container.querySelectorAll('.minutes-section-card').length);
+  container.append(card);
+  card.querySelector('input').focus();
+  scheduleMinutesPreview();
+});
 $('minutesMeetingType').addEventListener('change', () => {
   const other = $('minutesMeetingType').value === 'other';
   $('minutesMeetingTypeOther').classList.toggle('hidden', !other);

@@ -4,6 +4,7 @@ import { normalizeMinutesDraft } from '../minutes.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { buildMinutesDocx } from '../minutes-document.js';
 import { PDFDocument, PDFName } from 'pdf-lib';
+import { PDFParse } from 'pdf-parse';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -51,6 +52,25 @@ assert.equal(preparerOffice('Adrian Reese', 'assistant_secretary'), 'Assistant S
 assert.equal(preparerOffice('William M. McDuffie', 'secretary'), 'Secretary');
 assert.equal(preparerOffice('W. Aaron Dixon-Saunders', 'owner'), 'Worshipful Master');
 assert.equal(preparerOffice('Test Officer', 'unknown'), '');
+for (const prayerRequested of [true, false, null]) {
+  const input = {prayerRequested, sections: [{heading:'Roll Call and Quorum', body:'A quorum was confirmed.'}, {heading:'Reading of the Minutes', body:'Minutes were read.'}]};
+  const saved = JSON.stringify(input);
+  const normalized = normalizeMinutesDraft(input);
+  assert.equal(normalized.sections[1].heading, 'Sickness and Distress');
+  assert.equal(normalized.sections[1].body, '', 'required editor section adds no health statement');
+  assert.equal(JSON.stringify(input), saved, 'normalization preserves the supplied snapshot');
+  const section = documentSections(normalized).find(section => section.heading === 'Sickness and Distress');
+  assert.ok(section, 'all prayer choices retain the document section');
+  assert.doesNotMatch(section.body, /None (?:reported|present)|No (?:sickness|distress)/i);
+  if (prayerRequested === false) assert.equal(section.body, 'No entry recorded.');
+}
+const emptySickness = normalizeMinutesDraft({prayerRequested:false, closingPrayerGiven:false, closingTime:'9:30 PM', sections:[{heading:'Opening',body:'The Lodge opened.'}]});
+const emptyPdf = new PDFParse({data:await buildMinutesPdf({draft:emptySickness,status:'draft'})});
+try {
+  const renderedText = (await emptyPdf.getText()).text;
+  assert.match(renderedText, /SICKNESS AND DISTRESS/i);
+  assert.match(renderedText, /No entry recorded\./);
+} finally {await emptyPdf.destroy();}
 const ctx = {draft, status:'draft', preparedBy:'Adrian Reese', preparerRole:'assistant_secretary'};
 const pdfBytes = await buildMinutesPdf(ctx);
 const pdf = await PDFDocument.load(pdfBytes);
@@ -67,5 +87,9 @@ try {
   assert.match(xml, /Assistant Secretary/);
   assert.match(xml, /Closing of the Lodge/i);
   assert.equal((xml.match(/<w:drawing>/g) || []).length, 1);
+  await fs.writeFile(docx, await buildMinutesDocx({draft:emptySickness,status:'draft'}));
+  const emptyXml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});
+  assert.match(emptyXml, /SICKNESS AND DISTRESS/);
+  assert.match(emptyXml, /No entry recorded\./);
 } finally { await fs.rm(tmp, {recursive:true, force:true}); }
 console.log('Minutes bullets, emphasis, seal, closing facts, officer roles and Word parity passed.');

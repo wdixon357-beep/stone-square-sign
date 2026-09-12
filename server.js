@@ -1746,13 +1746,13 @@ app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, 
       return res.status(409).json({ error: 'Reopen these minutes before changing an attested or official record.' });
     }
     const draft = normalizeMinutesDraft(req.body.draft);
-    if (!draft.sections.length) return res.status(400).json({ error: 'The minutes need at least one section.' });
+    if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     const time = nowIso();
     const changes = masterReview ? minutesChanges(JSON.parse(row.submitted_draft_json || row.draft_json), draft) : [];
     const saved = await dbRun(
       `UPDATE meeting_minutes SET meeting_date = ?, draft_json = ?, updated_by_user_id = ?,
-       updated_at = ?, master_changes_json = ? WHERE id = ? AND status = ?`,
-      [draft.meetingDate, JSON.stringify(draft), req.user.id, time, JSON.stringify(changes), row.id, row.status],
+       updated_at = ?, master_changes_json = ? WHERE id = ? AND status = ? AND updated_at = ?`,
+      [draft.meetingDate, JSON.stringify(draft), req.user.id, time, JSON.stringify(changes), row.id, row.status, req.body.expectedUpdatedAt || row.updated_at],
     );
     if (!saved.changes) return res.status(409).json({ error: 'The record changed. Refresh before saving.' });
     await dbRun(
@@ -1967,7 +1967,7 @@ app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,
       const savedDraft = normalizeMinutesDraft(JSON.parse(row.draft_json));
       const draft = (row.status === 'draft' || (row.status === 'awaiting_master_attestation' && req.user.role === 'owner')) && req.body?.draft
         ? normalizeMinutesDraft(req.body.draft) : savedDraft;
-      if (!draft.sections.length) return res.status(400).json({ error: 'The minutes need at least one section.' });
+      if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
       const bytes = await buildMinutesPdf(await minutesArtifactContext(row, draft));
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'application/pdf');

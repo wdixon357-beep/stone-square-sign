@@ -1,3 +1,5 @@
+import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
+
 // One presentation model for the live PDF and Word record. Formatting never
 // supplies a motion, an outcome, a name, or a time missing from the record.
 export const prayerRequestText = 'The Worshipful Master asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.';
@@ -28,15 +30,16 @@ export function detectPrayerFacts(source) {
 }
 
 export function documentSections(draft) {
-  const sections = (draft.sections || []).filter(s => String(s.body || '').trim()).map(s => ({...s}));
+  const sections = (draft.sections || []).filter(s => String(s.body || '').trim() || isSicknessHeading(s.heading)).map(s => ({...s, heading: isSicknessHeading(s.heading) ? SICKNESS_HEADING : s.heading}));
   const closing = sections.filter(s => /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(s.heading.trim()));
   const result = sections.filter(s => !closing.includes(s));
-  let sick = result.find(s => /^sick(?:ness)? and distress$/i.test(s.heading.trim()));
-  if (!sick) { sick = {heading: 'Sickness and Distress', body: ''}; result.push(sick); }
+  let sick = result.find(s => isSicknessHeading(s.heading));
+  if (!sick) { sick = {heading: SICKNESS_HEADING, body: ''}; result.push(sick); }
   // Remove only our exact standard wording when the officer changes a control.
   if (typeof draft.prayerRequested === 'boolean') sick.body = sick.body.replaceAll(prayerRequestText, '').replace(/(?:The )?(?:Worshipful Master|WM) (?:asked|requested|directed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the close of the meeting|the end of the meeting|closing)\.?/gi, '').trim();
   if (draft.prayerRequested === true) sick.body += `\n${prayerRequestText}`;
   else if (draft.prayerRequested !== false) sick.body += '\nPrayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.';
+  if (!sick.body.trim()) sick.body = 'No entry recorded.';
   if (draft.nextMeeting) result.push({heading: 'Next Meeting', body: draft.nextMeeting});
   let closingBody = closing.map(s => s.body).join('\n').trim();
   if (typeof draft.closingPrayerGiven === 'boolean') closingBody = closingBody.replaceAll(closingPrayerText, '')

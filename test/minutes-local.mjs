@@ -3,10 +3,56 @@ import { generateMinutesDraft, normalizeMinutesDraft } from '../minutes.js';
 import { officerAttendanceRows, nonOfficerExcused } from '../minutes-layout.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { PDFDocument } from 'pdf-lib';
+import { SICKNESS_HEADING, isSicknessHeading } from '../minutes-sections.js';
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = () => { throw new Error('Local minutes generation must not call an external service.'); };
 try {
+  const sicknessAliases = [
+    'Sickness and Distress', 'SICKNESS & DISTRESS', '3. Sick and Distressed:',
+    '### **SICKNESS & DISTRESS:**', '**SICKNESS & DISTRESS**:', '(3) __Sick & Distressed__',
+    '2) SICKNESS AND DISTRESSED:', 'Sickness', 'Distress',
+  ];
+  for (const alias of sicknessAliases) assert.ok(isSicknessHeading(alias), `recognize ${alias}`);
+  for (const sentence of ['Please pray for the sick and distressed.', 'Sickness and Distress follow up', 'Sick & Distress: prayers were requested']) {
+    assert.equal(isSicknessHeading(sentence), false, 'only a complete heading is canonicalized');
+  }
+  for (const alias of sicknessAliases) {
+    const agenda = await generateMinutesDraft(`ROLL CALL
+Present: Brother Example One; Brother Example Two
+A quorum was established.
+${alias}
+A Brother requested prayers for his family.
+A visit was arranged for next week.
+PRAISE REPORTS
+The building team was thanked for completing the repairs.
+READING OF THE MINUTES
+The previous minutes were read and approved.`);
+    assert.equal(agenda.sourceType, 'compiled_notes');
+    assert.deepEqual(agenda.present, ['Brother Example One', 'Brother Example Two']);
+    const sickness = agenda.sections.filter(section => section.heading === SICKNESS_HEADING);
+    assert.equal(sickness.length, 1, `one dedicated section for ${alias}`);
+    assert.match(sickness[0].body, /A Brother requested prayers for his family\.[^]*A visit was arranged for next week\./);
+    assert.doesNotMatch(sickness[0].body, /building team|previous minutes|PRAISE REPORTS|READING OF THE MINUTES/);
+    assert.doesNotMatch(agenda.sections.find(section => section.heading === 'Roll Call and Quorum').body, /prayers|visit/);
+    assert.match(agenda.sections.find(section => section.heading === 'Good of the Order').body, /building team/);
+    assert.match(agenda.sections.find(section => section.heading === 'Reading of the Minutes').body, /read and approved/);
+  }
+  const healthNarrative = await generateMinutesDraft('A Brother was sick and requested prayers. Another Brother was distressed. The Chaplain prayed for the families. The Chaplain gave the closing prayer. The Lodge closed at 9:00 PM.');
+  const healthBody = healthNarrative.sections.find(section => section.heading === SICKNESS_HEADING)?.body;
+  assert.match(healthBody, /was sick and requested prayers[^]*was distressed[^]*prayed for the families/);
+  assert.doesNotMatch(healthBody, /closing prayer|Lodge closed/);
+  const closingBody = healthNarrative.sections.find(section => section.heading === 'Prayer and Closing')?.body;
+  assert.match(closingBody, /closing prayer/);
+  for (const request of ['Prayers were requested for Brother Example.', 'A prayer was requested for Brother Example.']) {
+    const prayerNarrative = await generateMinutesDraft(`The Lodge opened at 7:30 PM. ${request} The Chaplain gave the closing prayer. The Lodge closed at 9:00 PM.`);
+    const prayerBody = prayerNarrative.sections.find(section => section.heading === SICKNESS_HEADING)?.body;
+    assert.equal(prayerBody, request, 'preserve a passive prayer request in its dedicated section');
+    assert.doesNotMatch(prayerBody, /closing prayer|Lodge closed/);
+  }
+  const ordinaryClosing = await generateMinutesDraft('The next stated communication date was announced to the Brothers. The Chaplain gave the closing prayer. The Lodge closed at 9:00 PM.');
+  assert.equal(ordinaryClosing.sections.find(section => section.heading === SICKNESS_HEADING)?.body || '', '', 'a general closing prayer does not establish a sickness report');
+
   // Synthetic example mirrors notes, including Markdown, speaker labels, a future
   // event date, a financial report, a contextual motion, and a rejected proposal.
   const source = `****Excused: PM John Brown, david marable, Brother Marcus Green****
@@ -86,7 +132,8 @@ The Lodge closed at 9:18 PM.`;
   const invalid = await generateMinutesDraft('Meeting date: 2026-02-31\nOpening\nThe Lodge opened at 7:30 PM. Brothers discussed the meeting schedule and requested that it be reviewed before the next communication.');
   assert.equal(invalid.meetingDate, null);
   const old = normalizeMinutesDraft({sections:[{heading:'Opening',body:'The Lodge opened.\nGrand Secretary Mobley present as a member.'},{heading:"Grand Lodge Officers' Remarks",body:'An official visitation was announced.'}]});
-  assert.equal(old.sections[0].body, 'The Lodge opened.'); assert.equal(old.sections[1].heading, 'Communications');
+  assert.equal(old.sections.find(section => section.heading === 'Opening').body, 'The Lodge opened.');
+  assert.equal(old.sections.find(section => section.body === 'An official visitation was announced.').heading, 'Communications');
   const corrected = structuredClone(draft); corrected.officerAttendance.find(r=>r.title==='Treasurer').status='not_recorded';
   assert.equal(officerAttendanceRows(corrected).find(r=>r.title==='Treasurer').status,'excused');
   console.log('Minutes content, context, attendance, dates and compact PDF passed without a network call.');
