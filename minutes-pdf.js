@@ -1,3 +1,4 @@
+import upng from '@pdf-lib/upng';
 import { formatMinutesDate } from './public/minutes-dates.js';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
@@ -25,6 +26,23 @@ const clean = (value) => String(value || '')
   .replace(/[\u2013\u2014]/g, ',')
   .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, '')
   .trim();
+
+// Align the visible ink, not the padded image canvas. Stored signature bytes
+// remain unchanged; both original attestations and handwriting are preserved.
+const signatureBottomInset = bytes => {
+  const decoder = upng.default || upng;
+  const image = decoder.decode(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  const rgba = new Uint8Array(decoder.toRGBA8(image)[0]);
+  for (let row = image.height - 1; row >= 0; row--) {
+    for (let col = 0; col < image.width; col++) {
+      const offset = (row * image.width + col) * 4;
+      if (rgba[offset + 3] > 20 && Math.min(rgba[offset], rgba[offset + 1], rgba[offset + 2]) < 230) {
+        return (image.height - 1 - row) / image.height * 50;
+      }
+    }
+  }
+  return 0;
+};
 
 const fullDate = (value) => formatMinutesDate(value, 'Date needs review');
 
@@ -272,8 +290,8 @@ export const buildMinutesPdf = async ({
   const signatureY = y - 94;
   page.drawText('PREPARING OFFICER', {x: 61, y: y - 12, size: 8, font: bold, color: NAVY});
   page.drawText('WORSHIPFUL MASTER REVIEW', {x: 333, y: y - 12, size: 8, font: bold, color: NAVY});
-  if (preparerInk) page.drawImage(preparerInk, { x: 65, y: signatureY + 15, width: 195, height: 50 });
-  if (masterInk) page.drawImage(masterInk, { x: 337, y: signatureY + 15, width: 195, height: 50 });
+  if (preparerInk) page.drawImage(preparerInk, { x: 65, y: signatureY + 2 - signatureBottomInset(preparedSignature), width: 195, height: 50 });
+  if (masterInk) page.drawImage(masterInk, { x: 337, y: signatureY + 2 - signatureBottomInset(masterSignature), width: 195, height: 50 });
   page.drawLine({ start: { x: 55, y: signatureY }, end: { x: 277, y: signatureY }, thickness: 0.8, color: INK });
   page.drawLine({ start: { x: 327, y: signatureY }, end: { x: 549, y: signatureY }, thickness: 0.8, color: INK });
   const preparerName = clean(preparedBy) || 'Preparing Officer';
