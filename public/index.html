@@ -328,23 +328,20 @@
           </section>
 
           <section id="proposalsSection" class="warden-only hidden">
-            <p class="eyebrow">FOR THE SENIOR AND JUNIOR WARDEN</p>
+            <p class="eyebrow">LODGE OFFICER REQUESTS</p>
             <h2>My Dispensation Proposals</h2>
-            <p class="muted">Tell the Worshipful Master what you have in mind. You can see exactly what the
-              dispensation would look like before you send it. He reviews it, changes anything he needs to,
-              and if he approves it the Lodge sends it on from there.</p>
+            <p class="muted">Describe your request, preview it, and submit it to the Worshipful Master for review.</p>
             <form id="proposalForm">
-              <label for="propTitle">What is it, in a few words</label>
-              <input id="propTitle" type="text" placeholder="Community cookout" />
-              <label for="propDetails">What are you asking to do <span class="req">*</span></label>
-              <textarea id="propDetails" rows="4" required placeholder="Describe the event the way you would explain it on the floor."></textarea>
+              <input id="propTitle" type="hidden" />
+              <label for="propDetails">Requested activity <span class="req">*</span></label>
+              <textarea id="propDetails" rows="4" maxlength="600" required placeholder="Describe the activity and permission requested. Enter its date, time and venue below."></textarea>
               <div class="two">
                 <div><label for="propEventDate">Date of the event <span class="req">*</span></label>
                   <input id="propEventDate" type="date" required /></div>
                 <div><label for="propEventTime">Time <span class="req">*</span></label>
                   <input id="propEventTime" type="text" required placeholder="6:00 PM to 9:00 PM" /></div>
               </div>
-              <label for="propLocation">Where <span class="req">*</span></label>
+              <label for="propLocation">Venue name <span class="req">*</span></label>
               <input id="propLocation" type="text" required placeholder="Stone Square Lodge No. 22" />
               <div class="two">
                 <div><label for="propStreet">Street <span class="req">*</span></label>
@@ -352,10 +349,12 @@
                 <div><label for="propCityState">City and state <span class="req">*</span></label>
                   <input id="propCityState" type="text" required placeholder="Middletown, DE" /></div>
               </div>
-              <label for="propNote">Your thoughts for the Master</label>
-              <textarea id="propNote" rows="3" placeholder="Why you think the Lodge should do this."></textarea>
+              <details><summary>Additional context for the Worshipful Master (optional)</summary>
+                <label for="propNote">Background or considerations beyond the request above</label>
+                <textarea id="propNote" rows="3" maxlength="2000" placeholder="Include only additional information the Worshipful Master needs for review."></textarea>
+              </details>
               <div class="two">
-                <button id="proposalPreview" class="secondary" type="button">Show me what it would look like</button>
+                <button id="proposalPreview" class="secondary" type="button">Preview proposal</button>
                 <button class="primary" type="submit">Send to the Worshipful Master</button>
               </div>
               <p id="proposalMessage" class="muted"></p>

@@ -2551,6 +2551,7 @@ app.get('/api/proposals', requireAuth, requireOwnerOrWarden, async (req, res, ne
 app.post('/api/proposals', requireAuth, requireWarden, rateLimit({ key: 'proposal-create', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
   try {
     const f = readProposalFields(req.body);
+    if (!f.requestDate) f.requestDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
     const note = String(req.body?.proposerNote || '').trim().slice(0, 2000);
     if (!f.requestDetails || !f.eventDate) {
       return res.status(400).json({ error: 'Tell the Master what the event is and when it is.' });

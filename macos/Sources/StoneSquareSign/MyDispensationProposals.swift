@@ -17,16 +17,17 @@ struct MyDispensationProposalsView: View {
             Form {
                 if showingForm {
                     Section("New dispensation proposal") {
-                        TextField("Title", text: $draft.title)
-                        TextField("Request date (YYYY-MM-DD)", text: $draft.requestDate)
+                        Text("Requested activity (required)").font(.headline)
+                        Text("Describe the activity and permission requested. Enter its date, time and venue below.").font(.caption).foregroundStyle(.secondary)
+                        TextEditor(text: $draft.requestDetails).frame(minHeight: 110).accessibilityLabel("Requested activity")
                         TextField("Event date (YYYY-MM-DD, required)", text: $draft.eventDate)
                         TextField("Event time", text: $draft.eventTime)
-                        Text("What are you requesting? (required)").font(.headline)
-                        TextEditor(text: $draft.requestDetails).frame(minHeight: 110).accessibilityLabel("Request details")
-                        TextField("Location", text: $draft.locationName)
+                        TextField("Venue name", text: $draft.locationName)
                         TextField("Street address", text: $draft.streetAddress)
                         TextField("City and state", text: $draft.cityState)
-                        TextField("Note to the Worshipful Master", text: $draft.proposerNote, axis: .vertical).lineLimit(3...6)
+                        DisclosureGroup("Additional context for the Worshipful Master (optional)") {
+                            TextField("Additional context", text: $draft.proposerNote, axis: .vertical).lineLimit(3...6)
+                        }
                         Text("The Worshipful Master reviews the proposal before a dispensation is prepared.").font(.caption).foregroundStyle(.secondary)
                         if draft.hasContent, let validation = draft.validationMessage { Text(validation).font(.caption).foregroundStyle(.secondary) }
                         Button("Submit proposal") { confirmSubmit = true }.buttonStyle(.borderedProminent).disabled(!draft.isReady || submitting)
