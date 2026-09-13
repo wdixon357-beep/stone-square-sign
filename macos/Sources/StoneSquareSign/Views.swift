@@ -203,26 +203,13 @@ struct WorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(22)
-                List(selection: $selection) {
-                if model.user?.role == "owner" {
-                    ForEach(model.minutesReviewAlerts) { alert in
-                        Button {
-                            selection = .minutes
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Label(alert.title, systemImage: "bell.badge.fill")
-                                    .font(.callout.weight(.semibold))
-                                Text("Submitted by \(alert.submittedBy)").font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 6)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                if model.user?.role == "owner" && !model.minutesReviewAlerts.isEmpty {
+                    ScrollView {
+                        minutesReviewAlertButtons
                     }
+                    .frame(height: model.minutesReviewAlerts.count == 1 ? 88 : 160)
                 }
+                List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
                 if model.user?.role != "member" { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
                 if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
@@ -247,6 +234,7 @@ struct WorkspaceView: View {
                     Label("Service Settings", systemImage: "network").tag(AppSection.settings)
                 }
                 .scrollContentBackground(.hidden)
+                .frame(minHeight: 0, maxHeight: .infinity)
                 VStack(alignment: .leading, spacing: 5) {
                     Label(
                         model.isLive ? "Live queue connected" : "Reconnecting",
@@ -278,6 +266,32 @@ struct WorkspaceView: View {
             guard let requested else { return }
             selection = requested
             model.requestedSection = nil
+        }
+    }
+
+    private var minutesReviewAlertButtons: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.minutesReviewAlerts) { alert in
+                Button {
+                    selection = .minutes
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(alert.title, systemImage: "bell.badge.fill")
+                            .font(.callout.weight(.semibold))
+                            .lineLimit(2)
+                        Text("Submitted by \(alert.submittedBy)").font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                    .frame(height: 80, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("\(alert.title). Submitted by \(alert.submittedBy)")
+                .padding(.horizontal, 22)
+            }
         }
     }
 

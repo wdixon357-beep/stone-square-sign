@@ -1,10 +1,30 @@
-import { formatMinutesDate } from './public/minutes-dates.js';
+import { formatMinutesDate, minutesDateParts } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 
 // One presentation model for the live PDF and Word record. Formatting never
 // supplies a motion, an outcome, a name, or a time missing from the record.
-export const prayerRequestText = 'The Worshipful Master asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.';
+export const prayerRequestText = 'WM Dixon-Saunders asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.';
 export const closingPrayerText = 'The Chaplain gave the closing prayer and prayed for the sick and distressed.';
+
+const plainBullet = value => emphasisRuns(String(value || '').replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim()).map(run => run.text).join('').trim();
+const omitWholeBullets = (body, predicate) => String(body || '').split('\n').filter(line => {
+  const plain = plainBullet(line);
+  return plain && !/^[-*•▪]$/.test(plain) && !predicate(plain);
+}).join('\n').trim();
+const isStandardPrayerRequest = text => /^(?:The )?(?:Worshipful Master|WM)(?: Dixon-Saunders)? (?:asked|requested|directed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the (?:close|end)(?: of (?:the )?meeting)?|closing)\.?$/i.test(text);
+
+function repeatsNextMeeting(text, draft, heading) {
+  const known = minutesDateParts(plainBullet(draft.nextMeeting));
+  const stated = minutesDateParts(text);
+  if (!known || !stated || known.iso !== stated.iso) return false;
+  const prefix = stated.prefix.trim();
+  if (!/^(?:the )?next meeting(?:(?:\s+(?:is|was)(?:\s+scheduled)?(?:\s+(?:for|on))?)|(?:\s+scheduled(?:\s+(?:for|on))?)|\s*:)?$/i.test(prefix)
+      && !(heading.trim().toLowerCase() === 'next meeting' && !prefix)) return false;
+  const remainder = value => value.trim().replace(/\.$/, '').trim().toLowerCase();
+  // A date-only bullet is covered by the dedicated section. Additional time,
+  // location or event details stay unless that section also contains them.
+  return !remainder(stated.suffix) || remainder(stated.suffix) === remainder(known.suffix);
+}
 
 export function preparerOffice(name, role) {
   if (!String(name || '').trim()) return '';
@@ -37,17 +57,22 @@ export function documentSections(draft) {
   let sick = result.find(s => isSicknessHeading(s.heading));
   if (!sick) { sick = {heading: SICKNESS_HEADING, body: ''}; result.push(sick); }
   // Remove only our exact standard wording when the officer changes a control.
-  if (typeof draft.prayerRequested === 'boolean') sick.body = sick.body.replaceAll(prayerRequestText, '').replace(/(?:The )?(?:Worshipful Master|WM) (?:asked|requested|directed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the close of the meeting|the end of the meeting|closing)\.?/gi, '').trim();
+  if (typeof draft.prayerRequested === 'boolean') sick.body = omitWholeBullets(sick.body, isStandardPrayerRequest);
   if (draft.prayerRequested === true) sick.body += `\n${prayerRequestText}`;
   else if (draft.prayerRequested !== false) sick.body += '\nPrayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.';
   if (!sick.body.trim()) sick.body = 'No entry recorded.';
-  if (draft.nextMeeting) result.push({heading: 'Next Meeting', body: formatMinutesDate(draft.nextMeeting)});
+  if (draft.nextMeeting) {
+    for (const section of result) section.body = omitWholeBullets(section.body, text => repeatsNextMeeting(text, draft, section.heading));
+    if (!sick.body.trim()) sick.body = 'No entry recorded.';
+    result.push({heading: 'Next Meeting', body: formatMinutesDate(draft.nextMeeting)});
+  }
   let closingBody = closing.map(s => s.body).join('\n').trim();
-  if (typeof draft.closingPrayerGiven === 'boolean') closingBody = closingBody.replaceAll(closingPrayerText, '')
-    .replace(/(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer and prayed for the sick and distressed\.?/gi, '').trim();
+  if (draft.nextMeeting) closingBody = omitWholeBullets(closingBody, text => repeatsNextMeeting(text, draft, 'Closing'));
+  if (typeof draft.prayerRequested === 'boolean') closingBody = omitWholeBullets(closingBody, isStandardPrayerRequest);
+  if (typeof draft.closingPrayerGiven === 'boolean') closingBody = omitWholeBullets(closingBody, text => /^(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer and prayed for the sick and distressed\.?$/i.test(text));
   // Replace an isolated closing-time statement with the reviewed time. Retain
   // any additional ceremonial or business details in the source sentence.
-  if (draft.closingTime) closingBody = closingBody.split('\n').filter(line => !/^\s*(?:(?:the )?lodge (?:was )?)?(?:closed|adjourned)(?: at [\d: .APMapm]+)?\.?\s*$/i.test(line)).join('\n').trim();
+  if (draft.closingTime) closingBody = omitWholeBullets(closingBody, text => /^(?:(?:the )?lodge (?:was )?)?(?:closed|adjourned)(?: at [\d: .APMapm]+)?\.?$/i.test(text));
   const closure = draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.` : 'Closing time: confirm and enter the time the Lodge was closed.';
   const prayer = draft.closingPrayerGiven === true ? closingPrayerText : draft.closingPrayerGiven === false ? '' : 'Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.';
   result.push({heading: 'Closing of the Lodge', body: [closingBody, closure, prayer].filter(Boolean).join('\n')});
