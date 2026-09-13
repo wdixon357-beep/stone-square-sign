@@ -21,9 +21,14 @@ final class SessionFixture: URLProtocol {
 
 @main struct SessionTests {
     @MainActor static func main() async throws {
+        let noticeKey = "session-notice-dismissed.v1.9999"
+        let savedNoticeDismissal = UserDefaults.standard.object(forKey: noticeKey)
+        UserDefaults.standard.removeObject(forKey: noticeKey)
         let savedAddress = UserDefaults.standard.object(forKey: "server-address")
         UserDefaults.standard.set("http://untrusted.example.invalid", forKey: "server-address")
         defer {
+            if let savedNoticeDismissal { UserDefaults.standard.set(savedNoticeDismissal, forKey: noticeKey) }
+            else { UserDefaults.standard.removeObject(forKey: noticeKey) }
             if let savedAddress { UserDefaults.standard.set(savedAddress, forKey: "server-address") }
             else { UserDefaults.standard.removeObject(forKey: "server-address") }
         }
@@ -53,9 +58,12 @@ final class SessionFixture: URLProtocol {
         precondition(model.user?.id == 9999 && model.signInSession?.lifetimeDays == 90 && model.showSignInNotice)
         precondition(model.signInSession?.title.contains("90 days") == true)
         print("PASS: restored Mac account displays the service's 90-day sign-in notice")
-        model.showSignInNotice = false
+        model.dismissSignInNotice()
         precondition(model.signInSession?.lifetimeDays == 90 && !model.showSignInNotice)
-        print("PASS: dismissing the Mac notice retains sign-in details for Settings")
+        let restartedModel = AppModel(session: session, savedSessionToken: "test-only-not-a-real-token")
+        await restartedModel.restoreSession()
+        precondition(restartedModel.signInSession?.lifetimeDays == 90 && !restartedModel.showSignInNotice)
+        print("PASS: dismissing the Mac notice persists across relaunch while retaining Settings details")
         let legacy = try JSONDecoder().decode(MeResponse.self, from: Data(#"{"user":{"id":9999,"email":"session-qa@example.org","name":"QA Member","role":"member","hasSignature":false}}"#.utf8))
         precondition(legacy.session == nil)
         print("PASS: Mac remains compatible with services that do not yet return session details")

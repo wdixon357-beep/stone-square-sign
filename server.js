@@ -12,7 +12,7 @@ import express from 'express';
 import multer from 'multer';
 import mammoth from 'mammoth';
 import nodemailer from 'nodemailer';
-import { minutesReviewAlert } from './minutes-alerts.js';
+import { minutesReviewAlert, minutesCompletionAlert } from './minutes-alerts.js';
 import { PDFParse } from 'pdf-parse';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
@@ -506,6 +506,7 @@ const broadcast = (type, data = {}) => {
   for (const client of realtimeClients) {
     if (client.role === 'member' && !['connected','treasury_changed'].includes(type)) continue;
     if (type === 'minutes_review_changed' && client.role !== 'owner') continue;
+    if (type === 'minutes_completion_changed' && client.role !== 'owner' && !client.permissions?.includes('minutes.prepare')) continue;
     if (client.role === 'warden' && !WARDEN_EVENTS.has(type)) continue;
     client.response.write(event);
   }
@@ -1581,7 +1582,7 @@ app.get('/api/events', requireAuth, (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
   res.write(`retry: 2500\nevent: connected\ndata: ${JSON.stringify({ time: nowIso() })}\n\n`);
-  const client = { response: res, userId: req.user.id, role: req.user.role };
+  const client = { response: res, userId: req.user.id, role: req.user.role, permissions: resolvePermissions(req.user) };
   realtimeClients.add(client);
   const heartbeat = setInterval(() => res.write(`: heartbeat ${Date.now()}\n\n`), 20000);
   req.on('close', () => {
@@ -1857,6 +1858,32 @@ app.get('/api/minutes/review-alerts', requireAuth, requireOwner, async (_req, re
   } catch (error) { next(error); }
 });
 
+app.get('/api/minutes/completion-alerts', requireAuth, requireMinutesPreparer, async (req, res, next) => {
+  try {
+    const rows = await dbAll(`SELECT m.id, m.meeting_date, m.master_attested_at,
+        master.name AS master_attested_by_name
+      FROM meeting_minutes m
+      LEFT JOIN users master ON master.id = m.master_attested_by_user_id
+      WHERE m.created_by_user_id = ? AND m.master_attested_at IS NOT NULL
+        AND m.preparer_review_seen_at IS NULL
+        AND m.created_by_user_id <> m.master_attested_by_user_id
+      ORDER BY m.master_attested_at DESC`, [req.user.id]);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ alerts: rows.map(minutesCompletionAlert) });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/minutes/:id/completion-alert-seen', requireAuth, requireMinutesPreparer, async (req, res, next) => {
+  try {
+    const time = nowIso();
+    const seen = await dbRun(`UPDATE meeting_minutes SET preparer_review_seen_at = ?
+      WHERE id = ? AND created_by_user_id = ? AND master_attested_at IS NOT NULL
+        AND preparer_review_seen_at IS NULL`, [time, req.params.id, req.user.id]);
+    if (!seen.changes) return res.status(404).json({ error: 'That reviewed minutes alert is no longer pending.' });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 const finalMinutes = row => ['ready_for_distribution','distributed','approved_by_lodge'].includes(row.status) && Boolean(row.master_attested_at);
 const requireMinutesView = (req,res,next) => hasPermission(req.user,'minutes.view') ? next() : res.status(403).json({error:'Meeting minutes access is not enabled.'});
 app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) => {
@@ -2055,7 +2082,8 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
       const result = await dbRun(
       `UPDATE meeting_minutes SET status = 'ready_for_distribution', master_attested_by_user_id = ?,
        master_attested_at = ?, master_signature_bytes = ?, authorized_by_user_id = ?, authorized_at = ?,
-       updated_by_user_id = ?, updated_at = ? WHERE id = ? AND status = 'awaiting_master_attestation' AND updated_at = ?`,
+       preparer_review_seen_at = NULL, updated_by_user_id = ?, updated_at = ?
+       WHERE id = ? AND status = 'awaiting_master_attestation' AND updated_at = ?`,
       [req.user.id, time, asBuffer(signature.signature_bytes), req.user.id, time, req.user.id, time, row.id, row.updated_at],
     );
       if (result.changes) await dbRun(
@@ -2071,6 +2099,7 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
       [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id }), time],
     );
     broadcast('minutes_review_changed');
+    broadcast('minutes_completion_changed');
     const recipients = await dbAll("SELECT DISTINCT email FROM users WHERE access_revoked_at IS NULL AND (role = 'secretary' OR id = ?)", [row.created_by_user_id]);
     const changes = row.master_changes_json ? JSON.parse(row.master_changes_json) : [];
     const changedSections = changes.map(change => change.field).join(', ');

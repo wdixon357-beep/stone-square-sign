@@ -261,6 +261,7 @@ export const initSchema = async (exec = run) => {
     preparer_attested_at TEXT,
     master_attested_by_user_id INTEGER REFERENCES users(id),
     master_attested_at TEXT,
+    preparer_review_seen_at TEXT,
     authorized_by_user_id INTEGER REFERENCES users(id),
     authorized_at TEXT,
     distributed_by_user_id INTEGER REFERENCES users(id),
@@ -374,6 +375,7 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'meeting_minutes', 'preparer_attested_at', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'master_attested_by_user_id', 'INTEGER REFERENCES users(id)');
   await addColumn(exec, 'meeting_minutes', 'master_attested_at', 'TEXT');
+  await addColumn(exec, 'meeting_minutes', 'preparer_review_seen_at', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'submitted_draft_json', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'preparer_signature_bytes', 'BYTEA');
   await addColumn(exec, 'meeting_minutes', 'master_signature_bytes', 'BYTEA');

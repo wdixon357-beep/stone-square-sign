@@ -428,5 +428,7 @@ struct MinutesReviewAlert: Decodable, Identifiable {
     let id: String
     let title: String
     let submittedBy: String
+    var message: String? = nil
+    var kind: String? = nil
 }
 struct MinutesReviewAlertsPayload: Decodable { let alerts: [MinutesReviewAlert] }

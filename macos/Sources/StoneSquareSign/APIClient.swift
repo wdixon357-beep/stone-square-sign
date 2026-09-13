@@ -243,6 +243,23 @@ final class AppModel: ObservableObject {
 
     var webSessionToken: String? { token }
 
+    private func sessionNoticeDismissalKey(for user: User) -> String {
+        "session-notice-dismissed.v1.\(user.id)"
+    }
+
+    private func applyAuthenticatedSession(_ session: SignInSession?, user: User, freshLogin: Bool) {
+        let key = sessionNoticeDismissalKey(for: user)
+        if freshLogin { UserDefaults.standard.removeObject(forKey: key) }
+        signInSession = session
+        self.user = user
+        showSignInNotice = session != nil && !UserDefaults.standard.bool(forKey: key)
+    }
+
+    func dismissSignInNotice() {
+        if let user { UserDefaults.standard.set(true, forKey: sessionNoticeDismissalKey(for: user)) }
+        showSignInNotice = false
+    }
+
     var meetingMinutesURL: URL? {
         guard let baseURL else { return nil }
         return URL(string: "/?section=minutes", relativeTo: baseURL)
@@ -300,9 +317,7 @@ final class AppModel: ObservableObject {
         defer { restoringSession = false }
         do {
             let response: MeResponse = try await request("/api/auth/me")
-            signInSession = response.session
-            showSignInNotice = response.session != nil
-            user = response.user
+            applyAuthenticatedSession(response.session, user: response.user, freshLogin: false)
             await refresh(silent: true)
             startLiveQueue()
         } catch ClientError.unauthorized(let message) {
@@ -322,9 +337,7 @@ final class AppModel: ObservableObject {
             let response: AuthResponse = try await self.request("/api/auth/login", method: "POST", body: body)
             self.token = response.token
             try self.saveLogin(response.token)
-            self.signInSession = response.session
-            self.showSignInNotice = response.session != nil
-            self.user = response.user
+            self.applyAuthenticatedSession(response.session, user: response.user, freshLogin: true)
             await self.refresh(silent: true)
             self.startLiveQueue()
         }
@@ -346,9 +359,7 @@ final class AppModel: ObservableObject {
                     "Touch ID could not be used and has been switched off. Sign in with your password, then turn Touch ID back on in Service Settings.")
             }
             let response: MeResponse = try await self.request("/api/auth/me")
-            self.signInSession = response.session
-            self.showSignInNotice = response.session != nil
-            self.user = response.user
+            self.applyAuthenticatedSession(response.session, user: response.user, freshLogin: true)
             await self.refresh(silent: true)
             self.startLiveQueue()
         }
@@ -381,9 +392,7 @@ final class AppModel: ObservableObject {
             let response: AuthResponse = try await self.request("/api/auth/register", method: "POST", body: body)
             self.token = response.token
             try self.saveLogin(response.token)
-            self.signInSession = response.session
-            self.showSignInNotice = response.session != nil
-            self.user = response.user
+            self.applyAuthenticatedSession(response.session, user: response.user, freshLogin: true)
             await self.refresh(silent: true)
             self.startLiveQueue()
         }
@@ -408,13 +417,22 @@ final class AppModel: ObservableObject {
     }
 
     func refreshMinutesReviewAlerts() async {
-        guard user?.role == "owner" else { minutesReviewAlerts = []; return }
+        guard let user, user.role == "owner" || user.can("minutes.prepare") else { minutesReviewAlerts = []; return }
         let currentToken = token
         do {
-            let response: MinutesReviewAlertsPayload = try await request("/api/minutes/review-alerts")
-            guard token == currentToken, user?.role == "owner" else { return }
+            let path = user.role == "owner" ? "/api/minutes/review-alerts" : "/api/minutes/completion-alerts"
+            let response: MinutesReviewAlertsPayload = try await request(path)
+            guard token == currentToken, self.user?.id == user.id else { return }
             minutesReviewAlerts = response.alerts
         } catch { /* Preserve pending alerts if connectivity is temporarily unavailable. */ }
+    }
+
+    func markMinutesAlertSeen(_ alert: MinutesReviewAlert) async {
+        guard alert.kind == "preparer_completion" else { return }
+        do {
+            let _: EmptyResponse = try await request("/api/minutes/\(alert.id)/completion-alert-seen", method: "POST")
+            minutesReviewAlerts.removeAll { $0.id == alert.id }
+        } catch { show(error) }
     }
 
     func refresh(silent: Bool = false) async {
@@ -484,7 +502,7 @@ final class AppModel: ObservableObject {
                     await self.refreshMinutesReviewAlerts()
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
-                        if line == "event: minutes_review_changed" {
+                        if line == "event: minutes_review_changed" || line == "event: minutes_completion_changed" {
                             await self.refreshMinutesReviewAlerts()
                         }
                         if line == "event: queue_changed" || line == "event: profile_changed" {

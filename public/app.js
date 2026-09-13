@@ -723,28 +723,34 @@ const setMinutesMeetingType = (value) => {
 
 const refreshMinutesReviewAlerts = async () => {
   const container = $('minutesReviewAlerts');
-  if (state.user?.role !== 'owner') { container.replaceChildren(); hide(container); return; }
+  const isMaster = state.user?.role === 'owner';
+  if (!isMaster && !can('minutes.prepare')) { container.replaceChildren(); hide(container); return; }
   const userId = state.user.id;
   try {
-    const { alerts } = await apiFetch('/api/minutes/review-alerts');
-    if (state.user?.id !== userId || state.user?.role !== 'owner') return;
+    const { alerts } = await apiFetch(isMaster ? '/api/minutes/review-alerts' : '/api/minutes/completion-alerts');
+    if (state.user?.id !== userId) return;
     container.replaceChildren(...alerts.map((alert) => {
       const button = document.createElement('button');
       button.className = 'secondary';
       button.style.cssText = 'display:block;width:100%;text-align:left;white-space:normal;margin-bottom:12px';
-      button.textContent = `${alert.title}. Submitted by ${alert.submittedBy}. Open for review.`;
+      button.textContent = `${alert.title}. ${alert.message || `Submitted by ${alert.submittedBy}. Open for review.`}`;
       button.addEventListener('click', async () => {
+        if (alert.kind === 'preparer_completion') {
+          try { await apiFetch(`/api/minutes/${alert.id}/completion-alert-seen`, { method: 'POST' }); }
+          catch { /* Open the signed record even if acknowledging the alert must be retried. */ }
+        }
         showWorkspaceSection('minutes');
         await renderMinutes();
         const record = state.minutes.find(item => item.id === alert.id);
         if (record) openMinutesEditor(record.id);
+        await refreshMinutesReviewAlerts();
       });
       return button;
     }));
     container.classList.toggle('hidden', !alerts.length);
   } catch { /* Keep existing alerts visible until the next successful refresh. */ }
 };
-setInterval(() => { if (state.user?.role === 'owner') refreshMinutesReviewAlerts(); }, 20000);
+setInterval(() => { if (state.user?.role === 'owner' || can('minutes.prepare')) refreshMinutesReviewAlerts(); }, 20000);
 
 const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch, state.user?.role));
 const renderMinutes = async () => {
@@ -1653,7 +1659,7 @@ const startRealtime = async () => {
         const events = buffer.split('\n\n');
         buffer = events.pop() || '';
         events.forEach((event) => {
-          if (event.includes('event: minutes_review_changed')) refreshMinutesReviewAlerts();
+          if (event.includes('event: minutes_review_changed') || event.includes('event: minutes_completion_changed')) refreshMinutesReviewAlerts();
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();
           }

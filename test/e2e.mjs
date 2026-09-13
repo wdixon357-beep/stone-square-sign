@@ -519,6 +519,10 @@ try {
   const privateAlerts = await api('GET', '/api/minutes/review-alerts', { token: viewerToken });
   const secretaryAlerts = await api('GET', '/api/minutes/review-alerts', { token: secToken });
   check('review alerts are private to the Master', privateAlerts.status === 403 && secretaryAlerts.status === 403);
+  const earlyPreparerAlert = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });
+  const privateCompletionAlerts = await api('GET', '/api/minutes/completion-alerts', { token: viewerToken });
+  check('the preparer is not alerted before the Master signs', earlyPreparerAlert.status === 200
+    && !earlyPreparerAlert.payload.alerts.some(a => a.id === minutesId) && privateCompletionAlerts.status === 403);
   check('the immediate review email names the meeting date and preparer', deliveredMail.slice(mailBeforeMinutes)
     .some(m => m.replace(/\r?\n\s+/g, ' ').includes('Meeting minutes awaiting your review: Thursday, September 3, 2026') && m.includes('Adrian Reese')));
   const mailBeforeDuplicate = deliveredMail.length;
@@ -557,6 +561,20 @@ try {
       && Boolean(authorizedMinutes.payload.minutes.masterAttestedAt));
   const clearedAlerts = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('the review alert clears after the Master completes review', !clearedAlerts.payload.alerts.some(a => a.id === minutesId));
+  const preparerCompletionAlerts = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });
+  const otherSecretaryCompletionAlerts = await api('GET', '/api/minutes/completion-alerts', { token: secToken });
+  check('Adrian receives a persistent alert after the Master reviews and signs', preparerCompletionAlerts.status === 200
+    && preparerCompletionAlerts.payload.alerts.some(a => a.id === minutesId
+      && a.kind === 'preparer_completion'
+      && a.title.includes('Thursday, September 3, 2026')
+      && a.message.includes('WM Dixon-Saunders reviewed and signed'))
+    && !otherSecretaryCompletionAlerts.payload.alerts.some(a => a.id === minutesId));
+  const wrongOfficerDismissal = await api('POST', `/api/minutes/${minutesId}/completion-alert-seen`, { token: secToken });
+  check('another officer cannot clear the preparer alert', wrongOfficerDismissal.status === 404);
+  const seenCompletion = await api('POST', `/api/minutes/${minutesId}/completion-alert-seen`, { token: asstToken });
+  const clearedCompletion = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });
+  check('opening the reviewed record clears Adrian\'s alert', seenCompletion.status === 200
+    && !clearedCompletion.payload.alerts.some(a => a.id === minutesId));
   const draftDocx = await api('GET', `/api/minutes/${minutesId}/docx`, { token: secToken });
   const draftText = draftDocx.status === 200
     ? (await mammoth.extractRawText({ buffer: draftDocx.payload })).value : '';
@@ -608,6 +626,14 @@ try {
   await api('POST', `/api/minutes/${secretaryMinutesId}/reopen`, { token: wmToken });
   const afterReopen = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('returning minutes to draft removes the pending review alert', !afterReopen.payload.alerts.some(a => a.id === secretaryMinutesId));
+  const secretaryResubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
+  const secretaryReviewed = await api('POST', `/api/minutes/${secretaryMinutesId}/master-attest`, { token: wmToken });
+  const secretaryCompletion = await api('GET', '/api/minutes/completion-alerts', { token: secToken });
+  check('McDuffie receives the same reviewed and signed alert when he prepares the minutes',
+    secretaryResubmission.status === 200 && secretaryReviewed.status === 200
+      && secretaryCompletion.payload.alerts.some(a => a.id === secretaryMinutesId
+        && a.kind === 'preparer_completion' && a.message.includes('WM Dixon-Saunders reviewed and signed')));
+  await api('POST', `/api/minutes/${secretaryMinutesId}/completion-alert-seen`, { token: secToken });
 
   const ownSource = new FormData();
   ownSource.append('transcriptText', 'Meeting date: 2026-09-03. The Lodge opened at 7:30 PM. The committee reported. The Lodge closed at 9:00 PM.');

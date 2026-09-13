@@ -206,7 +206,7 @@ struct WorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(22)
-                if model.user?.role == "owner" && !model.minutesReviewAlerts.isEmpty {
+                if !model.minutesReviewAlerts.isEmpty {
                     ScrollView {
                         minutesReviewAlertButtons
                     }
@@ -288,12 +288,13 @@ struct WorkspaceView: View {
             ForEach(model.minutesReviewAlerts) { alert in
                 Button {
                     selection = .minutes
+                    Task { await model.markMinutesAlertSeen(alert) }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Label(alert.title, systemImage: "bell.badge.fill")
                             .font(.callout.weight(.semibold))
                             .lineLimit(2)
-                        Text("Submitted by \(alert.submittedBy)").font(.caption)
+                        Text(alert.message ?? "Submitted by \(alert.submittedBy)").font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -369,7 +370,7 @@ struct WorkspaceNotices: View {
                         Text(session.explanation).font(.callout).foregroundStyle(.secondary).lineLimit(3)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Got it") { model.showSignInNotice = false }
+                    Button("Got it") { model.dismissSignInNotice() }
                         .fixedSize()
                         .accessibilityLabel("Dismiss sign-in notice")
                 }
