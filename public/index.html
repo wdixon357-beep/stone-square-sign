@@ -124,7 +124,7 @@
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
             <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
-            <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> Propose a Dispensation</button>
+            <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> My Dispensation Proposals</button>
             <button id="proposalReviewNav" class="nav-item owner-only" type="button"><span>&#9998;</span> Warden Proposals</button>
             <button id="duesNav" class="nav-item dues-only" type="button"><span>$</span> Dues</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
@@ -146,7 +146,7 @@
           <section id="landingSection" class="landing-section">
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
             <div class="document-menu">
-              <button id="proposeMenuCard" class="document-menu-card warden-only" type="button"><i>&#9998;</i><span><strong>Propose a Dispensation</strong><small>Put an event to the Worshipful Master</small></span><b>&rsaquo;</b></button>
+              <button id="proposeMenuCard" class="document-menu-card warden-only" type="button"><i>&#9998;</i><span><strong>My Dispensation Proposals</strong><small>Submit a proposal and follow its status</small></span><b>&rsaquo;</b></button>
               <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
@@ -318,7 +318,7 @@
 
           <section id="proposalsSection" class="warden-only hidden">
             <p class="eyebrow">FOR THE SENIOR AND JUNIOR WARDEN</p>
-            <h2>Propose a dispensation</h2>
+            <h2>My Dispensation Proposals</h2>
             <p class="muted">Tell the Worshipful Master what you have in mind. You can see exactly what the
               dispensation would look like before you send it. He reviews it, changes anything he needs to,
               and if he approves it the Lodge sends it on from there.</p>
@@ -349,7 +349,7 @@
               </div>
               <p id="proposalMessage" class="muted"></p>
             </form>
-            <h3>What has been put up</h3>
+            <h3>My proposal history</h3>
             <div id="proposalList" class="list"></div>
           </section>
 

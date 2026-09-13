@@ -125,6 +125,8 @@ const server = spawn(process.execPath, ['server.js'], {
     DDGM_EMAIL: 'districtdeputy@example.org',
     DDGM_NAME: 'District Deputy Grand Master Cid L. Jones',
     WARDEN_EMAILS: 'senior.warden@example.org, junior.warden@example.org',
+    TRACKER_SSO_SHARED_SECRET: 'synthetic-tracker-secret-for-isolated-tests',
+    CANDIDATE_TRACKER_URL: 'https://tracker-fixture.invalid',
     APP_BASE_URL: BASE,
     SMTP_HOST: '127.0.0.1',
     SMTP_PORT: String(SMTP_PORT),
@@ -764,13 +766,37 @@ try {
    * approved proposal becomes an ordinary dispensation on the ordinary path.
    * ------------------------------------------------------------------- */
 
-  const wardenInvite = async (email, name) => {
-    const res = await api('POST', '/api/officers/invite', { token: wmToken, body: { email, name, role: 'warden' } });
+  const wardenInvite = async (email, name, upgradePending = false) => {
+    const res = await api('POST', '/api/officers/invite', { token: wmToken, body: { email, name, role: upgradePending ? 'viewer' : 'warden', sendEmail: false } });
     if (res.status !== 201) return { token: null, res };
     const t = new URL(res.payload.inviteUrl).searchParams.get('invite');
+    if (upgradePending) {
+      const pendingBefore = (await api('GET', '/api/officers', { token: wmToken })).payload.pending.find(item => item.email === email);
+      const change = { email, role: 'warden' };
+      const anonymousChange = await api('PUT', '/api/officers/invitations/role', { body: change });
+      const secretaryChange = await api('PUT', '/api/officers/invitations/role', { token: secToken, body: change });
+      check('only the owner can change a pending invitation role', anonymousChange.status === 401 && secretaryChange.status === 403);
+      const invalidRole = await api('PUT', '/api/officers/invitations/role', { token: wmToken, body: { email, role: 'owner' } });
+      check('the pending-role endpoint cannot grant an administrator role', invalidRole.status === 400);
+      const missingPending = await api('PUT', '/api/officers/invitations/role', { token: wmToken, body: { email: 'junior.warden@example.org', role: 'warden' } });
+      check('a missing pending invitation cannot be promoted', missingPending.status === 404);
+      const unchanged = (await api('GET', '/api/officers', { token: wmToken })).payload.pending.find(item => item.email === email);
+      check('rejected invitation changes preserve the original role and expiry', unchanged.role === pendingBefore.role && unchanged.expires_at === pendingBefore.expires_at);
+      const mailBefore = deliveredMail.length;
+      const updated = await api('PUT', '/api/officers/invitations/role', { token: wmToken, body: change });
+      const pendingAfter = (await api('GET', '/api/officers', { token: wmToken })).payload.pending.find(item => item.email === email);
+      check('the owner can promote the existing invitation to the configured Warden seat', updated.status === 200 && pendingAfter?.role === 'warden');
+      check('promotion preserves invitation name, creation time and original expiry', pendingAfter?.name === pendingBefore.name && pendingAfter?.created_at === pendingBefore.created_at && pendingAfter?.expires_at === pendingBefore.expires_at && pendingAfter?.expires_at === res.payload.expiresAt);
+      check('changing a pending role does not send a replacement invitation', deliveredMail.length === mailBefore);
+    }
     const reg = await api('POST', '/api/auth/register', {
       body: { email, name, password: 'another long secret', invitationToken: t },
     });
+    if (upgradePending) {
+      check('the original invitation link accepts the newly assigned Warden role', reg.status === 201 && reg.payload.user?.role === 'warden');
+      const acceptedChange = await api('PUT', '/api/officers/invitations/role', { token: wmToken, body: { email, role: 'warden' } });
+      check('an accepted invitation cannot be changed through the pending-role endpoint', acceptedChange.status === 404);
+    }
     return { token: reg.payload.token, res, user: reg.payload.user };
   };
 
@@ -780,11 +806,32 @@ try {
   check('a Brother who is not a Warden cannot be given the Warden seat',
     strangerWarden.status === 403, String(strangerWarden.status));
 
-  const xavier = await wardenInvite('senior.warden@example.org', 'The Senior Warden');
+  const outsiderPending = await api('POST', '/api/officers/invite', { token: wmToken, body: { email: 'unlisted-pending@example.org', name: 'Unlisted Brother', role: 'viewer', sendEmail: false } });
+  check('an ordinary pending viewer invitation can be prepared', outsiderPending.status === 201);
+  const outsiderPromotion = await api('PUT', '/api/officers/invitations/role', { token: wmToken, body: { email: 'unlisted-pending@example.org', role: 'warden' } });
+  const outsiderStillPending = (await api('GET', '/api/officers', { token: wmToken })).payload.pending.find(item => item.email === 'unlisted-pending@example.org');
+  check('a pending invitation outside the configured Warden addresses cannot be promoted', outsiderPromotion.status === 403 && outsiderStillPending?.role === 'viewer');
+
+  const xavier = await wardenInvite('senior.warden@example.org', 'The Senior Warden', true);
   check('the Senior Warden can be given the seat', Boolean(xavier.token), JSON.stringify(xavier.res.payload).slice(0, 160));
   check('he is seated as a warden', xavier.user?.role === 'warden', String(xavier.user?.role));
   const jamal = await wardenInvite('junior.warden@example.org', 'The Junior Warden');
   check('the Junior Warden can be given the seat too', Boolean(jamal.token), JSON.stringify(jamal.res.payload).slice(0, 160));
+
+  for (const [label, warden] of [['Senior', xavier], ['Junior', jamal]]) {
+    const profile = await api('PUT', '/api/profile/signature', { token: warden.token, body: { signatureData: SIG, signatureType: 'drawn' } });
+    const profileRead = await api('GET', '/api/profile/signature', { token: warden.token });
+    check(`the ${label} Warden can save and retrieve his signature profile`, profile.status === 200 && profileRead.status === 200 && Buffer.isBuffer(profileRead.payload) && profileRead.payload.equals(Buffer.from(SIG.split(',')[1], 'base64')));
+    const dues = await api('GET', '/api/dues', { token: warden.token });
+    check(`the ${label} Warden passes the dues permission gate`, dues.status === 503 && dues.payload.configured === false);
+    const handoff = await api('POST', '/api/tracker/handoff', { token: warden.token });
+    const handoffUrl = handoff.payload.url ? new URL(handoff.payload.url) : null;
+    const assertion = handoffUrl ? JSON.parse(Buffer.from(handoffUrl.searchParams.get('assertion').split('.')[0], 'base64url')) : {};
+    check(`the ${label} Warden can enter Candidate Tracker under his own role`, handoff.status === 200 && handoffUrl.hostname === 'tracker-fixture.invalid' && assertion.role === 'warden' && assertion.email === warden.user.email && assertion.expiresAt - assertion.issuedAt === 60);
+    const documentSign = await api('POST', `/api/documents/${docId}/sign`, { token: warden.token, body: { consent: true } });
+    check(`the ${label} Warden's signature profile does not grant document-signing permission`, documentSign.status === 403);
+  }
+  check('Candidate Tracker handoff requires authentication', (await api('POST', '/api/tracker/handoff')).status === 401);
 
   const wardenBuild = await api('POST', '/api/dispensations', { token: xavier.token, body: dispensationBody });
   check('a Warden cannot create a dispensation himself', wardenBuild.status === 403, String(wardenBuild.status));
@@ -793,9 +840,19 @@ try {
   const wardenApprovals = await api('GET', '/api/approvals', { token: xavier.token });
   check('a Warden cannot reach the approvals record', wardenApprovals.status === 403, String(wardenApprovals.status));
   const wardenQueue = await api('GET', '/api/documents', { token: xavier.token });
-  check('a Warden sees no Lodge documents in the queue',
-    (wardenQueue.payload.documents || []).length === 0,
-    JSON.stringify(wardenQueue.payload).slice(0, 160));
+  const wardenStatus = wardenQueue.payload.documents?.find(document => document.id === stuckId);
+  const ownerQueue = await api('GET', '/api/documents', { token: wmToken });
+  const ownerStatus = ownerQueue.payload.documents?.find(document => document.id === stuckId);
+  check('a Warden can read current dispensation status in the queue', wardenQueue.status === 200 && Boolean(wardenStatus) && wardenStatus.status === ownerStatus?.status);
+  check('Warden status access excludes ordinary uploaded Lodge documents', !wardenQueue.payload.documents?.some(document => document.id === docId) && wardenQueue.payload.documents?.every(document => document.template_kind === 'dispensation_v1'));
+  check('the owner retains access to dispensations and ordinary uploaded documents', ownerQueue.payload.documents?.some(document => document.id === docId) && Boolean(ownerStatus));
+  check('Warden status omits document bytes, private owner details and signer identifiers',
+    wardenStatus && !('owner_email' in wardenStatus) && !Object.keys(wardenStatus).some(key => /bytes|approval_note/.test(key))
+      && wardenStatus.signers.every(signer => typeof signer.signed === 'boolean' && !('id' in signer) && !('user_id' in signer) && !('signed_at' in signer)));
+  for (const suffix of ['', '/file', '/original', '/audit']) {
+    const denied = await api('GET', `/api/documents/${docId}${suffix}`, { token: xavier.token });
+    check(`a Warden's status access does not expose document ${suffix || 'detail'}`, denied.status === 403);
+  }
   const wardenEndorsed = await api('GET', `/api/documents/${stuckId}/endorsed`, { token: xavier.token });
   check('a Warden cannot pull an executed copy', wardenEndorsed.status === 403, String(wardenEndorsed.status));
 
@@ -819,8 +876,11 @@ try {
     `${deliveredMail.length} messages delivered`);
 
   const jamalSees = await api('GET', '/api/proposals', { token: jamal.token });
-  check('the other Warden sees it too', (jamalSees.payload.proposals || []).some((p) => p.id === proposalId),
-    JSON.stringify(jamalSees.payload).slice(0, 160));
+  check('the other Warden cannot see a proposal he did not submit', jamalSees.status === 200 && !(jamalSees.payload.proposals || []).some((p) => p.id === proposalId));
+  const ownProposals = await api('GET', '/api/proposals', { token: xavier.token });
+  const ownerProposals = await api('GET', '/api/proposals', { token: wmToken });
+  check('the submitting Warden can see his own proposal', ownProposals.payload.proposals?.some(item => item.id === proposalId));
+  check('the Worshipful Master can see the Warden proposal', ownerProposals.payload.proposals?.some(item => item.id === proposalId));
   const viewerProposals = await api('GET', '/api/proposals', { token: viewerToken });
   check('a viewer cannot see Warden proposals', viewerProposals.status === 403, String(viewerProposals.status));
 

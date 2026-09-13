@@ -6,13 +6,13 @@
  * there. Configuration comes from the environment and the roster lives in Postgres,
  * seeded once by scripts/seed-roster.mjs from a machine that already holds it.
  *
- * Who may see this: the Worshipful Master, the Secretary and the Assistant Secretary.
+ * Who may see this: the Worshipful Master, the Secretaries and the two Wardens.
  * A dues ledger names the men who are behind, which is not a thing a viewer sees.
  */
 
 import { dbAll } from './db.js';
 
-export const DUES_ROLES = new Set(['owner', 'secretary', 'assistant_secretary']);
+export const DUES_ROLES = new Set(['owner', 'secretary', 'assistant_secretary', 'warden']);
 
 const API_BASE = process.env.ZEFFY_API_BASE || 'https://api.zeffy.com/api/v1';
 const API_KEY = process.env.ZEFFY_API_KEY || '';

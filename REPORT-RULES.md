@@ -2,6 +2,12 @@
 
 These are William Dixon-Saunders's settled requirements. Update this record, the shared instructions in `report-rules.js`, and relevant regression tests together when he changes a rule. Both Mac and website call the shared service. The model receives the rules on every generation request; it does not learn them permanently from conversation. Code, not model instructions, controls permissions, signatures, money and publication.
 
+## Officer access and administrative details
+
+- Jamal Sadler and Xavier White have the Warden work areas: dispensation statuses, read-only dues and Candidate Tracker, Report Generator, their own signature profile, and My Dispensation Proposals. Each Warden sees his own proposal submissions, feedback and status. The Worshipful Master sees and reviews all proposals.
+- Warden access does not grant minutes, treasury, officer administration, private approvals, executed document downloads, or signing someone else's dispensation. Signature profile access is separate from document signing authority.
+- Generation provider/model names, usage, charges and remaining allowance are visible only to the Worshipful Master. Non-owner API responses and interface notices use neutral report-assistance wording; hiding a label alone is insufficient.
+
 ## Minutes
 
 - Accept complete transcripts, compiled notes and supported uploads. Preserve substantive source details and evidence, distinguish proposals from decisions, and flag unknowns or conflicts. Keep related event details, responsibilities and outcomes together. Never manufacture facts, votes, attendance, times or prayers.

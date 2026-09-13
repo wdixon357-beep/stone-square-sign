@@ -227,8 +227,11 @@ struct WorkspaceView: View {
                     if model.user?.role != "member" { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
                     if model.user?.role == "owner" {
                     }
-                    if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
+                    if model.user?.canReadDues == true {
                         Label("Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.dues)
+                    }
+                    if model.user?.canProposeDispensation == true {
+                        Label("My Dispensation Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                     }
                     if model.user?.canSign == true { Label("Signature Profile", systemImage: "signature").tag(AppSection.profile) }
                     Label("Service Settings", systemImage: "network").tag(AppSection.settings)
@@ -325,7 +328,10 @@ struct WorkspaceView: View {
         case .activity: if model.user?.role == "owner" {OfficerActivityView()}
         case .dues: DuesView()
         case .approvals: ApprovalsView()
-        case .proposalReview: ProposalReviewView()
+        case .proposalReview:
+            if model.user?.role == "owner" { ProposalReviewView() }
+            else if model.user?.canProposeDispensation == true { MyDispensationProposalsView() }
+            else { ContentUnavailableView("Proposal access is not assigned", systemImage: "lock") }
         case .profile: SignatureProfileView()
         case .settings: SettingsView()
         default: DocumentsView()

@@ -940,6 +940,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func submitProposal(_ draft: DispensationProposalDraft) async -> Bool {
+        guard user?.canProposeDispensation == true, draft.isReady else {
+            proposalsError = "Enter the event date and request details before submitting."
+            return false
+        }
+        proposalsLoading = true; proposalsError = ""
+        defer { proposalsLoading = false }
+        do {
+            let _: ProposalCreatedResponse = try await request("/api/proposals", method: "POST", body: JSONEncoder().encode(draft))
+            await loadProposals()
+            return true
+        } catch {
+            proposalsError = error.localizedDescription
+            return false
+        }
+    }
+
     /* approve | decline | changes. The Master may correct any field before approving; the
      * server creates the real dispensation through the same path his own builder uses. */
     func decideProposal(id: String, decision: String, wmNote: String) async -> Bool {

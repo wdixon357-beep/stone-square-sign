@@ -327,7 +327,7 @@ struct ReportGeneratorView: View {
                 .accessibilityLabel("Report source notes")
             Button(browser.organizing ? "Organizing…" : "Organize report") { Task { await browser.organize(using: model) } }
                 .disabled(browser.busy || browser.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Text("Uses the Lodge's approved generation allowance. Your notes are retained on this Mac.").font(.caption).foregroundStyle(.secondary)
+            Text(model.user?.role == "owner" ? "Uses the Lodge's approved generation allowance. Your notes are retained on this Mac." : "Your notes are retained on this Mac. Review each suggestion before applying it.").font(.caption).foregroundStyle(.secondary)
             if let result = browser.organization {
                 ForEach(Array(result.warnings.enumerated()), id: \.offset) { _, warning in
                     Label(warning, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)

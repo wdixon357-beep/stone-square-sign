@@ -183,7 +183,7 @@ const easternGreeting = () => {
 
 /* Who is ever asked for a saved signature. An allowlist, so a new role is never trapped
  * behind the forced signature modal that has no dismiss control. */
-const CAN_SIGN = new Set(['owner', 'secretary', 'assistant_secretary', 'signer', 'treasurer', 'assistant_treasurer', 'treasury_preparer']);
+const CAN_SIGN = new Set(['warden', 'owner', 'secretary', 'assistant_secretary', 'signer', 'treasurer', 'assistant_treasurer', 'treasury_preparer']);
 
 const enterWorkspace = async (user, session) => {
   state.user = user;
@@ -207,31 +207,33 @@ const enterWorkspace = async (user, session) => {
   document.querySelectorAll('.owner-only').forEach((element) => {
     element.classList.toggle('hidden', user.role !== 'owner');
   });
-  /* A Warden proposes and nothing else. He never sees the queue or the approvals record,
-   * and the server refuses him on both regardless of what the page shows. */
+  /* Wardens can read Lodge status and submit their own proposals. Administrative
+   * decisions remain restricted by the server and the owner controls. */
   document.querySelectorAll('.warden-only').forEach((element) => {
     element.classList.toggle('hidden', !['owner','warden'].includes(user.role));
   });
   if (user.role === 'warden') {
-    const line = document.querySelector('.landing-head p');
-    if (line) line.textContent = 'Put an event to the Worshipful Master for a dispensation.';
+    const line = document.querySelector('.landing-head p:not(.eyebrow)');
+    if (line) line.textContent = 'View Lodge status, prepare reports, and follow your dispensation proposals.';
   }
   document.querySelectorAll('.signer-only').forEach((element) => {
-    element.classList.toggle('hidden', ['warden','treasurer','assistant_treasurer','treasury_preparer','member'].includes(user.role));
+    element.classList.toggle('hidden', ['treasurer','assistant_treasurer','treasury_preparer','member'].includes(user.role));
   });
   /* Dues names the men who are behind, so a viewer is not shown the tile at all.
    * The server refuses him regardless; this avoids dangling a locked door. */
-  const maySeeDues = ['owner', 'secretary', 'assistant_secretary'].includes(user.role);
+  $('approvalsNav').classList.toggle('hidden', user.role === 'warden' || ['treasurer','assistant_treasurer','treasury_preparer','member'].includes(user.role));
+  const maySeeDues = ['owner', 'secretary', 'assistant_secretary', 'warden'].includes(user.role);
+  const maySeeMinutes = ['owner', 'secretary', 'assistant_secretary'].includes(user.role);
   document.querySelectorAll('.dues-only').forEach((element) => {
     element.classList.toggle('hidden', !maySeeDues);
   });
   document.querySelectorAll('.minutes-only').forEach((element) => {
-    element.classList.toggle('hidden', !maySeeDues);
+    element.classList.toggle('hidden', !maySeeMinutes);
   });
   document.querySelectorAll('.preparer-only').forEach((element) => {
     element.classList.toggle('hidden', !['owner', 'secretary', 'assistant_secretary'].includes(user.role));
   });
-  showWorkspaceSection(requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeDues ? 'minutes' : 'home');
+  showWorkspaceSection(requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
   await refreshMinutesReviewAlerts();
@@ -318,7 +320,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   const builder = section === 'builder';
   const queue = section === 'queue';
   const dues = section === 'dues';
-  const approvals = section === 'approvals';
+  const approvals = section === 'approvals' && state.user?.role !== 'warden';
   const minutes = section === 'minutes';
   const proposals = section === 'proposals';
   const proposalReview = section === 'proposalReview';
@@ -435,7 +437,7 @@ const refreshMinutesReviewAlerts = async () => {
 };
 setInterval(() => { if (state.token && state.user?.role === 'owner') refreshMinutesReviewAlerts(); }, 20000);
 
-const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch));
+const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch, state.user?.role));
 const renderMinutes = async () => {
   void refreshGenerationStatus($('minutesGenerationStatus'));
   try {
@@ -816,7 +818,7 @@ const renderApprovals = async () => {
         });
         actions.appendChild(endorsed);
       }
-      if (state.user?.role === 'viewer') actions.replaceChildren();
+      if (['viewer', 'warden'].includes(state.user?.role)) actions.replaceChildren();
       list.appendChild(row);
     });
   } catch (error) {
@@ -862,7 +864,7 @@ const renderProposals = async () => {
     target.replaceChildren(Object.assign(document.createElement('p'), {
       className: 'muted',
       textContent: isOwner ? 'No Warden has proposed a dispensation yet.'
-        : 'Nothing has been put up yet. Yours will show here once you send it.',
+        : 'You have not submitted a proposal yet. Your proposals and their status will appear here.',
     }));
     return;
   }
@@ -1258,7 +1260,7 @@ const renderDocuments = async () => {
     $('metricAll').textContent = documents.length;
     $('metricPending').textContent = documents.filter((item) => item.status === 'pending').length;
     $('metricComplete').textContent = documents.filter((item) => item.status === 'completed').length;
-    const awaiting = ['owner', 'viewer'].includes(state.user?.role)
+    const awaiting = ['owner', 'viewer', 'warden'].includes(state.user?.role)
       ? documents.filter((item) => !['completed', 'rescinded'].includes(item.status)).length
       : documents.filter((item) => item.needsSignature && !['completed', 'rescinded'].includes(item.status)).length;
     $('dispensationsMenuCard').classList.toggle('awaiting', awaiting > 0);
@@ -1304,7 +1306,7 @@ const renderDocuments = async () => {
       }
       /* A completed dispensation is not done until the District Deputy has it. Say plainly
        * whether it went, because a silent failure is how one misses its date. */
-      if (state.user?.role !== 'viewer' && doc.status === 'completed' && doc.template_kind === 'dispensation_v1') {
+      if (!['viewer', 'warden'].includes(state.user?.role) && doc.status === 'completed' && doc.template_kind === 'dispensation_v1') {
         const note = window.document.createElement('p');
         note.className = 'queue-submission';
         if (doc.submitted_at) {
@@ -1404,7 +1406,7 @@ const renderDocuments = async () => {
         });
         actions.appendChild(rescindButton);
       }
-      if (state.user?.role === 'viewer') actions.replaceChildren();
+      if (['viewer', 'warden'].includes(state.user?.role)) actions.replaceChildren();
       list.appendChild(article);
     });
     return documents;
@@ -1415,17 +1417,17 @@ const renderDocuments = async () => {
 };
 
 const showPendingSignatureNotice = (user, documents) => {
-  const pending = ['owner', 'viewer'].includes(user.role)
+  const pending = ['owner', 'viewer', 'warden'].includes(user.role)
     ? documents.filter((document) => !['completed', 'rescinded'].includes(document.status))
     : documents.filter((document) => document.needsSignature && !['completed', 'rescinded'].includes(document.status));
   if (!pending.length) return;
   state.pendingReviewDocument = pending[0];
   $('pendingSignatureTitle').textContent = user.role === 'owner'
     ? (pending.length === 1 ? 'Dispensation activity awaiting review' : `${pending.length} dispensations awaiting review`)
-    : user.role === 'viewer'
+    : ['viewer', 'warden'].includes(user.role)
       ? (pending.length === 1 ? 'Dispensation activity ready to view' : `${pending.length} dispensations ready to view`)
     : (pending.length === 1 ? 'Dispensation awaiting review and signature' : `${pending.length} dispensations awaiting review and signature`);
-  $('pendingSignatureMessage').textContent = user.role === 'owner' || user.role === 'viewer'
+  $('pendingSignatureMessage').textContent = ['owner', 'viewer', 'warden'].includes(user.role)
     ? `${pending.length} active dispensation${pending.length === 1 ? ' is' : 's are'} in the officer signing queue.`
     : (pending.length === 1
       ? `${pending[0].title || pending[0].original_name} is assigned to you and ready for review.`
@@ -1437,7 +1439,7 @@ $('dismissPendingSignature').addEventListener('click', () => hide($('pendingSign
 $('reviewPendingSignature').addEventListener('click', () => {
   const document = state.pendingReviewDocument;
   hide($('pendingSignatureNotice'));
-  if (state.user?.role === 'owner' || state.user?.role === 'viewer') {
+  if (['owner', 'viewer', 'warden'].includes(state.user?.role)) {
     showWorkspaceSection('queue');
   } else if (document) {
     openSignerModal(document.id, document.title || document.original_name);

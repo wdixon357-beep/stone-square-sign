@@ -46,6 +46,7 @@ async function start(mocked) {
     cwd: new URL('..', import.meta.url),
     env: {...process.env, PORT: String(port), NODE_ENV: 'test', DATABASE_URL: '', PGLITE_DIR: '',
       OWNER_EMAIL: 'generation-owner@example.org', APP_BASE_URL: base, SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '',
+      WARDEN_EMAILS: 'generation-warden@example.org',
       LODGE_ACCESS_CODE: '', DDGM_EMAIL: 'unused@example.org', OPENAI_API_KEY: '',
       MINUTES_TEST_RESPONSE: '', TREASURY_TEST_RESPONSE: ''},
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -86,6 +87,7 @@ const fetchImpl = async (url, options) => {
   await appendFile(callsFile, 'called\\n');
   const mode = JSON.parse(await readFile(controlFile, 'utf8')).mode;
   if (mode === 'error') return new Response(JSON.stringify({error:{message:'Synthetic request rejection'}}), {status:400, headers:{'Content-Type':'application/json'}});
+  if (mode === 'unknown') return new Response(JSON.stringify({error:{message:'Synthetic service failure'}}), {status:503, headers:{'Content-Type':'application/json'}});
   if (mode === 'wait') {
     for (let count=0; count<300; count++) {try {await access(releaseFile); break;} catch {} await new Promise(resolve=>setTimeout(resolve,25));}
   }
@@ -95,7 +97,8 @@ const fetchImpl = async (url, options) => {
   const input = JSON.parse(inputText);
   let result;
   if (body.text.format.name === 'stone_square_officer_report') {
-    result={suggestions:[{field:'title',value:'Synthetic report notes',quote:'Synthetic report notes'}],warnings:[]};
+    const title=input.source.includes('Source note mentions OpenAI')?'Source note mentions OpenAI':'Synthetic report notes';
+    result={suggestions:[{field:'title',value:title,quote:title}],warnings:['GPT-5.6 Terra organized the report. Review each suggestion.']};
   } else if (body.text.format.name === 'stone_square_meeting_minutes') {
     const local = await generateMinutesDraft(input.source, {sourceType:input.sourceType});
     const draft = Object.fromEntries(Object.keys(MINUTES_SCHEMA.properties).map(key=>[key,local[key]]));
@@ -113,7 +116,12 @@ const fetchImpl = async (url, options) => {
   }
   return new Response(JSON.stringify({id:'resp_route_test',model:'gpt-5.6-terra',status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}],usage:{input_tokens:1000,output_tokens:100}}), {status:200,headers:{'Content-Type':'application/json'}});
 };
-setGenerationForTests(createGenerator({apiKey:'test-only-secret-that-must-not-leak',fetchImpl}));
+const generator=createGenerator({apiKey:'test-only-secret-that-must-not-leak',fetchImpl});
+setGenerationForTests({...generator,forUser:userId=>async request=>{
+  const mode=JSON.parse(await readFile(controlFile,'utf8')).mode;
+  if(mode==='budget')throw Object.assign(new Error('The $5 monthly report allowance is fully used or reserved. You can continue editing reports manually.'),{statusCode:429,code:'GENERATION_MONTHLY_LIMIT'});
+  return generator.forUser(userId)(request);
+}});
 `);
 
 try {
@@ -129,11 +137,17 @@ try {
   owner = await registerOwner();
   const preparer = await officer(owner, 'treasury_preparer');
   const uploadOnly = await officer(owner, 'member');
+  const warden = await officer(owner, 'warden');
+  const secretary = await officer(owner, 'secretary');
   check('Generation status requires sign-in', (await api('/api/generation/status')).status === 401);
   const status = await api('/api/generation/status', owner.token);
   check('Owner can inspect generation status without a key leak', status.status === 200 && !JSON.stringify(status.data).includes('test-only-secret'));
+  check('Only the owner receives the model and shared monthly allowance', status.data.model === 'gpt-5.6-terra' && status.data.monthlyLimitDollars === 5 && ['committedDollars','reservedDollars','remainingDollars'].every(key => typeof status.data[key] === 'number'));
   check('Generation status is never cached', /no-store/.test(status.headers.get('cache-control')));
-  check('Preparer status does not expose a key', !JSON.stringify((await api('/api/generation/status', preparer.token)).data).includes('test-only-secret'));
+  for (const [role, account] of [['preparer', preparer], ['member', uploadOnly], ['warden', warden], ['secretary', secretary]]) {
+    const publicStatus = await api('/api/generation/status', account.token);
+    check(`${role} generation status exposes only configuration availability`, publicStatus.status === 200 && JSON.stringify(publicStatus.data) === '{"configured":true}');
+  }
   assert.equal((await api(`/api/treasury/access/${uploadOnly.user.id}`, owner.token, 'PUT', {enabled: true})).status, 200);
   let result = await api('/api/treasury/generate', uploadOnly.token, 'POST', bankingForm('save'));
   assert.equal(result.status, 201); let report = result.data.report;
@@ -147,6 +161,7 @@ try {
   check('Invalid treasury revision is rejected before a paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: String(report.revision)})).status === 409 && await providerCalls() === 0);
   result = await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: report.revision});
   check('Assigned preparer can organize the shared source', result.status === 200 && await providerCalls() === 1);
+  check('Preparer generation notices do not disclose provider details', !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(result.data.draft.extractionNotes)));
   check('Organization returns an unsaved replacement', (await api('/api/treasury', preparer.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
   const beforeEditing = await providerCalls();
   check('Treasury PDF preview makes no provider call', (await api(`/api/treasury/${report.id}/preview`, preparer.token, 'POST', {draft: completeTreasuryFixture})).status === 200 && await providerCalls() === beforeEditing);
@@ -188,6 +203,8 @@ try {
   result = await api(`/api/minutes/${minutes.id}/preparer-attest`, owner.token, 'POST', {expectedUpdatedAt: minutes.updatedAt});
   check('Minutes attestation makes no provider call', result.status === 200 && await providerCalls() === count);
   check('Attested minutes reject reorganization before a provider call', (await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: result.data.minutes.updatedAt})).status === 409 && await providerCalls() === count);
+  const secretaryMinutes = (await api('/api/minutes', secretary.token)).data.minutes.find(item => item.id === minutes.id);
+  check('Secretaries receive minutes without provider or cost notices', Boolean(secretaryMinutes) && !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(secretaryMinutes.draft.warnings)));
   await control({mode:'success'});
   const reportInput={source:'Synthetic report notes',type:'officer',master:false,fields:{}};
   const countBeforeReport=await providerCalls();
@@ -197,10 +214,26 @@ try {
   check('Invalid report fields are rejected before paid generation', (await api('/api/reports/organize',owner.token,'POST',{...reportInput,fields:{signatureName:'x'}})).status===400 && await providerCalls()===countBeforeReport);
   const organized=await api('/api/reports/organize',owner.token,'POST',reportInput);
   check('Owner receives supported report suggestions', organized.status===200 && organized.data.fields.title==='Synthetic report notes');
+  check('The owner retains detailed generation notices', organized.data.warnings.some(warning => warning.includes('GPT-5.6 Terra')));
   check('Report suggestions do not include identity or signature approval', !Object.hasOwn(organized.data.fields,'signatureName') && !Object.hasOwn(organized.data.fields,'reviewed'));
   const afterReport=await providerCalls();
   await api('/api/reports/organize',owner.token,'POST',reportInput);
   check('Repeated identical organization uses the shared cache', await providerCalls()===afterReport);
+  const wardenReport = await api('/api/reports/organize',warden.token,'POST',{...reportInput,source:'Source note mentions OpenAI'});
+  check('Wardens can organize their own report fields', wardenReport.status === 200 && wardenReport.data.fields.title === 'Source note mentions OpenAI');
+  check('Warden suggestions preserve source content but omit provider notices', wardenReport.data.fields.title.includes('OpenAI') && !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(wardenReport.data.warnings)));
+  const wardenCalls = await providerCalls();
+  check('Wardens cannot organize a Worshipful Master report', (await api('/api/reports/organize',warden.token,'POST',{...reportInput,master:true})).status===403 && await providerCalls()===wardenCalls);
+  await control({mode:'budget'});
+  const wardenBudget = await api('/api/reports/organize',warden.token,'POST',reportInput);
+  const ownerBudget = await api('/api/reports/organize',owner.token,'POST',reportInput);
+  check('Warden limit errors omit spending and provider details', wardenBudget.status === 429 && /Worshipful Master/.test(wardenBudget.data.error) && !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(wardenBudget.data.error));
+  check('The owner can inspect the actual monthly-limit error', ownerBudget.status === 429 && ownerBudget.data.error.includes('$5 monthly'));
+  await control({mode:'unknown'});
+  const unknownInput = {...reportInput,source:'Synthetic report notes for an uncertain request'};
+  const unknownResult = await api('/api/reports/organize',warden.token,'POST',unknownInput);
+  const duplicateResult = await api('/api/reports/organize',warden.token,'POST',unknownInput);
+  check('Unconfirmed and duplicate Warden requests hide charge and allowance details', unknownResult.status >= 500 && duplicateResult.status === 409 && [unknownResult, duplicateResult].every(item => !/GPT|Terra|OpenAI|charge|monthly|allowance|\$5/i.test(item.data.error)));
   console.log(`${passed} generation route checks passed with an isolated mocked provider.`);
 } finally {
   await stop();

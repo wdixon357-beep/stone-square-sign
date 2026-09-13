@@ -1,6 +1,6 @@
 {
   "name": "stone-square-sign",
-  "version": "1.14.1",
+  "version": "1.15.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,7 +10,7 @@
     "start": "node server.js",
     "build:mac": "./macos/scripts/build-app.sh --install",
     "import:history": "node scripts/import-historical-dispensations.mjs",
-    "test": "node test/web-updates.mjs && node test/report-ai.mjs && node test/ai-generation.mjs && node test/minutes-ai.mjs && node test/treasury-ai.mjs && node test/generation-routes.mjs && node test/production-check.mjs && node test/activity.mjs && node test/treasury.mjs && node test/treasury-source.mjs && node test/treasury-e2e.mjs && node test/session-policy.mjs && node test/minutes-alerts.mjs && node test/minutes-local.mjs && node test/minutes-format.mjs && node test/minutes-changes.mjs && node test/parity.mjs && node test/mac-compiles.mjs && node test/mac-session.mjs && node test/mac-minutes-dates.mjs && node test/mac-report.mjs && node test/e2e.mjs",
+    "test": "node test/web-access.mjs && node test/web-updates.mjs && node test/report-ai.mjs && node test/ai-generation.mjs && node test/minutes-ai.mjs && node test/treasury-ai.mjs && node test/generation-routes.mjs && node test/production-check.mjs && node test/activity.mjs && node test/treasury.mjs && node test/treasury-source.mjs && node test/treasury-e2e.mjs && node test/session-policy.mjs && node test/minutes-alerts.mjs && node test/minutes-local.mjs && node test/minutes-format.mjs && node test/minutes-changes.mjs && node test/parity.mjs && node test/mac-compiles.mjs && node test/mac-session.mjs && node test/mac-minutes-dates.mjs && node test/mac-report.mjs && node test/e2e.mjs",
     "test:production": "node test/production-check.mjs",
     "test:parity": "node test/parity.mjs",
     "test:mac": "node test/mac-compiles.mjs"

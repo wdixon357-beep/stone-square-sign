@@ -42,7 +42,7 @@ try {
   await test('missing key leaves local mode available and hides budget from ordinary status', async () => {
     const generator = createGenerator({ now: fixedNow, fetchImpl: () => { throw new Error('No fetch allowed'); } });
     assert.equal(generator.forUser(1), undefined);
-    assert.deepEqual(await generator.status(), { configured: false, model: MODEL, monthlyLimitDollars: 5, committedDollars: null, reservedDollars: null, remainingDollars: null });
+    assert.deepEqual(await generator.status(), { configured: false });
     assert.equal((await generator.status({ includeBudget: true })).remainingDollars, 5);
   });
 

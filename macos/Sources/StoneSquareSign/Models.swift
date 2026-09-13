@@ -7,8 +7,12 @@ struct User: Codable, Identifiable, Equatable {
     let role: String
     let hasSignature: Bool
     var treasuryAccess: String? = nil
-    var canSign: Bool { ["owner","secretary","assistant_secretary","signer","treasurer","assistant_treasurer","treasury_preparer"].contains(role) }
+    var canSign: Bool { ["owner","secretary","assistant_secretary","signer","treasurer","assistant_treasurer","treasury_preparer","warden"].contains(role) }
     var canUseTreasury: Bool { treasuryAccess != nil || ["owner","secretary","assistant_secretary","treasurer","assistant_treasurer","treasury_preparer"].contains(role) }
+
+    var canReadDues: Bool { ["owner", "secretary", "assistant_secretary", "warden"].contains(role) }
+    var canProposeDispensation: Bool { role == "warden" }
+    var proposalWorkspaceTitle: String { role == "owner" ? "Warden Proposals" : "My Dispensation Proposals" }
 
     var roleLabel: String { Self.roleLabel(for: role) }
 
@@ -289,8 +293,7 @@ struct DispensationApproval: Codable, Identifiable {
 
 // MARK: - Warden proposals
 // Xavier White and Jamal Sadler propose a dispensation; the Worshipful Master decides.
-// The Wardens themselves work on their phones through the web page, so only the Master's
-// review side lives here.
+// Both clients provide proposal preparation and the Master's review.
 
 struct WardenProposal: Codable, Identifiable {
     let id: String
@@ -308,6 +311,7 @@ struct WardenProposal: Codable, Identifiable {
     let wmNote: String?
     let createdAt: String?
     let resultingDocumentId: String?
+    var document: ProposalDocumentStatus? = nil
 
     var displayTitle: String {
         if let t = title, !t.isEmpty { return t }
@@ -323,6 +327,47 @@ struct WardenProposal: Codable, Identifiable {
         default: return "Waiting on the Master"
         }
     }
+}
+
+struct ProposalDocumentStatus: Codable {
+    let status: String?
+    let completedAt: String?
+    let submittedAt: String?
+    let submittedTo: String?
+    let approvalStatus: String?
+    let approvedOn: String?
+}
+
+struct DispensationProposalDraft: Codable, Equatable {
+    var title = ""
+    var requestDate = ""
+    var eventDate = ""
+    var eventTime = ""
+    var requestDetails = ""
+    var locationName = ""
+    var streetAddress = ""
+    var cityState = ""
+    var proposerNote = ""
+    var validationMessage: String? {
+        if requestDetails.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Describe what you are requesting." }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"; formatter.isLenient = false
+        for value in [eventDate, requestDate].filter({ !$0.isEmpty }) {
+            guard value.count == 10, let date = formatter.date(from: value), formatter.string(from: date) == value else { return "Enter dates as YYYY-MM-DD." }
+        }
+        if eventDate.isEmpty { return "Enter the event date." }
+        for (label, value, limit) in [("Request details", requestDetails, 600), ("Title", title, 200), ("Event time", eventTime, 40), ("Location", locationName, 120), ("Street address", streetAddress, 120), ("City and state", cityState, 120), ("Note", proposerNote, 2000)] {
+            if value.count > limit { return "\(label) must be \(limit) characters or fewer." }
+        }
+        return nil
+    }
+    var isReady: Bool { validationMessage == nil }
+    var hasContent: Bool { self != Self() }
+}
+
+struct ProposalCreatedResponse: Decodable {
+    struct Identifier: Decodable { let id: String }
+    let proposal: Identifier
 }
 
 struct ProposalsResponse: Codable { let proposals: [WardenProposal] }

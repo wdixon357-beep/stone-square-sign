@@ -236,7 +236,7 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
   const status = async ({ includeBudget = false } = {}) => {
     const result = { configured: Boolean(key), model: MODEL, monthlyLimitDollars: 5,
       committedDollars: null, reservedDollars: null, remainingDollars: null };
-    if (!includeBudget) return result;
+    if (!includeBudget) return { configured: Boolean(key) };
     await initSchema();
     const budget = await dbGet('SELECT charged_units, reserved_units FROM ai_generation_months WHERE month_key = ?', [clock().slice(0, 7)]);
     result.committedDollars = dollars(budget?.charged_units || 0);

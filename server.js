@@ -255,6 +255,9 @@ const requireAuth = async (req, res, next) => {
     );
     if (!row) return res.status(401).json({ error: 'Your sign in has expired.' });
     if (row.access_revoked_at) return res.status(403).json({ error: 'Your access has been revoked by the Worshipful Master.' });
+    if (row.role === 'warden' && !WARDEN_EMAILS.has(normalizeEmail(row.email))) {
+      return res.status(403).json({ error: 'Warden access is not configured for this account.' });
+    }
     if (Date.now() > new Date(row.expires_at).getTime()) {
       await endActivitySession(tokenHash, 'Sign-in expired');
       await dbRun('DELETE FROM sessions WHERE token = ?', [tokenHash]);
@@ -268,6 +271,26 @@ const requireAuth = async (req, res, next) => {
     }
     req.user = row;
     req.authTokenHash = tokenHash;
+    // Provider and spending diagnostics belong only to the administrator. Keep
+    // report content intact; redact only generated notices and error messages.
+    if (row.role !== 'owner') {
+      const originalJson = res.json.bind(res);
+      const neutralNotice = value => String(value)
+        .replace(/Terra\s*\(GPT-5\.6\)|GPT-5\.6[ -]Terra|gpt-5\.6-terra|\bTerra\b|\bOpenAI\b/gi, 'Report assistance')
+        .replace(/The \$5 monthly report allowance is fully used or reserved\./g, 'Report assistance is temporarily unavailable. Contact the Worshipful Master.')
+        .replace(/Paid report generation is paused because reported usage needs review\./g, 'Report assistance needs administrator review. Contact the Worshipful Master.')
+        .replace(/This source is too large for one report within the monthly allowance\./g, 'This source is too large for one report.')
+        .replace(/This request has an unconfirmed charge\. Its allowance remains reserved to protect the monthly limit\./g, 'This request could not be confirmed. Contact the Worshipful Master before retrying.')
+        .replace(/This report request is already processing or has an unconfirmed charge\. Its allowance remains reserved\./g, 'This report request is already processing or needs administrator review.');
+      const redact = value => {
+        if (Array.isArray(value)) return value.map(redact);
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+          ['warnings', 'extractionNotes'].includes(key) && Array.isArray(item) ? item.map(neutralNotice)
+          : key === 'error' && typeof item === 'string' ? neutralNotice(item) : redact(item)]));
+      };
+      res.json = value => originalJson(redact(value));
+    }
     next();
   } catch (error) {
     next(error);
@@ -392,7 +415,7 @@ const realtimeClients = new Set();
 /* A Warden has no business receiving document events. He cannot open any of those documents,
  * so the id is useless to him, but he should not be handed it at all. He gets the proposal
  * events, which are his, and nothing else. */
-const WARDEN_EVENTS = new Set(['proposals_changed', 'connected']);
+const WARDEN_EVENTS = new Set(['proposals_changed', 'queue_changed', 'connected']);
 
 const broadcast = (type, data = {}) => {
   const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -1384,7 +1407,7 @@ app.get('/api/events', requireAuth, (req, res) => {
   });
 });
 
-const requireSignatureProfile = (req, res, next) => ['treasurer', 'assistant_treasurer', 'treasury_preparer'].includes(req.user.role) ? next() : requireDocumentAccess(req, res, next);
+const requireSignatureProfile = (req, res, next) => ['treasurer', 'assistant_treasurer', 'treasury_preparer', 'warden'].includes(req.user.role) ? next() : requireDocumentAccess(req, res, next);
 app.get('/api/profile/signature', requireAuth, requireSignatureProfile, async (req, res, next) => {
   try {
     const signature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
@@ -1499,7 +1522,7 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
       emailSent = req.body?.sendEmail === false ? false : await sendEmail({
         to: email,
         subject: 'Your Stone Square Sign account invitation',
-        text: `${name},\n\nYou have been invited to Stone Square Sign as ${{ member: 'a Lodge Member', viewer: 'a Lodge Viewer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary', treasurer: 'Treasurer', assistant_treasurer: 'Assistant Treasurer', treasury_preparer: 'a Treasury Report Preparer', warden: 'a Warden' }[role] || 'a signer'}. ${{ member: 'Your account provides sign-in access. Additional work areas are assigned separately by the administrator.', treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', assistant_treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', treasury_preparer: 'You can prepare and sign treasurer reports using banking records supplied in the Dashboard. This does not provide access to the bank account.', viewer: 'You can review document status and signing progress, but cannot upload, create, or sign documents.', warden: 'You can propose a dispensation to the Worshipful Master for his approval. You will not be asked to sign anything.' }[role] || 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
+        text: `${name},\n\nYou have been invited to Stone Square Sign as ${{ member: 'a Lodge Member', viewer: 'a Lodge Viewer', secretary: 'Secretary', assistant_secretary: 'Assistant Secretary', treasurer: 'Treasurer', assistant_treasurer: 'Assistant Treasurer', treasury_preparer: 'a Treasury Report Preparer', warden: 'a Warden' }[role] || 'a signer'}. ${{ member: 'Your account provides sign-in access. Additional work areas are assigned separately by the administrator.', treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', assistant_treasurer: 'You can prepare and sign treasurer reports, or provide banking records for another preparing officer.', treasury_preparer: 'You can prepare and sign treasurer reports using banking records supplied in the Dashboard. This does not provide access to the bank account.', viewer: 'You can review document status and signing progress, but cannot upload, create, or sign documents.', warden: 'You can view dispensation status and dues, use the Report Generator and Candidate Tracker, save your signature, and submit and track your own dispensation proposals. The Worshipful Master reviews proposals before any dispensation is created.' }[role] || 'You can review and sign assigned Lodge documents.'}\n\nCreate your password using this private link:\n\n${inviteUrl}\n\nThe link expires in 7 days.`,
       });
     } catch (error) {
       console.warn('Invitation email failed:', error.message);
@@ -1541,6 +1564,23 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
  }catch(e){next(e)}
 });
 
+// Upgrade an existing invitation without replacing its private link or expiry.
+app.put('/api/officers/invitations/role', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (req.body?.role !== 'warden') return res.status(400).json({ error: 'This action assigns a Warden invitation.' });
+    if (!WARDEN_EMAILS.has(email)) return res.status(403).json({ error: 'This address is not configured for a Warden seat.' });
+    await withTransaction(async () => {
+      const invite = await dbGet('SELECT id, role FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ? FOR UPDATE', [email, nowIso()]);
+      if (!invite) throw httpError(404, 'An active pending invitation was not found.');
+      await dbRun("UPDATE invitations SET role = 'warden' WHERE id = ?", [invite.id]);
+      await addAudit({ userId: req.user.id, action: 'officer_invitation_role_changed', ip: req.ip,
+        details: { email, before: invite.role, after: 'warden' } });
+    });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 'revoke-access', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
   try {
     const email = normalizeEmail(req.body?.email);
@@ -1580,12 +1620,11 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
   }
 });
 
-/* Dues. Restricted to the Worshipful Master, the Secretary and the Assistant
- * Secretary. The ledger names who is behind on his dues, so viewers are refused
+/* Dues. Restricted to the Worshipful Master, the Secretaries and the Wardens. The ledger names who is behind on his dues, so viewers are refused
  * outright rather than shown an empty page. */
 const requireDuesAccess = (req, res, next) => {
   if (!DUES_ROLES.has(req.user.role)) {
-    return res.status(403).json({ error: 'Dues are restricted to the Worshipful Master and the Secretaries.' });
+    return res.status(403).json({ error: 'Dues access is restricted to authorized Lodge officers.' });
   }
   next();
 };
@@ -1990,15 +2029,15 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
               d.approval_status, d.approved_by, d.approved_on, d.approval_source,
               u.name AS owner_name, u.email AS owner_email
        FROM documents d LEFT JOIN users u ON u.id = d.owner_user_id
-       WHERE ? IN ('owner','viewer') OR d.owner_user_id = ? OR EXISTS (
+       WHERE (? IN ('owner','viewer','warden') OR d.owner_user_id = ? OR EXISTS (
          SELECT 1 FROM document_signers ds
          WHERE ds.document_id = d.id
          AND (ds.user_id = ? OR (ds.user_id IS NULL AND ds.signer_role = ?))
-       )
+       )) AND (? <> 'warden' OR d.template_kind = 'dispensation_v1')
        ORDER BY CASE d.status WHEN 'pending' THEN 0 WHEN 'partially_signed' THEN 1 ELSE 2 END,
                 CASE WHEN d.status IN ('completed', 'rescinded') THEN d.updated_at END DESC,
                 d.created_at ASC`,
-      [req.user.role, req.user.id, req.user.id, req.user.role],
+      [req.user.role, req.user.id, req.user.id, req.user.role, req.user.role],
     );
     const documents = [];
     for (const row of rows) {
@@ -2007,7 +2046,7 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
          FROM document_signers WHERE document_id = ? ORDER BY id`,
         [row.id],
       );
-      if (req.user.role === 'viewer') {
+      if (['viewer', 'warden'].includes(req.user.role)) {
         documents.push({
           id: row.id,
           title: row.title,
@@ -2474,9 +2513,9 @@ const PROPOSAL_SELECT = `
     FROM dispensation_proposals p
     LEFT JOIN documents d ON d.id = p.resulting_document_id`;
 
-app.get('/api/proposals', requireAuth, requireOwnerOrWarden, async (_req, res, next) => {
+app.get('/api/proposals', requireAuth, requireOwnerOrWarden, async (req, res, next) => {
   try {
-    const rows = await dbAll(`${PROPOSAL_SELECT} ORDER BY p.created_at DESC`);
+    const rows = await dbAll(`${PROPOSAL_SELECT} WHERE ? = 'owner' OR p.proposer_user_id = ? ORDER BY p.created_at DESC`, [req.user.role, req.user.id]);
     res.json({ proposals: rows.map(proposalForResponse) });
   } catch (error) { next(error); }
 });

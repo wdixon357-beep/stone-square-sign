@@ -4,7 +4,7 @@ import SwiftUI
 struct GenerationStatus: Decodable, Equatable {
     let configured: Bool
     let model: String?
-    let monthlyLimitDollars: Double
+    let monthlyLimitDollars: Double?
     let committedDollars: Double?
     let reservedDollars: Double?
     let remainingDollars: Double?
@@ -15,8 +15,12 @@ struct GenerationStatus: Decodable, Equatable {
             : "Local organizer active. Terra setup is pending."
     }
 
+    func explanation(forOwner: Bool) -> String {
+        forOwner ? explanation : "Review the organized draft against your source before using it."
+    }
+
     func allowance(forOwner: Bool) -> String? {
-        guard forOwner, let remainingDollars else { return nil }
+        guard forOwner, let remainingDollars, let monthlyLimitDollars else { return nil }
         let format = NumberFormatter()
         format.numberStyle = .currency
         format.locale = Locale(identifier: "en_US")
@@ -38,7 +42,7 @@ struct GenerationStatusView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(status?.explanation ?? "Generation status unavailable.")
+            Text(status?.explanation(forOwner: model.user?.role == "owner") ?? (model.user?.role == "owner" ? "Generation status unavailable." : "Review the draft against your source before using it."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

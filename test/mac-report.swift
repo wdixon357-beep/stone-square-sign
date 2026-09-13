@@ -286,7 +286,32 @@ final class GenerationFixture: URLProtocol {
         precondition(updater.unfinishedWorkReason == nil)
         print("PASS: each window retains its update guard when another window opens or closes")
         print("PASS: updater blocks unfinished operations and report input but permits saved local notes and loaded banking sources")
-        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/generation/status" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
-        print("PASS: reorganization fixtures make no save, sign, delivery or new-report requests")
+        let warden = User(id: 42, email: "synthetic-warden@example.invalid", name: "QA Warden", role: "warden", hasSignature: false)
+        precondition(warden.canSign && warden.canReadDues && warden.canProposeDispensation && !warden.canUseTreasury)
+        precondition(warden.proposalWorkspaceTitle == "My Dispensation Proposals")
+        let redactedStatus = try JSONDecoder().decode(GenerationStatus.self, from: Data(#"{"configured":true}"#.utf8))
+        precondition(redactedStatus.allowance(forOwner: false) == nil)
+        precondition(!redactedStatus.explanation(forOwner: false).contains("Terra"))
+        precondition(!redactedStatus.explanation(forOwner: false).contains("OpenAI"))
+        var proposalDraft = DispensationProposalDraft()
+        precondition(!proposalDraft.isReady)
+        proposalDraft.eventDate = "2026-10-15"; proposalDraft.requestDetails = "Synthetic event request."
+        precondition(proposalDraft.isReady)
+        proposalDraft.requestDetails = String(repeating: "x", count: 601)
+        precondition(!proposalDraft.isReady)
+        proposalDraft.requestDetails = "Synthetic event request."
+        reportApp.user = warden
+        GenerationFixture.beforeReply = { request in
+            GenerationFixture.response = request.httpMethod == "POST" ? Data(#"{"proposal":{"id":"synthetic-proposal"}}"#.utf8) : Data(#"{"proposals":[]}"#.utf8)
+        }
+        let proposalSubmitted = await reportApp.submitProposal(proposalDraft)
+        precondition(proposalSubmitted)
+        GenerationFixture.beforeReply = nil
+        let proposalRequest = GenerationFixture.requests.last { $0.path == "/api/proposals" && $0.method == "POST" }!
+        let proposalBody = try JSONSerialization.jsonObject(with: proposalRequest.body) as! [String: String]
+        precondition(proposalBody["eventDate"] == "2026-10-15" && proposalBody["requestDetails"] == "Synthetic event request.")
+        print("PASS: Wardens have assigned native navigation, submit proposals through the authenticated service, and see no generation model or allowance details")
+        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/generation/status" || $0.path == "/api/proposals" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
+        print("PASS: generation and proposal fixtures make no signing or document delivery requests")
     }
 }

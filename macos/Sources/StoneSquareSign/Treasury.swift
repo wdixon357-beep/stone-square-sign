@@ -196,7 +196,7 @@ struct TreasuryView: View {
                     Text("Save banking information for a report").tag("save")
                     if ["owner","treasurer","assistant_treasurer","treasury_preparer","secretary","assistant_secretary"].contains(model.user?.role ?? "") {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
-                Text("Save the information for later, or open the prefilled report and complete it yourself. Saving banking information for later does not use the generation allowance.").font(.caption)
+                Text(model.user?.role == "owner" ? "Save the information for later, or open the prefilled report and complete it yourself. Saving banking information for later does not use the generation allowance." : "Save the information for later, or open the prefilled report and complete it yourself.").font(.caption)
                 Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent)
             }.padding(12) }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
