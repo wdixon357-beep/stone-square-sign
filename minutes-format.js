@@ -111,6 +111,15 @@ export function detectPrayerFacts(source) {
   };
 }
 
+export function separateFormalClosure(body) {
+  const statements = [];
+  const remaining = String(body || '').replace(/\bThere being no further business,[^\n]*?\b(?:closed|adjourned)\b[^\n]*?\bWorshipful Master\./gi, statement => {
+    statements.push(statement);
+    return '';
+  }).trim();
+  return {remaining, statements};
+}
+
 export function documentSections(draft) {
   const sections = cleanMinutesSectionsForPresentation(draft.sections, draft);
   const closing = sections.filter(s => /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(s.heading.trim()));
@@ -132,9 +141,11 @@ export function documentSections(draft) {
   // Replace an isolated closing-time statement with the reviewed time. Retain
   // any additional ceremonial or business details in the source sentence.
   if (draft.closingTime) closingBody = omitWholeBullets(closingBody, text => /^(?:(?:the )?lodge (?:was )?)?(?:closed|adjourned)(?: at [\d: .APMapm]+)?\.?$/i.test(text));
-  const closure = draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.` : 'Closing time: confirm and enter the time the Lodge was closed.';
+  const formal = separateFormalClosure(closingBody);
+  closingBody = formal.remaining;
+  const closure = formal.statements.length ? formal.statements.join('\n') : draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.` : 'Closing time: confirm and enter the time the Lodge was closed.';
   const prayer = draft.closingPrayerGiven === true ? closingPrayerText : draft.closingPrayerGiven === false ? '' : 'Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.';
-  result.push({heading: 'Closing of the Lodge', body: [closingBody, closure, prayer].filter(Boolean).join('\n')});
+  result.push({heading: 'Closing of the Lodge', body: [closingBody, prayer, closure].filter(Boolean).join('\n')});
   return result.filter(s => s.body.trim() || isSicknessHeading(s.heading));
 }
 

@@ -47,13 +47,13 @@ const original = JSON.stringify(draft);
 const sections = documentSections(draft);
 assert.equal(JSON.stringify(draft), original, 'formatting must not mutate a saved or signed draft');
 assert.equal(sections.at(-1).heading, 'Closing of the Lodge');
-assert.equal(sections.at(-1).body, `The Lodge was closed at 9:30 PM.\n${closingPrayerText}`);
+assert.equal(sections.at(-1).body, `${closingPrayerText}\nThe Lodge was closed at 9:30 PM.`);
 assert.ok(sections.find(s => s.heading === 'Sickness and Distress').body.endsWith(prayerRequestText));
 assert.equal(sections.filter(s => /Closing/.test(s.heading)).length, 1);
 assert.equal(sections.find(s => s.heading === 'Next Meeting').body, 'Thursday, October 1, 2026 at 7:30 PM, Lodge Hall');
 const repeated = documentSections({...draft, sections:[{heading:'Sickness and Distress', body:'The WM asked the Chaplain to give a prayer for sickness and distress at the close of the meeting.\nPrayers for Brother Stone.'}, {heading:'Closing', body:'Closed at 9:30 PM.\nThe Chaplain offered the closing prayer and prayed for the sick and distressed.'}]});
 assert.equal(repeated.find(s=>s.heading==='Sickness and Distress').body, `Prayers for Brother Stone.\n${prayerRequestText}`);
-assert.equal(repeated.at(-1).body, `The Lodge was closed at 9:30 PM.\n${closingPrayerText}`);
+assert.equal(repeated.at(-1).body, `${closingPrayerText}\nThe Lodge was closed at 9:30 PM.`);
 const decoratedDraft = {...draft, closingTime:'10:30 PM', nextMeeting:'October 1, 2026', sections:[
   {heading:'Sickness and Distress', body:'- The Worshipful Master asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.'},
   {heading:'Upcoming Events and Reminders', body:'- The next meeting is scheduled for <u>October 1, 2026</u>.'},
@@ -62,7 +62,7 @@ const decoratedDraft = {...draft, closingTime:'10:30 PM', nextMeeting:'October 1
 const decoratedSnapshot = JSON.stringify(decoratedDraft);
 const decoratedSections = documentSections(decoratedDraft);
 assert.equal(JSON.stringify(decoratedDraft), decoratedSnapshot, 'deduplication never changes the saved draft');
-assert.equal(decoratedSections.at(-1).body, `The Lodge was closed at 10:30 PM.\n${closingPrayerText}`, 'marked-up whole closing bullets appear once in canonical closing');
+assert.equal(decoratedSections.at(-1).body, `${closingPrayerText}\nThe Lodge was closed at 10:30 PM.`, 'marked-up whole closing bullets appear once in canonical closing');
 assert.equal(decoratedSections.filter(s=>s.heading === 'Next Meeting').length, 1);
 assert.ok(!decoratedSections.some(s=>s.heading === 'Upcoming Events and Reminders'), 'empty duplicate-only events section is omitted');
 assert.equal(decoratedSections.find(s=>s.heading === 'Sickness and Distress').body.trim(), prayerRequestText);
@@ -195,3 +195,14 @@ try {
   assert.match(legacyXml, /Alex Example/); assert.match(legacyXml, /Victor Example/);
 } finally { await fs.rm(tmp, {recursive:true, force:true}); }
 console.log('Minutes bullets, emphasis, seal, closing facts, officer roles and Word parity passed.');
+
+const formalClosure = 'There being no further business, Stone Square Lodge No. 22 was closed in due form on the Third Degree of Masonry at 10:00 PM by Bro. W. Aaron Dixon Saunders, Worshipful Master.';
+const formalSource = {...draft, closingTime:'10:00 PM', sections:[{heading:'Prayer and Closing',body:formalClosure+' A closing prayer was offered by PM Kenny Davis.\nMinutes will be distributed before the next meeting.'}]};
+const formalBefore=structuredClone(formalSource);
+const formalResult=documentSections(formalSource).at(-1).body;
+assert.ok(formalResult.endsWith(formalClosure));
+assert.equal(formalResult.split(formalClosure).length-1,1);
+assert.ok(formalResult.indexOf('A closing prayer') < formalResult.indexOf(formalClosure));
+assert.ok(formalResult.indexOf('Minutes will be distributed') < formalResult.indexOf(formalClosure));
+assert.ok(!formalResult.includes('The Lodge was closed at'));
+assert.deepEqual(formalSource,formalBefore);
