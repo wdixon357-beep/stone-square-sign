@@ -13,6 +13,7 @@ export async function expectedProduction(root = ROOT) {
   const assets = Object.fromEntries(await Promise.all(names.map(async name =>
     ['/' + name, await readFile(path.join(root, 'public', name), 'utf8')])));
   assets['/'] = assets['/index.html'].replaceAll('__APP_VERSION__', version);
+  assets['/updates/appcast.xml'] = await readFile(path.join(root, 'public/updates/appcast.xml'), 'utf8');
   return { version, assets };
 }
 

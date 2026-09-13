@@ -74,7 +74,6 @@ struct RootView: View {
         }
         .task {
             await model.restoreSession()
-            model.startUpdateChecks()
         }
         .onChange(of: model.user) { _, user in
             showRequiredSignature = user?.hasSignature == false && user?.canSign == true
@@ -252,6 +251,7 @@ struct WorkspaceView: View {
                 .padding(20)
             }
             .background(.bar)
+            .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
         } detail: {
             VStack(spacing: 0) {
                 WorkspaceNotices()
@@ -260,7 +260,12 @@ struct WorkspaceView: View {
             }
         }
         .task { activityPresence.start(model);await model.refresh() }
-        .onDisappear {activityPresence.stop()}
+        .onAppear {
+            AppUpdater.shared.unfinishedWork = {
+                AppUpdater.unfinishedReportWork(report: reportBrowser, minutes: minutesWorkspace, treasury: treasuryWorkspace, operationInProgress: model.isBusy)
+            }
+        }
+        .onDisappear { activityPresence.stop(); AppUpdater.shared.unfinishedWork = nil }
         .onChange(of:selection){_,section in activityPresence.visit(section)}
         .onChange(of: model.requestedSection) { _, requested in
             guard let requested else { return }
@@ -330,6 +335,7 @@ struct WorkspaceView: View {
 /// Persistent notices reserve their own space above the selected workspace.
 struct WorkspaceNotices: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var updater = AppUpdater.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -353,7 +359,7 @@ struct WorkspaceNotices: View {
                 .background(SignTheme.gold.opacity(0.10))
                 Divider()
             }
-            if let version = model.availableUpdateVersion {
+            if let version = updater.availableVersion {
                 HStack(alignment: .top, spacing: 14) {
                     Image(systemName: "arrow.down.circle.fill").foregroundStyle(SignTheme.gold)
                     VStack(alignment: .leading, spacing: 4) {
@@ -361,7 +367,7 @@ struct WorkspaceNotices: View {
                         Text("Version \(version) is ready.").font(.callout).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Dismiss") { model.dismissAvailableUpdate() }.fixedSize()
+                    Button(updater.readyToRestart ? "Finish update" : "Update") { updater.checkForUpdates() }.fixedSize()
                 }
                 .padding(.horizontal, 22)
                 .padding(.vertical, 16)
@@ -669,6 +675,7 @@ struct CandidateRecordEditorView: View {
             .padding(20)
         }
         .frame(minWidth: 720, minHeight: 720)
+        .updateDraftGuard(reason: "Save or cancel the candidate record before updating.")
     }
 }
 
@@ -828,6 +835,7 @@ struct DispensationBuilderView: View {
             .padding(22)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .updateDraftGuard(active: !pastedDetails.isEmpty || !title.isEmpty || !requestDetails.isEmpty || !locationName.isEmpty || !streetAddress.isEmpty || !cityState.isEmpty, reason: "Finish your dispensation draft before updating. Your entered details are still open.")
         .task { applySavedProfiles() }
         .onChange(of: worshipfulMasterAddress) { _, _ in personalInfoConfirmed = false }
         .sheet(isPresented: $showingPasteReview) {
@@ -1602,6 +1610,7 @@ struct SignatureApprovalView: View {
                 .disabled(!consent || signatureImage == nil || !profileReady || model.isBusy)
             }
         }
+        .updateDraftGuard(reason: "Finish or cancel the signature review before updating.")
         .padding(30)
         .frame(width: 760)
         .task {
@@ -1695,6 +1704,7 @@ struct SignatureSetupView: View {
                     .disabled(model.isBusy || (mode == 0 ? paths.isEmpty : signatureInput.trimmingCharacters(in: .whitespaces).isEmpty))
             }
         }
+        .updateDraftGuard(reason: "Save or cancel the signature setup before updating.")
         .padding(30)
         .frame(width: 780)
         .onAppear {
@@ -2105,6 +2115,7 @@ struct ProposalReviewView: View {
             }
             .padding(30)
         }
+        .updateDraftGuard(active: !note.isEmpty || busyID != nil, reason: "Finish or clear your proposal note before updating.")
         .task { await model.loadProposals() }
     }
 

@@ -22,7 +22,7 @@ if [[ "$DISTRIBUTION_BUILD" == "1" ]]; then
     print -u2 "Distribution builds create a notarized release package and cannot use --install."
     exit 2
   fi
-  if [[ -z "$SIGNING_IDENTITY" || -z "$NOTARY_PROFILE" ]]; then
+  if [[ "$SIGNING_IDENTITY" != "Developer ID Application: "* || -z "$NOTARY_PROFILE" ]]; then
     print -u2 "DISTRIBUTION_BUILD=1 requires DEVELOPER_ID_APPLICATION and NOTARYTOOL_PROFILE."
     exit 2
   fi
@@ -50,12 +50,20 @@ fi
 
 sign_app() {
   local target="$1"
+  local framework="$target/Contents/Frameworks/Sparkle.framework"
+  local version="$framework/Versions/B"
+  local -a signing_options
+  signing_options=(--force --sign "$SIGNING_IDENTITY")
   if [[ "$DISTRIBUTION_BUILD" == "1" ]]; then
-    codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
-      --entitlements "StoneSquareSign.entitlements" "$target"
-  else
-    codesign --force --sign "$SIGNING_IDENTITY" --entitlements "StoneSquareSign.entitlements" "$target"
+    signing_options+=(--options runtime --timestamp)
   fi
+  # Sign nested executables first; the app sandbox entitlements belong only on the app.
+  codesign "${signing_options[@]}" "$version/XPCServices/Installer.xpc"
+  codesign "${signing_options[@]}" --preserve-metadata=entitlements "$version/XPCServices/Downloader.xpc"
+  codesign "${signing_options[@]}" "$version/Autoupdate"
+  codesign "${signing_options[@]}" "$version/Updater.app"
+  codesign "${signing_options[@]}" "$framework"
+  codesign "${signing_options[@]}" --entitlements "StoneSquareSign.entitlements" "$target"
 }
 
 cd "$PROJECT_DIR"
@@ -63,7 +71,8 @@ swift scripts/generate-icon.swift "$ICONSET_DIR"
 iconutil -c icns "$ICONSET_DIR" -o "$ICON_FILE"
 swift build -c release
 rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_DIR/Contents/Frameworks"
+ditto ".build/release/Sparkle.framework" "$APP_DIR/Contents/Frameworks/Sparkle.framework"
 install -m 755 ".build/release/StoneSquareSign" "$APP_DIR/Contents/MacOS/StoneSquareSign"
 install -m 644 "Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$APP_DIR/Contents/Info.plist"

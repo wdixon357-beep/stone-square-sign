@@ -255,6 +255,29 @@ final class GenerationFixture: URLProtocol {
         precondition(treasury.draft == treasuryDraft && treasury.selected?.revision == 4)
         print("PASS: late treasury generation cannot replace a newer report revision")
         treasury.close(); GenerationFixture.beforeReply = nil
+        model.startOver(); organizing.close(); treasury.close()
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false) == nil)
+        organizing.dirty = true
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false)?.contains("Meeting Minutes edits") == true)
+        organizing.dirty = false; organizing.source = "Unsaved source"
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false)?.contains("source notes") == true)
+        organizing.source = ""; treasury.source = "Unsaved banking source"
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false)?.contains("source material") == true)
+        treasury.source = ""; treasury.originalText = "Previously saved banking source"
+        model.source = "Locally saved report notes"; model.changed()
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false) == nil)
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: true) != nil)
+        let updater = AppUpdater()
+        let editorID = UUID()
+        updater.setEditorGuard(editorID, reason: "Unfinished candidate record")
+        precondition(updater.unfinishedWorkReason == "Unfinished candidate record")
+        updater.setEditorGuard(editorID, reason: nil)
+        precondition(updater.unfinishedWorkReason == nil)
+        updater.unfinishedWork = { "Unsaved workspace" }
+        precondition(updater.unfinishedWorkReason == "Unsaved workspace")
+        updater.unfinishedWork = nil
+        precondition(updater.unfinishedWorkReason == nil)
+        print("PASS: updater blocks unfinished operations and report input but permits saved local notes and loaded banking sources")
         precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/generation/status" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
         print("PASS: reorganization fixtures make no save, sign, delivery or new-report requests")
     }

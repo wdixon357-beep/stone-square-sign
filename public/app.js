@@ -51,22 +51,63 @@ const setMessage = (element, text, isError = false) => {
   element.classList.toggle('success', Boolean(text) && !isError);
 };
 
+// Website updates must never replace entered report text or interrupt a request.
+let webUpdateHasEntries = false;
+let webUpdateLastActivity = Date.now();
+let webUpdateRequests = 0;
+let webUpdateCheckBusy = false;
+const noteWebActivity = () => { webUpdateLastActivity = Date.now(); };
+const noteWebEntries = () => { webUpdateHasEntries = true; noteWebActivity(); };
+document.addEventListener('input', noteWebEntries, true);
+document.addEventListener('change', noteWebEntries, true);
+document.addEventListener('pointerdown', event => {
+  noteWebActivity();
+  if (event.target.closest?.('canvas, [contenteditable="true"]')) noteWebEntries();
+}, true);
+document.addEventListener('keydown', noteWebActivity, true);
+const webUpdateIsBusy = () => webUpdateRequests > 0 || Boolean(
+  state.editingMinutesId || state.signingDocumentId || treasuryWorkspace?.busy ||
+  document.querySelector('.modal:not(.hidden)') ||
+  [...document.querySelectorAll('button[disabled]')].some(button => button.getClientRects().length)
+);
 const checkForWebUpdate = async () => {
+  if (webUpdateCheckBusy) return;
+  webUpdateCheckBusy = true;
   try {
     const response = await fetch('/api/version', { cache: 'no-store' });
     if (!response.ok) return;
     const { version } = await response.json();
-    $('webUpdateBanner').classList.toggle('hidden', !version || version === CLIENT_BUILD_VERSION);
+    const available = Boolean(version && version !== CLIENT_BUILD_VERSION);
+    const banner = $('webUpdateBanner');
+    banner.classList.toggle('hidden', !available);
+    if (!available) return;
+    const fieldFocused = document.activeElement?.matches?.('input, textarea, select, [contenteditable="true"]');
+    if (!webUpdateHasEntries && !webUpdateIsBusy() && !fieldFocused && Date.now() - webUpdateLastActivity >= 30000) {
+      window.location.reload();
+      return;
+    }
+    banner.querySelector('span').textContent = webUpdateHasEntries
+      ? 'Your current work stays open. Save it before updating, or get the update on your next visit.'
+      : 'The website will update automatically when you are not working.';
   } catch {
     // A temporary connection interruption is handled by the live queue indicator.
-  }
+  } finally { webUpdateCheckBusy = false; }
 };
 
-$('applyWebUpdate').addEventListener('click', () => window.location.reload());
+$('applyWebUpdate').addEventListener('click', () => {
+  if (webUpdateIsBusy()) {
+    $('webUpdateBanner').querySelector('span').textContent = 'Finish the current action and close any open editor before updating.';
+    return;
+  }
+  if (webUpdateHasEntries && !window.confirm('Reload for the website update? Any entries you have not saved will be lost. Select Cancel to return and save your work.')) return;
+  window.location.reload();
+});
 window.setTimeout(checkForWebUpdate, 1500);
 window.setInterval(checkForWebUpdate, 30000);
 
 const apiFetch = async (path, init = {}) => {
+  webUpdateRequests += 1;
+  try {
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -79,6 +120,7 @@ const apiFetch = async (path, init = {}) => {
   const payload = type.includes('application/json') ? await response.json() : await response.blob();
   if (!response.ok) throw Object.assign(new Error(payload.error || 'The request could not be completed.'), { status: response.status });
   return payload;
+  } finally { webUpdateRequests -= 1; }
 };
 
 const setActiveTab = (which) => {

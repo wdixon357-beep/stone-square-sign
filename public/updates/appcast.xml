@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Stone Square Sign updates</title>
+    <link>https://stone-square-sign.onrender.com/updates/appcast.xml</link>
+    <description>Verified Mac application releases.</description>
+    <language>en</language>
+  </channel>
+</rss>

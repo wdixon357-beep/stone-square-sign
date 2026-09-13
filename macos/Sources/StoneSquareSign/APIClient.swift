@@ -188,7 +188,6 @@ final class AppModel: ObservableObject {
     @Published var dues: DuesLedger?
     @Published var duesLoading = false
     @Published var duesError: String?
-    @Published var availableUpdateVersion: String?
     @Published var biometricLoginEnabled: Bool
     @Published var biometricLoginAvailable: Bool
     @Published var message = ""
@@ -202,9 +201,7 @@ final class AppModel: ObservableObject {
     private var token: String?
     private var liveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
-    private var updateTask: Task<Void, Never>?
     private var candidateTrackerAuthenticated = false
-    private var dismissedUpdateVersion = UserDefaults.standard.string(forKey: "dismissed-update-version")
     private let candidateTrackerBaseURL = URL(string: "https://tracker.stonesquare22pha.org/")!
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -476,41 +473,6 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-    }
-
-    func startUpdateChecks() {
-        updateTask?.cancel()
-        updateTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                await self.checkForUpdate()
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
-            }
-        }
-    }
-
-    func checkForUpdate() async {
-        do {
-            let response: VersionResponse = try await request("/api/version")
-            let currentVersion = Bundle.main.object(
-                forInfoDictionaryKey: "CFBundleShortVersionString"
-            ) as? String ?? "0"
-            let isNewer = response.version.compare(currentVersion, options: .numeric) == .orderedDescending
-            availableUpdateVersion = isNewer && response.version != dismissedUpdateVersion
-                ? response.version
-                : nil
-        } catch {
-            // The normal connection status already reports service interruptions.
-        }
-    }
-
-    func dismissAvailableUpdate() {
-        guard let version = availableUpdateVersion else { return }
-        dismissedUpdateVersion = version
-        UserDefaults.standard.set(version, forKey: "dismissed-update-version")
-        availableUpdateVersion = nil
-        message = "Update notice dismissed. Install only a signed and notarized Stone Square Sign release."
-        isError = false
     }
 
     func upload(url: URL) async {
