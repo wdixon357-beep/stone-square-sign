@@ -1535,6 +1535,34 @@ app.post('/api/tracker/handoff', requireAuth, rateLimit({ key: 'tracker-handoff'
   }
 });
 
+app.post('/api/tracker/permissions', async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const email = normalizeEmail(req.body?.email);
+    const issuedAt = Number(req.body?.issuedAt);
+    const signature = String(req.get('X-Stone-Square-Tracker-Signature') || '');
+    const now = Math.floor(Date.now() / 1000);
+    if (!TRACKER_SSO_SHARED_SECRET || !isEmail(email) || !Number.isInteger(issuedAt)
+        || issuedAt < now - 60 || issuedAt > now + 15) {
+      return res.status(401).json({ error: 'Candidate Tracker authorization could not be verified.' });
+    }
+    const expected = crypto.createHmac('sha256', TRACKER_SSO_SHARED_SECRET)
+      .update(`${email}\n${issuedAt}`)
+      .digest('base64url');
+    if (!secretsMatch(signature, expected)) {
+      return res.status(401).json({ error: 'Candidate Tracker authorization could not be verified.' });
+    }
+    const user = await dbGet(
+      "SELECT role,permissions_json FROM users WHERE email=? AND access_revoked_at IS NULL AND email NOT LIKE '%.local'",
+      [email],
+    );
+    const permissions = user
+      ? resolvePermissions(user).filter((permission) => ['candidates.view', 'candidates.edit'].includes(permission))
+      : [];
+    return res.json({ active: Boolean(user) && permissions.includes('candidates.view'), permissions });
+  } catch (error) { next(error); }
+});
+
 app.post('/api/reports/handoff', requireAuth, rateLimit({ key: 'report-handoff', maximum: 120, windowMs: 60 * 60 * 1000 }), (req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'no-store');

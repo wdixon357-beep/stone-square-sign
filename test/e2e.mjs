@@ -12,6 +12,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -841,8 +842,28 @@ try {
   const editorPayload = JSON.parse(Buffer.from(new URL(editorHandoff.payload.url).searchParams.get('assertion').split('.')[0], 'base64url'));
   check('the signed tracker handoff carries the granted edit permission',
     editorPayload.permissions.includes('candidates.view') && editorPayload.permissions.includes('candidates.edit'));
+  const trackerPermissions = async (email, secret = 'synthetic-tracker-secret-for-isolated-tests', issuedAt = Math.floor(Date.now() / 1000)) => {
+    const signature = crypto.createHmac('sha256', secret).update(`${email.toLowerCase()}\n${issuedAt}`).digest('base64url');
+    const response = await fetch(`${BASE}/api/tracker/permissions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stone-Square-Tracker-Signature': signature },
+      body: JSON.stringify({ email, issuedAt }),
+    });
+    return { status: response.status, payload: await response.json() };
+  };
+  const currentEditorPermissions = await trackerPermissions(xavier.user.email);
+  check('the Tracker can verify current editing access without trusting its long-lived cookie',
+    currentEditorPermissions.status === 200 && currentEditorPermissions.payload.active
+      && currentEditorPermissions.payload.permissions.includes('candidates.edit'));
+  check('a forged Tracker permission check is refused',
+    (await trackerPermissions(xavier.user.email, 'wrong-shared-secret')).status === 401);
   check('the Worshipful Master can remove Candidate Tracker editing without removing view access',
     (await api('PUT', '/api/admin/access', { token: wmToken, body: { key: xavierAccess.key, permissions: xavierAccess.permissions } })).status === 200);
+  const currentReadOnlyPermissions = await trackerPermissions(xavier.user.email);
+  check('the same Tracker session immediately loses editing after Officer Access revocation',
+    currentReadOnlyPermissions.status === 200 && currentReadOnlyPermissions.payload.active
+      && currentReadOnlyPermissions.payload.permissions.includes('candidates.view')
+      && !currentReadOnlyPermissions.payload.permissions.includes('candidates.edit'));
   const readOnlyHandoff = await api('POST', '/api/tracker/handoff', { token: xavier.token });
   const readOnlyPayload = JSON.parse(Buffer.from(new URL(readOnlyHandoff.payload.url).searchParams.get('assertion').split('.')[0], 'base64url'));
   check('a new tracker handoff immediately reflects revoked edit access',
