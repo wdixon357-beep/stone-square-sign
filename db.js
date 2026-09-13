@@ -367,6 +367,10 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'users', 'access_revoked_at', 'TEXT');
   await addColumn(exec, 'users', 'permissions_json', 'TEXT');
   await addColumn(exec, 'invitations', 'permissions_json', 'TEXT');
+  await addColumn(exec, 'sessions', 'created_at', 'TEXT');
+  await addColumn(exec, 'sessions', 'last_seen_at', 'TEXT');
+  await addColumn(exec, 'sessions', 'client_label', 'TEXT');
+  await addColumn(exec, 'sessions', 'user_agent', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'preparer_attested_at', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'master_attested_by_user_id', 'INTEGER REFERENCES users(id)');
   await addColumn(exec, 'meeting_minutes', 'master_attested_at', 'TEXT');

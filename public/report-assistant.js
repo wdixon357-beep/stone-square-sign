@@ -2,7 +2,7 @@ const origin='https://request.stonesquare22pha.org';
 const $=id=>document.getElementById(id);
 let context=null,suggestions=null,sourceKey='',busy=false;
 const status=text=>$('status').textContent=text;
-const api=async(path,body)=>{const token=localStorage.getItem('stone-square-sign-token')||'';const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},...(body?{body:JSON.stringify(body)}:{})});const data=await r.json();if(!r.ok)throw Object.assign(new Error(data.error||'The request could not be completed.'),{status:r.status});return data;};
+const api=async(path,body)=>{const r=await fetch(path,{method:body?'POST':'GET',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Stone-Square-Client':'web'},...(body?{body:JSON.stringify(body)}:{})});const data=await r.json();if(!r.ok)throw Object.assign(new Error(data.error||'The request could not be completed.'),{status:r.status});return data;};
 async function check(){try{await api('/api/auth/me');$('signin').hidden=true;$('organize').disabled=!context||busy;status(context?'Your report is connected. Paste notes to begin.':'Open this assistant from the Report Generator.');}catch(e){$('signin').hidden=false;$('organize').disabled=true;status('Sign in, then return here and choose Check sign-in.');}}
 window.addEventListener('message',event=>{if(event.origin!==origin||event.source!==window.opener||event.data?.kind!=='report-assistant-context'||context)return;const v=event.data.context;if(!v||typeof v.type!=='string'||typeof v.master!=='boolean'||!v.fields||typeof v.fields!=='object'||Array.isArray(v.fields))return;context=structuredClone(v);check();});
 $('check').onclick=check;

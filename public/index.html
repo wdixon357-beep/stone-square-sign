@@ -160,17 +160,19 @@
               <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small id="minutesMenuDescription">Read finalized meeting minutes</small></span><b>›</b></button>
               <button id="activityMenuCard" class="document-menu-card owner-only" type="button"><i>ACT</i><span><strong>Officer Activity</strong><small>Sign-ins, recorded actions and estimated active time</small></span><b>›</b></button>
               <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small id="treasuryMenuDescription">Read finalized treasurer reports</small></span><b>›</b></button>
-              <a class="document-menu-card candidate-only" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
+              <button id="candidateMenuCard" class="document-menu-card candidate-only" type="button"><i>CT</i><span><strong>Candidate Tracker</strong><small id="candidateMenuDescription">Open the Candidate Tracker</small></span><b>›</b></button>
             </div>
+            <p id="candidateTrackerMessage" class="message" role="status"></p>
           </section>
-          <section id="settingsSection" class="hidden"><div class="content-head"><div><h1>My Settings</h1><p>Your account and this device.</p></div></div><div class="panel"><h2 id="settingsName"></h2><p id="settingsEmail"></p><p>You stay signed in for up to 90 days on this device. Your sign-in renews when you use it near the end of that period. Sign out when finished on a shared device.</p><div class="row-buttons"><button id="settingsSignature" class="secondary" type="button">Manage my signature</button><button id="settingsSignout" class="secondary" type="button">Sign out on this device</button></div></div></section>
+          <section id="settingsSection" class="hidden"><div class="content-head"><div><h1>My Settings</h1><p>Your account and signed-in devices.</p></div></div><div class="panel"><h2 id="settingsName"></h2><p id="settingsEmail"></p><p>You stay signed in for up to 90 days on this device. Your sign-in renews when you use it near the end of that period. Sign out when finished on a shared device.</p><div class="row-buttons"><button id="settingsSignature" class="secondary" type="button">Manage my signature</button><button id="settingsSignout" class="secondary" type="button">Sign out on this device</button></div></div><section class="panel device-sessions"><div class="panel-title"><div><p class="eyebrow">ACCOUNT SECURITY</p><h2>Signed-in devices</h2></div><button id="refreshDeviceSessions" class="secondary" type="button">Refresh</button></div><p class="helper">Review devices that can open your Lodge account. End any sign-in you do not recognize.</p><p id="deviceSessionsMessage" class="message" role="status"></p><div id="deviceSessionsList"></div><button id="revokeOtherSessions" class="secondary danger-text" type="button">Sign out all other devices</button></section></section>
           <section id="buildingSection" class="hidden"></section>
           <section id="calendarSection" class="hidden"></section>
           <section id="activitySection" class="hidden"></section>
           <section id="treasurySection" class="hidden"></section>
           <section id="reportsSection" class="hidden">
-            <div class="content-head"><div><p class="eyebrow">REPORTS FOR THE CRAFT</p><h1>Report Generator</h1><p>Preview your report before reviewing, signing and sending it.</p></div><a class="secondary" href="https://request.stonesquare22pha.org/report" target="_blank" rel="noopener noreferrer">Open in a separate tab</a></div>
-            <iframe id="reportGeneratorFrame" title="Report Generator" data-src="https://request.stonesquare22pha.org/report" referrerpolicy="no-referrer"></iframe>
+            <div class="content-head"><div><p class="eyebrow">REPORTS FOR THE CRAFT</p><h1>Report Generator</h1><p>Preview your report before reviewing, signing and sending it.</p></div><button id="reportSeparateTab" class="secondary" type="button">Open in a separate tab</button></div>
+            <p id="reportGeneratorMessage" class="message" role="status"></p>
+            <iframe id="reportGeneratorFrame" title="Report Generator" referrerpolicy="no-referrer"></iframe>
           </section>
           <section id="queueSection">
           <div class="content-head">
@@ -368,12 +370,13 @@
             <h2>Warden proposals</h2>
             <p class="muted">Approving one creates the dispensation exactly as if you had built it yourself,
               with your signature on it, and it goes to both Secretaries.</p>
+            <p id="proposalReviewMessage" class="message" role="status"></p>
             <div id="proposalReviewList" class="list"></div>
           </section>
         </div>
       </section>
 
-      <section id="minutesEditorModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="minutesEditorTitle">
+      <section id="minutesEditorModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="minutesEditorTitle">
         <div class="modal-body minutes-editor-body">
           <button id="closeMinutesEditor" class="modal-close" type="button" aria-label="Close">&times;</button>
           <p class="eyebrow">MEETING MINUTES DRAFT</p>
@@ -483,7 +486,7 @@
         </div>
       </section>
 
-      <section id="locationConfirmModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="locationConfirmTitle">
+      <section id="locationConfirmModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="locationConfirmTitle">
         <div class="modal-body narrow">
           <p class="eyebrow">ADDRESS CHECK</p><h2 id="locationConfirmTitle">Is this the correct event address?</h2>
           <div class="location-match"><strong id="locationMatchName"></strong><span id="locationMatchStreet"></span><span id="locationMatchCity"></span></div>
@@ -492,7 +495,7 @@
         </div>
       </section>
 
-      <section id="pasteReviewModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="pasteReviewTitle">
+      <section id="pasteReviewModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="pasteReviewTitle">
         <div class="modal-body paste-review-body">
           <p class="eyebrow">PASTED DETAILS REVIEW</p><h2 id="pasteReviewTitle">Does this look correct?</h2>
           <div id="pasteReviewFields" class="paste-review-fields"></div>
@@ -501,7 +504,7 @@
         </div>
       </section>
 
-      <section id="dispensationFinalReview" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="finalReviewTitle">
+      <section id="dispensationFinalReview" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="finalReviewTitle">
         <div class="modal-body pdf-modal-body">
           <p class="eyebrow">FINAL REVIEW</p><h2 id="finalReviewTitle">Review before sending</h2>
           <div id="finalReviewFields" class="paste-review-fields"></div>
@@ -512,7 +515,7 @@
         </div>
       </section>
 
-      <section id="pendingSignatureNotice" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="pendingSignatureTitle">
+      <section id="pendingSignatureNotice" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="pendingSignatureTitle">
         <div class="modal-body narrow">
           <p class="eyebrow">OFFICER ACTION NEEDED</p><h2 id="pendingSignatureTitle">Dispensation awaiting review and signature</h2>
           <p id="pendingSignatureMessage">A dispensation assigned to you is ready for review.</p>
@@ -520,7 +523,7 @@
         </div>
       </section>
 
-      <section id="signModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="signTitle">
+      <section id="signModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="signTitle">
         <div class="modal-body">
           <button id="closeSign" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">ELECTRONIC SIGNATURE</p><h2 id="signTitle">Sign this document</h2>
@@ -539,7 +542,7 @@
         </div>
       </section>
 
-      <section id="pdfModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="pdfViewerTitle">
+      <section id="pdfModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="pdfViewerTitle">
         <div class="modal-body pdf-modal-body">
           <button id="closePdf" class="modal-close" type="button" aria-label="Close PDF">×</button>
           <p class="eyebrow">LODGE RECORD</p><h2 id="pdfViewerTitle">Document</h2>
@@ -548,7 +551,7 @@
         </div>
       </section>
 
-      <section id="signatureSetupModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="signatureSetupTitle">
+      <section id="signatureSetupModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="signatureSetupTitle">
         <div class="modal-body signature-setup">
           <button id="closeSignatureSetup" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">SIGNATURE PROFILE</p><h2 id="signatureSetupTitle">Create your signature</h2>
@@ -575,7 +578,7 @@
         </div>
       </section>
 
-      <section id="inviteModal" class="modal hidden" aria-modal="true" role="dialog" aria-labelledby="inviteTitle">
+      <section id="inviteModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="inviteTitle">
         <div class="modal-body narrow">
           <button id="closeInvite" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">OFFICER ACCESS</p><h2 id="inviteTitle">Send private invitation</h2>

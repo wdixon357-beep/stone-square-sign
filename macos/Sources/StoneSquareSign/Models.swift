@@ -151,9 +151,12 @@ enum OfficerSeatState { case none, pending, active
 }
 struct InviteResponse: Codable { let inviteUrl: String; let emailSent: Bool; let expiresAt: String }
 struct SignatureResponse: Codable { let message: String; let user: User }
-struct MessageResponse: Codable { let message: String }
+struct MessageResponse: Codable { let message: String; var notificationWarnings: [String]? = nil }
 struct EmptyResponse: Codable { let ok: Bool }
-struct UploadResponse: Codable { let document: UploadedDocument }
+struct UploadResponse: Codable {
+    let document: UploadedDocument
+    var notificationWarnings: [String]? = nil
+}
 struct UploadedDocument: Codable { let id: String }
 struct APIError: Codable { let error: String }
 struct VersionResponse: Codable { let version: String }
@@ -409,6 +412,12 @@ struct DispensationProposalDraft: Codable, Equatable {
 struct ProposalCreatedResponse: Decodable {
     struct Identifier: Decodable { let id: String }
     let proposal: Identifier
+    var notificationWarnings: [String]? = nil
+}
+
+struct ProposalDecisionResponse: Decodable {
+    var ok: Bool? = nil
+    var notificationWarnings: [String]? = nil
 }
 
 struct ProposalsResponse: Codable { let proposals: [WardenProposal] }

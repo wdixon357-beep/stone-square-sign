@@ -38,7 +38,7 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
 @MainActor final class TreasuryWorkspace: ObservableObject {
     @Published var records: [TreasuryRecord] = []; @Published var selected: TreasuryRecord?; @Published var draft: TreasuryDraft?
     @Published var uploadIntent = "save"
-    @Published var source = ""; @Published var files: [URL] = []; @Published var message = ""; @Published var busy = false
+    @Published var source = ""; @Published var files: [URL] = []; @Published var messageIsWarning = false; @Published var message = "" { didSet { messageIsWarning = false } }; @Published var busy = false
     @Published var pdf: Data?; @Published var previewMessage = ""; @Published var dirty = false
     @Published var preparers: [TreasuryPreparer] = []; @Published var selectedPreparer = 0
     @Published var originalText = ""; @Published var sourceFiles: [TreasurySourceFile] = []; @Published var accessUsers: [TreasuryAccessUser] = []
@@ -83,7 +83,11 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
         guard owner, !serviceUpdateRequired else {return};do{accessUsers=try JSONDecoder().decode(TreasuryAccessPayload.self,from:await transport.request("/api/treasury/access")).users}catch{message=error.localizedDescription}
     }
     func setUploadAccess(_ user: TreasuryAccessUser) async {
-        do{_=try await transport.request("/api/treasury/access/\(user.id)",method:"PUT",body:JSONSerialization.data(withJSONObject:["enabled":!user.uploadEnabled]));await loadAccess()}catch{message=error.localizedDescription}
+        do {
+            _ = try await transport.request("/api/treasury/access/\(user.id)", method: "PUT", body: JSONSerialization.data(withJSONObject: ["enabled": !user.uploadEnabled]))
+            await loadAccess()
+            message = user.uploadEnabled ? "Bank record upload access removed for \(user.name)." : "Bank record upload access enabled for \(user.name)."
+        } catch { message = error.localizedDescription }
     }
     func close() { previewTask?.cancel(); generation += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
     func createBlank() async {
@@ -146,8 +150,8 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
         guard let selected else { return }
         do {
             let data = try await transport.request("/api/treasury/\(selected.id)/\(action)", method:"POST", body:JSONSerialization.data(withJSONObject:["revision":selected.revision]))
-            let payload = try JSONDecoder().decode(TreasuryPayload.self, from:data); open(payload.report); await refresh(); message = (["Report updated."] + (payload.notificationWarnings ?? [])).joined(separator:" ")
-        } catch { message = error.localizedDescription }
+            let payload = try JSONDecoder().decode(TreasuryPayload.self, from:data); open(payload.report); await refresh(); message = (["Report updated."] + (payload.notificationWarnings ?? [])).joined(separator:" "); messageIsWarning = payload.notificationWarnings?.isEmpty == false
+        } catch { message = error.localizedDescription; messageIsWarning = false }
     }
     func remove(_ record: TreasuryRecord) async { do { _ = try await transport.request("/api/treasury/\(record.id)",method:"DELETE"); await refresh(); message = "Unsigned draft deleted." } catch { message = error.localizedDescription } }
     func preview() {
@@ -172,7 +176,16 @@ struct TreasuryView: View {
     @State private var editorSection = 0
     @State private var confirmReorganize = false
     @State private var readonlyReport: TreasuryRecord?
+    @State private var pendingWorkflowAction: String?
+    @State private var pendingAccessUser: TreasuryAccessUser?
+    @State private var confirmingAssignment = false
     var editable: Bool { guard model.user?.can("treasury.prepare") == true, let r = workspace.selected else { return false }; return r.status == "draft" && (r.preparerUserId == model.user?.id || model.user?.role == "owner") }
+    var canFinalize: Bool {
+        guard editable, let draft = workspace.draft else { return false }
+        return draft.sourceReviewed && draft.fundsReviewed && draft.obligationsReviewed
+            && draft.accounts.allSatisfy(\.activityComplete)
+            && workspace.pdf != nil && workspace.previewMessage == "Preview matches the current fields."
+    }
     func text(_ path: WritableKeyPath<TreasuryDraft,String>) -> Binding<String> { Binding(get:{workspace.draft?[keyPath:path] ?? ""},set:{workspace.draft?[keyPath:path]=$0}) }
     func flag(_ path: WritableKeyPath<TreasuryDraft,Bool>) -> Binding<Bool> { Binding(get:{workspace.draft?[keyPath:path] ?? false},set:{workspace.draft?[keyPath:path]=$0}) }
     var body: some View {
@@ -186,7 +199,12 @@ struct TreasuryView: View {
                     Button("Check again") { Task { await workspace.refresh(); if !workspace.serviceUpdateRequired { workspace.message = ""; await workspace.loadAccess() } } }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if workspace.draft == nil { sourceView } else { editor }
-            if !workspace.message.isEmpty { Text(workspace.message).font(.callout).padding(14) }
+            if !workspace.message.isEmpty {
+                Group {
+                    if workspace.messageIsWarning { Label(workspace.message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                    else { Text(workspace.message) }
+                }.font(.callout).padding(14)
+            }
         }.background(Color(nsColor:.windowBackgroundColor)).disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh(); await workspace.loadAccess() }
         .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
@@ -197,6 +215,37 @@ struct TreasuryView: View {
             Button("Reorganize original source") { Task { await workspace.reorganize() } }
             Button("Keep editing", role: .cancel) {}
         } message: { Text("This replaces your unsaved entries with a new draft from the original banking records. Review the result before saving.") }
+        .alert(pendingWorkflowAction == "preparer-attest" ? "Sign and finalize this Treasurer Report?" : "Record this report as distributed?", isPresented: Binding(
+            get: { pendingWorkflowAction != nil },
+            set: { if !$0 { pendingWorkflowAction = nil } }
+        )) {
+            Button(pendingWorkflowAction == "preparer-attest" ? "Sign and finalize" : "Record distribution") {
+                let action = pendingWorkflowAction
+                pendingWorkflowAction = nil
+                if let action { Task { await workspace.action(action) } }
+            }
+            Button("Cancel", role: .cancel) { pendingWorkflowAction = nil }
+        } message: {
+            Text(pendingWorkflowAction == "preparer-attest"
+                 ? "This saves the current entries and applies the preparing officer's attestation to the final report."
+                 : "Use this only after the finalized report has been distributed to the Lodge.")
+        }
+        .alert(item: $pendingAccessUser) { user in
+            Alert(
+                title: Text(user.uploadEnabled ? "Remove bank record upload access?" : "Allow bank record uploads?"),
+                message: Text(user.uploadEnabled
+                    ? "\(user.name) will no longer be able to supply banking records for a Treasurer Report."
+                    : "\(user.name) will be able to upload banking records for a Treasurer Report. This does not grant bank login or report editing access."),
+                primaryButton: .default(Text(user.uploadEnabled ? "Remove access" : "Allow uploads")) { Task { await workspace.setUploadAccess(user) } },
+                secondaryButton: .cancel()
+            )
+        }
+        .alert("Assign this Treasurer Report?", isPresented: $confirmingAssignment) {
+            Button("Assign report") { Task { await workspace.assign() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The selected officer will receive the source records and prefilled report for completion.")
+        }
     }
     var sourceView: some View {
         Form {
@@ -217,9 +266,9 @@ struct TreasuryView: View {
                 Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent)
             }.padding(12) } }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
-                ForEach(workspace.accessUsers.filter { !$0.canPrepare }) { user in HStack { Text(user.name); Spacer(); Button(user.uploadEnabled ? "Remove upload access" : "Allow bank record uploads") { Task { await workspace.setUploadAccess(user) } } } }
+                ForEach(workspace.accessUsers.filter { !$0.canPrepare }) { user in HStack { Text(user.name); Spacer(); Button(user.uploadEnabled ? "Remove upload access" : "Allow bank record uploads") { pendingAccessUser = user } } }
             } }
-            ForEach(workspace.records) { record in HStack { VStack(alignment:.leading) { Text(record.draft.periodEnd.isEmpty ? "Reporting date needs review" : record.draft.periodEnd).font(.headline);Text("\(record.preparerUserId == model.user?.id ? "Assigned to you" : record.createdBy.isEmpty ? "Available for a preparer" : record.createdBy) · Uploaded by \(record.uploadedBy) · \((record.status == "awaiting_preparer" ? "Banking information saved for a report" : record.status.replacingOccurrences(of:"_",with:" ")))").font(.caption) }; Spacer();if record.canOpen(for: model.user) { Button("Review") { if model.user?.can("treasury.prepare") != true && ["ready_for_distribution", "distributed"].contains(record.status) { readonlyReport = record } else { workspace.open(record) } } }; if model.user?.can("treasury.prepare") == true && ["draft","awaiting_preparer"].contains(record.status) && (model.user?.role == "owner" || record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id) { Button("Delete",role:.destructive) { deleting=record } } }.padding(14).background(.background,in:RoundedRectangle(cornerRadius:12)) }
+            ForEach(workspace.records) { record in HStack { VStack(alignment:.leading) { Text(record.draft.periodEnd.isEmpty ? "Reporting date needs review" : LodgeCalendarDates.displayDate(record.draft.periodEnd)).font(.headline);Text("\(record.preparerUserId == model.user?.id ? "Assigned to you" : record.createdBy.isEmpty ? "Available for a preparer" : record.createdBy) · Uploaded by \(record.uploadedBy) · \((record.status == "awaiting_preparer" ? "Banking information saved for a report" : record.status.replacingOccurrences(of:"_",with:" ")))").font(.caption) }; Spacer();if record.canOpen(for: model.user) { Button("Review") { if model.user?.can("treasury.prepare") != true && ["ready_for_distribution", "distributed"].contains(record.status) { readonlyReport = record } else { workspace.open(record) } } }; if model.user?.can("treasury.prepare") == true && ["draft","awaiting_preparer"].contains(record.status) && (model.user?.role == "owner" || record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id) { Button("Delete",role:.destructive) { deleting=record } } }.padding(14).background(.background,in:RoundedRectangle(cornerRadius:12)) }
         } }.formStyle(.grouped)
     }
     var editor: some View {
@@ -273,7 +322,7 @@ struct TreasuryView: View {
             if record.status == "awaiting_preparer" {
                 Text("Banking information saved").font(.headline)
                 Text("These records are available for an authorized preparer. No one has been assigned automatically.").font(.callout)
-                if model.user?.can("treasury.prepare") == true { Button("I’m completing this report") { workspace.selectedPreparer=model.user?.id ?? 0;Task {await workspace.assign()} }.buttonStyle(.borderedProminent) }
+                if model.user?.can("treasury.prepare") == true { Button("I’m completing this report") { workspace.selectedPreparer = model.user?.id ?? 0; confirmingAssignment = true }.buttonStyle(.borderedProminent) }
             } else {Text("Preparing officer: \(record.createdBy)").font(.headline)}
             if ["draft","awaiting_preparer"].contains(record.status) && (record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id || model.user?.role == "owner") {
                 DisclosureGroup(record.status == "awaiting_preparer" ? "Assign a preparing officer (optional)" : "Change preparing officer") { assignmentPicker }
@@ -283,7 +332,7 @@ struct TreasuryView: View {
     var assignmentPicker: some View { VStack(alignment:.leading,spacing:12) {
         Text("Select yourself to continue, or hand the records and prefilled draft to another officer.").font(.callout)
         Picker("Preparing officer",selection:$workspace.selectedPreparer) { Text("Choose an officer").tag(0);ForEach(workspace.preparers) { person in Text(person.name + (person.id == model.user?.id ? " (I will prepare it)" : "")).tag(person.id) } }
-        Button("Continue with selected officer") { Task { await workspace.assign() } }.buttonStyle(.borderedProminent).disabled(workspace.selectedPreparer == 0)
+        Button("Continue with selected officer") { confirmingAssignment = true }.buttonStyle(.borderedProminent).disabled(workspace.selectedPreparer == 0)
     } }
     var metadata: some View { GroupBox("Report details") { VStack { TextField("Period begins (YYYY-MM-DD)",text:text(\.periodStart));TextField("Period ends (YYYY-MM-DD)",text:text(\.periodEnd));TextField("Date presented (YYYY-MM-DD)",text:text(\.presentedOn));TextField("Bank or credit union",text:text(\.bankName)) }.padding(10) } }
     var importReview: some View { DisclosureGroup("Source and import review") { Text(workspace.draft?.sourceNames.joined(separator:", ") ?? "");Text(workspace.draft?.extractionNotes.joined(separator:"\n") ?? "");Text("Review these lines that did not map to a financial field:").font(.caption);Text(workspace.draft?.unmappedLines.joined(separator:"\n") ?? "").font(.caption).textSelection(.enabled) } }
@@ -332,9 +381,17 @@ struct TreasuryView: View {
     var workflow: some View { VStack(alignment:.leading,spacing:10) {
         if editable { Button("Save corrections") { Task { _ = await workspace.save() } } }
         if let r=workspace.selected {
-            if model.user?.role == "owner" && r.status == "draft" && r.preparerUserId != model.user?.id {Button("Prepare this report as WM"){workspace.selectedPreparer=model.user?.id ?? 0;Task{await workspace.assign()}}.buttonStyle(.borderedProminent)}
-            if model.user?.can("treasury.prepare") == true && r.status == "draft" && r.preparerUserId == model.user?.id { Button("Sign and finalize report") { Task { await workspace.action("preparer-attest") } }.buttonStyle(.borderedProminent) }
-            if r.status == "ready_for_distribution" && ["owner","secretary"].contains(model.user?.role ?? "") { Button("Mark as distributed") { Task { await workspace.action("mark-distributed") } } }
+            if model.user?.role == "owner" && r.status == "draft" && r.preparerUserId != model.user?.id {Button("Prepare this report as WM"){workspace.selectedPreparer = model.user?.id ?? 0; confirmingAssignment = true}.buttonStyle(.borderedProminent)}
+            if model.user?.can("treasury.prepare") == true && r.status == "draft" && r.preparerUserId == model.user?.id {
+                Button("Sign and finalize report") { pendingWorkflowAction = "preparer-attest" }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canFinalize)
+                if !canFinalize {
+                    Text("Confirm the source, funds, obligations and each account's activity, then wait for the current PDF preview before finalizing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if r.status == "ready_for_distribution" && ["owner","secretary"].contains(model.user?.role ?? "") { Button("Mark as distributed") { pendingWorkflowAction = "mark-distributed" } }
         }
     } }
 }

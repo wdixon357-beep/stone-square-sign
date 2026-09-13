@@ -9,7 +9,13 @@ private func activityDate(_ value:String?) -> String {
  guard let value else{return "Not recorded"};let parser=ISO8601DateFormatter();parser.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
  guard let date=parser.date(from:value) else{return value};let formatter=DateFormatter();formatter.timeZone=TimeZone(identifier:"America/New_York");formatter.dateFormat="EEE, MMM d, yyyy h:mm a z";return formatter.string(from:date)
 }
-private func activeDuration(_ seconds:Int)->String {seconds<60 ? "\(seconds) sec" : "\(seconds/60) min \(seconds%60) sec"}
+private func activeDuration(_ seconds:Int)->String {
+ let safe = max(0, seconds)
+ if safe < 60 { return "\(safe) sec" }
+ if safe < 3600 { return "\(safe / 60) min \(safe % 60) sec" }
+ let hours = safe / 3600, minutes = (safe % 3600) / 60
+ return minutes == 0 ? "\(hours) hr" : "\(hours) hr \(minutes) min"
+}
 
 @MainActor final class ActivityPresence: ObservableObject {
  private weak var model:AppModel?;private var timer:Timer?;private var eventMonitor:Any?;private var lastInteraction=Date();private var busy=false

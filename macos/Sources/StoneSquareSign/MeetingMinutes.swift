@@ -40,7 +40,8 @@ final class MinutesWorkspace: ObservableObject {
     @Published var sourceType = "auto"
     @Published var fileURL: URL?
     @Published var pdf: Data?
-    @Published var message = ""
+    @Published var messageIsWarning = false
+    @Published var message = "" { didSet { messageIsWarning = false } }
     @Published var previewMessage = ""
     @Published var busy = false
     @Published var dirty = false
@@ -83,7 +84,7 @@ final class MinutesWorkspace: ObservableObject {
     func refreshGenerationStatus() async { generationStatus = await GenerationStatus.load(using: self) }
     func open(_ record: MinutesRecord) {
         previewTask?.cancel(); revision += 1
-        selected = record; draft = record.draft; pdf = nil; message = ""; dirty = false
+        selected = record; draft = record.draft; pdf = nil; message = ""; messageIsWarning = false; dirty = false
         Task { await refreshGenerationStatus() }
         updatePreview()
     }
@@ -145,7 +146,8 @@ final class MinutesWorkspace: ObservableObject {
             let data = try await request("/api/minutes/\(record.id)/\(action)", method: "POST", body: JSONEncoder().encode(body))
             let payload = try JSONDecoder().decode(MinutesPayload.self, from: data)
             await refresh(); open(payload.minutes); message = (["Record updated."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
-        } catch { message = error.localizedDescription }
+            messageIsWarning = payload.notificationWarnings?.isEmpty == false
+        } catch { message = error.localizedDescription; messageIsWarning = false }
     }
     func updatePreview() {
         previewTask?.cancel(); revision += 1
@@ -222,7 +224,12 @@ struct MeetingMinutesView: View {
                 } else { Button("Refresh", systemImage: "arrow.clockwise") { Task { await workspace.refresh() } } }
             }
             if workspace.selected != nil, workspace.draft != nil { editor } else { recordList }
-            if !workspace.message.isEmpty { Text(workspace.message).font(.callout).textSelection(.enabled).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar) }
+            if !workspace.message.isEmpty {
+                Group {
+                    if workspace.messageIsWarning { Label(workspace.message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                    else { Text(workspace.message) }
+                }.font(.callout).textSelection(.enabled).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar)
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .opacity(appeared ? 1 : 0)

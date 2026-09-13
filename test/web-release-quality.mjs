@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
+const app = read('../public/app.js');
+const html = read('../public/index.html');
+const styles = read('../public/styles.css');
+const reportAssistant = read('../public/report-assistant.js');
+
+assert.match(app, /credentials:\s*'same-origin'/, 'dashboard API requests must carry the secure web session cookie');
+assert.match(app, /'X-Stone-Square-Client':\s*'web'/, 'dashboard must identify the web client');
+assert.doesNotMatch(app, /localStorage\.setItem\(['"]stone-square-sign-token/, 'new bearer tokens must never be stored by the website');
+assert.match(app, /localStorage\.removeItem\('stone-square-sign-token'\)/, 'one-time legacy bearer migration must remove local storage');
+assert.doesNotMatch(reportAssistant, /localStorage|Authorization/, 'report assistant must use the secure cookie session');
+assert.match(reportAssistant, /credentials:'same-origin'/, 'report assistant API requests must carry the secure cookie session');
+
+assert.match(app, /\/api\/reports\/handoff/, 'Report Generator must use a short-lived handoff');
+assert.match(app, /Number\(handoff\?\.expiresAt\) \* 1000/, 'handoff expiry must interpret Unix seconds correctly');
+assert.match(app, /event\.origin !== REPORT_GENERATOR_ORIGIN/, 'report handoff must verify the sender origin');
+assert.match(app, /event\.source !== connection\.target/, 'report handoff must verify the exact iframe or window');
+assert.match(app, /kind: 'stone-square-report-assertion'/, 'assertion must be delivered by postMessage');
+assert.match(app, /refreshPromise/, 'report access renewal must combine concurrent ready events');
+assert.match(app, /renewReportHandoff/, 'the trusted report target must be able to renew without losing its draft');
+assert.doesNotMatch(html, /request\.stonesquare22pha\.org/, 'the website must not expose a static Report Generator URL');
+assert.doesNotMatch(app, /[?&]assertion=/, 'the assertion must not be placed in a URL');
+
+assert.match(app, /\/api\/auth\/sessions/, 'My Settings must load signed-in devices');
+assert.match(app, /\/api\/auth\/sessions\/revoke-others/, 'My Settings must support ending other sessions');
+assert.match(app, /notificationWarnings/, 'notification delivery warnings must remain visible after successful writes');
+assert.match(app, /beforeunload/, 'unfinished long-form work must be protected on reload');
+assert.match(app, /sessionStorage/, 'non-sensitive drafts must recover within the current tab');
+assert.doesNotMatch(read('../public/treasury.js'), /sessionStorage|localStorage/, 'banking data must not be retained in browser storage');
+
+const modalTags = html.match(/<section[^>]+class="modal[^>]*>/g) || [];
+assert.ok(modalTags.length >= 8, 'expected dashboard modals were not found');
+modalTags.forEach(tag => assert.match(tag, /aria-hidden="true"/, `modal must start hidden from assistive technology: ${tag}`));
+assert.match(app, /modalFocusOrigins/, 'modal focus must return to its opener');
+assert.match(app, /event\.key !== 'Tab'/, 'keyboard focus must stay inside an open modal');
+assert.match(styles, /:focus-visible/, 'keyboard focus must be visible');
+assert.match(styles, /prefers-reduced-motion:\s*reduce/, 'motion must respect the operating system preference');
+assert.match(styles, /@media \(max-width: 760px\)[\s\S]*overflow-x:\s*auto/, 'phone navigation must remain reachable without page overflow');
+assert.match(styles, /min-height:\s*44px/, 'touch controls must include a 44px target treatment');
+
+console.log('PASS: secure cookie auth, short-lived postMessage handoff, device controls, draft safeguards, notification truth, modal accessibility, responsive navigation and reduced motion.');

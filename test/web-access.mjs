@@ -39,7 +39,9 @@ assert.equal(visibility('officer', ['minutes.prepare'])['.preparer-only'], true)
 assert.match(html, /id="proposalsNav"[^>]+>[\s\S]*?My Dispensation Proposals<\/button>/);
 assert.match(html, /<h2>My Dispensation Proposals<\/h2>/);
 assert.match(html, /id="proposalReviewNav" class="nav-item owner-only"/);
-assert.match(html, /class="document-menu-card candidate-only" href="https:\/\/tracker.stonesquare22pha.org/);
+assert.match(html, /id="candidateMenuCard" class="document-menu-card candidate-only" type="button"/);
+assert.match(app, /api\/tracker\/handoff/);
+assert.doesNotMatch(html, /href="https:\/\/tracker\.stonesquare22pha\.org/);
 const sensitive = { configured: true, remainingDollars: 4.15, model: 'gpt-5.6-terra', cost: 0.85 };
 for (const role of [undefined, 'warden', 'member', 'secretary', 'assistant_secretary', 'viewer', 'treasurer', 'assistant_treasurer', 'treasury_preparer']) {
   for (const payload of [sensitive, { configured: false }, null]) {

@@ -192,12 +192,17 @@ final class AppModel: ObservableObject {
     @Published var duesError: String?
     @Published var biometricLoginEnabled: Bool
     @Published var biometricLoginAvailable: Bool
-    @Published var message = ""
+    @Published var messageIsWarning = false
+    @Published var message = "" { didSet { messageIsWarning = false } }
     @Published var isError = false
     @Published var requestedSection: AppSection?
+    #if DEBUG
     @Published var serverAddress: String {
         didSet { UserDefaults.standard.set(serverAddress, forKey: "server-address") }
     }
+    #else
+    @Published private(set) var serverAddress = defaultServerAddress
+    #endif
 
     private let session: URLSession
     private var token: String?
@@ -213,7 +218,9 @@ final class AppModel: ObservableObject {
 
     init(session: URLSession = .shared, savedSessionToken: String? = TokenStore.load()) {
         self.session = session
+        #if DEBUG
         serverAddress = UserDefaults.standard.string(forKey: "server-address") ?? defaultServerAddress
+        #endif
         biometricLoginEnabled = UserDefaults.standard.bool(forKey: "biometric-login-enabled")
         biometricLoginAvailable = BiometricCredentialStore.isAvailable
         /* Always restore the session. Throwing it away when Touch ID is on meant every quit
@@ -225,9 +232,13 @@ final class AppModel: ObservableObject {
     }
 
     var baseURL: URL? {
+        #if DEBUG
         let cleaned = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return URL(string: cleaned)
+        #else
+        return URL(string: defaultServerAddress)
+        #endif
     }
 
     var webSessionToken: String? { token }
@@ -507,13 +518,14 @@ final class AppModel: ObservableObject {
             add("--\(boundary)\r\nContent-Disposition: form-data; name=\"document\"; filename=\"\(url.lastPathComponent)\"\r\nContent-Type: application/pdf\r\n\r\n")
             body.append(fileData)
             add("\r\n--\(boundary)--\r\n")
-            let _: UploadResponse = try await self.request(
+            let response: UploadResponse = try await self.request(
                 "/api/documents",
                 method: "POST",
                 body: body,
                 contentType: "multipart/form-data; boundary=\(boundary)"
             )
-            self.message = "Dispensation added to the live queue."
+            self.message = (["Dispensation added to the live queue."] + (response.notificationWarnings ?? [])).joined(separator: " ")
+            self.messageIsWarning = response.notificationWarnings?.isEmpty == false
             await self.refresh(silent: true)
         }
     }
@@ -531,7 +543,8 @@ final class AppModel: ObservableObject {
         await perform {
             let response: MessageResponse = try await self.request(
                 "/api/documents/\(documentId)/offer-to-both", method: "POST", body: Data("{}".utf8))
-            self.message = response.message
+            self.message = ([response.message] + (response.notificationWarnings ?? [])).joined(separator: " ")
+            self.messageIsWarning = response.notificationWarnings?.isEmpty == false
             await self.refresh(silent: true)
             success = true
         }
@@ -550,7 +563,8 @@ final class AppModel: ObservableObject {
             let body = try JSONSerialization.data(withJSONObject: ["resend": resend])
             let response: MessageResponse = try await self.request(
                 "/api/documents/\(documentId)/submit", method: "POST", body: body)
-            self.message = response.message
+            self.message = ([response.message] + (response.notificationWarnings ?? [])).joined(separator: " ")
+            self.messageIsWarning = response.notificationWarnings?.isEmpty == false
             await self.refresh(silent: true)
             success = true
         }
@@ -590,8 +604,9 @@ final class AppModel: ObservableObject {
                 "worshipfulMasterAddress": worshipfulMasterAddress,
                 "personalInfoConfirmed": personalInfoConfirmed,
             ])
-            let _: UploadResponse = try await self.request("/api/dispensations", method: "POST", body: body)
-            self.message = "Dispensation created from the official template and added to the queue."
+            let response: UploadResponse = try await self.request("/api/dispensations", method: "POST", body: body)
+            self.message = (["Dispensation created from the official template and added to the queue."] + (response.notificationWarnings ?? [])).joined(separator: " ")
+            self.messageIsWarning = response.notificationWarnings?.isEmpty == false
             await self.refresh(silent: true)
             success = true
         }
@@ -701,7 +716,7 @@ final class AppModel: ObservableObject {
     }
 
     func saveCandidateRecord(_ record: CandidateRecord, isNew: Bool) async -> Bool {
-        guard user?.role == "owner" else {
+        guard user?.can("candidates.edit") == true else {
             message = "Candidate Tracker is read only for this account."
             isError = true
             return false
@@ -771,6 +786,7 @@ final class AppModel: ObservableObject {
             ])
             result = try await self.request("/api/officers/invite", method: "POST", body: body)
             self.message = result?.emailSent == true ? "Invitation emailed." : "Invitation created. Copy the private link."
+            self.messageIsWarning = result?.emailSent != true
         }
         return result
     }
@@ -960,11 +976,14 @@ final class AppModel: ObservableObject {
             proposalsError = "Enter the event date and request details before submitting."
             return false
         }
-        proposalsLoading = true; proposalsError = ""
+        proposalsLoading = true; proposalsError = ""; messageIsWarning = false
         defer { proposalsLoading = false }
         do {
-            let _: ProposalCreatedResponse = try await request("/api/proposals", method: "POST", body: JSONEncoder().encode(draft))
+            let response: ProposalCreatedResponse = try await request("/api/proposals", method: "POST", body: JSONEncoder().encode(draft))
             await loadProposals()
+            message = (["Proposal submitted to the Worshipful Master for review."] + (response.notificationWarnings ?? [])).joined(separator: " ")
+            isError = false
+            messageIsWarning = response.notificationWarnings?.isEmpty == false
             return true
         } catch {
             proposalsError = error.localizedDescription
@@ -975,14 +994,18 @@ final class AppModel: ObservableObject {
     /* approve | decline | changes. The Master may correct any field before approving; the
      * server creates the real dispensation through the same path his own builder uses. */
     func decideProposal(id: String, decision: String, wmNote: String) async -> Bool {
+        messageIsWarning = false
         do {
             let body = try JSONSerialization.data(withJSONObject: ["decision": decision, "wmNote": wmNote])
-            let _: EmptyResponse = try await request(
+            let response: ProposalDecisionResponse = try await request(
                 "/api/proposals/\(id)/decision",
                 method: "POST",
                 body: body
             )
             await loadProposals()
+            message = (["Proposal decision recorded."] + (response.notificationWarnings ?? [])).joined(separator: " ")
+            isError = false
+            messageIsWarning = response.notificationWarnings?.isEmpty == false
             return true
         } catch {
             proposalsError = (error as? ClientError).map { "\($0)" } ?? error.localizedDescription
@@ -1029,6 +1052,7 @@ final class AppModel: ObservableObject {
         isBusy = true
         message = ""
         isError = false
+        messageIsWarning = false
         defer { isBusy = false }
         do { try await work() } catch { show(error) }
     }
@@ -1036,5 +1060,6 @@ final class AppModel: ObservableObject {
     private func show(_ error: Error) {
         message = error.localizedDescription
         isError = true
+        messageIsWarning = false
     }
 }

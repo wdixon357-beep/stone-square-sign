@@ -35,10 +35,12 @@ else
   # Ad hoc signing produces a different signature on every build, so macOS stops recognising the
   # app that owns its Keychain items and starts demanding the login keychain password. Point
   # LOCAL_SIGNING_IDENTITY at a self signed code signing certificate and the signature stays
-  # constant across rebuilds, which is what keeps Touch ID working. Falls back to ad hoc.
-  if [[ -n "${LOCAL_SIGNING_IDENTITY:-}" ]] \
-     && security find-identity -v -p codesigning | grep -Fq "\"$LOCAL_SIGNING_IDENTITY\""; then
-    SIGNING_IDENTITY="$LOCAL_SIGNING_IDENTITY"
+  # constant across rebuilds, which is what keeps Touch ID working. When no override is supplied,
+  # use this Mac's Apple Development identity if one is available; otherwise fall back to ad hoc.
+  LOCAL_BUILD_IDENTITY="${LOCAL_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)}"
+  if [[ -n "$LOCAL_BUILD_IDENTITY" ]] \
+     && security find-identity -v -p codesigning | grep -Fq "\"$LOCAL_BUILD_IDENTITY\""; then
+    SIGNING_IDENTITY="$LOCAL_BUILD_IDENTITY"
   else
     if [[ -n "${LOCAL_SIGNING_IDENTITY:-}" ]]; then
       print -u2 "LOCAL_SIGNING_IDENTITY not found in the keychain, falling back to ad hoc: $LOCAL_SIGNING_IDENTITY"

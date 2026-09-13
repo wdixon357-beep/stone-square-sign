@@ -30,7 +30,8 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
     @Published var requests: [BuildingRequest] = []
     @Published var canDecide = false
     @Published var busy = false
-    @Published var message = ""
+    @Published var messageIsWarning = false
+    @Published var message = "" { didSet { messageIsWarning = false } }
     @discardableResult func load(using model: AppModel) async -> Bool {
         guard model.user?.can("building.view") == true else { requests = []; canDecide = false; return false }
         busy = true; defer { busy = false }
@@ -49,6 +50,7 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
             let result: BuildingDecisionResponse = try await model.request("/api/building/requests/\(routeID(request.id))/decision", method: "POST", body: body)
             if let index = requests.firstIndex(where: { $0.id == result.request.id }) { requests[index] = result.request }
             message = result.request.requesterNotified ? "Decision recorded and requester notified." : "Decision recorded. The requester notification has not been confirmed."
+            messageIsWarning = !result.request.requesterNotified
             return true
         } catch ClientError.conflict {
             let refreshed = await load(using: model)
@@ -81,7 +83,7 @@ struct BuildingRequestsView: View {
                     List(visible, selection: $selectedID) { request in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(request.organization).font(.headline)
-                            Text("\(request.date) · \(request.statusLabel)").font(.caption).foregroundStyle(.secondary)
+                            Text("\(LodgeCalendarDates.displayDate(request.date)) · \(request.statusLabel)").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag(request.id)
                     }
                 }.frame(minWidth: 230, idealWidth: 310, maxWidth: 400)
@@ -89,8 +91,8 @@ struct BuildingRequestsView: View {
                     Form {
                         Section(request.organization) {
                             LabeledContent("Status", value: request.statusLabel)
-                            LabeledContent("Date", value: request.date)
-                            LabeledContent("Time", value: [request.start, request.end].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " to "))
+                            LabeledContent("Date", value: LodgeCalendarDates.displayDate(request.date))
+                            LabeledContent("Time", value: [LodgeCalendarDates.displayTime(request.start), LodgeCalendarDates.displayTime(request.end)].filter { !$0.isEmpty }.joined(separator: " to "))
                             LabeledContent("Requested spaces", value: request.spaces.joined(separator: ", "))
                             LabeledContent("Contact", value: [request.contactName, request.contact].filter { !$0.isEmpty }.joined(separator: " · "))
                             Text(request.description).textSelection(.enabled)
@@ -109,7 +111,12 @@ struct BuildingRequestsView: View {
             }.disabled(workspace.busy)
             } else { ContentUnavailableView("Request building use", systemImage: "building.2", description: Text("Use New Building Request to choose dates and spaces, check availability, and submit your request for review.")).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if workspace.busy { ProgressView().padding(8) }
-            if !workspace.message.isEmpty { Text(workspace.message).font(.callout).padding(12) }
+            if !workspace.message.isEmpty {
+                Group {
+                    if workspace.messageIsWarning { Label(workspace.message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                    else { Text(workspace.message) }
+                }.font(.callout).padding(12)
+            }
         }
         .task { await workspace.load(using: model) }
         .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
@@ -161,6 +168,19 @@ enum LodgeCalendarDates {
     static func key(_ date: Date) -> String { let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = calendar.timeZone; formatter.dateFormat = "yyyy-MM-dd"; return formatter.string(from: date) }
     static func valid(_ value: String) -> Bool { let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = calendar.timeZone; formatter.dateFormat = "yyyy-MM-dd"; formatter.isLenient = false; guard value.count == 10, let date = formatter.date(from: value) else { return false }; return key(date) == value }
     static func range(_ date: Date) -> (String, String) { let interval = calendar.dateInterval(of: .month, for: date)!; return (key(interval.start), key(calendar.date(byAdding: .day, value: -1, to: interval.end)!)) }
+    static func displayDate(_ value: String) -> String {
+        let input = DateFormatter(); input.locale = Locale(identifier: "en_US_POSIX"); input.timeZone = calendar.timeZone; input.dateFormat = "yyyy-MM-dd"; input.isLenient = false
+        guard let date = input.date(from: value) else { return value }
+        let output = DateFormatter(); output.locale = Locale(identifier: "en_US"); output.timeZone = calendar.timeZone; output.dateFormat = "MMM d, yyyy"
+        return output.string(from: date)
+    }
+    static func displayTime(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "" }
+        let input = DateFormatter(); input.locale = Locale(identifier: "en_US_POSIX"); input.timeZone = calendar.timeZone; input.dateFormat = "HH:mm"; input.isLenient = false
+        guard let date = input.date(from: value) else { return value }
+        let output = DateFormatter(); output.locale = Locale(identifier: "en_US"); output.timeZone = calendar.timeZone; output.dateFormat = "h:mm a"
+        return output.string(from: date)
+    }
 }
 private struct CalendarMutationResponse: Decodable { let ok: Bool? }
 
@@ -244,15 +264,15 @@ struct LodgeCalendarView: View {
                 List(visible, selection: $selectedID) { event in
                     VStack(alignment: .leading, spacing: 5) {
                         Text(event.title).font(.headline)
-                        Text([event.startDate, event.timeLabel].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                        Text([LodgeCalendarDates.displayDate(event.startDate), event.allDay ? "All day" : [LodgeCalendarDates.displayTime(event.startTime), LodgeCalendarDates.displayTime(event.endTime)].filter { !$0.isEmpty }.joined(separator: " to ")].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                         Text(event.category.capitalized).font(.caption2).foregroundStyle(.secondary)
                     }.padding(.vertical, 6).tag(event.id)
                 }.frame(minWidth: 260, idealWidth: 350, maxWidth: 460)
                 if let event = selected {
                     Form {
                         Section(event.title) {
-                            LabeledContent("Starts", value: [event.startDate, event.startTime ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
-                            LabeledContent("Ends", value: [event.endDate, event.endTime ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+                            LabeledContent("Starts", value: [LodgeCalendarDates.displayDate(event.startDate), LodgeCalendarDates.displayTime(event.startTime)].filter { !$0.isEmpty }.joined(separator: " · "))
+                            LabeledContent("Ends", value: [LodgeCalendarDates.displayDate(event.endDate), LodgeCalendarDates.displayTime(event.endTime)].filter { !$0.isEmpty }.joined(separator: " · "))
                             if event.allDay { Text("All-day event") }
                             if !event.location.isEmpty { LabeledContent("Location", value: event.location) }
                             LabeledContent("Category", value: event.category.capitalized)
@@ -292,9 +312,13 @@ private struct LodgeCalendarEditor: View {
     let event: LodgeCalendarEvent?
     let visibleDate: Date
     @State private var draft: LodgeEventDraft
+    private let initialDraft: LodgeEventDraft
+    @State private var confirmingCancel = false
     init(workspace: LodgeCalendarWorkspace, event: LodgeCalendarEvent?, day: String, visibleDate: Date) {
         self.workspace = workspace; self.event = event; self.visibleDate = visibleDate
-        _draft = State(initialValue: event.map(LodgeEventDraft.init) ?? LodgeEventDraft(day: day))
+        let startingDraft = event.map(LodgeEventDraft.init) ?? LodgeEventDraft(day: day)
+        initialDraft = startingDraft
+        _draft = State(initialValue: startingDraft)
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -318,14 +342,21 @@ private struct LodgeCalendarEditor: View {
                 if !workspace.message.isEmpty { Text(workspace.message).font(.callout) }
             }.formStyle(.grouped).disabled(workspace.busy)
             HStack {
-                Button("Cancel", role: .cancel) { dismiss() }.disabled(workspace.busy)
+                Button("Cancel", role: .cancel) {
+                    if draft != initialDraft { confirmingCancel = true }
+                    else { dismiss() }
+                }.disabled(workspace.busy)
                 Spacer()
                 Button("Save event") { Task { if await workspace.save(draft, event: event, date: visibleDate, using: model) { dismiss() } } }
                     .buttonStyle(.borderedProminent).disabled(!draft.valid || workspace.busy)
             }.padding(18)
         }.frame(width: 650, height: 620)
-        .interactiveDismissDisabled(workspace.busy)
-        .updateDraftGuard(reason: "Finish or cancel your calendar event changes before updating.")
+        .interactiveDismissDisabled(workspace.busy || draft != initialDraft)
+        .updateDraftGuard(active: draft != initialDraft || workspace.busy, reason: "Finish or cancel your calendar event changes before updating.")
+        .alert("Discard calendar event changes?", isPresented: $confirmingCancel) {
+            Button("Discard changes", role: .destructive) { dismiss() }
+            Button("Keep editing", role: .cancel) {}
+        } message: { Text("The changes in this editor have not been saved.") }
     }
 }
 
@@ -399,7 +430,8 @@ struct BuildingSubmissionReceipt: Decodable {
 @MainActor final class NewBuildingRequestWorkspace: ObservableObject {
     @Published var draft = NewBuildingRequestDraft()
     @Published var busy = false
-    @Published var message = ""
+    @Published var messageIsWarning = false
+    @Published var message = "" { didSet { messageIsWarning = false } }
     @Published var availability: [BuildingBusyEntry] = []
     @Published var availabilityWarning = ""
     @Published var warningAcknowledged = false
@@ -442,7 +474,11 @@ struct BuildingSubmissionReceipt: Decodable {
             }
             let result: BuildingSubmissionReceipt = try await model.request("/api/building/requests", method: "POST", body: pendingBody)
             guard result.ok, !result.references.isEmpty else { throw ClientError.invalidResponse }
-            retryPending = false; pendingBody = nil; receipt = result; message = "Request submitted for review. This is not an approved reservation."
+            retryPending = false; pendingBody = nil; receipt = result
+            message = result.wmNotified
+                ? "Request submitted for review. This is not an approved reservation."
+                : "Request submitted for review, but notification to the Worshipful Master has not been confirmed."
+            messageIsWarning = !result.wmNotified
             return true
         } catch ClientError.rejected(let detail) { pendingBody = nil; retryPending = false; checkedKey = nil; message = detail; return false }
         catch ClientError.conflict(let detail) {
@@ -460,6 +496,7 @@ private struct NewBuildingRequestView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var workspace: NewBuildingRequestWorkspace
     @State private var confirmingSubmit = false
+    @State private var confirmingClose = false
     var body: some View {
         VStack(spacing: 0) {
             Text("New Building Request").font(.title2.weight(.semibold)).padding(20)
@@ -468,7 +505,11 @@ private struct NewBuildingRequestView: View {
                     Label("Submitted for review", systemImage: "checkmark.circle").font(.title3)
                     Text("Your request is pending. Building use has not been approved.")
                     ForEach(receipt.references, id: \.self) { Text("Reference: \($0)").textSelection(.enabled) }
-                    Text(receipt.wmNotified ? "The Worshipful Master was notified." : "Notification to the Worshipful Master has not been confirmed.").font(.callout)
+                    if receipt.wmNotified {
+                        Label("The Worshipful Master was notified.", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Label("Notification to the Worshipful Master has not been confirmed.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
                     HStack { Button("Start another request") { workspace.startNew() }; Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent) }
                 }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
@@ -513,7 +554,7 @@ private struct NewBuildingRequestView: View {
                             if workspace.conflicts.isEmpty && workspace.availabilityWarning.isEmpty { Text("No known overlapping bookings were found. The request still requires approval.").font(.callout) }
                             else if !workspace.conflicts.isEmpty {
                                 Text("Choose another date or time. These bookings overlap your request:").foregroundStyle(.red)
-                                ForEach(Array(workspace.conflicts.enumerated()), id: \.offset) { _, entry in Text("\(entry.date) · \(entry.label) · \(entry.allDay == true ? "All day" : [entry.start ?? "", entry.end ?? ""].joined(separator: " to "))") }
+                                ForEach(Array(workspace.conflicts.enumerated()), id: \.offset) { _, entry in Text("\(LodgeCalendarDates.displayDate(entry.date)) · \(entry.label) · \(entry.allDay == true ? "All day" : [LodgeCalendarDates.displayTime(entry.start), LodgeCalendarDates.displayTime(entry.end)].filter { !$0.isEmpty }.joined(separator: " to "))") }
                             }
                             if !workspace.availabilityWarning.isEmpty {
                                 Text(workspace.availabilityWarning).foregroundStyle(.orange)
@@ -525,7 +566,10 @@ private struct NewBuildingRequestView: View {
                     if !workspace.message.isEmpty { Text(workspace.message).foregroundStyle(.red) }
                 }.formStyle(.grouped).disabled(workspace.busy || workspace.retryPending)
                 HStack {
-                    Button("Close") { dismiss() }.disabled(workspace.busy)
+                    Button("Close") {
+                        if workspace.hasUnsubmittedChanges { confirmingClose = true }
+                        else { dismiss() }
+                    }.disabled(workspace.busy)
                     Spacer()
                     if workspace.busy { ProgressView().controlSize(.small) }
                     Button(workspace.retryPending ? "Retry same request" : "Submit request") { confirmingSubmit = true }.buttonStyle(.borderedProminent).disabled(!workspace.canSubmit)
@@ -534,10 +578,14 @@ private struct NewBuildingRequestView: View {
         }.frame(width: 790, height: 760)
         .environment(\.timeZone, LodgeCalendarDates.calendar.timeZone)
         .environment(\.calendar, LodgeCalendarDates.calendar)
-        .interactiveDismissDisabled(workspace.busy)
+        .interactiveDismissDisabled(workspace.busy || workspace.hasUnsubmittedChanges)
         .alert("Submit this building request?", isPresented: $confirmingSubmit) {
             Button("Submit request") { Task { _ = await workspace.submit(using: model) } }
             Button("Cancel", role: .cancel) {}
         } message: { Text(workspace.availabilityWarning.isEmpty ? "This sends your requested dates and details for review and sends the request notifications. It does not approve building use." : "Availability could not be fully confirmed. You have acknowledged that further review is needed. This sends your request and its notifications; it does not approve building use.") }
+        .alert("Discard this building request draft?", isPresented: $confirmingClose) {
+            Button("Discard draft", role: .destructive) { workspace.startNew(); dismiss() }
+            Button("Keep editing", role: .cancel) {}
+        } message: { Text("Your entered dates, spaces and event details have not been submitted.") }
     }
 }

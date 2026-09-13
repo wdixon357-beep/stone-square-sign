@@ -4,7 +4,18 @@ export const monthBounds = date => {
   return {from:`${year}-${pad(month+1)}-01`,to:`${year}-${pad(month+1)}-${pad(new Date(year,month+1,0).getDate())}`};
 };
 export const eventOccurs = (event, date) => event.startDate <= date && (event.endDate || event.startDate) >= date;
-const eventTime = event => event.allDay ? 'All day' : event.startTime ? `${event.startTime}${event.endTime ? ' to '+event.endTime : ''}` : 'Time not provided';
+export const formatCalendarTime = value => {
+  const text = String(value || '').trim();
+  const twentyFour = text.match(/^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
+  if (twentyFour) {
+    const hour = Number(twentyFour[1]);
+    return `${hour % 12 || 12}:${twentyFour[2]} ${hour >= 12 ? 'PM' : 'AM'}`;
+  }
+  const twelveHour = text.match(/^(1[0-2]|0?[1-9]):([0-5]\d)\s*(AM|PM)$/i);
+  if (twelveHour) return `${Number(twelveHour[1])}:${twelveHour[2]} ${twelveHour[3].toUpperCase()}`;
+  return text;
+};
+export const eventTime = event => event.allDay ? 'All day' : event.startTime ? `${formatCalendarTime(event.startTime)}${event.endTime ? ' to '+formatCalendarTime(event.endTime) : ''}` : 'Time not provided';
 export const BUILDING_SPACES = ['Lodge building','Back yard','Front yard'];
 export function validateBuildingRequest(request){
   if(!request.bookings?.length||request.bookings.length>12)return 'Choose between one and twelve dates.';
@@ -25,12 +36,28 @@ export class BuildingCalendarWorkspace {
   bind(){
     this.calendarRoot.addEventListener('input', event=>{if(event.target.closest('#calendarEventForm'))this.calendarDirty=true;});
     this.buildingRoot.addEventListener('click',event=>{const button=event.target.closest('[data-building]');if(button){if(button.dataset.building.startsWith('request-'))void this.requestAction(button);else void this.decision(button);}});
-    this.buildingRoot.addEventListener('input',event=>{if(event.target.closest('#buildingRequestForm')){this.availabilityKey=null;}});
+    this.buildingRoot.addEventListener('input',event=>{const form=event.target.closest('#buildingRequestForm');if(form){this.availabilityKey=null;this.saveRequestDraft(form);}});
     this.buildingRoot.addEventListener('submit',event=>{if(event.target.id==='buildingRequestForm'){event.preventDefault();void this.submitRequest(event.target);}});
     this.calendarRoot.addEventListener('click',event=>{const button=event.target.closest('[data-calendar]');if(button)this.calendarAction(button);});
     this.calendarRoot.addEventListener('submit',event=>{if(event.target.id==='calendarEventForm'){event.preventDefault();void this.saveEvent(event.target);}});
   }
   message(root,text){const element=root.querySelector('[data-message]');if(element)element.textContent=text;}
+  requestDraftKey(){return this.user()?.id?`ss22-web-draft:${this.user().id}:building-request`:'';}
+  clearRequestDraft(){const key=this.requestDraftKey();if(key)try{sessionStorage.removeItem(key);}catch{}}
+  hasUnsavedRequest(){
+    const form=this.buildingRoot.querySelector('#buildingRequestForm');if(!form)return false;
+    const rows=[...form.querySelectorAll('.building-booking-row')];
+    const spaces=[...form.querySelectorAll('[name="space"]:checked')].map(input=>input.value);
+    return Boolean(form.querySelector('[name="purpose"]')?.value.trim()||form.querySelector('[name="phone"]')?.value.trim()||rows.length>1||rows.some(row=>[...row.querySelectorAll('[data-booking]')].some(input=>input.value))||spaces.length!==1||spaces[0]!==BUILDING_SPACES[0]);
+  }
+  saveRequestDraft(form){
+    const key=this.requestDraftKey();if(!key)return;
+    try{if(!this.hasUnsavedRequest())sessionStorage.removeItem(key);else{const draft=this.collectRequest(form);delete draft.submissionId;sessionStorage.setItem(key,JSON.stringify(draft));}}catch{}
+  }
+  restoreRequestDraft(form){
+    const key=this.requestDraftKey();if(!key)return;
+    try{const draft=JSON.parse(sessionStorage.getItem(key)||'null');if(!draft||!Array.isArray(draft.bookings))return;draft.bookings=draft.bookings.slice(0,12);const rows=form.querySelector('#buildingBookingRows');while(rows.children.length>1)rows.lastElementChild.remove();for(let index=1;index<draft.bookings.length;index++)this.addBookingRow();[...rows.children].forEach((row,index)=>{const booking=draft.bookings[index]||{};row.querySelectorAll('[data-booking]').forEach(input=>{input.value=String(booking[input.dataset.booking]||'');});});form.querySelectorAll('[name="space"]').forEach(input=>{input.checked=Array.isArray(draft.spaces)&&BUILDING_SPACES.includes(input.value)&&draft.spaces.includes(input.value);});form.querySelector('[name="purpose"]').value=String(draft.purpose||'').slice(0,1000);form.querySelector('[name="phone"]').value=String(draft.phone||'').slice(0,40);form.querySelector('#buildingRequestMessage').textContent='An unfinished building request from this tab has been restored.';}catch{}
+  }
   async building(){
     if(!this.can('building.view')&&!this.can('building.request'))return;
     if(this.buildingUserId!==this.user()?.id){this.requestFormOpen=false;this.requestSubmissionId=null;this.pendingRequestPayload=null;this.buildingUserId=this.user()?.id;}
@@ -49,6 +76,7 @@ export class BuildingCalendarWorkspace {
     const account=this.user();
     this.buildingRoot.querySelector('#buildingRequestComposer').innerHTML=`<form id="buildingRequestForm" class="panel building-request-form"><h2>New Building Request</h2><p>This request is for Stone Square Lodge No. 22 use, submitted under ${escape(account.name)}${account.email?' ('+escape(account.email)+')':''}. Private-party rentals use the public building request process.</p><fieldset><legend>Property requested</legend>${BUILDING_SPACES.map((space,index)=>`<label class="calendar-checkbox"><input type="checkbox" name="space" value="${space}" ${index===0?'checked':''}> ${space}</label>`).join('')}</fieldset><h3>Dates and times</h3><p class="helper">Times are Eastern. Add one row per date, up to twelve dates.</p><div id="buildingBookingRows"></div><button class="secondary" type="button" data-building="request-add">Add another date</button><label>Event details<textarea name="purpose" required maxlength="1000"></textarea></label><label>Phone (optional)<input name="phone" type="tel" maxlength="40" autocomplete="tel"></label><button class="secondary" type="button" data-building="request-check">Review availability</button><div id="buildingRequestAvailability" role="status"></div><p class="helper">Submitting sends the request through the existing building portal and its notifications. It does not reserve the property. Wait for written Lodge approval before making arrangements that depend on the space.</p><div class="row-buttons"><button class="primary" type="submit">Submit building request</button><button class="secondary" type="button" data-building="request-cancel">Cancel</button></div><p id="buildingRequestMessage" role="status"></p></form>`;
     this.addBookingRow();
+    this.restoreRequestDraft(this.buildingRoot.querySelector('#buildingRequestForm'));
   }
   addBookingRow(){
     const rows=this.buildingRoot.querySelector('#buildingBookingRows');if(rows.children.length>=12)return;
@@ -62,7 +90,7 @@ export class BuildingCalendarWorkspace {
     if(action==='request-new')return this.newRequest();
     if(action==='request-add')return this.addBookingRow();
     if(action==='request-remove'){if(this.buildingRoot.querySelector('#buildingBookingRows').children.length>1){button.closest('.building-booking-row').remove();this.availabilityKey=null;}return;}
-    if(action==='request-cancel'){if(!window.confirm('Discard this unsent building request?'))return;this.requestFormOpen=false;this.requestSubmissionId=null;return this.building();}
+    if(action==='request-cancel'){if(this.hasUnsavedRequest()&&!window.confirm('Discard this unsent building request?'))return;this.clearRequestDraft();this.requestFormOpen=false;this.requestSubmissionId=null;return this.building();}
     if(action==='request-check')return this.checkRequestAvailability(this.buildingRoot.querySelector('#buildingRequestForm'));
   }
   async checkRequestAvailability(form){
@@ -101,6 +129,7 @@ export class BuildingCalendarWorkspace {
       this.pendingRequestPayload=structuredClone(payload);
       const result=await this.api('/api/building/requests',{method:'POST',body:JSON.stringify(payload)});if(!result.ok)throw Error('The request could not be confirmed. Your entries remain here for retry.');
       this.requestFormOpen=false;this.requestSubmissionId=null;this.pendingRequestPayload=null;
+      this.clearRequestDraft();
       const refs=result.refs?.length?result.refs:[result.ref];
       form.innerHTML=`<h2>Request submitted for review</h2><p>Reference${refs.length===1?'':'s'}: <strong>${refs.map(escape).join(', ')}</strong></p><p>This is not approval. Wait for written Lodge confirmation.</p><p>${result.wmNotified?'Worshipful Master notification recorded.':'Worshipful Master notification has not been confirmed.'}</p><button type="button" class="secondary" data-building="request-new">New Building Request</button>`;
     }catch(error){

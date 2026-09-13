@@ -13,6 +13,6 @@ try{
  const frameworks=path.join(root,'macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64');
  const resolved=spawnSync('swift',['package','--package-path','macos','resolve'],{cwd:root,stdio:'inherit'});
  if(resolved.status!==0) throw new Error('Could not resolve native dependencies');
- const build=spawnSync('swiftc',['-F',frameworks,'-framework','Sparkle','-Xlinker','-rpath','-Xlinker',frameworks,'-parse-as-library',...files,'test/mac-report.swift','-o',binary],{cwd:root,stdio:'inherit'});
+ const build=spawnSync('swiftc',['-DDEBUG','-F',frameworks,'-framework','Sparkle','-Xlinker','-rpath','-Xlinker',frameworks,'-parse-as-library',...files,'test/mac-report.swift','-o',binary],{cwd:root,stdio:'inherit'});
  process.exitCode=build.status===0?(spawnSync(binary,[],{cwd:root,stdio:'inherit'}).status??1):1;
 }finally{rmSync(scratch,{recursive:true,force:true})}

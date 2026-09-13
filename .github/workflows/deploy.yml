@@ -54,7 +54,8 @@ jobs:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
           code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$HOOK")
-          if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+          # Render may acknowledge an asynchronous deploy with 202 Accepted.
+          if [ "$code" != "200" ] && [ "$code" != "201" ] && [ "$code" != "202" ]; then
             echo "::error::Render refused the deploy hook, HTTP $code. The hook is probably stale."
             exit 1
           fi

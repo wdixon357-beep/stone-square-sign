@@ -21,10 +21,19 @@ final class SessionFixture: URLProtocol {
 
 @main struct SessionTests {
     @MainActor static func main() async throws {
+        let savedAddress = UserDefaults.standard.object(forKey: "server-address")
+        UserDefaults.standard.set("http://untrusted.example.invalid", forKey: "server-address")
+        defer {
+            if let savedAddress { UserDefaults.standard.set(savedAddress, forKey: "server-address") }
+            else { UserDefaults.standard.removeObject(forKey: "server-address") }
+        }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [SessionFixture.self]
         let session = URLSession(configuration: config)
         let model = AppModel(session: session, savedSessionToken: "test-only-not-a-real-token")
+        precondition(model.serverAddress == defaultServerAddress)
+        precondition(model.baseURL?.absoluteString == "https://stone-square-sign.onrender.com")
+        print("PASS: release sessions ignore stored service overrides and pin the approved HTTPS origin")
         await model.restoreSession()
         precondition(model.hasSavedSession && model.user == nil && model.sessionConnectionError != nil && !model.restoringSession)
         print("PASS: HTTP 503 preserves saved login and shows reconnect state")

@@ -3,7 +3,7 @@ export const CAPABILITIES = [
  ['building.request','Request use of the Lodge building'],['building.view','View building requests'],['building.decide','Approve or decline building requests'],['calendar.view','View Lodge Calendar'],['calendar.manage','Manage Lodge Calendar events'],
  ['reports.create','Prepare reports'],['minutes.view','View finished meeting minutes'],['minutes.prepare','Prepare and edit meeting minutes'],
  ['treasury.view','View finished treasurer reports'],['treasury.prepare','Prepare and edit treasurer reports'],['treasury.upload','Provide bank records and screenshots'],
- ['dues.view','View dues'],['documents.status','View dispensation statuses'],['documents.sign','Sign assigned dispensations'],['candidates.view','View Candidate Tracker'],
+ ['dues.view','View dues'],['documents.status','View dispensation statuses'],['documents.sign','Sign assigned dispensations'],['candidates.view','View Candidate Tracker'],['candidates.edit','Edit Candidate Tracker records'],
  ['proposals.create','Submit and track personal dispensation proposals'],['signature.manage','Manage own signature'],['settings.manage','Own service settings']
 ].map(([id,label])=>({id,label}));
 const personal=['building.request','signature.manage','settings.manage'];
@@ -13,6 +13,7 @@ export function normalizePermissions(values){
  const p=new Set(values);for(const prefix of ['minutes','treasury'])if(p.has(prefix+'.prepare'))p.add(prefix+'.view');
  if(p.has('building.decide'))p.add('building.view');if(p.has('calendar.manage'))p.add('calendar.view');
  if(p.has('treasury.upload'))p.add('treasury.view');if(p.has('documents.sign'))p.add('documents.status');
+ if(p.has('candidates.edit'))p.add('candidates.view');
  return [...p].sort();
 }
 export function resolvePermissions(user){

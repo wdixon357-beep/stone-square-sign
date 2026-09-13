@@ -827,11 +827,26 @@ try {
     const handoff = await api('POST', '/api/tracker/handoff', { token: warden.token });
     const handoffUrl = handoff.payload.url ? new URL(handoff.payload.url) : null;
     const assertion = handoffUrl ? JSON.parse(Buffer.from(handoffUrl.searchParams.get('assertion').split('.')[0], 'base64url')) : {};
-    check(`the ${label} Warden can enter Candidate Tracker under his own role`, handoff.status === 200 && handoffUrl.hostname === 'tracker-fixture.invalid' && assertion.role === 'warden' && assertion.email === warden.user.email && assertion.expiresAt - assertion.issuedAt === 60);
+    check(`the ${label} Warden can enter Candidate Tracker under his assigned read-only access`, handoff.status === 200 && handoffUrl.hostname === 'tracker-fixture.invalid' && assertion.role === 'warden' && assertion.email === warden.user.email && assertion.permissions?.includes('candidates.view') && !assertion.permissions?.includes('candidates.edit') && assertion.expiresAt - assertion.issuedAt === 60);
     const documentSign = await api('POST', `/api/documents/${docId}/sign`, { token: warden.token, body: { consent: true } });
     check(`the ${label} Warden's signature profile does not grant document-signing permission`, documentSign.status === 403);
   }
   check('Candidate Tracker handoff requires authentication', (await api('POST', '/api/tracker/handoff')).status === 401);
+  const accessForTracker = await api('GET', '/api/admin/access', { token: wmToken });
+  const xavierAccess = accessForTracker.payload.accounts.find(account => account.email === xavier.user.email);
+  const xavierEditorPermissions = [...new Set([...xavierAccess.permissions, 'candidates.edit'])];
+  check('the Worshipful Master can grant Candidate Tracker editing independently',
+    (await api('PUT', '/api/admin/access', { token: wmToken, body: { key: xavierAccess.key, permissions: xavierEditorPermissions } })).status === 200);
+  const editorHandoff = await api('POST', '/api/tracker/handoff', { token: xavier.token });
+  const editorPayload = JSON.parse(Buffer.from(new URL(editorHandoff.payload.url).searchParams.get('assertion').split('.')[0], 'base64url'));
+  check('the signed tracker handoff carries the granted edit permission',
+    editorPayload.permissions.includes('candidates.view') && editorPayload.permissions.includes('candidates.edit'));
+  check('the Worshipful Master can remove Candidate Tracker editing without removing view access',
+    (await api('PUT', '/api/admin/access', { token: wmToken, body: { key: xavierAccess.key, permissions: xavierAccess.permissions } })).status === 200);
+  const readOnlyHandoff = await api('POST', '/api/tracker/handoff', { token: xavier.token });
+  const readOnlyPayload = JSON.parse(Buffer.from(new URL(readOnlyHandoff.payload.url).searchParams.get('assertion').split('.')[0], 'base64url'));
+  check('a new tracker handoff immediately reflects revoked edit access',
+    readOnlyPayload.permissions.includes('candidates.view') && !readOnlyPayload.permissions.includes('candidates.edit'));
 
   const wardenBuild = await api('POST', '/api/dispensations', { token: xavier.token, body: dispensationBody });
   check('a Warden cannot create a dispensation himself', wardenBuild.status === 403, String(wardenBuild.status));

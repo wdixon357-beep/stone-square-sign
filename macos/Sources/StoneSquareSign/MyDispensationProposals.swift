@@ -5,8 +5,10 @@ struct MyDispensationProposalsView: View {
     @State private var draft = DispensationProposalDraft()
     @State private var showingForm = false
     @State private var confirmSubmit = false
+    @State private var confirmDiscard = false
     @State private var submitting = false
     @State private var message = ""
+    @State private var messageIsWarning = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +32,11 @@ struct MyDispensationProposalsView: View {
                         }
                         Text("The Worshipful Master reviews the proposal before a dispensation is prepared.").font(.caption).foregroundStyle(.secondary)
                         if draft.hasContent, let validation = draft.validationMessage { Text(validation).font(.caption).foregroundStyle(.secondary) }
-                        Button("Submit proposal") { confirmSubmit = true }.buttonStyle(.borderedProminent).disabled(!draft.isReady || submitting)
+                        HStack {
+                            Button("Discard proposal", role: .destructive) { confirmDiscard = true }.disabled(!draft.hasContent || submitting)
+                            Spacer()
+                            Button("Submit proposal") { confirmSubmit = true }.buttonStyle(.borderedProminent).disabled(!draft.isReady || submitting)
+                        }
                     }.disabled(submitting)
                 }
                 Section("Your proposals") {
@@ -43,7 +49,7 @@ struct MyDispensationProposalsView: View {
                                 Spacer()
                                 Text(proposal.verdict).font(.subheadline.weight(.medium))
                             }
-                            if let date = proposal.eventDate, !date.isEmpty { Text("Event date: \(date)") }
+                            if let date = proposal.eventDate, !date.isEmpty { Text("Event date: \(LodgeCalendarDates.displayDate(date))") }
                             if let details = proposal.requestDetails, !details.isEmpty { Text(details).textSelection(.enabled) }
                             if let note = proposal.wmNote, !note.isEmpty {
                                 Text("Worshipful Master's response: \(note)").font(.callout)
@@ -57,7 +63,10 @@ struct MyDispensationProposalsView: View {
                     }
                 }
                 if !model.proposalsError.isEmpty { Text(model.proposalsError).foregroundStyle(.red) }
-                if !message.isEmpty { Text(message).foregroundStyle(.secondary) }
+                if !message.isEmpty {
+                    if messageIsWarning { Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                    else { Text(message).foregroundStyle(.secondary) }
+                }
             }.formStyle(.grouped)
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -69,12 +78,17 @@ struct MyDispensationProposalsView: View {
                 Task {
                     if await model.submitProposal(draft) {
                         draft = DispensationProposalDraft(); showingForm = false
-                        message = "Proposal submitted to the Worshipful Master for review."
+                        message = model.message
+                        messageIsWarning = model.messageIsWarning
                     }
                     submitting = false
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("The Worshipful Master will receive your request and note.") }
+        .alert("Discard this proposal draft?", isPresented: $confirmDiscard) {
+            Button("Discard proposal", role: .destructive) { draft = DispensationProposalDraft(); showingForm = false }
+            Button("Keep editing", role: .cancel) {}
+        } message: { Text("The proposal details entered here have not been submitted.") }
     }
 }

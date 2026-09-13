@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { BuildingCalendarWorkspace, monthBounds, eventOccurs } from '../public/building-calendar.js';
+import { BuildingCalendarWorkspace, monthBounds, eventOccurs, formatCalendarTime, eventTime } from '../public/building-calendar.js';
 assert.deepEqual(monthBounds(new Date(2028,1,5)),{from:'2028-02-01',to:'2028-02-29'});
 assert.equal(eventOccurs({startDate:'2026-09-30',endDate:'2026-10-02'},'2026-10-02'),true);
 assert.equal(eventOccurs({startDate:'2026-09-30',endDate:'2026-10-02'},'2026-10-03'),false);
@@ -8,6 +8,12 @@ class Element {constructor(){this.innerHTML='';this.textContent='';this.value='R
 global.document={getElementById:id=>{if(!elements.has(id)){const e=new Element();e.id=id;elements.set(id,e);}return elements.get(id)}};
 let confirmed=false;global.window={confirm:()=>confirmed};
 const request={id:'SSL-TEST',organization:'Example Chapter',date:'2026-09-20',spaces:['Lodge building'],description:'Meeting',status:'pending',revision:7};
+assert.equal(formatCalendarTime('19:30'), '7:30 PM');
+assert.equal(formatCalendarTime('00:05:00'), '12:05 AM');
+assert.equal(formatCalendarTime('12:00'), '12:00 PM');
+assert.equal(formatCalendarTime('7:30 pm'), '7:30 PM');
+assert.equal(formatCalendarTime('7:30'), '7:30 AM');
+assert.equal(eventTime({startTime:'19:30',endTime:'22:00'}), '7:30 PM to 10:00 PM');
 let permissions=['building.view','calendar.view'], calls=[], failConflict=false;
 const workspace=new BuildingCalendarWorkspace({user:()=>({role:'officer',permissions}),api:async(path,init)=>{calls.push({path,init});if(init){if(failConflict)throw Object.assign(Error('changed'),{status:409});return{request};}return path.startsWith('/api/building')?{requests:[request],canDecide:true}:{events:[],warnings:[]};}});
 await workspace.building();assert.doesNotMatch(workspace.buildingRoot.querySelector('.building-requests').innerHTML,/data-building="approved"/);

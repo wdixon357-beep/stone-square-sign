@@ -10,6 +10,7 @@
   --muted: #68717a;
   --green: #246a52;
   --red: #9e332d;
+  --blue: #145b91;
   --shadow: 0 24px 70px rgba(4, 19, 34, 0.16);
 }
 
@@ -70,7 +71,7 @@ h1, h2 { font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; }
 .helper { color: var(--muted); font-size: 12px; line-height: 1.5; }
 label { color: var(--ink); font-size: 11px; font-weight: 800; letter-spacing: .045em; }
 input, select, textarea { width: 100%; min-height: 46px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); padding: 13px 14px; outline: none; }
-input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(199,154,66,.14); }
+input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(199,154,66,.14); }
 .primary, .secondary { border-radius: 8px; padding: 12px 16px; font-size: 12px; font-weight: 800; letter-spacing: .025em; }
 .primary { border: 1px solid var(--navy); background: var(--navy); color: white; box-shadow: 0 6px 18px rgba(7,27,47,.15); }
 .primary:hover { background: var(--navy-2); }
@@ -81,6 +82,7 @@ input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgb
 .message { min-height: 20px; margin: 12px 0 0; font-size: 12px; }
 .message.error { color: var(--red); }
 .message.success { color: var(--green); }
+.message.warning { color: #76500c; }
 .hidden { display: none !important; }
 .update-banner { width: min(1120px, calc(100% - 28px)); display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: max(16px, env(safe-area-inset-top)) auto 0; padding: 14px 16px; border: 1px solid rgba(199,154,66,.55); border-radius: 12px; background: #fffdf7; }
 .update-banner-copy { display: grid; gap: 5px; flex: 1 1 280px; min-width: 0; overflow-wrap: anywhere; }
@@ -568,3 +570,95 @@ a { overflow-wrap: anywhere; }
 @media (max-width: 650px) { .building-booking-row { grid-template-columns: 1fr 1fr; } .building-booking-row > label:first-child { grid-column: 1 / -1; } }
 .building-request-form > label { display: block; margin-top: 16px; }
 .building-request-form > button { display: block; margin: 12px 0; }
+
+/* Release-wide interaction polish. Every keyboard action remains visible, disabled
+   controls look unavailable, and text stays readable on touch screens. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid #2e78b7;
+  outline-offset: 3px;
+}
+button:disabled, input:disabled, select:disabled, textarea:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+}
+summary { min-height: 44px; display: flex; align-items: center; }
+.content .eyebrow, .auth-card .eyebrow, .modal .eyebrow { color: #805813; }
+.helper, .content-head > div > p:last-child, .document-menu-card small { font-size: 13px; }
+.selected-file, .minutes-row p, .officer-list small { font-size: 11px; }
+.nav-item { font-size: 13px; }
+.user-block small { color: rgba(255,255,255,.74); font-size: 10px; }
+.sidebar-foot p { color: rgba(255,255,255,.7); }
+.message[role="status"], [role="alert"] { line-height: 1.5; overflow-wrap: anywhere; }
+.modal-body { overscroll-behavior: contain; }
+.pdf-frame { background: #eef1f4; }
+.device-sessions { margin-top: 18px; }
+.device-session { display: flex; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid var(--line); }
+.device-session > div { min-width: 0; flex: 1; }
+.device-session strong { color: var(--navy); }
+.device-session p { margin: 5px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
+/* On tablet and phone, navigation is one compact horizontal rail. Officers can move
+   between areas without first scrolling past a wall of menu buttons. */
+@media (max-width: 1100px) {
+  .sidebar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+  }
+  .sidebar nav {
+    display: flex;
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+    scroll-snap-type: x proximity;
+  }
+  .sidebar nav .nav-item {
+    width: auto;
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+  .sidebar-foot { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+  .sidebar-foot .helper, .sidebar-foot .live-status { display: none; }
+}
+
+@media (max-width: 760px) {
+  .sidebar {
+    position: sticky;
+    top: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding-top: max(11px, env(safe-area-inset-top));
+  }
+  .sidebar nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    padding-bottom: 3px;
+  }
+  .sidebar nav .nav-item { width: auto; min-width: 0; padding: 10px 12px; }
+  .sidebar-foot { grid-column: 2; grid-row: 1; }
+  .user-block { grid-column: 1; grid-row: 1; min-width: 0; }
+  .user-block > div { min-width: 0; }
+  .user-block strong, .user-block small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .content-head > button, .content-head > a { min-height: 44px; }
+  .document-menu-card { min-height: 132px; padding: 18px; }
+  .modal { place-items: center; }
+  .modal-body { min-height: 0; max-height: calc(100dvh - 16px); }
+  .minutes-editor-body, .pdf-modal-body { min-height: calc(100dvh - 16px); }
+  .paste-review-fields div { grid-template-columns: 1fr; gap: 5px; }
+  .building-booking-row > button { grid-column: 1 / -1; width: 100%; }
+  .device-session { align-items: stretch; flex-direction: column; }
+  .device-session button { width: 100%; }
+  #reportGeneratorFrame { height: max(700px, 78dvh); border-radius: 10px; }
+}
+
+@media (max-width: 430px) {
+  .shell { margin-left: max(8px, env(safe-area-inset-left)); margin-right: max(8px, env(safe-area-inset-right)); }
+  .content { padding-inline: 12px; }
+  .content-head > button, .content-head > a { width: 100%; justify-content: center; text-align: center; }
+  .calendar-toolbar button { flex: 1 1 calc(50% - 5px); }
+  .calendar-toolbar h2 { text-align: center; }
+}

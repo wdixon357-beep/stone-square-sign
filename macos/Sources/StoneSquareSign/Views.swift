@@ -61,10 +61,10 @@ struct RootView: View {
             if !model.message.isEmpty {
                 Label(
                     model.message,
-                    systemImage: model.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+                    systemImage: model.isError || model.messageIsWarning ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
                 )
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(model.isError ? .red : .green)
+                .foregroundStyle(model.isError ? .red : model.messageIsWarning ? .orange : .green)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(.regularMaterial, in: Capsule())
@@ -153,12 +153,14 @@ struct AuthenticationView: View {
                     SecureField(mode == 2 ? "New password" : mode == 1 ? "Create password" : "Password", text: $password)
                     if mode == 2 { Button("Send reset code") { Task { await model.requestReset(email: email) } } }
                 }
+                #if DEBUG
                 Section {
-                    DisclosureGroup("Connection settings") {
+                    DisclosureGroup("Debug connection settings") {
                         TextField("Signing service address", text: $model.serverAddress)
-                        Text("Use the shared Lodge service for your account.").font(.caption).foregroundStyle(.secondary)
+                        Text("Release builds always use the approved Lodge service.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                #endif
             }.formStyle(.grouped).textFieldStyle(.roundedBorder).frame(height: mode == 2 ? 250 : 230)
             if mode == 0 && model.biometricLoginEnabled {
                 Button("Sign in with Touch ID", systemImage: "touchid") { Task { await model.signInWithBiometrics() } }
@@ -425,7 +427,7 @@ struct NativeCandidateTrackerView: View {
     private let trackerLine = Color(nsColor: .separatorColor)
 
     private var canEdit: Bool {
-        model.user?.role == "owner"
+        model.user?.can("candidates.edit") == true
     }
 
     private var filteredRecords: [CandidateRecord] {
@@ -625,6 +627,15 @@ struct CandidateRecordEditorView: View {
     @State var record: CandidateRecord
     let isNew: Bool
     let categories: [String]
+    private let initialRecord: CandidateRecord
+    @State private var confirmCancel = false
+
+    init(record: CandidateRecord, isNew: Bool, categories: [String]) {
+        _record = State(initialValue: record)
+        self.isNew = isNew
+        self.categories = categories
+        self.initialRecord = record
+    }
 
     private let statuses = [
         "New", "Not started", "In progress", "Needs follow-up", "Background not submitted",
@@ -680,7 +691,10 @@ struct CandidateRecordEditorView: View {
             }
             .formStyle(.grouped)
             HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Cancel", role: .cancel) {
+                    if record != initialRecord { confirmCancel = true }
+                    else { dismiss() }
+                }
                 Spacer()
                 Button(isNew ? "Add record" : "Save changes") {
                     Task {
@@ -693,7 +707,12 @@ struct CandidateRecordEditorView: View {
             .padding(20)
         }
         .frame(minWidth: 720, minHeight: 720)
-        .updateDraftGuard(reason: "Save or cancel the candidate record before updating.")
+        .updateDraftGuard(active: record != initialRecord || model.candidateTrackerLoading, reason: "Save or cancel the candidate record before updating.")
+        .interactiveDismissDisabled(record != initialRecord || model.candidateTrackerLoading)
+        .alert("Discard candidate record changes?", isPresented: $confirmCancel) {
+            Button("Discard changes", role: .destructive) { dismiss() }
+            Button("Keep editing", role: .cancel) {}
+        } message: { Text("The changes in this editor have not been saved.") }
     }
 }
 
@@ -1184,6 +1203,33 @@ struct DocumentRow: View {
     let queueNumber: Int?
     let open: () -> Void
     let sign: () -> Void
+    @State private var pendingQueueAction: QueueAction?
+
+    private enum QueueAction {
+        case offerToBothSecretaries, submitToDistrictDeputy, resendToDistrictDeputy
+
+        var title: String {
+            switch self {
+            case .offerToBothSecretaries: return "Let either Secretary sign this dispensation?"
+            case .submitToDistrictDeputy: return "Send this dispensation to the District Deputy?"
+            case .resendToDistrictDeputy: return "Send this dispensation again?"
+            }
+        }
+        var button: String {
+            switch self {
+            case .offerToBothSecretaries: return "Add the other Secretary"
+            case .submitToDistrictDeputy: return "Send dispensation"
+            case .resendToDistrictDeputy: return "Send again"
+            }
+        }
+        var explanation: String {
+            switch self {
+            case .offerToBothSecretaries: return "The first Secretary to sign will complete the secretary step. The document and existing signatures remain unchanged."
+            case .submitToDistrictDeputy: return "This sends the completed PDF and submission note. Review the document before continuing."
+            case .resendToDistrictDeputy: return "This sends another copy of the completed PDF and submission note."
+            }
+        }
+    }
 
     private var onlyOneSecretary: Bool {
         let roles = Set(document.signers.map(\.signerRole))
@@ -1231,7 +1277,7 @@ struct DocumentRow: View {
                 /* Only worth offering while exactly one of the two Secretaries is on it. */
                 if model.user?.role == "owner" && !document.isTerminal && onlyOneSecretary {
                     Button("Let either Secretary sign") {
-                        Task { await model.offerToBothSecretaries(documentId: document.id) }
+                        pendingQueueAction = .offerToBothSecretaries
                     }
                     .buttonStyle(.borderless)
                 }
@@ -1246,14 +1292,12 @@ struct DocumentRow: View {
                     .buttonStyle(.borderless)
                     if document.submittedAt == nil {
                         Button("Send to the District Deputy") {
-                            Task { await model.submitToDistrictDeputy(documentId: document.id) }
+                            pendingQueueAction = .submitToDistrictDeputy
                         }
                         .buttonStyle(.borderedProminent).tint(.accentColor)
                     } else {
                         Button("Send again") {
-                            Task {
-                                await model.submitToDistrictDeputy(documentId: document.id, resend: true)
-                            }
+                            pendingQueueAction = .resendToDistrictDeputy
                         }
                         .buttonStyle(.borderless)
                     }
@@ -1261,6 +1305,26 @@ struct DocumentRow: View {
             }
         }
         .padding(.vertical, 13)
+        .alert(pendingQueueAction?.title ?? "Confirm document action", isPresented: Binding(
+            get: { pendingQueueAction != nil },
+            set: { if !$0 { pendingQueueAction = nil } }
+        )) {
+            Button(pendingQueueAction?.button ?? "Continue") {
+                let action = pendingQueueAction
+                pendingQueueAction = nil
+                Task {
+                    switch action {
+                    case .offerToBothSecretaries: _ = await model.offerToBothSecretaries(documentId: document.id)
+                    case .submitToDistrictDeputy: _ = await model.submitToDistrictDeputy(documentId: document.id)
+                    case .resendToDistrictDeputy: _ = await model.submitToDistrictDeputy(documentId: document.id, resend: true)
+                    case nil: break
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingQueueAction = nil }
+        } message: {
+            Text(pendingQueueAction?.explanation ?? "Review the document before continuing.")
+        }
     }
 }
 
@@ -1346,6 +1410,11 @@ struct OfficerAccessView: View {
     @State private var revokeTargetName = ""
     @State private var revokeTargetEmail = ""
     @State private var showRevokeConfirmation = false
+    private var canCreateInvitation: Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedName.isEmpty && trimmedEmail.contains("@") && trimmedEmail.split(separator: "@").last?.contains(".") == true && !model.isBusy
+    }
 
     var body: some View {
         ScrollView {
@@ -1392,6 +1461,7 @@ struct OfficerAccessView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent).tint(.accentColor)
+                    .disabled(!canCreateInvitation)
                     if !privateLink.isEmpty {
                         TextField("Private link", text: $privateLink)
                         Button("Copy private link") {
@@ -1554,8 +1624,12 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Shared signing service") {
+                #if DEBUG
                 TextField("Service address", text: $model.serverAddress)
-                Text("Use an HTTPS address for officer access. The Mac app and web users must use the same service.")
+                #else
+                LabeledContent("Service", value: "Stone Square Lodge secure service")
+                #endif
+                Text("Officer access is securely connected to the approved Lodge service.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Test and refresh") { Task { await model.refresh() } }
             }
@@ -2068,8 +2142,29 @@ struct ApprovalsView: View {
  * deliberately web only and this is the deciding side. */
 struct ProposalReviewView: View {
     @EnvironmentObject var model: AppModel
-    @State private var note = ""
+    @State private var notes: [String: String] = [:]
     @State private var busyID: String?
+    @State private var pendingDecision: PendingDecision?
+
+    private struct PendingDecision: Identifiable {
+        let proposal: WardenProposal
+        let decision: String
+        var id: String { proposal.id + ":" + decision }
+        var title: String {
+            switch decision {
+            case "approve": return "Approve this dispensation proposal?"
+            case "changes": return "Send this proposal back for changes?"
+            default: return "Decline this dispensation proposal?"
+            }
+        }
+        var button: String {
+            switch decision {
+            case "approve": return "Approve proposal"
+            case "changes": return "Send back"
+            default: return "Decline proposal"
+            }
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -2096,7 +2191,7 @@ struct ProposalReviewView: View {
                             Text("Proposed by \(proposal.proposerName)")
                                 .font(.subheadline).foregroundStyle(.secondary)
                             if let date = proposal.eventDate, !date.isEmpty {
-                                Text("Event date: \(date)\(proposal.eventTime.map { $0.isEmpty ? "" : ", \($0)" } ?? "")")
+                                Text("Event date: \(LodgeCalendarDates.displayDate(date))\(proposal.eventTime.map { $0.isEmpty ? "" : ", \(LodgeCalendarDates.displayTime($0))" } ?? "")")
                                     .font(.subheadline)
                             }
                             if let place = proposal.locationName, !place.isEmpty {
@@ -2114,13 +2209,16 @@ struct ProposalReviewView: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                             }
                             if proposal.isPending {
-                                TextField("A note back to him, optional", text: $note)
+                                TextField("A note back to him, optional", text: Binding(
+                                    get: { notes[proposal.id] ?? "" },
+                                    set: { notes[proposal.id] = $0 }
+                                ))
                                     .textFieldStyle(.roundedBorder).padding(.top, 4)
                                 HStack(spacing: 10) {
-                                    Button("Approve") { decide(proposal, "approve") }
+                                    Button("Approve") { pendingDecision = PendingDecision(proposal: proposal, decision: "approve") }
                                         .buttonStyle(.borderedProminent)
-                                    Button("Send back") { decide(proposal, "changes") }
-                                    Button("Decline") { decide(proposal, "decline") }
+                                    Button("Send back") { pendingDecision = PendingDecision(proposal: proposal, decision: "changes") }
+                                    Button("Decline") { pendingDecision = PendingDecision(proposal: proposal, decision: "decline") }
                                     if busyID == proposal.id { ProgressView().controlSize(.small) }
                                 }
                                 .disabled(busyID != nil)
@@ -2139,16 +2237,23 @@ struct ProposalReviewView: View {
             }
             .padding(30)
         }
-        .updateDraftGuard(active: !note.isEmpty || busyID != nil, reason: "Finish or clear your proposal note before updating.")
+        .updateDraftGuard(active: notes.values.contains(where: { !$0.isEmpty }) || busyID != nil, reason: "Finish or clear your proposal note before updating.")
         .task { await model.loadProposals() }
+        .alert(item: $pendingDecision) { pending in
+            Alert(
+                title: Text(pending.title),
+                message: Text("This records your decision and notifies the proposing officer.\((notes[pending.proposal.id] ?? "").isEmpty ? "" : " Your note will be included.")"),
+                primaryButton: .default(Text(pending.button)) { decide(pending.proposal, pending.decision) },
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private func decide(_ proposal: WardenProposal, _ decision: String) {
         busyID = proposal.id
-        let text = note
+        let text = notes[proposal.id] ?? ""
         Task {
-            _ = await model.decideProposal(id: proposal.id, decision: decision, wmNote: text)
-            note = ""
+            if await model.decideProposal(id: proposal.id, decision: decision, wmNote: text) { notes[proposal.id] = nil }
             busyID = nil
         }
     }

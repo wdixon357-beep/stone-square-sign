@@ -10,7 +10,8 @@ let minutesDates;
 const minutesDatesReady = import(`/minutes-dates.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`).then(module => { minutesDates = module; });
 
 const state = {
-  token: localStorage.getItem('stone-square-sign-token') || '',
+  legacyToken: localStorage.getItem('stone-square-sign-token') || '',
+  authEpoch: 0,
   user: null,
   signingDocumentId: null,
   signingPdfObjectUrl: null,
@@ -33,6 +34,12 @@ const state = {
   editingMinutesId: null,
   editingMinutesUpdatedAt: null,
   minutesPreviewUrl: '',
+  minutesEditorDirty: false,
+  reportHandoffExpiresAt: 0,
+  reportHandoff: null,
+  proposalDirty: false,
+  dispensationDirty: false,
+  minutesSourceDirty: false,
 };
 let treasuryWorkspace;
 let buildingCalendarWorkspace;
@@ -40,8 +47,26 @@ let activityWorkspace,activityTracker;
 const requestedWorkspaceSection = new URLSearchParams(window.location.search).get('section');
 
 const $ = (id) => document.getElementById(id);
-const show = (element) => element.classList.remove('hidden');
-const hide = (element) => element.classList.add('hidden');
+const modalFocusOrigins = new WeakMap();
+const modalFocusSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const show = (element) => {
+  element.classList.remove('hidden');
+  if (element.classList.contains('modal')) {
+    modalFocusOrigins.set(element, document.activeElement);
+    element.setAttribute('aria-hidden', 'false');
+    element.querySelector('.modal-body')?.scrollTo?.({ top: 0 });
+    window.requestAnimationFrame(() => element.querySelector(modalFocusSelector)?.focus());
+  }
+};
+const hide = (element) => {
+  element.classList.add('hidden');
+  if (element.classList.contains('modal')) {
+    element.setAttribute('aria-hidden', 'true');
+    const origin = modalFocusOrigins.get(element);
+    if (origin?.isConnected) origin.focus({ preventScroll: true });
+    modalFocusOrigins.delete(element);
+  }
+};
 const authMessage = $('authMessage');
 const docMessage = $('docMessage');
 const delay = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -50,7 +75,87 @@ const setMessage = (element, text, isError = false) => {
   element.textContent = text || '';
   element.classList.toggle('error', isError);
   element.classList.toggle('success', Boolean(text) && !isError);
+  element.classList.remove('warning');
 };
+const escapeMarkup = value => String(value ?? '').replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[character]));
+const notificationMessage = (success, payload) => {
+  const warnings = Array.isArray(payload?.notificationWarnings) ? payload.notificationWarnings.filter(Boolean) : [];
+  return [success, ...warnings].join(' ');
+};
+const setNotificationMessage = (element, success, payload) => {
+  const warnings = Array.isArray(payload?.notificationWarnings) ? payload.notificationWarnings.filter(Boolean) : [];
+  setMessage(element, notificationMessage(success, payload));
+  element.classList.toggle('warning', warnings.length > 0);
+  element.classList.toggle('success', warnings.length === 0);
+};
+const draftStorageKey = name => state.user ? `ss22-web-draft:${state.user.id}:${name}` : '';
+const writeSessionDraft = (name, fields) => {
+  const key = draftStorageKey(name);
+  if (!key) return;
+  try { sessionStorage.setItem(key, JSON.stringify(Object.fromEntries(fields.map(id => [id, $(id).value])))); } catch {}
+};
+const clearSessionDraft = name => {
+  const key = draftStorageKey(name);
+  if (key) try { sessionStorage.removeItem(key); } catch {}
+};
+const restoreSessionDraft = (name, fields) => {
+  const key = draftStorageKey(name);
+  if (!key) return false;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+    if (!saved || typeof saved !== 'object') return false;
+    let restored = false;
+    fields.forEach(id => { if (typeof saved[id] === 'string' && saved[id]) { $(id).value = saved[id]; restored = true; } });
+    return restored;
+  } catch { return false; }
+};
+
+const PROPOSAL_DRAFT_FIELDS = ['propTitle','propDetails','propEventDate','propEventTime','propLocation','propStreet','propCityState','propNote'];
+const DISPENSATION_DRAFT_FIELDS = ['dispPasteDetails','dispTitle','dispRequestDate','dispRequestDetails','dispEventDate','dispEventTime','dispLocationName','dispStreet','dispCityState'];
+const MINUTES_SOURCE_DRAFT_FIELDS = ['minutesSourceType','minutesTranscriptText'];
+
+const restoreWebDrafts = () => {
+  if (restoreSessionDraft('proposal', PROPOSAL_DRAFT_FIELDS)) {
+    state.proposalDirty = true;
+    setMessage($('proposalMessage'), 'An unfinished proposal from this tab has been restored.');
+  }
+  if (restoreSessionDraft('dispensation', DISPENSATION_DRAFT_FIELDS)) {
+    state.dispensationDirty = true;
+    setMessage($('builderMessage'), 'An unfinished dispensation from this tab has been restored.');
+  }
+  if (restoreSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS)) {
+    state.minutesSourceDirty = true;
+    setMessage($('minutesMessage'), 'Your unfinished meeting source from this tab has been restored.');
+  }
+};
+
+const hasUnsavedWorkspace = section => ({
+  proposals: state.proposalDirty,
+  builder: state.dispensationDirty,
+  minutes: state.minutesSourceDirty,
+  treasury: Boolean(treasuryWorkspace?.dirty),
+  calendar: Boolean(buildingCalendarWorkspace?.calendarDirty),
+  building: Boolean(buildingCalendarWorkspace?.hasUnsavedRequest?.()),
+  queue: Boolean($('accessControls')?.dirtyAccessKeys?.size),
+}[section] || false);
+
+document.addEventListener('keydown', event => {
+  const modal = document.querySelector('.modal:not(.hidden)');
+  if (!modal) return;
+  if (event.key === 'Escape') {
+    const close = modal.querySelector('.modal-close');
+    if (close) { event.preventDefault(); close.click(); }
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = [...modal.querySelectorAll(modalFocusSelector)].filter(element => element.getClientRects().length);
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
 
 // Website updates must never replace entered report text or interrupt a request.
 let webUpdateHasEntries = false;
@@ -119,9 +224,11 @@ const apiFetch = async (path, init = {}) => {
   try {
   const response = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
+      'X-Stone-Square-Client': 'web',
+      ...(state.legacyToken ? { Authorization: `Bearer ${state.legacyToken}` } : {}),
       ...(init.headers || {}),
     },
   });
@@ -161,9 +268,14 @@ const roleLabel = (role) => ({
 }[role] || 'Signer');
 
 const initials = (name) => name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-const formatDate = (date) => new Intl.DateTimeFormat('en-US', {
-  month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-}).format(new Date(date));
+const formatDate = (date) => {
+  if (!date) return 'Date unavailable';
+  const value = new Date(date);
+  if (Number.isNaN(value.getTime())) return 'Date unavailable';
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(value);
+};
 
 /* An event date is a calendar day, not an instant. Parsing "2026-10-10" with new Date()
  * reads it as UTC midnight and shows the day before to anyone east of Greenwich, so build
@@ -207,6 +319,7 @@ const applyWorkspacePermissions = user => {
   $('settingsNav').classList.toggle('hidden', !can('settings.manage', user));
   $('settingsName').textContent = user.name; $('settingsEmail').textContent = user.email;
   $('settingsSignature').classList.toggle('hidden', !can('signature.manage', user));
+  $('candidateMenuDescription').textContent = can('candidates.edit', user) ? 'View and update candidate records' : 'View candidate records';
   $('profileButton').classList.toggle('hidden',!can('signature.manage', user));
   $('whoami').textContent = user.name;
   $('userRole').textContent = roleLabel(user.role);
@@ -252,10 +365,11 @@ const enterWorkspace = async (user, session) => {
   $('sessionNotice').classList.toggle('hidden', !hasSessionPolicy);
   $('sessionDetails').classList.toggle('hidden', !hasSessionPolicy);
   if (hasSessionPolicy) $('sessionNoticeTitle').textContent = `You will stay signed in for ${sessionDays} days on this device.`;
-  if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.token&&state.user)});}
+  if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.user)});}
   if (!buildingCalendarWorkspace) { const { BuildingCalendarWorkspace } = await import('/building-calendar.js'); buildingCalendarWorkspace = new BuildingCalendarWorkspace({api: apiFetch, user: () => state.user}); }
   if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
   const { maySeeTreasury, maySeeMinutes } = applyWorkspacePermissions(user);
+  restoreWebDrafts();
   showWorkspaceSection(requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
@@ -275,12 +389,13 @@ const enterWorkspace = async (user, session) => {
 // Refresh access without rebuilding forms, clearing drafts, or restarting the workspace.
 let permissionRefreshBusy = false;
 const refreshSessionPermissions = async () => {
-  if (permissionRefreshBusy || !state.token || !state.user) return;
+  if (permissionRefreshBusy || !state.user) return;
   permissionRefreshBusy = true;
-  const token = state.token;
+  const userId = state.user.id;
+  const authEpoch = state.authEpoch;
   try {
     const { user } = await apiFetch('/api/auth/me');
-    if (state.token !== token || !user || user.id !== state.user?.id) return;
+    if (!state.user || !user || state.authEpoch !== authEpoch || user.id !== userId || user.id !== state.user.id) return;
     const before = JSON.stringify([state.user.role, [...(state.user.permissions || [])].sort()]);
     const after = JSON.stringify([user.role, [...(user.permissions || [])].sort()]);
     state.user = user;
@@ -296,7 +411,9 @@ const refreshSessionPermissions = async () => {
     $('permissionRefreshNotice').textContent = 'Your access has been updated. Entries on this page have been kept.';
     show($('permissionRefreshNotice'));
   } catch(error) {
-    if (error.status === 401 && state.token === token) {
+    if (error.status === 401 && state.authEpoch === authEpoch && state.user?.id === userId) {
+      state.authEpoch += 1;
+      state.user = null;
       hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
       setMessage(authMessage, 'Your session is no longer authorized. Sign in again to continue.', true);
     }
@@ -349,6 +466,8 @@ const fillFormFromParsedDispensation = () => {
       : 'The pasted details are ready. Complete the remaining Lodge questions.',
     missing.length > 0,
   );
+  state.dispensationDirty = true;
+  writeSessionDraft('dispensation', DISPENSATION_DRAFT_FIELDS);
   hide($('pasteReviewModal'));
 };
 
@@ -358,7 +477,130 @@ const loadSubmissionProfiles = async () => {
   applySubmissionProfiles();
 };
 
+const REPORT_GENERATOR_ORIGIN = 'https://request.stonesquare22pha.org';
+const secureReportUrl = value => {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.origin !== REPORT_GENERATOR_ORIGIN || url.searchParams.has('assertion')) {
+    throw new Error('The secure Report Generator address could not be verified.');
+  }
+  return url.href;
+};
+
+const validateReportHandoff = handoff => {
+  const url = secureReportUrl(handoff?.url);
+  const expiresAt = Number(handoff?.expiresAt) * 1000;
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error('The secure Report Generator connection expired before it could open. Try again.');
+  if (typeof handoff?.assertion !== 'string' || !handoff.assertion) throw new Error('The secure Report Generator connection could not be verified.');
+  return { url, assertion: handoff.assertion, expiresAt };
+};
+
+const postReportAssertion = (connection, assertion, expiresAt) => {
+  connection.target.postMessage({ kind: 'stone-square-report-assertion', assertion }, REPORT_GENERATOR_ORIGIN);
+  connection.expiresAt = expiresAt;
+  state.reportHandoffExpiresAt = expiresAt;
+  if (connection.embedded) $('reportGeneratorFrame').dataset.connected = 'true';
+  setMessage($('reportGeneratorMessage'), 'Report Generator connected.');
+};
+
+const renewReportHandoff = connection => {
+  if (connection.refreshPromise) return connection.refreshPromise;
+  setMessage($('reportGeneratorMessage'), 'Renewing the secure Report Generator connection…');
+  connection.refreshPromise = (async () => {
+    try {
+      const handoff = validateReportHandoff(await apiFetch('/api/reports/handoff', { method: 'POST' }));
+      if (state.reportHandoff !== connection) return;
+      postReportAssertion(connection, handoff.assertion, handoff.expiresAt);
+    } catch (error) {
+      if (state.reportHandoff === connection) {
+        setMessage($('reportGeneratorMessage'), error.message || 'The Report Generator could not reconnect.', true);
+      }
+    } finally {
+      if (state.reportHandoff === connection) connection.refreshPromise = null;
+    }
+  })();
+  return connection.refreshPromise;
+};
+
+window.addEventListener('message', event => {
+  const connection = state.reportHandoff;
+  if (!connection || event.origin !== REPORT_GENERATOR_ORIGIN || event.source !== connection.target
+      || event.data?.kind !== 'stone-square-report-ready') return;
+  if (connection.stagedAssertion && connection.expiresAt > Date.now()) {
+    const assertion = connection.stagedAssertion;
+    connection.stagedAssertion = '';
+    postReportAssertion(connection, assertion, connection.expiresAt);
+    return;
+  }
+  connection.stagedAssertion = '';
+  void renewReportHandoff(connection);
+});
+
+const loadReportGenerator = async ({ separate = false } = {}) => {
+  const message = $('reportGeneratorMessage');
+  const frame = $('reportGeneratorFrame');
+  const stillFresh = frame.dataset.connected === 'true' && state.reportHandoffExpiresAt > Date.now() + 60_000;
+  if (!separate && stillFresh) return;
+  let popup = null;
+  if (separate) {
+    popup = window.open('about:blank', 'stone-square-report-generator');
+    if (!popup) {
+      setMessage(message, 'Your browser blocked the Report Generator window. Allow pop-ups for this website, then try again.', true);
+      return;
+    }
+  }
+  setMessage(message, separate ? 'Opening a secure Report Generator…' : 'Connecting securely to the Report Generator…');
+  try {
+    const handoff = validateReportHandoff(await apiFetch('/api/reports/handoff', { method: 'POST' }));
+    state.reportHandoffExpiresAt = handoff.expiresAt;
+    if (separate) {
+      state.reportHandoff = { target: popup, stagedAssertion: handoff.assertion, expiresAt: handoff.expiresAt, refreshPromise: null, embedded: false };
+      popup.location.replace(handoff.url);
+    } else {
+      delete frame.dataset.connected;
+      state.reportHandoff = { target: frame.contentWindow, stagedAssertion: handoff.assertion, expiresAt: handoff.expiresAt, refreshPromise: null, embedded: true };
+      frame.src = handoff.url;
+    }
+    setMessage(message, 'Waiting for the secure Report Generator to finish connecting…');
+  } catch (error) {
+    state.reportHandoff = null;
+    state.reportHandoffExpiresAt = 0;
+    popup?.close();
+    setMessage(message, error.message || 'The Report Generator could not be opened.', true);
+  }
+};
+
+const CANDIDATE_TRACKER_ORIGIN = 'https://tracker.stonesquare22pha.org';
+const secureCandidateTrackerUrl = value => {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.origin !== CANDIDATE_TRACKER_ORIGIN || url.pathname !== '/api/sso'
+      || url.username || url.password) {
+    throw new Error('The secure Candidate Tracker address could not be verified.');
+  }
+  return url.href;
+};
+
+const openCandidateTracker = async () => {
+  const message = $('candidateTrackerMessage');
+  const popup = window.open('about:blank', 'stone-square-candidate-tracker');
+  if (!popup) {
+    setMessage(message, 'Your browser blocked the Candidate Tracker window. Allow pop-ups for this website, then try again.', true);
+    return;
+  }
+  popup.opener = null;
+  setMessage(message, 'Opening the Candidate Tracker securely…');
+  try {
+    const { url } = await apiFetch('/api/tracker/handoff', { method: 'POST' });
+    popup.location.replace(secureCandidateTrackerUrl(url));
+    setMessage(message, 'Candidate Tracker opened securely.');
+  } catch (error) {
+    popup.close();
+    setMessage(message, error.message || 'The Candidate Tracker could not be opened.', true);
+  }
+};
+
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
+  if (state.activeSection && section !== state.activeSection && hasUnsavedWorkspace(state.activeSection)
+      && !window.confirm('Leave this unfinished work? It will stay in this browser tab so you can return to it.')) return false;
   const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.view'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
   if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
   $('buildingSection').classList.toggle('hidden', section !== 'building');
@@ -381,8 +623,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   const reports = section === 'reports';
   $('reportsSection').classList.toggle('hidden', !reports);
   $('reportsNav').classList.toggle('active', reports);
-  const reportFrame = $('reportGeneratorFrame');
-  if (reports && !reportFrame.hasAttribute('src')) reportFrame.src = reportFrame.dataset.src;
+  if (reports && !skipLoad) void loadReportGenerator();
   const home = section === 'home';
   const builder = section === 'builder';
   const queue = section === 'queue';
@@ -416,6 +657,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
    * officers looking at once see the same figures. */
   window.clearInterval(state.duesTimer);
   if (dues) state.duesTimer = window.setInterval(() => renderDues(true), 60000);
+  return true;
 };
 
 const MINUTES_STATUS = {
@@ -482,10 +724,10 @@ const setMinutesMeetingType = (value) => {
 const refreshMinutesReviewAlerts = async () => {
   const container = $('minutesReviewAlerts');
   if (state.user?.role !== 'owner') { container.replaceChildren(); hide(container); return; }
-  const token = state.token;
+  const userId = state.user.id;
   try {
     const { alerts } = await apiFetch('/api/minutes/review-alerts');
-    if (state.token !== token || state.user?.role !== 'owner') return;
+    if (state.user?.id !== userId || state.user?.role !== 'owner') return;
     container.replaceChildren(...alerts.map((alert) => {
       const button = document.createElement('button');
       button.className = 'secondary';
@@ -502,7 +744,7 @@ const refreshMinutesReviewAlerts = async () => {
     container.classList.toggle('hidden', !alerts.length);
   } catch { /* Keep existing alerts visible until the next successful refresh. */ }
 };
-setInterval(() => { if (state.token && state.user?.role === 'owner') refreshMinutesReviewAlerts(); }, 20000);
+setInterval(() => { if (state.user?.role === 'owner') refreshMinutesReviewAlerts(); }, 20000);
 
 const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch, state.user?.role));
 const renderMinutes = async () => {
@@ -592,7 +834,7 @@ const sectionEditor = (section, index) => {
   body.setAttribute('aria-label', `Section ${index + 1} content`);
   const remove = document.createElement('button');
   remove.type = 'button'; remove.className = 'text-button danger-text remove-section'; remove.textContent = 'Remove section';
-  remove.addEventListener('click', () => { card.remove(); renumberMinutesSections(); scheduleMinutesPreview(); });
+  remove.addEventListener('click', () => { card.remove(); state.minutesEditorDirty = true; renumberMinutesSections(); scheduleMinutesPreview(); });
   card.append(label, heading, body, remove);
   return card;
 };
@@ -792,6 +1034,7 @@ const openMinutesEditor = (id) => {
   }
   setMessage($('minutesEditorMessage'), '');
   updateMinutesEditorControls(item);
+  state.minutesEditorDirty = false;
   show($('minutesEditorModal'));
   refreshMinutesPreview();
 };
@@ -823,6 +1066,7 @@ const saveMinutesCorrections = async () => {
     method: 'PUT', body: JSON.stringify({ draft: collectMinutesDraft(), expectedUpdatedAt: state.editingMinutesUpdatedAt }),
   });
   state.editingMinutesUpdatedAt = payload.minutes.updatedAt;
+  state.minutesEditorDirty = false;
 };
 
 /* What the District Deputy decided, and the proof of it.
@@ -859,11 +1103,12 @@ const renderApprovals = async () => {
         <div class="queue-number">${item.approval_status === 'approved' ? '\u2713' : '\u2022'}</div>
         <div class="doc-icon">PDF</div>
         <div class="doc-main"><h3></h3><p></p></div>
-        <span class="status ${item.approval_status === 'approved' ? 'completed' : 'rescinded'}">${decided}</span>
+        <span class="status ${item.approval_status === 'approved' ? 'completed' : 'rescinded'}"></span>
         <div class="doc-actions"></div>`;
       row.querySelector('h3').textContent = item.title || item.original_name;
       row.querySelector('.doc-main p').textContent =
         `${item.approved_by || 'Not recorded'} · ${formatDate(item.approved_on)} · ${route}`;
+      row.querySelector('.status').textContent = decided;
       if (!item.has_endorsed_copy) {
         const warn = window.document.createElement('p');
         warn.className = 'queue-submission queue-submission-warn';
@@ -895,6 +1140,47 @@ const renderApprovals = async () => {
     });
   } catch (error) {
     setMessage(message, error.message, true);
+  }
+};
+
+const renderDeviceSessions = async () => {
+  const message = $('deviceSessionsMessage');
+  const list = $('deviceSessionsList');
+  setMessage(message, 'Reading signed-in devices…');
+  try {
+    const { sessions = [] } = await apiFetch('/api/auth/sessions');
+    list.replaceChildren(...sessions.map(session => {
+      const card = document.createElement('article');
+      card.className = 'device-session';
+      const copy = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = session.current ? `${session.label || 'This device'} · Current` : (session.label || 'Signed-in device');
+      const detail = document.createElement('p');
+      const lastUsed = session.lastSeenAt || session.createdAt;
+      detail.textContent = `${lastUsed ? `Last used ${formatDate(lastUsed)}` : 'Last used time unavailable'} · ${session.expiresAt ? `Expires ${formatDate(session.expiresAt)}` : 'Expiration unavailable'}`;
+      copy.append(title, detail); card.append(copy);
+      if (!session.current) {
+        const end = document.createElement('button');
+        end.type = 'button'; end.className = 'secondary danger-text'; end.textContent = 'Sign out device';
+        end.addEventListener('click', async () => {
+          if (!window.confirm(`Sign out ${session.label || 'this device'}? It will need the account password to reconnect.`)) return;
+          end.disabled = true;
+          try {
+            await apiFetch(`/api/auth/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+            await renderDeviceSessions();
+            setMessage(message, 'That device has been signed out.');
+          } catch (error) { setMessage(message, error.message, true); end.disabled = false; }
+        });
+        card.append(end);
+      }
+      return card;
+    }));
+    $('revokeOtherSessions').classList.toggle('hidden', sessions.every(session => session.current));
+    setMessage(message, sessions.length ? `${sessions.length} signed-in device${sessions.length === 1 ? '' : 's'}.` : 'No active device sessions were returned.');
+  } catch (error) {
+    list.replaceChildren();
+    $('revokeOtherSessions').classList.add('hidden');
+    setMessage(message, error.message || 'Signed-in devices could not load.', true);
   }
 };
 
@@ -1007,11 +1293,12 @@ const renderProposals = async () => {
       const decide = async (decision) => {
         row.querySelectorAll('button').forEach((b) => { b.disabled = true; });
         try {
-          await apiFetch(`/api/proposals/${p.id}/decision`, {
+          const payload = await apiFetch(`/api/proposals/${p.id}/decision`, {
             method: 'POST',
             body: JSON.stringify({ decision, wmNote: note.value.trim(), ...editedFields() }),
           });
-          renderProposals();
+          await renderProposals();
+          setNotificationMessage($('proposalReviewMessage'), 'Proposal status updated and saved.', payload);
         } catch (error) {
           row.querySelectorAll('button').forEach((b) => { b.disabled = false; });
           problem.textContent = error.message || 'That did not go through. Try again.';
@@ -1073,20 +1360,26 @@ $('proposalForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = event.target.querySelector('button[type="submit"]');
   button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = state.resubmitId ? 'Sending changes…' : 'Sending proposal…';
   try {
+    let payload;
     if (state.resubmitId) {
-      await apiFetch(`/api/proposals/${state.resubmitId}`, { method: 'PUT', body: JSON.stringify(proposalFields()) });
+      payload = await apiFetch(`/api/proposals/${state.resubmitId}`, { method: 'PUT', body: JSON.stringify(proposalFields()) });
       state.resubmitId = null;
     } else {
-      await apiFetch('/api/proposals', { method: 'POST', body: JSON.stringify(proposalFields()) });
+      payload = await apiFetch('/api/proposals', { method: 'POST', body: JSON.stringify(proposalFields()) });
     }
-    $('proposalMessage').textContent = 'Sent to the Worshipful Master. He will come back to you.';
+    setNotificationMessage($('proposalMessage'), 'Proposal saved and sent to the Worshipful Master for review.', payload);
     event.target.reset();
-    renderProposals();
+    state.proposalDirty = false;
+    clearSessionDraft('proposal');
+    await renderProposals();
   } catch (error) {
-    $('proposalMessage').textContent = error.message || 'Could not send it.';
+    setMessage($('proposalMessage'), error.message || 'The proposal could not be saved.', true);
   }
   button.disabled = false;
+  button.textContent = originalLabel;
 });
 
 $('approvalsNav').addEventListener('click', () => showWorkspaceSection('approvals'));
@@ -1107,10 +1400,23 @@ $('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'
 $('treasuryMenuCard').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
 $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
+$('candidateMenuCard').addEventListener('click', () => { void openCandidateTracker(); });
+$('reportSeparateTab').addEventListener('click', () => { void loadReportGenerator({ separate: true }); });
 $('minutesNav').addEventListener('click', () => showWorkspaceSection('minutes'));
 $('minutesMenuCard').addEventListener('click', () => showWorkspaceSection('minutes'));
 $('minutesRefresh').addEventListener('click', () => renderMinutes());
-$('settingsNav').addEventListener('click', () => showWorkspaceSection('settings'));
+$('settingsNav').addEventListener('click', () => { showWorkspaceSection('settings'); void renderDeviceSessions(); });
+$('refreshDeviceSessions').addEventListener('click', () => { void renderDeviceSessions(); });
+$('revokeOtherSessions').addEventListener('click', async () => {
+  if (!window.confirm('Sign out every other device? This device will stay signed in.')) return;
+  const button = $('revokeOtherSessions'); button.disabled = true;
+  try {
+    await apiFetch('/api/auth/sessions/revoke-others', { method: 'POST' });
+    await renderDeviceSessions();
+    setMessage($('deviceSessionsMessage'), 'All other devices have been signed out.');
+  } catch (error) { setMessage($('deviceSessionsMessage'), error.message, true); }
+  finally { button.disabled = false; }
+});
 $('settingsSignature').addEventListener('click', () => openSignatureSetup(false));
 $('settingsSignout').addEventListener('click', () => $('logoutBtn').click());
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
@@ -1122,8 +1428,30 @@ $('duesNav').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesMenuCard').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesRefresh').addEventListener('click', () => renderDues(true));
 
+$('proposalForm').addEventListener('input', () => {
+  state.proposalDirty = true;
+  writeSessionDraft('proposal', PROPOSAL_DRAFT_FIELDS);
+});
+$('dispensationForm').addEventListener('input', () => {
+  state.dispensationDirty = true;
+  writeSessionDraft('dispensation', DISPENSATION_DRAFT_FIELDS);
+});
+$('minutesTranscriptText').addEventListener('input', () => {
+  state.minutesSourceDirty = true;
+  writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS);
+});
+$('minutesSourceType').addEventListener('change', () => {
+  if ($('minutesTranscriptText').value.trim()) writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS);
+});
+window.addEventListener('beforeunload', event => {
+  if (!state.minutesEditorDirty && !hasUnsavedWorkspace(state.activeSection)) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
 $('minutesTranscriptFile').addEventListener('change', () => {
   $('minutesSelectedFile').textContent = $('minutesTranscriptFile').files[0]?.name || 'No file selected';
+  state.minutesSourceDirty = Boolean($('minutesTranscriptFile').files[0]) || Boolean($('minutesTranscriptText').value.trim());
 });
 
 $('generateMinutes').addEventListener('click', async () => {
@@ -1148,6 +1476,8 @@ $('generateMinutes').addEventListener('click', async () => {
     $('minutesTranscriptFile').value = '';
     $('minutesSelectedFile').textContent = 'No file selected';
     $('minutesTranscriptText').value = '';
+    state.minutesSourceDirty = false;
+    clearSessionDraft('minutes-source');
     await renderMinutes();
     setMessage($('minutesMessage'), 'Draft created. Review every section before sending it to the Worshipful Master.');
     openMinutesEditor(payload.minutes.id);
@@ -1161,8 +1491,10 @@ $('generateMinutes').addEventListener('click', async () => {
 });
 
 $('closeMinutesEditor').addEventListener('click', () => {
+  if (state.minutesEditorDirty && !window.confirm('Close these minutes without saving your latest corrections?')) return;
   hide($('minutesEditorModal'));
   clearTimeout(minutesPreviewTimer); ++minutesPreviewRevision; state.editingMinutesId = null;
+  state.minutesEditorDirty = false;
   if (state.minutesPreviewUrl) URL.revokeObjectURL(state.minutesPreviewUrl);
   state.minutesPreviewUrl = '';
   minutesPdfViewer?.clear();
@@ -1175,15 +1507,17 @@ $('minutesPreviewFrame').addEventListener('previewerror', event => { $('minutesP
 $('refreshMinutesPreview').addEventListener('click', refreshMinutesPreview);
 $('addMinutesOfficer').addEventListener('click', () => {
   $('minutesOfficerAttendance').append(officerAttendanceEditor({ status: 'not_recorded' }));
+  state.minutesEditorDirty = true;
 });
-$('addMinutesIncome').addEventListener('click', () => $('minutesIncome').append(financeEditor()));
-$('addMinutesExpense').addEventListener('click', () => $('minutesExpenses').append(financeEditor()));
+$('addMinutesIncome').addEventListener('click', () => { $('minutesIncome').append(financeEditor()); state.minutesEditorDirty = true; });
+$('addMinutesExpense').addEventListener('click', () => { $('minutesExpenses').append(financeEditor()); state.minutesEditorDirty = true; });
 $('addMinutesSection').addEventListener('click', () => {
   const item = currentMinutes();
   if (!item || !(item.status === 'draft' || (item.status === 'awaiting_master_attestation' && state.user?.role === 'owner'))) return;
   const container = $('minutesSections');
   const card = sectionEditor({ heading: 'Meeting Business', body: '' }, container.querySelectorAll('.minutes-section-card').length);
   container.append(card);
+  state.minutesEditorDirty = true;
   card.querySelector('input').focus();
   scheduleMinutesPreview();
 });
@@ -1207,8 +1541,8 @@ for (const id of ['minutesMeetingDate', 'minutesNextMeeting']) {
     $(id).value = minutesDates.formatMinutesDate(id === 'minutesMeetingDate' ? dateValue : minutesDates.replaceMinutesDate($(id).value, dateValue));
   });
 }
-$('minutesEditorForm').addEventListener('input', scheduleMinutesPreview);
-$('minutesEditorForm').addEventListener('change', scheduleMinutesPreview);
+$('minutesEditorForm').addEventListener('input', () => { state.minutesEditorDirty = true; scheduleMinutesPreview(); });
+$('minutesEditorForm').addEventListener('change', () => { state.minutesEditorDirty = true; scheduleMinutesPreview(); });
 $('reorganizeMinutes').addEventListener('click', async () => {
   if (!confirm('Reorganize the original source into a fresh preview? Current corrections will be replaced in this editor. The saved record changes only when you save.')) return;
   const id = state.editingMinutesId;
@@ -1299,10 +1633,11 @@ const startRealtime = async () => {
   state.realtimeAbort?.abort();
   const controller = new AbortController();
   state.realtimeAbort = controller;
-  while (state.token && !controller.signal.aborted) {
+  while (state.user && !controller.signal.aborted) {
     try {
       const response = await fetch('/api/events', {
-        headers: { Authorization: `Bearer ${state.token}` },
+        credentials: 'same-origin',
+        headers: { 'X-Stone-Square-Client': 'web' },
         signal: controller.signal,
       });
       if (!response.ok || !response.body) throw new Error('Live connection unavailable.');
@@ -1364,16 +1699,17 @@ const renderDocuments = async () => {
       const article = window.document.createElement('article');
       article.className = 'doc-row';
       const signerHtml = doc.signers.map((signer) =>
-        `<span class="signer ${signer.signed_at ? 'signed' : ''}">${signer.signed_at ? '✓' : '○'} ${signer.signer_name}</span>`).join('');
+        `<span class="signer ${signer.signed_at ? 'signed' : ''}">${signer.signed_at ? '✓' : '○'} ${escapeMarkup(signer.signer_name)}</span>`).join('');
       const status = doc.status === 'rescinded'
         ? 'Rescinded'
         : doc.status === 'completed' ? 'Completed'
         : doc.needsSignature ? 'Your signature is needed' : 'Awaiting signatures';
+      const statusClass = ['pending', 'partially_signed', 'completed', 'rescinded'].includes(doc.status) ? doc.status : 'pending';
       article.innerHTML = `
         <div class="queue-number">${doc.status === 'rescinded' ? 'R' : doc.status === 'completed' ? '✓' : queueNumber}</div>
         <div class="doc-icon">PDF</div>
         <div class="doc-main"><h3></h3><p>${formatDate(doc.created_at)} · ${signerHtml}</p></div>
-        <span class="status ${doc.status}">${status}</span>
+        <span class="status ${statusClass}">${status}</span>
         <div class="doc-actions"></div>`;
       article.querySelector('h3').textContent = doc.title || doc.original_name;
       const actions = article.querySelector('.doc-actions');
@@ -1447,7 +1783,7 @@ const renderDocuments = async () => {
             const payload = await apiFetch(`/api/documents/${doc.id}/submit`, {
               method: 'POST', body: JSON.stringify({ resend: Boolean(doc.submitted_at) }),
             });
-            setMessage(docMessage, payload.message || 'Sent to the District Deputy.');
+            setNotificationMessage(docMessage, payload.message || 'Sent to the District Deputy.', payload);
             await renderDocuments();
           } catch (error) {
             setMessage(docMessage, error.message, true);
@@ -1467,7 +1803,7 @@ const renderDocuments = async () => {
           if (!window.confirm(`Send ${doc.title || doc.original_name} to both Secretaries? Whoever signs first completes it.`)) return;
           try {
             const payload = await apiFetch(`/api/documents/${doc.id}/offer-to-both`, { method: 'POST' });
-            setMessage(docMessage, payload.message || 'Either Secretary can now sign it.');
+            setNotificationMessage(docMessage, payload.message || 'Either Secretary can now sign it.', payload);
             await renderDocuments();
           } catch (error) {
             setMessage(docMessage, error.message, true);
@@ -1628,7 +1964,10 @@ const renderOfficers = async () => {
       list.appendChild(row);
     });
   } catch (error) {
-    $('officerList').innerHTML = `<p class="helper">${error.message}</p>`;
+    const note = document.createElement('p');
+    note.className = 'helper';
+    note.textContent = error.message || 'Officer accounts could not load.';
+    $('officerList').replaceChildren(note);
   }
 };
 
@@ -1650,10 +1989,12 @@ $('loginForm').addEventListener('submit', async (event) => {
       body: JSON.stringify({
         email: $('loginEmail').value.trim(),
         password: $('loginPassword').value,
+        client: 'web',
       }),
     });
-    state.token = payload.token;
-    localStorage.setItem('stone-square-sign-token', payload.token);
+    state.legacyToken = '';
+    localStorage.removeItem('stone-square-sign-token');
+    state.authEpoch += 1;
     await enterWorkspace(payload.user, payload.session);
   } catch (error) {
     setMessage(authMessage, error.message, true);
@@ -1672,10 +2013,12 @@ $('registerForm').addEventListener('submit', async (event) => {
         invitationToken: state.invitationToken,
         role: $('registerRole').value,
         accessCode: $('registerAccessCode').value.trim(),
+        client: 'web',
       }),
     });
-    state.token = payload.token;
-    localStorage.setItem('stone-square-sign-token', payload.token);
+    state.legacyToken = '';
+    localStorage.removeItem('stone-square-sign-token');
+    state.authEpoch += 1;
     history.replaceState({}, '', '/');
     await enterWorkspace(payload.user, payload.session);
   } catch (error) {
@@ -1717,8 +2060,11 @@ $('resetSubmit').addEventListener('click', async () => {
 $('logoutBtn').addEventListener('click', async () => {
   state.realtimeAbort?.abort();
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
-  state.token = '';
+  state.authEpoch += 1;
+  state.legacyToken = '';
   state.user = null;
+  state.reportHandoff = null;
+  state.reportHandoffExpiresAt = 0;
   localStorage.removeItem('stone-square-sign-token');
   /* Every modal belongs to the session that opened it. Leaving one up over the sign-in
    * screen shows the next person Lodge business he has no account for. */
@@ -1879,15 +2225,17 @@ $('backFromFinalReview').addEventListener('click', () => hide($('dispensationFin
 $('sendDispensation').addEventListener('click', async () => {
   try {
     setMessage($('finalReviewMessage'), 'Sending the dispensation to the officer queue...');
-    await apiFetch('/api/dispensations', { method: 'POST', body: JSON.stringify(dispensationPayload()) });
+    const payload = await apiFetch('/api/dispensations', { method: 'POST', body: JSON.stringify(dispensationPayload()) });
     hide($('dispensationFinalReview'));
     $('dispensationForm').reset();
+    state.dispensationDirty = false;
+    clearSessionDraft('dispensation');
     $('dispRequestDate').value = builderTodayValue;
     applySubmissionProfiles();
     document.querySelectorAll('.parsed-covered').forEach((element) => element.classList.remove('hidden'));
     hide($('remainingQuestionsIntro'));
     showWorkspaceSection('queue');
-    setMessage(docMessage, 'Dispensation created from the official template and added to the queue.');
+    setNotificationMessage(docMessage, 'Dispensation created from the official template and added to the queue.', payload);
     await renderDocuments();
   } catch (error) {
     setMessage($('finalReviewMessage'), error.message, true);
@@ -1903,10 +2251,10 @@ $('uploadForm').addEventListener('submit', async (event) => {
     const form = new FormData();
     form.append('document', file);
     form.append('title', $('docTitle').value.trim());
-    await apiFetch('/api/documents', { method: 'POST', body: form });
+    const payload = await apiFetch('/api/documents', { method: 'POST', body: form });
     $('uploadForm').reset();
     $('selectedFile').textContent = 'No file selected';
-    setMessage(docMessage, 'Document added to the live queue.');
+    setNotificationMessage(docMessage, 'Document added to the live queue.', payload);
     await renderDocuments();
   } catch (error) {
     setMessage(docMessage, error.message, true);
@@ -2201,7 +2549,8 @@ const openSignerModal = async (documentId, title) => {
       }
     }
     const pdfResponse = await fetch(`/api/documents/${documentId}/file`, {
-      headers: { Authorization: `Bearer ${state.token}` },
+      credentials: 'same-origin',
+      headers: { 'X-Stone-Square-Client': 'web' },
     });
     if (!pdfResponse.ok) {
       const payload = await pdfResponse.json().catch(() => ({}));
@@ -2274,19 +2623,22 @@ const initialize = async () => {
     }
   } catch (_error) {}
   if (state.invitationToken) setActiveTab('register');
-  if (state.token) {
-    try {
-      const payload = await apiFetch('/api/auth/me');
-      await enterWorkspace(payload.user, payload.session);
-    } catch (error) {
-      if (error.status === 401 || error.status === 403) {
-        localStorage.removeItem('stone-square-sign-token');
-        state.token = '';
-        setMessage(authMessage, error.message, true);
-      } else {
-        setMessage(authMessage, 'We could not reconnect. Your sign-in is still saved. Try reconnecting when your connection returns.', true);
-        show($('reconnectSession'));
-      }
+  try {
+    const payload = await apiFetch('/api/auth/me');
+    if (state.legacyToken) {
+      state.legacyToken = '';
+      localStorage.removeItem('stone-square-sign-token');
+    }
+    state.authEpoch += 1;
+    await enterWorkspace(payload.user, payload.session);
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) {
+      localStorage.removeItem('stone-square-sign-token');
+      state.legacyToken = '';
+      if (state.invitationToken) setActiveTab('register');
+    } else {
+      setMessage(authMessage, 'We could not reconnect. Your sign-in may still be saved. Try reconnecting when your connection returns.', true);
+      show($('reconnectSession'));
     }
   }
 };
@@ -2333,7 +2685,7 @@ const renderDues = async (force = false) => {
       const how = r.payments.length
         ? ` · matched by ${[...new Set(r.payments.map((p) => p.matchedVia))].join(', ')}`
         : '';
-      el.innerHTML = `<div class="grow"><div class="name">${r.name}</div><small>${paid}${credit}${how}</small></div><span class="pill">${r.status}</span>`;
+      el.innerHTML = `<div class="grow"><div class="name">${escapeMarkup(r.name)}</div><small>${escapeMarkup(paid + credit + how)}</small></div><span class="pill">${escapeMarkup(r.status)}</span>`;
       rows.append(el);
     }
 
@@ -2344,7 +2696,7 @@ const renderDues = async (force = false) => {
       for (const u of led.unmatched) {
         const el = document.createElement('div');
         el.className = 'item';
-        el.innerHTML = `<div class="grow"><div class="name">${u.buyerName || u.buyerEmail || 'Unknown'}</div><small>${u.dateISO} · ${money(u.amountCents)} · ${u.buyerEmail}</small></div>`;
+        el.innerHTML = `<div class="grow"><div class="name">${escapeMarkup(u.buyerName || u.buyerEmail || 'Unknown')}</div><small>${escapeMarkup(u.dateISO)} · ${escapeMarkup(money(u.amountCents))} · ${escapeMarkup(u.buyerEmail)}</small></div>`;
         un.append(el);
       }
       panel.classList.remove('hidden');

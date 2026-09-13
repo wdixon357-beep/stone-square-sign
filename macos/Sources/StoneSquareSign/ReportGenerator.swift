@@ -21,11 +21,18 @@ struct ReportOrganization: Decodable {
     let evidence: [Evidence]
 }
 
+private struct ReportHandoffResponse: Decodable {
+    let url: String
+    let assertion: String
+    let expiresAt: Int
+}
+
 // Native controls consume the same published schema and report endpoint as the web.
 // The Sign session and stored Lodge signatures are never passed to this service.
 @MainActor
 final class ReportBrowserModel: ObservableObject {
     static let reportURL = URL(string: "https://request.stonesquare22pha.org/report")!
+    private static let reportAPIURL = URL(string: "https://request.stonesquare22pha.org/api/report")!
     @Published var schema: [String: Any] = [:]
     @Published var isOfficer = true
     @Published var name = ""
@@ -43,13 +50,20 @@ final class ReportBrowserModel: ObservableObject {
     @Published var pdf: Data?
     @Published var busy = false
     @Published var error: String?
-    @Published var message = ""
+    @Published var messageIsWarning = false
+    @Published var message = "" { didSet { messageIsWarning = false } }
     @Published var draftSaved = false
     var clientId = UUID().uuidString
+    private weak var appModel: AppModel?
+    private var assertion = ""
+    private var assertionExpiresAt = Date.distantPast
+    private var assertionUserID: Int?
+    private var configuredUserID: Int?
+    private var loadedDraftUserID: Int?
     private var previewKey: Data?
     var officers: [[String: String]] { schema["officers"] as? [[String: String]] ?? [] }
-    var office: String { isOfficer ? officers.first { $0["name"] == name }?["office"] ?? "" : "" }
-    var isMaster: Bool { office == "Worshipful Master" }
+    var office: String { appModel?.user?.role == "owner" ? "Worshipful Master" : appModel?.user?.roleLabel ?? "Lodge Officer" }
+    var isMaster: Bool { appModel?.user?.role == "owner" }
     var recipient: String { isMaster ? "your Lodge inbox" : "the Worshipful Master" }
     var types: [String: [String: Any]] { schema[isMaster ? "masterTypes" : "types"] as? [String: [String: Any]] ?? [:] }
     var reportFields: [NativeReportField] { (types[type]?["fields"] as? [[String: Any]] ?? []).map(NativeReportField.init) }
@@ -69,11 +83,28 @@ final class ReportBrowserModel: ObservableObject {
         type = raw["type"] as? String ?? "officer"; fields = raw["fields"] as? [String: String] ?? [:]
         source = raw["source"] as? String ?? ""
         clientId = raw["clientId"] as? String ?? UUID().uuidString
+        loadedDraftUserID = raw["userId"] as? Int
         draftSaved = true
     }
+    func configure(_ model: AppModel) {
+        appModel = model
+        guard let user = model.user else { return }
+        let belongsToAnotherUser = loadedDraftUserID.map { $0 != user.id } ?? (draftSaved && user.role != "owner")
+        if belongsToAnotherUser || configuredUserID.map({ $0 != user.id }) == true {
+            phone = ""; type = "officer"; fields = [:]; source = ""; reviewed = false; signatureName = ""
+            organization = nil; pdf = nil; previewKey = nil; clientId = UUID().uuidString; draftSaved = false
+            loadedDraftUserID = nil
+        }
+        if assertionUserID != user.id {
+            assertion = ""; assertionExpiresAt = .distantPast; assertionUserID = nil
+        }
+        configuredUserID = user.id
+        isOfficer = true
+        name = user.name
+        email = user.email
+    }
     func payload() -> [String: Any] {
-        ["isOfficer": isOfficer, "office": office, "name": name, "email": email, "phone": phone,
-         "type": type, "fields": fields, "reviewed": reviewed, "signatureName": signatureName, "clientId": clientId]
+        ["phone": phone, "type": type, "fields": fields, "reviewed": reviewed, "clientId": clientId]
     }
     func contentKey() -> Data? {
         var object = payload(); object.removeValue(forKey: "reviewed"); object.removeValue(forKey: "signatureName")
@@ -84,6 +115,7 @@ final class ReportBrowserModel: ObservableObject {
         organization = nil; organizationKey = nil; revision += 1
         draftSaved = false
         var object = payload(); object["source"] = source; object["reviewed"] = false; object["signatureName"] = ""; object["savedAt"] = Date().timeIntervalSince1970
+        if let configuredUserID { object["userId"] = configuredUserID; loadedDraftUserID = configuredUserID }
         if let url = persistenceURL, let data = try? JSONSerialization.data(withJSONObject: object) {
             do {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -138,24 +170,31 @@ final class ReportBrowserModel: ObservableObject {
         guard schema.isEmpty else { return }
         busy = true; defer { busy = false }
         do {
-            let (data, response) = try await session.data(from: Self.reportURL.deletingLastPathComponent().appendingPathComponent("api/report").appending(queryItems: [URLQueryItem(name: "schema", value: "1")]))
-            guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+            let (data, response) = try await portalRequest(queryItems: [URLQueryItem(name: "schema", value: "1")])
+            guard response.statusCode == 200,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["types"] != nil else { throw ClientError.invalidResponse }
             schema = object; error = nil
-        } catch { self.error = "Report fields could not load. \(error.localizedDescription)" }
+            if types[type] == nil, let available = ["officer", "committee", "event", "formal"].first(where: { types[$0] != nil }) {
+                type = available; changed()
+            }
+        } catch {
+            let detail = error.localizedDescription
+            self.error = detail.contains("404")
+                ? "The Report Generator update is still being applied. Try again shortly."
+                : "Report fields could not load. \(detail)"
+        }
     }
     func validate(signing: Bool) throws {
-        if isOfficer && office.isEmpty { throw ClientError.server("Choose your name from the officer list.") }
-        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ClientError.server("Enter your name.") }
-        if !email.contains("@") || !email.contains(".") { throw ClientError.server("Enter a working email address.") }
+        guard let user = appModel?.user else { throw ClientError.server("Your Dashboard sign-in could not be confirmed. Sign in again before preparing this report.") }
         for field in reportFields where field.required {
             if (fields[field.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (fields[field.id + "Other"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 throw ClientError.server("\(field.label) is required.")
             }
         }
         if signing && !previewCurrent { throw ClientError.server("Update and review the preview before signing this report.") }
-        if signing && (!reviewed || signatureName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
-            throw ClientError.server("Review the report, check the confirmation, and type your name before sending.")
+        if signing && !user.hasSignature { throw ClientError.server("Save your signature in Signature Profile before sending this report.") }
+        if signing && !reviewed {
+            throw ClientError.server("Review the report and check the confirmation before sending.")
         }
     }
     func prepare(send: Bool) async {
@@ -164,12 +203,12 @@ final class ReportBrowserModel: ObservableObject {
         do {
             try validate(signing: send)
             let key = contentKey()
-            var request = URLRequest(url: URL(string: "https://request.stonesquare22pha.org/api/report?\(send ? "copy" : "preview")=1")!)
-            request.httpMethod = "POST"; request.timeoutInterval = 90
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload())
-            let (data, response) = try await session.data(for: request)
-            guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
+            let body = try JSONSerialization.data(withJSONObject: payload())
+            let (data, response) = try await portalRequest(
+                method: "POST",
+                queryItems: [URLQueryItem(name: send ? "copy" : "preview", value: "1")],
+                body: body
+            )
             guard (200..<300).contains(response.statusCode) else {
                 let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 let problems = raw?["problems"] as? [[String: String]]
@@ -182,6 +221,7 @@ final class ReportBrowserModel: ObservableObject {
                 message = raw["mailed"] as? Bool == true ? "Signed report emailed to \(recipient)."
                     : raw["delivery"] as? String == "pending" ? "Signed report prepared. Email delivery is still being checked. Use Send final report again to check the same delivery."
                     : "Signed report prepared, but email delivery failed. Use Send final report again to retry."
+                messageIsWarning = raw["mailed"] as? Bool != true
             } else {
                 guard PDFDocument(data: data) != nil else { throw ClientError.invalidResponse }
                 pdf = data; message = "Preview ready. No email has been sent."
@@ -192,6 +232,45 @@ final class ReportBrowserModel: ObservableObject {
     func startOver() {
         source = ""; fields = [:]; reviewed = false; signatureName = ""; pdf = nil; message = ""; error = nil
         clientId = UUID().uuidString; changed()
+    }
+
+    private func portalAssertion() async throws -> String {
+        guard let appModel, let user = appModel.user else { throw ClientError.unauthorized("Your Dashboard sign-in could not be confirmed.") }
+        if !assertion.isEmpty, assertionUserID == user.id, assertionExpiresAt.timeIntervalSinceNow > 15 { return assertion }
+        let handoff: ReportHandoffResponse = try await appModel.request("/api/reports/handoff", method: "POST", body: Data("{}".utf8))
+        guard let url = URL(string: handoff.url), url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == Self.reportAPIURL.host?.lowercased(),
+              url.path == Self.reportURL.path,
+              (url.port == nil || url.port == 443), url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil,
+              !handoff.assertion.isEmpty else { throw ClientError.invalidResponse }
+        let expiry = Date(timeIntervalSince1970: TimeInterval(handoff.expiresAt))
+        guard expiry.timeIntervalSinceNow > 0, expiry.timeIntervalSinceNow <= 305 else { throw ClientError.invalidResponse }
+        assertion = handoff.assertion
+        assertionExpiresAt = expiry
+        assertionUserID = user.id
+        return assertion
+    }
+
+    private func portalRequest(method: String = "GET", queryItems: [URLQueryItem], body: Data? = nil, retryingAuthentication: Bool = false) async throws -> (Data, HTTPURLResponse) {
+        var components = URLComponents(url: Self.reportAPIURL, resolvingAgainstBaseURL: false)!
+        components.queryItems = queryItems
+        guard let url = components.url else { throw ClientError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 90
+        request.setValue("Bearer \(try await portalAssertion())", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
+        if response.statusCode == 401, !retryingAuthentication {
+            assertion = ""; assertionExpiresAt = .distantPast; assertionUserID = nil
+            return try await portalRequest(method: method, queryItems: queryItems, body: body, retryingAuthentication: true)
+        }
+        return (data, response)
     }
 }
 
@@ -244,7 +323,7 @@ struct ReportGeneratorView: View {
                                 } header: { Text("Preparing officer") }
                                 Section {
                                     Picker("Report type", selection: $browser.type) {
-                                        ForEach(["officer", "committee", "event", "formal"].filter { browser.isOfficer || $0 != "officer" }, id: \.self) { key in
+                                        ForEach(["officer", "committee", "event", "formal"].filter { browser.types[$0] != nil }, id: \.self) { key in
                                             Text(browser.types[key]?["name"] as? String ?? key.capitalized).tag(key)
                                         }
                                     }
@@ -258,20 +337,20 @@ struct ReportGeneratorView: View {
                             } else {
                                 Section {
                                     LabeledContent("Report", value: reportTitle)
-                                    LabeledContent("Prepared by", value: browser.name.isEmpty ? "Choose your name in Details" : browser.name)
+                                    LabeledContent("Prepared by", value: browser.name)
                                     LabeledContent("Delivery", value: browser.recipient)
                                 } header: { Text("Final review") }
                                 Section {
                                     Label(browser.previewCurrent ? "Preview matches this report" : "Update the preview before signing", systemImage: browser.previewCurrent ? "checkmark.circle.fill" : "doc.badge.clock")
                                         .foregroundStyle(browser.previewCurrent ? Color.green : Color.secondary)
                                     Toggle(browser.reviewStatement, isOn: $browser.reviewed).toggleStyle(.checkbox).disabled(!browser.previewCurrent)
-                                    TextField("Type your name to sign", text: $browser.signatureName)
-                                    Text("Your signature is applied only when you confirm Send final report.").font(.caption).foregroundStyle(.secondary)
+                                    LabeledContent("Signed as", value: browser.name)
+                                    Text("Your saved Dashboard identity and signature are applied only when you confirm Send final report.").font(.caption).foregroundStyle(.secondary)
                                 } header: { Text("Your signature") }
                                 Section {
                                     Button { confirmSend = true } label: { Label("Send final report", systemImage: "paperplane") }
                                         .buttonStyle(.borderedProminent)
-                                        .disabled(!browser.previewCurrent || !browser.reviewed || browser.signatureName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                        .disabled(!browser.previewCurrent || !browser.reviewed)
                                     Text("Emails the signed report to \(browser.recipient).").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -301,17 +380,19 @@ struct ReportGeneratorView: View {
             if let error = browser.error, !browser.schema.isEmpty {
                 Label(error, systemImage: "exclamationmark.circle.fill").foregroundStyle(.red).font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading)
             }
-            if !browser.message.isEmpty { Text(browser.message).font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading) }
+            if !browser.message.isEmpty {
+                Group {
+                    if browser.messageIsWarning { Label(browser.message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                    else { Text(browser.message) }
+                }.font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            }
         }.background(Color(nsColor: .windowBackgroundColor))
-        .task { await browser.loadIfNeeded() }
-        .onChange(of: browser.name) { _, _ in browser.signatureName = ""; browser.changed() }
-        .onChange(of: browser.email) { _, _ in browser.changed() }
+        .task { browser.configure(model); await browser.loadIfNeeded() }
         .onChange(of: browser.phone) { _, _ in browser.changed() }
-        .onChange(of: browser.isOfficer) { _, value in browser.name = ""; if !value && browser.type == "officer" { browser.type = "formal" }; browser.changed() }
         .onChange(of: browser.type) { _, _ in browser.changed() }
         .alert("Send this signed report?", isPresented: $confirmSend) {
             Button("Send final report") { Task { await browser.prepare(send: true) } }; Button("Cancel", role: .cancel) {}
-        } message: { Text("The current report will be signed with the name you entered and emailed to \(browser.recipient).") }
+        } message: { Text("The current report will be signed with your Dashboard identity and emailed to \(browser.recipient).") }
         .alert("Start a new report?", isPresented: $confirmReset) {
             Button("Clear report", role: .destructive) { browser.startOver(); step = 0 }; Button("Cancel", role: .cancel) {}
         } message: { Text("The saved report fields will be cleared. Your contact details remain available.") }
@@ -382,15 +463,11 @@ struct ReportGeneratorView: View {
     }
 
     @ViewBuilder private var identity: some View {
-        Toggle("I am a Lodge officer", isOn: $browser.isOfficer).toggleStyle(.checkbox)
-        if browser.isOfficer {
-            Picker("Officer", selection: $browser.name) {
-                Text("Choose your name").tag("")
-                ForEach(browser.officers, id: \.self) { officer in Text("\(officer["name"] ?? "") · \(officer["office"] ?? "")").tag(officer["name"] ?? "") }
-            }
-        } else { TextField("Your name", text: $browser.name) }
-        TextField("Email address", text: $browser.email)
+        LabeledContent("Signed in as", value: browser.name)
+        LabeledContent("Office", value: browser.office)
+        LabeledContent("Email", value: browser.email)
         TextField("Phone (optional)", text: $browser.phone)
+        Text("Your identity comes from your Dashboard account and cannot be changed inside the report.").font(.caption).foregroundStyle(.secondary)
     }
     @ViewBuilder private func reportField(_ field: NativeReportField) -> some View {
         VStack(alignment: .leading, spacing: 6) {

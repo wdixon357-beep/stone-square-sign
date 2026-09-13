@@ -44,7 +44,11 @@ const SESSION_POLICY = createSessionPolicy();
 const CANDIDATE_TRACKER_URL = String(
   process.env.CANDIDATE_TRACKER_URL || 'https://tracker.stonesquare22pha.org/',
 ).replace(/\/$/, '');
+const REPORT_GENERATOR_URL = String(
+  process.env.REPORT_GENERATOR_URL || 'https://request.stonesquare22pha.org/report',
+);
 const TRACKER_SSO_SHARED_SECRET = String(process.env.TRACKER_SSO_SHARED_SECRET || '');
+const WEB_SESSION_COOKIE = 'ss22_session';
 const OFFICE_ROLES = new Set(['secretary', 'assistant_secretary']);
 const MINUTES_ROLES = new Set(['owner', 'secretary', 'assistant_secretary']);
 /* One shared Lodge access code, so an officer can create his own account without waiting on an
@@ -109,10 +113,13 @@ const createTrackerHandoffUrl = (user) => {
     throw new Error('Candidate Tracker single sign-on is not configured.');
   }
   const issuedAt = Math.floor(Date.now() / 1000);
+  const permissions = resolvePermissions(user)
+    .filter((permission) => ['candidates.view', 'candidates.edit'].includes(permission));
   const payload = Buffer.from(JSON.stringify({
     email: user.email,
     name: user.name,
     role: user.role,
+    permissions,
     audience: 'stone-square-candidate-tracker',
     issuedAt,
     expiresAt: issuedAt + 60,
@@ -124,6 +131,54 @@ const createTrackerHandoffUrl = (user) => {
   const url = new URL('/api/sso', CANDIDATE_TRACKER_URL);
   url.searchParams.set('assertion', `${payload}.${signature}`);
   return url.toString();
+};
+
+const createReportAssertion = (user) => {
+  if (!TRACKER_SSO_SHARED_SECRET) {
+    throw new Error('Report Generator single sign-on is not configured.');
+  }
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = issuedAt + 300;
+  const payload = Buffer.from(JSON.stringify({
+    aud: 'stone-square-report-generator',
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    permissions: resolvePermissions(user),
+    issuedAt,
+    expiresAt,
+  })).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', TRACKER_SSO_SHARED_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return { assertion: `${payload}.${signature}`, expiresAt };
+};
+
+const isWebClient = (req) => req.get('x-stone-square-client') === 'web'
+  || req.body?.client === 'web';
+const requestsWebSession = (req) => req.body?.client === 'web';
+const cookieValues = (req) => Object.fromEntries(
+  String(req.headers.cookie || '').split(';').map((part) => {
+    const separator = part.indexOf('=');
+    return separator < 0 ? ['', ''] : [part.slice(0, separator).trim(), part.slice(separator + 1).trim()];
+  }).filter(([key]) => key),
+);
+const setWebSessionCookie = (res, token) => {
+  const attributes = [
+    `${WEB_SESSION_COOKIE}=${token}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/',
+    `Max-Age=${SESSION_POLICY.lifetimeDays * 24 * 60 * 60}`,
+  ];
+  if (IS_PRODUCTION) attributes.push('Secure');
+  res.setHeader('Set-Cookie', attributes.join('; '));
+};
+const clearWebSessionCookie = (res) => {
+  const attributes = [`${WEB_SESSION_COOKIE}=`, 'HttpOnly', 'SameSite=Strict', 'Path=/', 'Max-Age=0'];
+  if (IS_PRODUCTION) attributes.push('Secure');
+  res.setHeader('Set-Cookie', attributes.join('; '));
 };
 
 const createTransporter = () => {
@@ -200,10 +255,17 @@ const extractTextFromPdf = async (buffer) => {
 const createAuthToken = async (userId, req) => {
   const token = generateToken();
   const expiresAt = SESSION_POLICY.expiresAt();
-  await dbRun('INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)', [
+  const createdAt = nowIso();
+  await dbRun(`INSERT INTO sessions
+    (user_id, token, expires_at, created_at, last_seen_at, client_label, user_agent)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`, [
     userId,
     hashSecret(token),
     expiresAt,
+    createdAt,
+    createdAt,
+    isWebClient(req) ? 'Web browser' : req.get('x-stone-square-client') === 'mac' ? 'Mac app' : 'Other device',
+    String(req.get('user-agent') || '').slice(0, 500),
   ]);
   await startActivitySession(userId, hashSecret(token), req);
   return { token, session: { lifetimeDays: SESSION_POLICY.lifetimeDays, expiresAt } };
@@ -248,11 +310,22 @@ const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assis
 const requireAuth = async (req, res, next) => {
   try {
     const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    const token = bearer || req.headers['x-lodge-token'];
+    const headerToken = bearer || req.headers['x-lodge-token'];
+    const cookieToken = cookieValues(req)[WEB_SESSION_COOKIE];
+    const token = headerToken || cookieToken;
     if (!token) return res.status(401).json({ error: 'Sign in is required.' });
+    const authViaCookie = !headerToken && Boolean(cookieToken);
+    if (authViaCookie && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      let expectedOrigin = '';
+      try { expectedOrigin = new URL(requestBaseUrl(req)).origin; } catch {}
+      if (!req.get('origin') || req.get('origin') !== expectedOrigin) {
+        return res.status(403).json({ error: 'This signed-in request did not come from Stone Square Sign.' });
+      }
+    }
     const tokenHash = hashSecret(token);
     const row = await dbGet(
-      `SELECT users.id, users.email, users.name, users.role, users.permissions_json, users.access_revoked_at, sessions.expires_at
+      `SELECT users.id, users.email, users.name, users.role, users.permissions_json, users.access_revoked_at,
+              sessions.id AS session_id, sessions.expires_at, sessions.last_seen_at
        FROM sessions JOIN users ON users.id = sessions.user_id
        WHERE sessions.token = ?`,
       [tokenHash],
@@ -269,13 +342,19 @@ const requireAuth = async (req, res, next) => {
     }
     if (SESSION_POLICY.shouldRefresh(row.expires_at)) {
       row.expires_at = SESSION_POLICY.expiresAt();
-      await dbRun('UPDATE sessions SET expires_at = ? WHERE token = ?', [
-        row.expires_at, tokenHash,
+      await dbRun('UPDATE sessions SET expires_at = ?, last_seen_at = ? WHERE token = ?', [
+        row.expires_at, nowIso(), tokenHash,
       ]);
+      if (authViaCookie) setWebSessionCookie(res, token);
+    } else if (!row.last_seen_at || Date.now() - Date.parse(row.last_seen_at) > 5 * 60 * 1000) {
+      await dbRun('UPDATE sessions SET last_seen_at = ? WHERE token = ?', [nowIso(), tokenHash]);
     }
     row.permissions = resolvePermissions(row);
     req.user = row;
     req.authTokenHash = tokenHash;
+    req.authRawToken = token;
+    req.authSessionId = row.session_id;
+    req.authViaCookie = authViaCookie;
     // Provider and spending diagnostics belong only to the administrator. Keep
     // report content intact; redact only generated notices and error messages.
     if (row.role !== 'owner') {
@@ -1280,7 +1359,12 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
       userAgent: req.get('user-agent') || '',
     });
     broadcast('queue_changed', { reason: 'account_activated' });
-    res.status(201).json({ token, user: responseUser, session });
+    if (requestsWebSession(req)) {
+      setWebSessionCookie(res, token);
+      res.status(201).json({ user: responseUser, session });
+    } else {
+      res.status(201).json({ token, user: responseUser, session });
+    }
   } catch (error) {
     if (isUniqueViolation(error)) {
       return res.status(409).json({ error: 'That email address is already registered.' });
@@ -1299,7 +1383,12 @@ app.post('/api/auth/login', rateLimit({ key: 'login', maximum: 10, windowMs: 15 
     }
     const { token, session } = await createAuthToken(user.id, req);
     await addAudit({ userId: user.id, action: 'signed_in', ip: req.ip, userAgent: req.get('user-agent') || '' });
-    res.json({ token, user: await userForResponse(user), session });
+    if (requestsWebSession(req)) {
+      setWebSessionCookie(res, token);
+      res.json({ user: await userForResponse(user), session });
+    } else {
+      res.json({ token, user: await userForResponse(user), session });
+    }
   } catch (error) {
     next(error);
   }
@@ -1310,6 +1399,7 @@ app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
     await endActivitySession(req.authTokenHash, 'Signed out');
     await addAudit({ userId:req.user.id, action:'signed_out', ip:req.ip, userAgent:req.get('user-agent')||'' });
     await dbRun('DELETE FROM sessions WHERE token = ?', [req.authTokenHash]);
+    if (req.authViaCookie || isWebClient(req)) clearWebSessionCookie(res);
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -1318,10 +1408,56 @@ app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
 
 app.get('/api/auth/me', requireAuth, async (req, res, next) => {
   try {
+    if (isWebClient(req) && !req.authViaCookie) setWebSessionCookie(res, req.authRawToken);
     res.json({ user: await userForResponse(req.user), session: { lifetimeDays: SESSION_POLICY.lifetimeDays, expiresAt: req.user.expires_at } });
   } catch (error) {
     next(error);
   }
+});
+
+app.get('/api/auth/sessions', requireAuth, async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const rows = await dbAll(
+      `SELECT id, created_at, last_seen_at, expires_at, client_label
+         FROM sessions WHERE user_id = ? ORDER BY COALESCE(last_seen_at, created_at, expires_at) DESC`,
+      [req.user.id],
+    );
+    res.json({ sessions: rows.map((row) => ({
+      id: row.id,
+      label: row.client_label || 'Existing device',
+      createdAt: row.created_at || null,
+      lastSeenAt: row.last_seen_at || null,
+      expiresAt: row.expires_at,
+      current: row.id === req.authSessionId,
+    })) });
+  } catch (error) { next(error); }
+});
+
+app.delete('/api/auth/sessions/:id', requireAuth, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Choose a valid device sign-in.' });
+    const session = await dbGet('SELECT id, token FROM sessions WHERE id = ? AND user_id = ?', [id, req.user.id]);
+    if (!session) return res.status(404).json({ error: 'That device sign-in is no longer active.' });
+    await endActivitySession(session.token, id === req.authSessionId ? 'Signed out' : 'Ended from device settings');
+    await dbRun('DELETE FROM sessions WHERE id = ? AND user_id = ?', [id, req.user.id]);
+    await addAudit({ userId: req.user.id, action: 'device_session_ended', ip: req.ip,
+      userAgent: req.get('user-agent') || '', details: { current: id === req.authSessionId } });
+    if (id === req.authSessionId) clearWebSessionCookie(res);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/auth/sessions/revoke-others', requireAuth, async (req, res, next) => {
+  try {
+    const others = await dbAll('SELECT token FROM sessions WHERE user_id = ? AND id <> ?', [req.user.id, req.authSessionId]);
+    for (const session of others) await endActivitySession(session.token, 'Ended from device settings');
+    await dbRun('DELETE FROM sessions WHERE user_id = ? AND id <> ?', [req.user.id, req.authSessionId]);
+    await addAudit({ userId: req.user.id, action: 'other_device_sessions_ended', ip: req.ip,
+      userAgent: req.get('user-agent') || '', details: { count: others.length } });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
 });
 
 app.post('/api/auth/forgot-password', rateLimit({ key: 'reset', maximum: 5, windowMs: 30 * 60 * 1000 }), async (req, res, next) => {
@@ -1397,6 +1533,18 @@ app.post('/api/tracker/handoff', requireAuth, rateLimit({ key: 'tracker-handoff'
   } catch (error) {
     next(error);
   }
+});
+
+app.post('/api/reports/handoff', requireAuth, rateLimit({ key: 'report-handoff', maximum: 120, windowMs: 60 * 60 * 1000 }), (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!hasPermission(req.user, 'reports.create')) {
+      return res.status(403).json({ error: 'Report Generator access is not enabled.' });
+    }
+    const { assertion, expiresAt } = createReportAssertion(req.user);
+    const url = new URL(REPORT_GENERATOR_URL);
+    res.json({ url: url.toString(), assertion, expiresAt });
+  } catch (error) { next(error); }
 });
 
 app.get('/api/events', requireAuth, (req, res) => {
@@ -2248,15 +2396,18 @@ app.post('/api/documents', requireAuth, requireOwner, upload.single('document'),
        WHERE ds.document_id = ? AND u.email NOT LIKE '%.local'`,
       [documentId],
     );
+    const notificationWarnings = [];
     for (const signer of signerAccounts) {
       try {
-        await sendEmail({
+        const sent = await sendEmail({
           to: signer.email,
           subject: `Signature requested: ${title}`,
           text: `${signer.name},\n\nA Lodge document is ready for your signature. Sign in at ${requestBaseUrl(req)} to review and sign ${title}.`,
         });
+        if (!sent) notificationWarnings.push(`The document is saved, but the email notice to ${signer.name} could not be delivered.`);
       } catch (error) {
         console.warn('Signature request email failed:', error.message);
+        notificationWarnings.push(`The document is saved, but the email notice to ${signer.name} could not be delivered.`);
       }
     }
     await addAudit({
@@ -2281,6 +2432,7 @@ app.post('/api/documents', requireAuth, requireOwner, upload.single('document'),
         created_at: createdAt,
         signers,
       },
+      notificationWarnings,
     });
   } catch (error) {
     next(error);
@@ -2418,6 +2570,7 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
   );
   await dbRun('UPDATE documents SET signing_mode = ? WHERE id = ?', ['any', documentId]);
   const signerNames = [];
+  const notificationWarnings = [];
   for (const role of BOTH_SECRETARIES) {
     const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
     const officerName = officer?.name
@@ -2429,15 +2582,17 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
     );
     if (officer?.email && !officer.email.endsWith('.local')) {
       try {
-        await sendEmail({
+        const sent = await sendEmail({
           to: officer.email,
           subject: `Signature requested: ${documentTitle}`,
           text: `${officerName},\n\nA dispensation is ready for your signature. Either Secretary may sign this one; whoever signs first completes it. Sign in at ${baseUrl} to review and sign ${documentTitle}.`,
         });
+        if (!sent) notificationWarnings.push(`The dispensation is saved, but the email notice to ${officerName} could not be delivered.`);
       } catch (error) {
         console.warn('Signature request email failed:', error.message);
+        notificationWarnings.push(`The dispensation is saved, but the email notice to ${officerName} could not be delivered.`);
       }
-    }
+    } else notificationWarnings.push(`The dispensation is saved, but ${officerName} does not have a deliverable account email for the signature notice.`);
   }
   await addAudit({
     userId: ownerUser.id,
@@ -2451,7 +2606,7 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
     },
   });
   broadcast('queue_changed', { reason: 'dispensation_created', documentId });
-  return { documentId, documentTitle };
+  return { documentId, documentTitle, notificationWarnings };
 };
 
 app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'dispensation-create', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
@@ -2462,7 +2617,7 @@ app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'disp
     }
     /* signerRoles is still accepted from an older cached page and deliberately ignored.
      * Every dispensation goes to both Secretaries now. */
-    const { documentId } = await createDispensationDocument({
+    const { documentId, notificationWarnings } = await createDispensationDocument({
       fields: {
         requestDate: String(req.body?.requestDate || ''),
         eventDate: String(req.body?.eventDate || ''),
@@ -2479,7 +2634,7 @@ app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'disp
       ip: req.ip,
       userAgent: req.get('user-agent') || '',
     });
-    res.status(201).json({ document: { id: documentId } });
+    res.status(201).json({ document: { id: documentId }, notificationWarnings });
   } catch (error) {
     next(error);
   }
@@ -2569,17 +2724,22 @@ app.post('/api/proposals', requireAuth, requireWarden, rateLimit({ key: 'proposa
     );
     await addAudit({ userId: req.user.id, action: 'proposal_created', ip: req.ip,
       userAgent: req.get('user-agent') || '', details: { proposalId: id, eventDate: f.eventDate } });
+    const notificationWarnings = [];
     if (OWNER_EMAIL) {
       try {
-        await sendEmail({
+        const sent = await sendEmail({
           to: OWNER_EMAIL,
           subject: `Dispensation proposed by ${req.user.name}`,
           text: `${req.user.name} has proposed a dispensation for ${f.eventDate}.\n\n${f.requestDetails}\n\nHis note:\n${note || '(none)'}\n\nReview it at ${requestBaseUrl(req)}`,
         });
-      } catch (error) { console.warn('Proposal notice email failed:', error.message); }
-    }
+        if (!sent) notificationWarnings.push('The proposal is saved, but the Worshipful Master email notice could not be delivered.');
+      } catch (error) {
+        console.warn('Proposal notice email failed:', error.message);
+        notificationWarnings.push('The proposal is saved, but the Worshipful Master email notice could not be delivered.');
+      }
+    } else notificationWarnings.push('The proposal is saved, but the Worshipful Master email notice is not configured.');
     broadcast('proposals_changed', { reason: 'proposal_created', proposalId: id });
-    res.status(201).json({ proposal: { id } });
+    res.status(201).json({ proposal: { id }, notificationWarnings });
   } catch (error) { next(error); }
 });
 
@@ -2609,8 +2769,22 @@ app.put('/api/proposals/:id', requireAuth, requireWarden, async (req, res, next)
     );
     await addAudit({ userId: req.user.id, action: 'proposal_resubmitted', ip: req.ip,
       userAgent: req.get('user-agent') || '', details: { proposalId: req.params.id } });
+    const notificationWarnings = [];
+    if (OWNER_EMAIL) {
+      try {
+        const sent = await sendEmail({
+          to: OWNER_EMAIL,
+          subject: `Dispensation proposal revised by ${req.user.name}`,
+          text: `${req.user.name} revised the dispensation proposal for ${f.eventDate}.\n\n${f.requestDetails}\n\nReview it at ${requestBaseUrl(req)}`,
+        });
+        if (!sent) notificationWarnings.push('The revised proposal is saved, but the Worshipful Master email notice could not be delivered.');
+      } catch (error) {
+        console.warn('Proposal revision notice email failed:', error.message);
+        notificationWarnings.push('The revised proposal is saved, but the Worshipful Master email notice could not be delivered.');
+      }
+    } else notificationWarnings.push('The revised proposal is saved, but the Worshipful Master email notice is not configured.');
     broadcast('proposals_changed', { reason: 'proposal_resubmitted', proposalId: req.params.id });
-    res.json({ ok: true });
+    res.json({ ok: true, notificationWarnings });
   } catch (error) { next(error); }
 });
 
@@ -2667,24 +2841,31 @@ app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, r
 
     const proposer = await dbGet('SELECT email, name FROM users WHERE id = ?', [claimed.proposer_user_id]);
     const notify = async (subject, text) => {
+      const warnings = [];
       if (proposer?.email && !proposer.email.endsWith('.local')) {
-        try { await sendEmail({ to: proposer.email, subject, text }); }
-        catch (error) { console.warn('Proposal decision email failed:', error.message); }
-      }
+        try {
+          const sent = await sendEmail({ to: proposer.email, subject, text });
+          if (!sent) warnings.push(`The decision is saved, but the email notice to ${proposer.name || 'the proposer'} could not be delivered.`);
+        } catch (error) {
+          console.warn('Proposal decision email failed:', error.message);
+          warnings.push(`The decision is saved, but the email notice to ${proposer.name || 'the proposer'} could not be delivered.`);
+        }
+      } else warnings.push('The decision is saved, but the proposer does not have a deliverable email address.');
+      return warnings;
     };
 
     if (decision !== 'approve') {
       const action = decision === 'decline' ? 'proposal_declined' : 'proposal_changes_requested';
       await addAudit({ userId: req.user.id, action, ip: req.ip,
         userAgent: req.get('user-agent') || '', details: { proposalId: req.params.id } });
-      await notify(
+      const notificationWarnings = await notify(
         decision === 'decline' ? 'Your dispensation proposal was not approved' : 'The Worshipful Master sent your proposal back',
         `${proposer?.name || 'Brother'},\n\n${decision === 'decline'
           ? 'The Worshipful Master has not approved the dispensation you proposed.'
           : 'The Worshipful Master has asked for changes to the dispensation you proposed. Sign in and update it.'}\n\n${wmNote ? `His note:\n${wmNote}\n\n` : ''}${requestBaseUrl(req)}`,
       );
       broadcast('proposals_changed', { reason: action, proposalId: req.params.id });
-      return res.json({ ok: true, status: decision === 'decline' ? 'declined' : 'changes_requested' });
+      return res.json({ ok: true, status: decision === 'decline' ? 'declined' : 'changes_requested', notificationWarnings });
     }
 
     /* Approve. The Master's edits win over whatever the Warden typed. */
@@ -2708,7 +2889,7 @@ app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, r
     ).trim().slice(0, 160);
     let createdDocumentId = null;
     try {
-      const { documentId } = await createDispensationDocument({
+      const { documentId, notificationWarnings: secretaryWarnings } = await createDispensationDocument({
         fields: { ...edited, worshipfulMasterAddress: masterAddress },
         ownerUser: req.user,
         baseUrl: requestBaseUrl(req),
@@ -2725,10 +2906,11 @@ app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, r
       );
       await addAudit({ userId: req.user.id, documentId, action: 'proposal_approved', ip: req.ip,
         userAgent: req.get('user-agent') || '', details: { proposalId: req.params.id } });
-      await notify('Your dispensation proposal was approved',
+      const proposerWarnings = await notify('Your dispensation proposal was approved',
         `${proposer?.name || 'Brother'},\n\nThe Worshipful Master approved the dispensation you proposed. It has gone to the Secretaries for signature and will follow the usual course from there.\n\n${wmNote ? `His note:\n${wmNote}\n\n` : ''}You can follow its progress at ${requestBaseUrl(req)}`);
       broadcast('proposals_changed', { reason: 'proposal_approved', proposalId: req.params.id });
-      res.json({ ok: true, status: 'approved', documentId });
+      res.json({ ok: true, status: 'approved', documentId,
+        notificationWarnings: [...secretaryWarnings, ...proposerWarnings] });
     } catch (error) {
       /* Hand the proposal back rather than stranding it, but ONLY if nothing was created.
        * If the dispensation exists and something later failed, returning it to pending would
@@ -3129,23 +3311,27 @@ app.post('/api/documents/:id/offer-to-both', requireAuth, requireOwner, rateLimi
       });
       return { documentId: document.id, title: document.title, added };
     });
+    const notificationWarnings = [];
     for (const officer of result.added) {
       if (officer.email && !officer.email.endsWith('.local')) {
         try {
-          await sendEmail({
+          const sent = await sendEmail({
             to: officer.email,
             subject: `Signature requested: ${result.title}`,
             text: `${officer.name},\n\nA dispensation is ready for your signature. Either Secretary may sign this one; whoever signs first completes it. Sign in at ${requestBaseUrl(req)} to review and sign ${result.title}.`,
           });
+          if (!sent) notificationWarnings.push(`The signing assignment is saved, but the email notice to ${officer.name} could not be delivered.`);
         } catch (error) {
           console.warn('Signature request email failed:', error.message);
+          notificationWarnings.push(`The signing assignment is saved, but the email notice to ${officer.name} could not be delivered.`);
         }
-      }
+      } else notificationWarnings.push(`The signing assignment is saved, but ${officer.name} does not have a deliverable email address.`);
     }
     broadcast('queue_changed', { reason: 'document_opened_to_both', documentId: result.documentId });
     res.json({
       message: 'Either Secretary can now sign this document. Whoever signs first completes it.',
       added: result.added.map((officer) => officer.name),
+      notificationWarnings,
     });
   } catch (error) {
     next(error);

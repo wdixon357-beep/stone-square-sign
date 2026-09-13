@@ -4,12 +4,43 @@ import PDFKit
 final class ReportFixture: URLProtocol {
     static var pdf = Data()
     static var deliveries = 0
+    static var handoffs = 0
+    static var portalBodies: [[String: Any]] = []
+    static var mailed = true
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if request.url?.path == "/api/reports/handoff" {
+            precondition(request.url?.host == "sign-fixture.invalid")
+            precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-token")
+            Self.handoffs += 1
+            let expiry = Int(Date().addingTimeInterval(300).timeIntervalSince1970)
+            let data = try! JSONSerialization.data(withJSONObject: ["url": "https://request.stonesquare22pha.org/report", "assertion": "synthetic-report-assertion", "expiresAt": expiry])
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        precondition(request.url?.host == "request.stonesquare22pha.org")
+        precondition(request.url?.path == "/api/report")
+        precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-report-assertion")
+        var portalBody = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                portalBody.append(buffer, count: count)
+            }
+        }
+        if let object = try? JSONSerialization.jsonObject(with: portalBody) as? [String: Any] {
+            Self.portalBodies.append(object)
+        }
         let sending = request.url!.query?.contains("copy=1") == true
         if sending { Self.deliveries += 1 }
-        let data = sending ? try! JSONSerialization.data(withJSONObject: ["pdf": Self.pdf.base64EncodedString(), "mailed": true]) : Self.pdf
+        let data = sending ? try! JSONSerialization.data(withJSONObject: ["pdf": Self.pdf.base64EncodedString(), "mailed": Self.mailed]) : Self.pdf
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": sending ? "application/json" : "application/pdf"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -85,9 +116,14 @@ final class GenerationFixture: URLProtocol {
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
         ReportFixture.pdf = try Data(contentsOf: URL(fileURLWithPath: "test/sample-dispensation.pdf"))
+        let secureReportApp = AppModel(session: session, savedSessionToken: "synthetic-token")
+        let savedReportServer = secureReportApp.serverAddress
+        secureReportApp.serverAddress = "https://sign-fixture.invalid"
+        defer { secureReportApp.serverAddress = savedReportServer }
+        secureReportApp.user = User(id: 1, email: "qa@example.org", name: "QA Officer", role: "secretary", hasSignature: true, permissions: ["reports.create"])
         let model = ReportBrowserModel(persistenceURL: scratch.appendingPathComponent("draft.json"), session: session)
+        model.configure(secureReportApp)
         model.schema = ["officers": [["name": "QA Officer", "office": "Secretary"]], "types": ["officer": ["name": "Officer Report", "fields": [["id": "summary", "label": "Summary", "req": true]]]]]
-        model.name = "QA Officer"; model.email = "qa@example.org"
         await model.prepare(send: false)
         precondition(model.pdf == nil && model.error?.contains("Summary is required") == true)
         print("PASS: missing required content prevents preview")
@@ -97,6 +133,12 @@ final class GenerationFixture: URLProtocol {
         let restored = ReportBrowserModel(persistenceURL: model.persistenceURL, session: session)
         precondition(restored.fields == model.fields && restored.draftSaved && !restored.reviewed && restored.signatureName.isEmpty)
         print("PASS: draft survives reopening without carrying a signature or approval")
+        let anotherAccount = AppModel(session: session, savedSessionToken: "synthetic-token")
+        anotherAccount.user = User(id: 2, email: "other@example.invalid", name: "Other Officer", role: "officer", hasSignature: true, permissions: ["reports.create"])
+        let isolatedDraft = ReportBrowserModel(persistenceURL: model.persistenceURL, session: session)
+        isolatedDraft.configure(anotherAccount)
+        precondition(isolatedDraft.fields.isEmpty && isolatedDraft.source.isEmpty && isolatedDraft.phone.isEmpty && !isolatedDraft.draftSaved)
+        print("PASS: a saved local report draft is never shown to a different Dashboard account")
         model.reviewed = true; model.signatureName = "QA Officer"
         await model.prepare(send: true)
         precondition(ReportFixture.deliveries == 0 && model.error?.contains("preview") == true)
@@ -113,7 +155,19 @@ final class GenerationFixture: URLProtocol {
         await model.prepare(send: false); model.reviewed = true; model.signatureName = "QA Officer"
         await model.prepare(send: true)
         precondition(ReportFixture.deliveries == 1 && model.message.contains("Signed report emailed"))
+        precondition(ReportFixture.handoffs == 1)
+        precondition(ReportFixture.portalBodies.count == 3)
+        for body in ReportFixture.portalBodies {
+            precondition(body["name"] == nil && body["email"] == nil && body["office"] == nil && body["isOfficer"] == nil && body["signatureName"] == nil)
+            precondition(body["type"] as? String == "officer")
+        }
+        print("PASS: report preview and final use a short-lived signed handoff without editable officer identity")
         print("PASS: reviewed current report reaches only the isolated delivery fixture")
+        ReportFixture.mailed = false
+        await model.prepare(send: true)
+        precondition(ReportFixture.deliveries == 2 && model.messageIsWarning && model.message.contains("delivery failed"))
+        ReportFixture.mailed = true
+        print("PASS: a prepared report with failed email delivery displays a distinct warning state")
         model.startOver()
         precondition(model.fields.isEmpty && model.pdf == nil && !model.reviewed && model.signatureName.isEmpty && model.name == "QA Officer")
         print("PASS: new report clears content and signature while retaining contact details")
@@ -304,14 +358,19 @@ final class GenerationFixture: URLProtocol {
         let access = try decoder.decode(AccountAccessResponse.self, from: Data(#"{"capabilities":[{"id":"minutes.prepare","label":"Prepare minutes"}],"accounts":[{"key":"invite:7","id":7,"name":"QA Officer","email":"qa@example.invalid","role":"officer","pending":true,"revoked":false,"permissions":["minutes.view"]}]}"#.utf8))
         precondition(access.accounts[0].id == "invite:7" && access.accounts[0].pending && access.capabilities[0].id == "minutes.prepare")
         print("PASS: explicit capabilities override role defaults, finalized readers cannot prepare, manual treasury preparers lack upload, and owner retains administration")
-        let normalizedPermissions = AccessPermissions.normalized(["minutes.prepare", "treasury.upload", "documents.sign", "signature.manage"])
-        precondition(normalizedPermissions == ["minutes.prepare", "minutes.view", "treasury.upload", "treasury.view", "documents.sign", "documents.status", "signature.manage"])
+        let normalizedPermissions = AccessPermissions.normalized(["minutes.prepare", "treasury.upload", "documents.sign", "signature.manage", "candidates.edit"])
+        precondition(normalizedPermissions == ["minutes.prepare", "minutes.view", "treasury.upload", "treasury.view", "documents.sign", "documents.status", "signature.manage", "candidates.edit", "candidates.view"])
         precondition(AccessPermissions.normalized(["treasury.prepare"]) == ["treasury.prepare", "treasury.view"])
         precondition(AccessPermissions.normalized(normalizedPermissions) == normalizedPermissions)
         let officer = User(id: 47, email: "qa@example.invalid", name: "QA Officer", role: "officer", hasSignature: true)
         precondition(officer.canOpen(.reportGenerator) && officer.canOpen(.minutes) && officer.canOpen(.treasury) && officer.canOpen(.profile) && officer.canOpen(.settings))
         precondition(!officer.can("minutes.prepare") && !officer.can("treasury.prepare") && !officer.canOpen(.access))
         print("PASS: permission prerequisites normalize consistently and the officer fallback grants only reports, finalized views, signature and settings")
+        let candidateEditor = User(id: 48, email: "editor@example.invalid", name: "QA Candidate Editor", role: "officer", hasSignature: true, permissions: ["candidates.view", "candidates.edit"])
+        precondition(candidateEditor.canOpen(.candidateTracker) && candidateEditor.can("candidates.edit"))
+        let candidateReader = User(id: 49, email: "reader@example.invalid", name: "QA Candidate Reader", role: "officer", hasSignature: true, permissions: ["candidates.view"])
+        precondition(candidateReader.canOpen(.candidateTracker) && !candidateReader.can("candidates.edit"))
+        print("PASS: candidate viewing and editing are independently assigned capabilities")
         var uploader = warden; uploader.permissions = ["treasury.upload", "treasury.view"]
         precondition(!treasuryRecord.canOpen(for: uploader))
         var finalizedTreasury = treasuryRecord; finalizedTreasury.status = "ready_for_distribution"
@@ -321,6 +380,10 @@ final class GenerationFixture: URLProtocol {
         precondition(redactedStatus.allowance(forOwner: false) == nil)
         precondition(!redactedStatus.explanation(forOwner: false).contains("Terra"))
         precondition(!redactedStatus.explanation(forOwner: false).contains("OpenAI"))
+        precondition(LodgeCalendarDates.displayDate("2026-09-19") == "Sep 19, 2026")
+        precondition(LodgeCalendarDates.displayTime("19:30") == "7:30 PM")
+        precondition(LodgeCalendarDates.displayTime(nil).isEmpty)
+        print("PASS: calendar, building request and treasury list dates use consistent readable Eastern formatting")
         var proposalDraft = DispensationProposalDraft()
         precondition(!proposalDraft.isReady)
         proposalDraft.eventDate = "2026-10-15"; proposalDraft.requestDetails = "Synthetic event request."
@@ -330,15 +393,15 @@ final class GenerationFixture: URLProtocol {
         proposalDraft.requestDetails = "Synthetic event request."
         reportApp.user = warden
         GenerationFixture.beforeReply = { request in
-            GenerationFixture.response = request.httpMethod == "POST" ? Data(#"{"proposal":{"id":"synthetic-proposal"}}"#.utf8) : Data(#"{"proposals":[]}"#.utf8)
+            GenerationFixture.response = request.httpMethod == "POST" ? Data(#"{"proposal":{"id":"synthetic-proposal"},"notificationWarnings":["Notification delivery needs review."]}"#.utf8) : Data(#"{"proposals":[]}"#.utf8)
         }
         let proposalSubmitted = await reportApp.submitProposal(proposalDraft)
-        precondition(proposalSubmitted)
+        precondition(proposalSubmitted && reportApp.message.contains("Notification delivery needs review.") && reportApp.messageIsWarning)
         GenerationFixture.beforeReply = nil
         let proposalRequest = GenerationFixture.requests.last { $0.path == "/api/proposals" && $0.method == "POST" }!
         let proposalBody = try JSONSerialization.jsonObject(with: proposalRequest.body) as! [String: String]
         precondition(proposalBody["eventDate"] == "2026-10-15" && proposalBody["requestDetails"] == "Synthetic event request.")
-        print("PASS: Wardens have assigned native navigation, submit proposals through the authenticated service, and see no generation model or allowance details")
+        print("PASS: Wardens have assigned native navigation, submit proposals through the authenticated service, see delivery warnings, and see no generation model or allowance details")
         var changedWarden = warden; changedWarden.permissions = []
         GenerationFixture.response = try JSONEncoder().encode(["user": changedWarden])
         await reportApp.refresh(silent: true)
@@ -372,7 +435,7 @@ final class GenerationFixture: URLProtocol {
         let approvedPayload = Data(#"{"request":{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","spaces":["Hall"],"description":"Synthetic request","status":"approved","revision":"r2","requesterNotified":false}}"#.utf8)
         GenerationFixture.response = approvedPayload
         let recordedDecision = await building.decide(building.requests[0], decision: "approved", note: "Synthetic note", using: reportApp)
-        precondition(recordedDecision && building.message.contains("not been confirmed") && building.requests[0].status == "approved")
+        precondition(recordedDecision && building.message.contains("not been confirmed") && building.messageIsWarning && building.requests[0].status == "approved")
         print("PASS: building reads never decide, view-only accounts cannot decide, stale decisions reload, and notification status stays accurate")
         let calendarPayload = Data(#"{"events":[{"id":"event-1","title":"Synthetic event","startDate":"2026-11-01","endDate":"2026-11-03","startTime":"","endTime":"","allDay":false,"location":"Hall","description":"Synthetic notes","category":"lodge","status":"tentative","source":"Lodge calendar","editable":true,"sourceUrl":"","revision":"3"}],"warnings":["External calendar unavailable."],"timezone":"America/New_York"}"#.utf8)
         let calendar = LodgeCalendarWorkspace()
@@ -444,7 +507,7 @@ final class GenerationFixture: URLProtocol {
         precondition(GenerationFixture.requests.count == beforeRetryCheck)
         GenerationFixture.statusCode = 200; GenerationFixture.response = Data(#"{"ok":true,"ref":"synthetic-ref","refs":["synthetic-ref"],"wmNotified":false}"#.utf8)
         let recovered = await newRequest.submit(using: reportApp)
-        precondition(recovered && GenerationFixture.requests.last!.body == firstSubmit && newRequest.receipt?.references == ["synthetic-ref"] && !newRequest.hasUnsubmittedChanges)
+        precondition(recovered && GenerationFixture.requests.last!.body == firstSubmit && newRequest.receipt?.references == ["synthetic-ref"] && newRequest.messageIsWarning && !newRequest.hasUnsubmittedChanges)
         newRequest.startNew()
         precondition(newRequest.draft.submissionId != originalID && !newRequest.retryPending)
         print("PASS: native Lodge requests isolate queue access, block pending overlaps, require availability review and acknowledgment, and recover receipts with an identical frozen submission")

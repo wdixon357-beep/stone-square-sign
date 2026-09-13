@@ -14,6 +14,7 @@ enum AccessPermissions {
         if values.contains("minutes.prepare") { values.insert("minutes.view") }
         if values.contains("treasury.prepare") || values.contains("treasury.upload") { values.insert("treasury.view") }
         if values.contains("documents.sign") { values.insert("documents.status") }
+        if values.contains("candidates.edit") { values.insert("candidates.view") }
         return values
     }
 }
