@@ -34,7 +34,8 @@ The previous minutes were read and approved.`);
     assert.equal(sickness.length, 1, `one dedicated section for ${alias}`);
     assert.match(sickness[0].body, /A Brother requested prayers for his family\.[^]*A visit was arranged for next week\./);
     assert.doesNotMatch(sickness[0].body, /building team|previous minutes|PRAISE REPORTS|READING OF THE MINUTES/);
-    assert.doesNotMatch(agenda.sections.find(section => section.heading === 'Roll Call and Quorum').body, /prayers|visit/);
+    assert.ok(!agenda.sections.some(section => section.heading === 'Roll Call and Quorum'));
+    assert.equal(agenda.quorum, 'Yes', 'quorum stays in metadata after the redundant section is removed');
     assert.match(agenda.sections.find(section => section.heading === 'Good of the Order').body, /building team/);
     assert.match(agenda.sections.find(section => section.heading === 'Reading of the Minutes').body, /read and approved/);
   }
@@ -53,11 +54,42 @@ The previous minutes were read and approved.`);
   const ordinaryClosing = await generateMinutesDraft('The next stated communication date was announced to the Brothers. The Chaplain gave the closing prayer. The Lodge closed at 9:00 PM.');
   assert.equal(ordinaryClosing.sections.find(section => section.heading === SICKNESS_HEADING)?.body || '', '', 'a general closing prayer does not establish a sickness report');
 
-  for (const visitorValue of ['None', 'NONE', 'N/A', 'No visitors', 'No visiting Brothers']) {
+  for (const visitorValue of ['None', 'NONE', 'None recorded', 'None reported', 'N/A', 'No visitors', 'No visiting Brothers']) {
     const noVisitors = await generateMinutesDraft(`ROLL CALL AND QUORUM\nPresent: Brother Example One\nVisitors: ${visitorValue}\nA quorum was established.\nCLOSING\nThe Lodge closed at 9:00 PM.`);
     assert.deepEqual(noVisitors.visitors, [], 'a no-visitors marker is not a person');
     assert.deepEqual(noVisitors.present, ['Brother Example One']);
   }
+  const visitorWithAffiliation = await generateMinutesDraft('ROLL CALL AND QUORUM\nPresent: Brother Sample Member\nVisitors: Bro. Alex Example, Example Lodge No. 99\nA quorum was established.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.deepEqual(visitorWithAffiliation.visitors, ['Bro. Alex Example, Example Lodge No. 99'], 'a visitor affiliation stays attached to its visitor');
+  for (const secondVisitor of ['Bro. Ben Sample of Example Lodge No. 99', 'Ben Sample of Example Lodge No. 99']) {
+    const separateVisitors = await generateMinutesDraft(`ROLL CALL AND QUORUM\nPresent: Brother Sample Member\nVisitors: Bro. Alex Example, ${secondVisitor}\nA quorum was established.\nCLOSING\nThe Lodge closed at 9:00 PM.`);
+    assert.deepEqual(separateVisitors.visitors.map(visitor => visitor.toLowerCase()), ['bro. alex example', secondVisitor.toLowerCase()], 'a second person with a Lodge affiliation remains a separate visitor');
+  }
+  const legacySections = [{heading:'Roll Call and Quorum',body:'All officers are present unless noted.\nATTENDANCE AND VISITORS\nAdditional Brothers and visitors recorded in the sign in book.\nPRAISE REPORTS\nNone reported.'}];
+  const legacyBefore = JSON.stringify(legacySections);
+  const legacyClean = normalizeMinutesDraft({sections:legacySections,visitors:[]});
+  assert.ok(!legacyClean.sections.some(section => section.heading === 'Roll Call and Quorum'));
+  assert.doesNotMatch(JSON.stringify(legacyClean.sections), /praise reports|none reported|attendance and visitors|sign in book/i);
+  assert.equal(JSON.stringify(legacySections), legacyBefore, 'display normalization does not mutate the source snapshot');
+  const namedVisitorDraft = normalizeMinutesDraft({visitors:['Bro. Alex Example, Example Lodge No. 99'],sections:[{heading:'Roll Call and Quorum',body:'Visitors: Bro. Alex Example, Example Lodge No. 99'}]});
+  assert.deepEqual(namedVisitorDraft.visitors, ['Bro. Alex Example, Example Lodge No. 99']);
+  assert.ok(!namedVisitorDraft.sections.some(section => section.heading === 'Roll Call and Quorum'));
+  const visitorMarkers = ['None', 'None recorded', 'None reported.', 'None were recorded.', 'Not recorded', 'Not applicable', 'N/A', 'NA', 'N.A.', 'No visitors', 'No visitors were present.', 'No visiting Brothers', 'Visitors: None reported.'];
+  const placeholderVisitors = normalizeMinutesDraft({visitors:visitorMarkers,sections:legacySections});
+  assert.deepEqual(placeholderVisitors.visitors, [], 'saved visitor placeholders cannot create a Visitors table');
+  assert.doesNotMatch(JSON.stringify(placeholderVisitors.sections), /attendance and visitors|sign in book/i, 'section cleanup receives the filtered visitor list');
+  const mixedVisitors = normalizeMinutesDraft({visitors:[...visitorMarkers,'Bro. Alex Example, Example Lodge No. 99','Bro. Ben Sample of Example Lodge No. 99']});
+  assert.deepEqual(mixedVisitors.visitors, ['Bro. Alex Example, Example Lodge No. 99','Bro. Ben Sample of Example Lodge No. 99'], 'placeholder filtering preserves actual visitor names and affiliations exactly');
+  for (const emptyPraise of ['PRAISE REPORTS\nNone reported.', '3. Praise Reports: None recorded.', '**Praise Reports**\n- **None recorded.**']) {
+    const noPraise = await generateMinutesDraft(`OPENING\nThe Lodge opened at 7:30 PM.\n${emptyPraise}\nNEW BUSINESS\nA planning discussion was held. No vote was taken.\nCLOSING\nThe Lodge closed at 9:00 PM.`);
+    assert.doesNotMatch(JSON.stringify(noPraise.sections), /praise reports|none recorded|none reported/i);
+    assert.match(noPraise.sections.find(section => section.heading === 'New Business and Motions').body, /No vote was taken/);
+  }
+  const meaningfulPraise = await generateMinutesDraft('OPENING\nThe Lodge opened at 7:30 PM.\nPRAISE REPORTS\nPrayers were requested for the families.\nThe volunteers were thanked for arranging the supper.\nA motion to repair the steps was seconded.\nNo vote was taken. The team will obtain an estimate.\nCLOSING\nThe Lodge closed at 9:00 PM.');
+  assert.match(meaningfulPraise.sections.find(section => section.heading === SICKNESS_HEADING).body, /Prayers were requested for the families/);
+  assert.match(meaningfulPraise.sections.find(section => section.heading === 'Good of the Order').body, /volunteers were thanked/);
+  assert.match(meaningfulPraise.sections.find(section => section.heading === 'New Business and Motions').body, /repair the steps was seconded[^]*No vote was taken[^]*obtain an estimate/);
+  assert.doesNotMatch(JSON.stringify(meaningfulPraise.sections), /praise reports/i);
   const uppercaseAttendance = await generateMinutesDraft('ROLL CALL\nPresent:\nJOHN SAMPLE\nJAMES EXAMPLE\nExcused:\nDAVID TEST\nCOMMUNITY SERVICE\nA food collection was discussed.\nCLOSING\nThe Lodge closed at 9:00 PM.');
   assert.deepEqual(uppercaseAttendance.present, ['JOHN SAMPLE', 'JAMES EXAMPLE'], 'uppercase names remain in an explicitly labeled attendance list');
   assert.deepEqual(uppercaseAttendance.excused, ['DAVID TEST']);

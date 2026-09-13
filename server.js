@@ -21,6 +21,7 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
+import { minutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
 import { closingReviewIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
@@ -1723,23 +1724,6 @@ app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, rateL
   } catch (error) { next(error); }
 });
 
-const minutesChanges = (submitted, reviewed) => {
-  const before = normalizeMinutesDraft(submitted), after = normalizeMinutesDraft(reviewed);
-  const changes = [];
-  const labels = { meetingDate: 'Meeting date', meetingType: 'Meeting type', degree: 'Degree', openingTime: 'Opening time', closingTime: 'Closing time', prayerRequested: 'Prayer requested by the Worshipful Master', closingPrayerGiven: 'Closing prayer for the sick and distressed', presiding: 'Presiding officer', quorum: 'Quorum', nextMeeting: 'Next meeting', present: 'Brothers present', excused: 'Brothers excused', visitors: 'Visitors', officerAttendance: 'Officer attendance' };
-  const display = value => typeof value === 'string' ? value : value == null ? ''
-    : Array.isArray(value) ? value.map(entry => typeof entry === 'string' ? entry
-      : `${entry.name}, ${entry.title}: ${entry.status.replaceAll('_', ' ')}`).join('\n') : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
-  for (const field of ['meetingDate', 'meetingType', 'degree', 'openingTime', 'closingTime', 'prayerRequested', 'closingPrayerGiven', 'presiding', 'quorum', 'nextMeeting', 'present', 'excused', 'visitors', 'officerAttendance']) {
-    if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) changes.push({ field: labels[field], before: display(before[field]), after: display(after[field]) });
-  }
-  const count = Math.max(before.sections.length, after.sections.length);
-  for (let index = 0; index < count; index++) {
-    const previous = before.sections[index], current = after.sections[index];
-    if (JSON.stringify(previous) !== JSON.stringify(current)) changes.push({ field: current?.heading || previous?.heading || `Section ${index + 1}`, before: previous ? `${previous.heading}\n${previous.body}` : '', after: current ? `${current.heading}\n${current.body}` : '' });
-  }
-  return changes;
-};
 
 app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, next) => {
   try {

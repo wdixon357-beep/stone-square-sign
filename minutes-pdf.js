@@ -250,7 +250,7 @@ export const buildMinutesPdf = async ({
   // Render the editor's sections in order. No separate inferred financial ledger,
   // speculative motion results, empty worksheets, or repeated remarks pages.
   for (const section of documentSections(draft)) {
-    if (!clean(section.body)) continue;
+    if (!clean(section.body) && section.heading !== 'Sickness and Distress') continue;
     const closingHeight = section.heading === 'Closing of the Lodge'
       ? bulletItems(section.body).reduce((sum, item) => sum + layoutBullet(item).length * 14 + 8, 32) + (masterChanges.length ? 260 : 220) : 65;
     ensure(closingHeight);

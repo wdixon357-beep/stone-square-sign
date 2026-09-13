@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { bulletItems, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
+import { bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
 import { normalizeMinutesDraft } from '../minutes.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { buildMinutesDocx } from '../minutes-document.js';
@@ -80,7 +80,7 @@ assert.equal(preservedEvents.body, extraEvents, 'event details, other dates, mis
 const mixedEvents = documentSections({...decoratedDraft, sections:[{heading:'Upcoming Events and Reminders', body:`- The next meeting is scheduled for <u>October 1, 2026</u>.\n${extraEvents}`}]}).find(s=>s.heading === 'Upcoming Events and Reminders');
 assert.equal(mixedEvents.body, extraEvents, 'only the duplicate whole bullet is removed from a mixed events section');
 assert.ok(!documentSections({...decoratedDraft, sections:[{heading:'Adjournment',body:'- Next meeting: <u>October 1, 2026</u>.'}]}).at(-1).body.includes('October 1'), 'a duplicate whole next-meeting bullet is also removed from closing');
-assert.equal(documentSections({...decoratedDraft, prayerRequested:false, sections:[{heading:'Sickness and Distress',body:'- Next meeting: October 1, 2026.'}]}).find(s=>s.heading === 'Sickness and Distress').body, 'No entry recorded.', 'deduplication cannot remove the required sickness section');
+assert.equal(documentSections({...decoratedDraft, prayerRequested:false, sections:[{heading:'Sickness and Distress',body:'- Next meeting: October 1, 2026.'}]}).find(s=>s.heading === 'Sickness and Distress').body, '', 'required sickness heading remains without a filler bullet');
 const closingDetails = '- The Lodge closed at <u>10:30 PM</u> after the final announcement.\n- A motion to adjourn was recorded.';
 assert.ok(documentSections({...decoratedDraft, sections:[{heading:'Closing', body:closingDetails}]}).at(-1).body.startsWith(closingDetails), 'ceremony and motion details are retained');
 const unconfirmedClosing = documentSections({...decoratedDraft, closingTime:'', prayerRequested:null, closingPrayerGiven:null});
@@ -108,16 +108,44 @@ for (const prayerRequested of [true, false, null]) {
   const section = documentSections(normalized).find(section => section.heading === 'Sickness and Distress');
   assert.ok(section, 'all prayer choices retain the document section');
   assert.doesNotMatch(section.body, /None (?:reported|present)|No (?:sickness|distress)/i);
-  if (prayerRequested === false) assert.equal(section.body, 'No entry recorded.');
+  if (prayerRequested === false) assert.equal(section.body, '');
 }
+const legacySections = [{heading:'Roll Call and Quorum',body:'All officers are present unless noted.\nATTENDANCE AND VISITORS\nAdditional Brothers and visitors recorded in the sign in book.\nPRAISE REPORTS\nNone reported.'}];
+const legacySnapshot = JSON.stringify(legacySections);
+assert.deepEqual(cleanMinutesSectionsForPresentation(legacySections), [], 'exact legacy template boilerplate produces no redundant section');
+assert.equal(JSON.stringify(legacySections), legacySnapshot, 'cleanup preserves the original saved/signed sections');
+assert.deepEqual(bulletItems('None Recorded.\n- **None reported.**\nNo entry recorded.\nNot applicable.\nNo vote was recorded.').map(item=>item.text), ['No vote was recorded.'], 'empty filler disappears while substantive negative outcomes remain');
+const meaningfulPraise = cleanMinutesSectionsForPresentation([{heading:'Praise Reports',body:'Brother Example thanked the building committee.\nNone recorded.'},{heading:'Announcements',body:'- **Praise Report:** The repair was completed.\nNo motion was made.'}]);
+assert.equal(meaningfulPraise[0].heading, 'Good of the Order');
+assert.equal(meaningfulPraise[0].body, 'Brother Example thanked the building committee.');
+assert.equal(meaningfulPraise[1].body, 'The repair was completed.\nNo motion was made.');
+assert.doesNotMatch(JSON.stringify(meaningfulPraise), /praise reports?/i);
+assert.deepEqual(cleanMinutesSectionsForPresentation([{heading:'Visitors',body:'Not applicable.'},{heading:'Announcements',body:'Visitors\nNone recorded.\nThe committee will meet.'}]), [{heading:'Announcements',body:'The committee will meet.'}]);
+const visitors = ['Bro. Victor Example, Example Lodge No. 1'];
+const namedVisitorSections = [{heading:'Attendance and Visitors',body:'- **Attendance and Visitors**\n- Visitors: Bro. Victor Example, Example Lodge No. 1.'}];
+assert.deepEqual(cleanMinutesSectionsForPresentation(namedVisitorSections,{visitors}), namedVisitorSections, 'actual named visitors and their recorded text remain');
+assert.ok(cleanMinutesSectionsForPresentation([{heading:'Announcements',body:'Visitors\nBro. Victor Example'}])[0].body.includes('Visitors'), 'a visitor label followed by a named entry remains');
+const uniqueBusiness = cleanMinutesSectionsForPresentation([{heading:'Roll Call and Quorum',body:'All officers are present unless noted.\nA quorum was confirmed.\nPresent: Alex Example.\nThe building committee requested three estimates.'}], {quorum:'Yes',present:['Alex Example']});
+assert.deepEqual(uniqueBusiness, [{heading:'Other Meeting Business',body:'The building committee requested three estimates.'}], 'dedicated attendance and quorum controls replace duplicates while distinct business survives');
+assert.equal(cleanMinutesSectionsForPresentation([{heading:'Roll Call and Quorum',body:'Present: Alex Example.'}])[0].body, 'Present: Alex Example.', 'attendance absent from the dedicated lists is not silently discarded');
+assert.equal(cleanMinutesSectionsForPresentation([{heading:'Roll Call',body:'Present: Bro. Example'}],{present:null,excused:null,officerAttendance:[null]} )[0].body, 'Present: Bro. Example', 'nullable optional attendance arrays preserve unproven source entries');
 const emptySickness = normalizeMinutesDraft({prayerRequested:false, closingPrayerGiven:false, closingTime:'9:30 PM', sections:[{heading:'Opening',body:'The Lodge opened.'}]});
 const emptyPdf = new PDFParse({data:await buildMinutesPdf({draft:emptySickness,status:'draft'})});
 try {
   const renderedText = (await emptyPdf.getText()).text;
   assert.match(renderedText, /SICKNESS AND DISTRESS/i);
-  assert.match(renderedText, /No entry recorded\./);
+  assert.doesNotMatch(renderedText, /No entry recorded\./);
 } finally {await emptyPdf.destroy();}
 const ctx = {draft, status:'draft', preparedBy:'Adrian Reese', preparerRole:'assistant_secretary'};
+const legacyDraft = {...draft, present:['Alex Example'],visitors,sections:legacySections};
+const legacyRecordSnapshot = JSON.stringify(legacyDraft);
+const legacyPdf = new PDFParse({data:await buildMinutesPdf({...ctx,draft:legacyDraft,status:'awaiting_master_attestation'})});
+try {
+  const rendered = (await legacyPdf.getText()).text;
+  assert.doesNotMatch(rendered, /PRAISE REPORTS?|None (?:recorded|reported)|No entry recorded|ROLL CALL AND QUORUM|ATTENDANCE AND VISITORS/i);
+  assert.match(rendered, /Alex Example/); assert.match(rendered, /Victor Example/);
+} finally {await legacyPdf.destroy();}
+assert.equal(JSON.stringify(legacyDraft), legacyRecordSnapshot, 'rendering legacy submitted content never mutates the record');
 const pdfBytes = await buildMinutesPdf(ctx);
 const decoratedPdf = new PDFParse({data:await buildMinutesPdf({...ctx,draft:decoratedDraft})});
 try {
@@ -154,12 +182,16 @@ try {
   await fs.writeFile(docx, await buildMinutesDocx({draft:emptySickness,status:'draft'}));
   const emptyXml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});
   assert.match(emptyXml, /SICKNESS AND DISTRESS/);
-  assert.match(emptyXml, /No entry recorded\./);
+  assert.doesNotMatch(emptyXml, /No entry recorded\./);
   await fs.writeFile(docx, await buildMinutesDocx({...ctx,draft:decoratedDraft}));
   const decoratedXml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});
   assert.equal((decoratedXml.match(/10:30 PM/g) || []).length, 2, 'Word has the closing time in the summary and one closing bullet');
   assert.equal((decoratedXml.replace(/<[^>]*>/g, '').match(/The Lodge was closed at 10:30 PM/g) || []).length, 1);
   assert.equal((decoratedXml.match(/October 1, 2026/g) || []).length, 1, 'Word renders the next meeting date once');
   assert.doesNotMatch(decoratedXml, /UPCOMING EVENTS AND REMINDERS/i);
+  await fs.writeFile(docx, await buildMinutesDocx({...ctx,draft:legacyDraft,status:'awaiting_master_attestation'}));
+  const legacyXml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});
+  assert.doesNotMatch(legacyXml, /PRAISE REPORTS?|None (?:recorded|reported)|No entry recorded|ROLL CALL AND QUORUM/i);
+  assert.match(legacyXml, /Alex Example/); assert.match(legacyXml, /Victor Example/);
 } finally { await fs.rm(tmp, {recursive:true, force:true}); }
 console.log('Minutes bullets, emphasis, seal, closing facts, officer roles and Word parity passed.');

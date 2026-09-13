@@ -16,7 +16,7 @@ const sentenceParts = text => text.split(/(?<=[.!?])\s+(?=[A-Z])/).reduce((parts
 
 const headings = [
   ['Opening', /^(?:opening(?: of the lodge)?|open on|call to order)$/i],
-  ['Roll Call and Quorum', /^(?:roll call(?: of officers| and quorum)?|quorum)$/i],
+  ['Roll Call and Quorum', /^(?:roll call(?: of officers| and quorum)?|quorum|attendance(?:\s+(?:and|&)\s+visitors|\s*\/\s*visitors)?)$/i],
   [SICKNESS_HEADING, isSicknessHeading],
   ['Reading of the Minutes', /^(?:(?:reading and approval|approval|reading) of (?:the )?(?:previous |current )?minutes|minutes of (?:the )?previous meeting|previous minutes)$/i],
   ["Treasurer's Report", /^(?:treasurer'?s? report|financial report)(?:\s*\(.*\))?$/i],
@@ -33,11 +33,19 @@ const headings = [
 ];
 const knownHeading = line => headings.find(([, matcher]) => typeof matcher === 'function'
   ? matcher(line) : matcher.test(undecorated(line).replace(/:$/, '')))?.[0];
-const emptyAttendance = value => /^(?:none(?: reported| present)?|no (?:one|visitors?|visiting brothers?|guests?|absences|excused brothers?)(?: were present| present| reported)?|n\/?a|not applicable)[.!]?$/i.test(String(value || '').trim());
+const emptyAttendance = value => /^(?:none(?: recorded| reported| present)?|no (?:one|visitors?|visiting brothers?|guests?|absences|excused brothers?)(?: were present| present| recorded| reported)?|n\/?a|not applicable)[.!]?$/i.test(String(value || '').trim());
 const names = text => [...new Set(clean(text)
   .replace(/,\s*(PM|HPM|Jr\.?|Sr\.?|II|III|IV)(?=\s*(?:[,;]|$))/gi, ' $1')
   .replace(/\s+(?:and|&)\s+/gi, ';').split(/\s*[;,|]\s*/).map(clean).filter(name => !emptyAttendance(name))
   .map(name => name.replace(/\b[a-z][a-z]+\b/g, word => word[0].toUpperCase() + word.slice(1))).filter(Boolean))];
+const visitorNames = text => names(text).reduce((visitors, entry) => {
+  const startsPerson = /^(?:(?:bro(?:ther)?|mr|mrs|ms|dr|rev)\.?\s|(?:PM|HPM|WM|SW|JW)\s|(?:Worshipful|Past) Master\s)/i.test(entry)
+    || /\b(?:of|from)\s+.+\blodge\b/i.test(entry);
+  if (visitors.length && !startsPerson && /\blodge\s+(?:no\.?\s*|#\s*)\d+\b/i.test(entry)) visitors[visitors.length - 1] += `, ${entry}`;
+  else visitors.push(entry);
+  return visitors;
+}, []);
+const obsoletePraiseHeading = value => /^praise reports?$/i.test(undecorated(value).replace(/:$/, ''));
 const isLetterhead = line => /^stone square lodge(?:\s+(?:no\.?|#)\s*\d+)?(?:\s*[,•]\s*(?:f\.?\s*&\s*a\.?\s*m\.?|p\.?h\.?a\.?|prince hall affiliation))*\s*\.?$/i.test(line);
 
 function unknownHeading(line, markedHeadings) {
@@ -127,7 +135,7 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
     const label = /^(?:(?:brothers?|members?|officers?)\s+)?(present|excused|absent|visitors?)(?:\s+(?:brothers?|members?|officers?))?\s*:\s*(.*)$/i.exec(undecorated(line));
     if (label) {
       attendanceLabel = label[1].toLowerCase().replace(/^visitor$/, 'visitors');
-      attendance[attendanceLabel].push(...names(label[2]));
+      attendance[attendanceLabel].push(...(attendanceLabel === 'visitors' ? visitorNames(label[2]) : names(label[2])));
       continue;
     }
     const onlyLabel = /^(present|excused|absent|visitors?)$/i.exec(line);
@@ -136,7 +144,7 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
     if (attendanceLabel && !knownHeading(line) && (!unknownHeading(line, markedHeadings) || ambiguousAttendanceName) && !/^\d+[.)]/.test(line)
       && !/[.!?:]/.test(line.replace(/\b(?:Bro|Jr|Sr)\./g,'')) && line.split(' ').length <= 5) {
       if (ambiguousAttendanceName) placementWarnings.push(`Uppercase entries under ${attendanceLabel} were kept as names. Confirm that none is a section heading.`);
-      attendance[attendanceLabel].push(...names(line)); continue;
+      attendance[attendanceLabel].push(...(attendanceLabel === 'visitors' ? visitorNames(line) : names(line))); continue;
     }
     attendanceLabel = null;
     if (/^(?:meeting date|date(?: of (?:the )?meeting)?|meeting type|degree|opening time|closing time|presiding|quorum|next meeting|next stated communication)\s*:/i.test(line)) continue;
@@ -146,13 +154,13 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   for (const key of Object.keys(attendance)) attendance[key] = [...new Set(attendance[key])];
   const blocks = [];
   let active = null;
-  const begin = (heading, topic = '', preserveBlock = false) => { active = { heading, lines: topic ? [topic] : [], preserveBlock }; blocks.push(active); };
+  const begin = (heading, topic = '', preserveBlock = false, obsoletePraise = false) => { active = { heading, lines: topic ? [topic] : [], preserveBlock, obsoletePraise }; blocks.push(active); };
   const explicitPresence = /\b(?:include|record) (?:the )?grand lodge (?:officer|presence)\b/i.test(source);
   for (let line of content) {
     const heading = knownHeading(line);
-    if (heading) { begin(heading); continue; }
+    if (heading) { begin(heading, '', false, obsoletePraiseHeading(line)); continue; }
     const inline = /^([^:]+):\s+(.+)$/.exec(line);
-    if (inline && knownHeading(inline[1])) { begin(knownHeading(inline[1])); line = inline[2]; }
+    if (inline && knownHeading(inline[1])) { begin(knownHeading(inline[1]), '', false, obsoletePraiseHeading(inline[1])); line = inline[2]; }
     else if (unknownHeading(line, markedHeadings)) {
       begin('Other Meeting Business', line, true);
       placementWarnings.push(`Confirm the section for "${undecorated(line).replace(/:$/, '')}". Its full notes were kept in Other Meeting Business.`);
@@ -163,6 +171,7 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
       continue;
     }
     line = line.replace(/^(?:\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*)?(?:Speaker\s*\d+\s*:\s*)?/i, '');
+    if (emptyAttendance(clean(undecorated(line).replace(/^[-•]\s*/, '')))) continue;
     const sentences = sentenceParts(line).filter(sentence => explicitPresence || !containsRoutinePresence(sentence)
       || /\b(?:official visitation|grand lodge visitation)\b/i.test(sentence));
     if (!sentences.length) continue;
@@ -184,7 +193,21 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
     const entries = sections.get(heading) || [];
     entries.push(body.trim()); sections.set(heading, entries);
   };
-  for (const block of blocks) {
+  const topicBlocks = blocks.flatMap(block => {
+    if (!block.obsoletePraise) return [block];
+    const groups = [];
+    for (const sentence of block.lines.flatMap(sentenceParts)) {
+      const inferred = narrativeHeading(sentence);
+      const heading = inferred !== 'Other Meeting Business' ? inferred
+        : /\b(?:thanked|thank you|thanks|congratulations|congratulated)\b/i.test(sentence) ? 'Good of the Order'
+          : groups.at(-1)?.heading || 'Good of the Order';
+      if (groups.at(-1)?.heading === heading) groups.at(-1).lines.push(sentence);
+      else groups.push({heading, lines: [sentence]});
+    }
+    return groups;
+  });
+  for (const block of topicBlocks) {
+    if (!block.lines.length) continue;
     if (block.heading === "Treasurer's Report") {
       const reading = treasuryReading(block.lines);
       add(block.heading, reading === 'not_read' ? "The Treasurer's report was not read aloud."

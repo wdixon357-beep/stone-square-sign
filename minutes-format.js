@@ -12,6 +12,67 @@ const omitWholeBullets = (body, predicate) => String(body || '').split('\n').fil
   return plain && !/^[-*•▪]$/.test(plain) && !predicate(plain);
 }).join('\n').trim();
 const isStandardPrayerRequest = text => /^(?:The )?(?:Worshipful Master|WM)(?: Dixon-Saunders)? (?:asked|requested|directed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the (?:close|end)(?: of (?:the )?meeting)?|closing)\.?$/i.test(text);
+const isEmptyEntry = value => /^(?:none(?: (?:were )?(?:recorded|reported|noted))?|no entr(?:y|ies)(?: (?:was |were )?(?:recorded|reported|noted))?|not (?:recorded|reported|applicable)|n\/?a|nil)\.?$/i.test(plainBullet(value));
+const praiseLabel = /^praise reports?\s*[:.]?\s*$/i;
+const attendanceLabel = /^attendance (?:and|&) visitors\s*[:.]?\s*$/i;
+const visitorPlaceholder = /^(?:(?:additional )?(?:brothers|brethren)(?: and visitors)?|visitors)(?: (?:were |are |have been ))?\s*recorded in (?:the )?sign[ -]?in book\.?$/i;
+
+// Use the same cleanup for editable drafts and documents made from historical
+// snapshots. Return new objects; neither saved nor attested records are changed.
+export function cleanMinutesSectionsForPresentation(sections, {visitors = [], present = [], excused = [], officerAttendance = [], quorum = ''} = {}) {
+  const input = Array.isArray(sections) ? sections : [];
+  const meaningfulVisitor = value => {
+    const text = plainBullet(value);
+    return text && !isEmptyEntry(text) && !visitorPlaceholder.test(text) && !/^(?:no visitors(?: (?:were |are )?(?:present|recorded|reported))?|visitors?\s*:\s*(?:none|not recorded|no entry recorded))\.?$/i.test(text);
+  };
+  const hasVisitors = (Array.isArray(visitors) ? visitors : []).some(meaningfulVisitor) || input.some(section => String(section.body || '').split('\n').some((line, index, lines) => {
+    const text = plainBullet(line);
+    if (/^visitors?\s*:?$/i.test(plainBullet(section.heading)) && meaningfulVisitor(text) && !/^visitors?\s*:?$/i.test(text)) return true;
+    if (/^visitors?\s*:?$/i.test(text)) {
+      const next = plainBullet(lines.slice(index + 1).find(value => plainBullet(value)) || '');
+      if (meaningfulVisitor(next) && /^(?:(?:Bro(?:ther)?|PM|HPM)\.?\s+|[A-Z][a-z]+\s+[A-Z][a-z]+(?:[,.]|$))/.test(next)) return true;
+    }
+    const named = /^(?:visitors?|visiting brothers)\s*:\s*(.+)$/i.exec(plainBullet(line));
+    return named && meaningfulVisitor(named[1]);
+  }));
+  const cleanBody = value => String(value || '').replace(/\r/g, '').split('\n').flatMap(line => {
+    const text = plainBullet(line);
+    if (!text || /^[-*•▪]$/.test(text) || isEmptyEntry(text) || praiseLabel.test(text)) return [];
+    if (!hasVisitors && (attendanceLabel.test(text) || /^visitors?\s*[:.]?$/i.test(text) || visitorPlaceholder.test(text))) return [];
+    const visitor = /^visitors?\s*:\s*(.+)$/i.exec(text);
+    if (visitor && !meaningfulVisitor(visitor[1])) return [];
+    const praise = /^praise reports?\s*:\s*(.+)$/i.exec(text);
+    if (praise) return isEmptyEntry(praise[1]) ? [] : [praise[1]];
+    return [line];
+  }).join('\n').trim();
+  const normalizedName = value => plainBullet(value).toLowerCase().replace(/\b(?:brother|bro|pm|hpm)\.?\s*/g, '').replace(/[^a-z0-9]/g, '');
+  const recordedNames = status => {
+    const list = status === 'present' ? present : excused;
+    return [...(Array.isArray(list) ? list : []), ...(Array.isArray(officerAttendance) ? officerAttendance : []).filter(officer => officer && officer.status === status).map(officer => officer.name)].map(normalizedName);
+  };
+  const redundantRollCall = value => {
+    const text = plainBullet(value);
+    if (attendanceLabel.test(text) || visitorPlaceholder.test(text)) return true;
+    if (/^all officers (?:are |were )?present unless (?:otherwise )?noted\.?$/i.test(text)) return true;
+    if (/^yes$/i.test(quorum) && /^(?:a )?quorum (?:was |is )?(?:present|confirmed|established)\.?$/i.test(text)) return true;
+    if (/^no$/i.test(quorum) && /^(?:no quorum (?:was |is )?present|(?:a )?quorum (?:was |is )?not present)\.?$/i.test(text)) return true;
+    const attendance = /^(present|excused)(?: brothers)?\s*:\s*(.+?)\.?$/i.exec(text);
+    if (!attendance) return false;
+    const names = attendance[2].split(/\s*[,;]\s*|\s+and\s+/i).filter(name => !/^(?:PM|HPM)$/i.test(name)).map(normalizedName).filter(Boolean);
+    const known = recordedNames(attendance[1].toLowerCase());
+    return names.length > 0 && names.every(name => known.includes(name));
+  };
+  return input.map(section => {
+    let heading = plainBullet(section.heading).replace(/^#{1,6}\s*/, '').replace(/:\s*$/, '');
+    const rollCall = /^(?:roll call(?: (?:and|&) (?:quorum|attendance))?|attendance (?:and|&) quorum|quorum)$/i.test(heading);
+    if (isSicknessHeading(heading)) heading = SICKNESS_HEADING;
+    else if (praiseLabel.test(heading)) heading = 'Good of the Order';
+    else if (!hasVisitors && attendanceLabel.test(heading)) heading = 'Attendance';
+    let body = cleanBody(section.body);
+    if (rollCall) { body = omitWholeBullets(body, redundantRollCall); heading = 'Other Meeting Business'; }
+    return {...section, heading, body};
+  }).filter(section => section.body || isSicknessHeading(section.heading));
+}
 
 function repeatsNextMeeting(text, draft, heading) {
   const known = minutesDateParts(plainBullet(draft.nextMeeting));
@@ -51,7 +112,7 @@ export function detectPrayerFacts(source) {
 }
 
 export function documentSections(draft) {
-  const sections = (draft.sections || []).filter(s => String(s.body || '').trim() || isSicknessHeading(s.heading)).map(s => ({...s, heading: isSicknessHeading(s.heading) ? SICKNESS_HEADING : s.heading}));
+  const sections = cleanMinutesSectionsForPresentation(draft.sections, draft);
   const closing = sections.filter(s => /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(s.heading.trim()));
   const result = sections.filter(s => !closing.includes(s));
   let sick = result.find(s => isSicknessHeading(s.heading));
@@ -60,10 +121,8 @@ export function documentSections(draft) {
   if (typeof draft.prayerRequested === 'boolean') sick.body = omitWholeBullets(sick.body, isStandardPrayerRequest);
   if (draft.prayerRequested === true) sick.body += `\n${prayerRequestText}`;
   else if (draft.prayerRequested !== false) sick.body += '\nPrayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.';
-  if (!sick.body.trim()) sick.body = 'No entry recorded.';
   if (draft.nextMeeting) {
     for (const section of result) section.body = omitWholeBullets(section.body, text => repeatsNextMeeting(text, draft, section.heading));
-    if (!sick.body.trim()) sick.body = 'No entry recorded.';
     result.push({heading: 'Next Meeting', body: formatMinutesDate(draft.nextMeeting)});
   }
   let closingBody = closing.map(s => s.body).join('\n').trim();
@@ -76,11 +135,11 @@ export function documentSections(draft) {
   const closure = draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.` : 'Closing time: confirm and enter the time the Lodge was closed.';
   const prayer = draft.closingPrayerGiven === true ? closingPrayerText : draft.closingPrayerGiven === false ? '' : 'Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.';
   result.push({heading: 'Closing of the Lodge', body: [closingBody, closure, prayer].filter(Boolean).join('\n')});
-  return result.filter(s => s.body.trim());
+  return result.filter(s => s.body.trim() || isSicknessHeading(s.heading));
 }
 
 export function bulletItems(value) {
-  const lines = String(value || '').replace(/\r/g, '').split(/\n+|\s+[•▪]\s*/).map(line => line.replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim()).filter(Boolean);
+  const lines = String(value || '').replace(/\r/g, '').split(/\n+|\s+[•▪]\s*/).map(line => line.replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim()).filter(line => line && !isEmptyEntry(line) && !praiseLabel.test(plainBullet(line)));
   return lines.flatMap(line => {
     // Keep short, connected statements together. Split a dense paragraph at
     // sentence boundaries, respecting titles, initials, times and abbreviations.
