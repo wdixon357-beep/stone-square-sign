@@ -8,7 +8,7 @@ FROM node:22-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=dependencies /app/node_modules ./node_modules
-COPY package.json server.js db.js session-policy.js dues.js minutes.js minutes-alerts.js minutes-organizer.js minutes-layout.js minutes-format.js minutes-document.js minutes-pdf.js ./
+COPY package.json server.js db.js session-policy.js dues.js minutes.js minutes-alerts.js minutes-organizer.js minutes-layout.js minutes-format.js minutes-document.js minutes-pdf.js minutes-sections.js minutes-changes.js treasury.js treasury-ai.js treasury-source.js treasury-routes.js treasury-pdf.js ai-generation.js activity.js report-rules.js ./
 COPY assets ./assets
 COPY public ./public
 RUN mkdir -p /var/data/lodge-signing && chown -R node:node /app /var/data/lodge-signing

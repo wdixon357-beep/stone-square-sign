@@ -1,3 +1,4 @@
+import { TREASURY_REPORT_RULES } from '../report-rules.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { generateTreasuryDraft, TREASURY_AI_SCHEMA } from '../treasury-ai.js';
@@ -56,6 +57,7 @@ check('without a model callback the existing deterministic parser is used unchan
 
 let request;
 const output = await generateTreasuryDraft(source, { sourceNames: ['synthetic.png'], sourceNotes: ['Synthetic screenshot was read with OCR. Check every amount.'], generateStructured: async value => { request = value; return response(); } });
+assert.equal(request.instructions, TREASURY_REPORT_RULES);
 check('callback receives treasury routing and exact source text', request.purpose === 'treasury' && request.schemaName === 'treasury_source_extraction' && JSON.parse(request.input).sourceText === source);
 check('supported source figures keep existing normalized dollar strings', output.accounts[0].openingBalance === '1000.00' && output.accounts[0].statementBalance === '1150.00' && output.transactions[0].amount === '200.00');
 check('explicit reporting month and cited statement year are resolved deterministically', output.periodStart === '2026-08-01' && output.periodEnd === '2026-08-31' && output.transactions[0].date === '2026-08-03');

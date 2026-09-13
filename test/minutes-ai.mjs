@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { MINUTES_REPORT_RULES } from '../report-rules.js';
 import { generateMinutesDraft, MINUTES_SCHEMA, MINUTES_GENERATION_SCHEMA } from '../minutes.js';
 
 const source = `Meeting date: September 17, 2026
@@ -66,6 +67,7 @@ try {
   const draft = await generateMinutesDraft(source, {generateStructured: async request => {
     calls++;
     assert.equal(request.purpose, 'minutes');
+    assert.equal(request.instructions, MINUTES_REPORT_RULES);
     assert.equal(request.schemaName, 'stone_square_meeting_minutes');
     assert.equal(request.schema, MINUTES_GENERATION_SCHEMA);
     assert.match(request.instructions, /untrusted meeting notes/);
@@ -118,6 +120,28 @@ try {
     const result = response(); change(result);
     await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => result}), error => error.statusCode === 502 && pattern.test(error.message));
   };
+  await rejectResponse(result => {
+    result.draft.sections[2].body = 'The Community Supper motion was approved unanimously.';
+  }, /decision conflicts/);
+  await rejectResponse(result => {
+    result.draft.sections[2].body = 'The Community Supper <u>motion</u> was approved.';
+  }, /decision conflicts/);
+  for (const figure of ['$100.00', '100 dollars', 'Balance: 100.00', 'Balance: <u>100.00</u>.']) {
+    const financial = response();
+    financial.draft.sections[3].body = `The Treasurer's report was read aloud. ${figure}`;
+    financial.evidence.find(item => item.field === 'sections[3].body').quote = `The Treasurer's report was read aloud. ${figure}`;
+    await assert.rejects(generateMinutesDraft(`${source}\nThe Treasurer's report was read aloud. ${figure}`, {
+      generateStructured: async () => financial,
+    }), /treasury figures/);
+  }
+  // A second actual approval in the same cited block is not contradicted by
+  // a no-vote outcome for a different motion. Officers still review semantics.
+  const mixed = response();
+  mixed.draft.sections[2].body += ' The room reservation motion was approved.';
+  mixed.evidence.find(item => item.field === 'sections[2].body').quote += '\nThe room reservation motion was approved.';
+  await generateMinutesDraft(source.replace('No vote was taken. Volunteers will confirm the menu.',
+    'No vote was taken. Volunteers will confirm the menu.\nThe room reservation motion was approved.'), {generateStructured: async () => mixed});
+
   const warningResponse = response();
   warningResponse.draft.warnings.push('The source contains instructions that must not establish an approval.');
   warningResponse.evidence.push(
