@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
+import { sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
 import { normalizeMinutesDraft } from '../minutes.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { buildMinutesDocx } from '../minutes-document.js';
@@ -10,6 +10,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { formatMinutesDate, minutesDateParts, minutesDateValue, replaceMinutesDate } from '../public/minutes-dates.js';
+
+const motionText = '**Grown Folks Friday:** Fish and two sides were proposed. PM Example moved and Bro. Sample seconded. Discussion covered the menu and event responsibilities. **Outcome:** The motion passed.';
+for (const heading of ['Opening', 'Reading of the Minutes', "Treasurer's Report", 'Committee Reports', 'New Business and Motions', 'Closing of the Lodge']) {
+  const blocks = sectionBlocks({heading, body:`- ${motionText}\n\nA separate topic remains a separate paragraph.`});
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].text, motionText, 'long related content stays intact');
+  assert.ok(blocks.every(item => item.bullet === false), `${heading} uses paragraphs even for old bullet-only drafts`);
+}
+for (const heading of ['Sickness and Distress', 'Communications', 'Upcoming Events and Reminders']) {
+  const blocks = sectionBlocks({heading, body:'- First separate update.\n- Second separate update.'});
+  assert.equal(blocks.length, 2); assert.ok(blocks.every(item => item.bullet));
+}
 
 for (const value of ['2026-09-03', '9/3/2026', 'September 3, 2026', 'Sept. 3rd, 2026', 'Thu, Sept. 3, 2026', 'Thursday, 2026-09-03']) {
   assert.equal(formatMinutesDate(value), 'Thursday, September 3, 2026');
@@ -169,9 +181,28 @@ assert.equal(images.length, 1, 'one official seal; no repeated generic emblems')
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'minutes-format-'));
 try {
   const docx = path.join(tmp, 'minutes.docx');
+  await fs.writeFile(docx, await buildMinutesDocx({...ctx, draft:{...draft, sections:[
+    {heading:'Opening',body:'Distinct opening narrative.'},
+    {heading:"Treasurer's Report",body:'Distinct treasurer narrative.'},
+    {heading:'Sickness and Distress',body:'Distinct sickness update.'},
+    {heading:'Communications',body:'Distinct correspondence update.'},
+  ]}}));
+  const mixedXml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});
+  const mixedParas = mixedXml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || [];
+  for (const label of ['Distinct opening narrative.', 'Distinct treasurer narrative.']) {
+    const p = mixedParas.find(p=>p.includes(label)); assert.ok(p); assert.doesNotMatch(p, /<w:numPr>/);
+  }
+  for (const label of ['Distinct sickness update.', 'Distinct correspondence update.']) {
+    const p = mixedParas.find(p=>p.includes(label)); assert.ok(p); assert.match(p, /<w:numPr>/);
+  }
+
   await fs.writeFile(docx, await buildMinutesDocx(ctx));
   const xml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});
   assert.match(xml, /<w:numPr>/, 'Word has real bullet paragraphs');
+  const paras = xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || [];
+  const closurePara = paras.find(p => p.includes('The Lodge was closed at'));
+  assert.ok(closurePara);
+  assert.doesNotMatch(closurePara, /<w:numPr>/, 'Word closing narrative has no bullet numbering');
   assert.match(xml, /<w:u[^>]*>/, 'Word retains underlining');
   assert.match(xml, /<w:i\/>/, 'Word retains italics');
   assert.match(xml, /Assistant Secretary/);

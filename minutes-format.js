@@ -149,6 +149,16 @@ export function documentSections(draft) {
   return result.filter(s => s.body.trim() || isSicknessHeading(s.heading));
 }
 
+// One block model controls both PDF and Word. Narrative and motions remain
+// intact paragraphs; list sections use one bullet per source-delimited item.
+export function sectionBlocks(section) {
+  const list = /^(?:sickness (?:and|&) distress|communications|correspondence|upcoming events(?: and reminders)?|reminders)$/i.test(String(section.heading || '').trim());
+  return String(section.body || '').replace(/\r/g, '').split(/\n+|\s+[•▪]\s*/)
+    .map(line => line.replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim())
+    .filter(line => line && !isEmptyEntry(line) && !praiseLabel.test(plainBullet(line)))
+    .map(text => ({text, runs: emphasisRuns(text), bullet: list}));
+}
+
 export function bulletItems(value) {
   const lines = String(value || '').replace(/\r/g, '').split(/\n+|\s+[•▪]\s*/).map(line => line.replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim()).filter(line => line && !isEmptyEntry(line) && !praiseLabel.test(plainBullet(line)));
   return lines.flatMap(line => {

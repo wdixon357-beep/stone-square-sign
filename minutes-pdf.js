@@ -1,7 +1,7 @@
 import { formatMinutesDate } from './public/minutes-dates.js';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
-import { bulletItems, documentSections, preparerOffice } from './minutes-format.js';
+import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
 
 import {
   additionalPresent, nonOfficerExcused, officerAttendanceRows,
@@ -170,7 +170,7 @@ export const buildMinutesPdf = async ({
   };
 
   const layoutBullet = (item) => {
-    const size = 10, available = WIDTH - 20;
+    const size = 10, available = WIDTH - (item.bullet === false ? 0 : 20);
     const tokens = []; let token = [];
     for (const run of item.runs) {
       const font = run.bold ? (run.italic ? boldItalic : bold) : (run.italic ? italic : regular);
@@ -203,14 +203,15 @@ export const buildMinutesPdf = async ({
     }, []));
   };
 
-  const bullets = (text) => {
-    const size = 10, lineHeight = 14, indent = LEFT + 15;
-    for (const item of bulletItems(text)) {
+  const renderBlocks = (items) => {
+    const size = 10, lineHeight = 14;
+    for (const item of items) {
+      const indent = item.bullet === false ? LEFT : LEFT + 15;
       const lines = layoutBullet(item);
       ensure(Math.min(lines.length, 3) * lineHeight + 8);
       lines.forEach((parts, index) => {
         ensure(lineHeight + 3);
-        if (index === 0) page.drawCircle({x: LEFT + 4, y: y + 3, size: 1.8, color: GOLD});
+        if (index === 0 && item.bullet !== false) page.drawCircle({x: LEFT + 4, y: y + 3, size: 1.8, color: GOLD});
         let x = indent;
         for (const part of parts) {
           page.drawText(part.text, {x, y, size, font: part.font, color: INK});
@@ -222,6 +223,8 @@ export const buildMinutesPdf = async ({
       y -= 8;
     }
   };
+
+  const bullets = text => renderBlocks(bulletItems(text));
 
   startPage('Stone Square Lodge No. 22');
   page.drawImage(seal, {x: LEFT + WIDTH - 60, y: y - 33, width: 60, height: 60});
@@ -252,11 +255,11 @@ export const buildMinutesPdf = async ({
   for (const section of documentSections(draft)) {
     if (!clean(section.body) && section.heading !== 'Sickness and Distress') continue;
     const closingHeight = section.heading === 'Closing of the Lodge'
-      ? bulletItems(section.body).reduce((sum, item) => sum + layoutBullet(item).length * 14 + 8, 32) + (masterChanges.length ? 260 : 220) : 65;
+      ? sectionBlocks(section).reduce((sum, item) => sum + layoutBullet(item).length * 14 + 8, 32) + (masterChanges.length ? 260 : 220) : 65;
     ensure(closingHeight);
     const title = clean(section.heading).replace(/^Grand Lodge Officers?'? Remarks$/i, 'Communications');
     ruleHeading(title || 'Meeting Business');
-    bullets(section.body);
+    renderBlocks(sectionBlocks(section));
   }
   ensure(masterChanges.length ? 260 : 220);
   ruleHeading('Attestation and Distribution');

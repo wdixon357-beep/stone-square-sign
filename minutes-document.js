@@ -4,7 +4,7 @@ import {
   Paragraph, Table, TableCell, TableRow, TextRun, VerticalAlign, WidthType,
 } from 'docx';
 import { readFile } from 'node:fs/promises';
-import { bulletItems, documentSections, preparerOffice } from './minutes-format.js';
+import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
 
 import {
   additionalPresent, nonOfficerExcused, officerAttendanceRows,
@@ -44,10 +44,9 @@ const sectionHeading = (text) => new Paragraph({
   children: [new TextRun({ text: String(text || '').toUpperCase(), size: 23, bold: true, color: '10263D' })],
 });
 
-const bodyParagraphs = (text, keepNext = false) => bulletItems(text).map(item => new Paragraph({
+const bodyParagraphs = (section, keepNext = false) => (typeof section === 'string' ? bulletItems(section).map(item => ({...item, bullet:true})) : sectionBlocks(section)).map(item => new Paragraph({
   keepNext,
-  bullet: {level: 0},
-  indent: {left: 260, hanging: 200},
+  ...(item.bullet ? {bullet: {level: 0}, indent: {left: 260, hanging: 200}} : {}),
   spacing: {after: 130, line: 288},
   children: item.runs.map(run => new TextRun({text: run.text, size: 22, bold: run.bold, italics: run.italic, underline: run.underline ? {} : undefined})),
 }));
@@ -144,7 +143,7 @@ export const buildMinutesDocx = async ({
     ...nameGroup('Non Officers Excused From Meeting', nonOfficerExcused(draft)),
     ...documentSections(draft).flatMap((item) => [
       sectionHeading(item.heading || 'Meeting Notes'),
-      ...bodyParagraphs(item.body, item.heading === 'Closing of the Lodge'),
+      ...bodyParagraphs(item, item.heading === 'Closing of the Lodge'),
     ]),
     sectionHeading('Officer Attestations'),
     ...(masterChanges.length ? [paragraph("The preparing officer attested to the submitted version. The Worshipful Master's corrections and the original signed submission are retained in the record.")] : []),
