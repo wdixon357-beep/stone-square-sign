@@ -1,3 +1,4 @@
+import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
 import { hasPermission, resolvePermissions, mountAccessRoutes } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
@@ -3189,6 +3190,7 @@ app.get('/api/generation/status', requireAuth, async (req, res, next) => {
 });
 
 mountAccessRoutes(app,{requireAuth,requireOwner});
+mountBuildingCalendar(app,{requireAuth});
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 
@@ -3214,6 +3216,7 @@ app.use((error, _req, res, _next) => {
 validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
+await initializeBuildingCalendar();
 await initTreasurySchema();
 await initGenerationSchema();
 await initActivitySchema();

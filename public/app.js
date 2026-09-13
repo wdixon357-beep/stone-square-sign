@@ -35,6 +35,7 @@ const state = {
   minutesPreviewUrl: '',
 };
 let treasuryWorkspace;
+let buildingCalendarWorkspace;
 let activityWorkspace,activityTracker;
 const requestedWorkspaceSection = new URLSearchParams(window.location.search).get('section');
 
@@ -190,6 +191,8 @@ const applyWorkspacePermissions = user => {
   $('minutesPageDescription').textContent = can('minutes.prepare', user) ? 'Prepare and review meeting minutes. The preparing officer attests, and the Worshipful Master reviews and authorizes distribution.' : 'Read finalized meeting minutes.';
   $('minutesMenuDescription').textContent = can('minutes.prepare', user) ? 'Prepare, review and attest to meeting records' : 'Read finalized meeting minutes';
   $('treasuryMenuDescription').textContent = can('treasury.prepare', user) ? (can('treasury.upload', user) ? 'Upload records, prepare and review reports' : 'Prepare reports and review assigned banking records') : (can('treasury.upload', user) ? 'Provide banking records and read finalized reports' : 'Read finalized treasurer reports');
+  document.querySelectorAll('.building-only').forEach(element => element.classList.toggle('hidden', !can('building.view', user)));
+  document.querySelectorAll('.calendar-only').forEach(element => element.classList.toggle('hidden', !can('calendar.view', user)));
   const maySeeTreasury = can('treasury.view', user) || can('treasury.prepare', user) || can('treasury.upload', user);
   document.querySelectorAll('.treasury-only').forEach(el => el.classList.toggle('hidden', !maySeeTreasury));
   ['reportsNav','reportsMenuCard'].forEach(id => $(id).classList.toggle('hidden', !can('reports.create', user)));
@@ -242,6 +245,7 @@ const enterWorkspace = async (user, session) => {
   $('sessionDetails').classList.toggle('hidden', !hasSessionPolicy);
   if (hasSessionPolicy) $('sessionNoticeTitle').textContent = `You will stay signed in for ${sessionDays} days on this device.`;
   if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.token&&state.user)});}
+  if (!buildingCalendarWorkspace) { const { BuildingCalendarWorkspace } = await import('/building-calendar.js'); buildingCalendarWorkspace = new BuildingCalendarWorkspace({api: apiFetch, user: () => state.user}); }
   if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
   const { maySeeTreasury, maySeeMinutes } = applyWorkspacePermissions(user);
   showWorkspaceSection(requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
@@ -276,6 +280,7 @@ const refreshSessionPermissions = async () => {
     applyWorkspacePermissions(user);
     showWorkspaceSection(state.activeSection || 'home', { skipLoad: true });
     treasuryWorkspace?.refreshPermissions();
+    buildingCalendarWorkspace?.refreshPermissions();
     if (can('documents.status')) void renderDocuments();
     if (!can('documents.sign')) hide($('signModal'));
     if (!can('minutes.prepare')) hide($('minutesEditorModal'));
@@ -346,8 +351,14 @@ const loadSubmissionProfiles = async () => {
 };
 
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
-  const sectionPermissions = { reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.view'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
+  const sectionPermissions = { building: ['building.view'], calendar: ['calendar.view'], reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.view'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
   if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
+  $('buildingSection').classList.toggle('hidden', section !== 'building');
+  $('calendarSection').classList.toggle('hidden', section !== 'calendar');
+  $('buildingNav').classList.toggle('active', section === 'building');
+  $('calendarNav').classList.toggle('active', section === 'calendar');
+  if (section === 'building' && !skipLoad) buildingCalendarWorkspace?.building();
+  if (section === 'calendar' && !skipLoad) buildingCalendarWorkspace?.calendar();
   $('settingsSection').classList.toggle('hidden', section !== 'settings');
   $('settingsNav').classList.toggle('active', section === 'settings');
   if(['activity','builder','proposalReview'].includes(section)&&state.user?.role!=='owner')section='home';
@@ -1072,6 +1083,10 @@ $('proposalForm')?.addEventListener('submit', async (event) => {
 
 $('approvalsNav').addEventListener('click', () => showWorkspaceSection('approvals'));
 $('approvalsRefresh').addEventListener('click', () => renderApprovals());
+$('buildingNav').addEventListener('click', () => showWorkspaceSection('building'));
+$('buildingMenuCard').addEventListener('click', () => showWorkspaceSection('building'));
+$('calendarNav').addEventListener('click', () => showWorkspaceSection('calendar'));
+$('calendarMenuCard').addEventListener('click', () => showWorkspaceSection('calendar'));
 $('accessNav').addEventListener('click', () => {
   if (state.user?.role !== 'owner') return;
   showWorkspaceSection('queue');

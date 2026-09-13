@@ -56,3 +56,10 @@ Opening/closing times, an individual Brother's missed instruction months, and co
 ## General Report Generator assistance
 
 Officer, committee, event and formal reports can organize pasted notes into the selected report fields. This uses the same authenticated Terra integration and shared $5 monthly limit. Preserve original notes and existing entries; show suggestions and source evidence before the user applies them. Never change identity, signatures, review confirmations or send a report during organization. Invalidate the old preview and signature confirmation when suggestions are applied. Keep report calculations in the existing renderer, preserve payer-attributed budgets and proposals versus decisions, and leave unknowns for review. The public generator opens the authenticated Sign assistant; credentials never cross into the public report page.
+
+## Building Requests and Lodge Calendar
+
+- Building Requests uses the existing reservation service. WM and Xavier may approve or decline after an explicit confirmation. Jamal, the Secretary and Assistant Secretary may view requests. Opening or refreshing a request never decides it or sends a notification. Stale decisions require a fresh review.
+- Lodge Calendar is available to Lodge officers. WM can create, edit and remove Lodge calendar events. Building source entries remain read only here and retain pending status where applicable. These permissions remain visible in Officer Access.
+- Merge the building calendar with dated Lodge and jurisdiction events. Calendar-only events do not reserve the building or alter reservation availability. Preserve inclusive multi-day dates, Eastern time and unknown times. Show a warning if a source cannot be loaded.
+- Use the finalized trestleboard and verified event notices. Do not invent dates for TBD or week-only items, or turn a date-only entry into a claimed all-day duration. Keep source details and distinguish tentative events.

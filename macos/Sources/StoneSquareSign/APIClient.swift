@@ -12,6 +12,7 @@ enum ClientError: LocalizedError {
     case invalidServer
     case invalidResponse
     case server(String)
+    case conflict(String)
     case unauthorized(String)
     case serviceUpdateRequired(String)
 
@@ -19,7 +20,7 @@ enum ClientError: LocalizedError {
         switch self {
         case .invalidServer: return "Enter a valid signing service address."
         case .invalidResponse: return "The signing service returned an invalid response."
-        case .server(let message), .unauthorized(let message), .serviceUpdateRequired(let message): return message
+        case .server(let message), .conflict(let message), .unauthorized(let message), .serviceUpdateRequired(let message): return message
         }
     }
 }
@@ -255,6 +256,7 @@ final class AppModel: ObservableObject {
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? decoder.decode(APIError.self, from: data).error)
                 ?? "Request failed with status \(http.statusCode)."
+            if http.statusCode == 409 { throw ClientError.conflict(message) }
             if http.statusCode == 401 || http.statusCode == 403 { throw ClientError.unauthorized(message) }
             throw ClientError.server(message)
         }

@@ -118,6 +118,8 @@
           <nav>
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
             <button id="accessNav" class="nav-item owner-only" type="button"><span>ACC</span> Officer Access</button>
+            <button id="buildingNav" class="nav-item building-only" type="button"><span>BLD</span> Building Requests</button>
+            <button id="calendarNav" class="nav-item calendar-only" type="button"><span>CAL</span> Lodge Calendar</button>
             <button id="activityNav" class="nav-item owner-only" type="button"><span>ACT</span> Officer Activity</button>
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
@@ -150,6 +152,8 @@
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
             <div class="document-menu">
               <button id="proposeMenuCard" class="document-menu-card warden-only" type="button"><i>&#9998;</i><span><strong>My Dispensation Proposals</strong><small>Submit a proposal and follow its status</small></span><b>&rsaquo;</b></button>
+              <button id="buildingMenuCard" class="document-menu-card building-only" type="button"><i>BLD</i><span><strong>Building Requests</strong><small>View building requests and their status</small></span><b>›</b></button>
+              <button id="calendarMenuCard" class="document-menu-card calendar-only" type="button"><i>CAL</i><span><strong>Lodge Calendar</strong><small>Building use and Lodge events</small></span><b>›</b></button>
               <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
@@ -160,6 +164,8 @@
             </div>
           </section>
           <section id="settingsSection" class="hidden"><div class="content-head"><div><h1>My Settings</h1><p>Your account and this device.</p></div></div><div class="panel"><h2 id="settingsName"></h2><p id="settingsEmail"></p><p>You stay signed in for up to 90 days on this device. Your sign-in renews when you use it near the end of that period. Sign out when finished on a shared device.</p><div class="row-buttons"><button id="settingsSignature" class="secondary" type="button">Manage my signature</button><button id="settingsSignout" class="secondary" type="button">Sign out on this device</button></div></div></section>
+          <section id="buildingSection" class="hidden"></section>
+          <section id="calendarSection" class="hidden"></section>
           <section id="activitySection" class="hidden"></section>
           <section id="treasurySection" class="hidden"></section>
           <section id="reportsSection" class="hidden">

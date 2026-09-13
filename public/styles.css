@@ -524,3 +524,29 @@ a { overflow-wrap: anywhere; }
 .permission-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; border: 0; padding: 10px 0; margin: 8px 0; }
 .permission-grid label { display: flex; gap: 9px; align-items: flex-start; margin: 0; }
 .permission-grid input { width: 18px; height: 18px; flex: 0 0 18px; margin: 2px 0; }
+
+.building-requests { display: grid; gap: 16px; }
+.building-request p, .calendar-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.calendar-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0; }
+.calendar-toolbar h2 { margin: 0; flex: 1; min-width: 180px; }
+.calendar-weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.calendar-weekdays { text-align: center; padding: 8px 0; font-size: 12px; }
+.calendar-day { min-height: 100px; padding: 5px; border: 1px solid var(--line); min-width: 0; }
+.calendar-day h3 { margin: 0 0 6px; font-size: 13px; }
+.calendar-event { display: block; text-align: left; width: 100%; margin: 4px 0; border: 1px solid var(--line); border-radius: 6px; padding: 7px; color: var(--navy); background: var(--paper); overflow-wrap: anywhere; cursor: pointer; }
+.calendar-event span, .calendar-event small { display: block; margin-top: 3px; font-size: 11px; }
+.calendar-agenda { display: grid; gap: 12px; }
+.calendar-agenda article { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.calendar-warnings { color: #8a481c; white-space: pre-wrap; }
+.calendar-details { margin-top: 20px; }
+.calendar-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.calendar-checkbox { display: flex; align-items: center; gap: 8px; }
+.calendar-checkbox input { width: 18px; height: 18px; }
+@media (max-width: 650px) {
+  .calendar-weekdays, .calendar-empty { display: none; }
+  .calendar-grid { display: block; }
+  .calendar-day { min-height: 0; margin-bottom: 8px; }
+  .calendar-day:not(:has(.calendar-event)) { display: none; }
+  .calendar-form-grid { grid-template-columns: 1fr; }
+  .calendar-toolbar h2 { order: -1; flex-basis: 100%; }
+}

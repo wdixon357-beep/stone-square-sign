@@ -9,6 +9,8 @@ struct AccessAccount: Decodable, Identifiable {
 enum AccessPermissions {
     static func normalized(_ selected: Set<String>) -> Set<String> {
         var values = selected
+        if values.contains("building.decide") { values.insert("building.view") }
+        if values.contains("calendar.manage") { values.insert("calendar.view") }
         if values.contains("minutes.prepare") { values.insert("minutes.view") }
         if values.contains("treasury.prepare") || values.contains("treasury.upload") { values.insert("treasury.view") }
         if values.contains("documents.sign") { values.insert("documents.status") }

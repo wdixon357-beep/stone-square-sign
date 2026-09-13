@@ -212,6 +212,8 @@ struct WorkspaceView: View {
                 }
                 List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
+                if model.user?.canOpen(.building) == true { Label("Building Requests", systemImage: "building.2").tag(AppSection.building) }
+                if model.user?.canOpen(.lodgeCalendar) == true { Label("Lodge Calendar", systemImage: "calendar").tag(AppSection.lodgeCalendar) }
                 if model.user?.can("reports.create") == true { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
                 if model.user?.canReadMinutes == true {
                     Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes)
@@ -316,8 +318,12 @@ struct WorkspaceView: View {
                 openCandidateTracker: { selection = .candidateTracker },
                 openReports: { selection = .reportGenerator },
                 openMinutes: { selection = .minutes },
-                openTreasury: { selection = .treasury }
+                openTreasury: { selection = .treasury },
+                openBuilding: { selection = .building },
+                openCalendar: { selection = .lodgeCalendar }
             )
+        case .building: BuildingRequestsView()
+        case .lodgeCalendar: LodgeCalendarView()
         case .reportGenerator:
             ReportGeneratorView(browser: reportBrowser)
         case .minutes:
@@ -951,6 +957,8 @@ struct LandingDashboardView: View {
     let openReports: () -> Void
     let openMinutes: () -> Void
     let openTreasury: () -> Void
+    let openBuilding: () -> Void
+    let openCalendar: () -> Void
 
     private var awaitingCount: Int {
         if model.user?.role == "owner" || model.user?.role == "viewer" {
@@ -973,6 +981,8 @@ struct LandingDashboardView: View {
             NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
             List {
                 Section("Reports and records") {
+                    if model.user?.canOpen(.building) == true { homeRow("Building Requests", "View requests and recorded decisions", "building.2", action: openBuilding) }
+                    if model.user?.canOpen(.lodgeCalendar) == true { homeRow("Lodge Calendar", "View scheduled events", "calendar", action: openCalendar) }
                     if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports) }
                     if model.user?.can("documents.status") == true {
                         homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) awaiting action" : "Open the document queue", "doc.text.fill", action: openDispensations)

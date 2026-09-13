@@ -20,6 +20,9 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 /* web element id -> Mac AppSection case */
 const PAIRS = {
   homeNav: 'home',
+  buildingNav: 'building',
+  calendarNav: 'lodgeCalendar',
+  proposalsNav: 'proposalReview',
   reportsNav: 'reportGenerator',
   minutesNav: 'minutes',
   treasuryNav: 'treasury',
@@ -35,12 +38,8 @@ const PAIRS = {
 };
 
 /* Deliberate asymmetries. Each needs a reason, so the list stays honest. */
-const WEB_ONLY = {
-  proposalsNav: 'the Wardens propose from their phones. The Mac build is ad hoc signed and only '
-    + 'runs on the machine it was built on, so Xavier and Jamal can never install it. Building a '
-    + 'proposing screen there would be a screen nobody who proposes can open. The Master\'s '
-    + 'deciding side IS on the Mac, as proposalReview.',
-};
+const WEB_ONLY = {};
+
 const MAC_ONLY = {
   candidateTracker: 'the web side links out to the Tracker instead of embedding it',
 };
@@ -84,6 +83,34 @@ for (const mac of macSections) {
 console.log('\nMac app configuration');
 const client = read('macos/Sources/StoneSquareSign/APIClient.swift');
 const macMinutes = read('macos/Sources/StoneSquareSign/MeetingMinutes.swift');
+const macBuildingCalendar = read('macos/Sources/StoneSquareSign/BuildingCalendar.swift');
+const webBuildingCalendar = read('public/building-calendar.js');
+check('both clients open building requests through the authenticated shared service',
+  macBuildingCalendar.includes('model.request("/api/building/requests")')
+  && webBuildingCalendar.includes("this.api('/api/building/requests')")
+  && macViews.includes('case .building: BuildingRequestsView()'));
+check('both clients require building decision permission and server approval access',
+  macBuildingCalendar.includes('model.user?.can("building.decide") == true')
+  && macBuildingCalendar.includes('canDecide')
+  && webBuildingCalendar.includes("this.can('building.decide')")
+  && webBuildingCalendar.includes('result.canDecide'));
+check('both clients expose the Lodge Calendar with manager-only source-aware editing',
+  macViews.includes('case .lodgeCalendar: LodgeCalendarView()')
+  && macBuildingCalendar.includes('model.user?.can("calendar.manage") == true')
+  && macBuildingCalendar.includes('event.editable')
+  && webBuildingCalendar.includes("this.can('calendar.manage')")
+  && webBuildingCalendar.includes('event?.editable'));
+check('both clients send the saved calendar revision for editing and removal',
+  macBuildingCalendar.includes('revision = event.revision')
+  && macBuildingCalendar.includes('event.revision.map { ["revision": $0] }')
+  && macBuildingCalendar.includes('method: "DELETE", body: body')
+  && webBuildingCalendar.includes('event.revision=this.editingEvent.revision')
+  && webBuildingCalendar.includes('JSON.stringify({revision:event.revision})'));
+check('Wardens can prepare proposals natively while the owner retains the review workspace',
+  macViews.includes('MyDispensationProposalsView()')
+  && macViews.includes('model.user?.showsPersonalProposals == true')
+  && models.includes('role != "owner" && canProposeDispensation'));
+
 check('the Mac app defaults to the hosted service, not localhost',
   /let defaultServerAddress = "https:\/\//.test(client) && !/\?\? "http:\/\/localhost/.test(client));
 check('the Mac app consumes the same live event stream as the web page',
@@ -201,7 +228,7 @@ check('every element app.js binds without ?. actually exists in index.html',
  * belong in the environment. Only the Lodge's own domain and example.org may appear in
  * the source. */
 const PERSONAL_ADDRESS = /[A-Za-z0-9._%+-]+@(?!stonesquare22pha\.org|example\.(?:org|com)|[^\s"'`]*\.local)[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const sourcesToCheck = ['server.js', 'db.js', 'dues.js', 'public/app.js', 'public/index.html',
+const sourcesToCheck = ['building-calendar.js', 'public/building-calendar.js', 'macos/Sources/StoneSquareSign/BuildingCalendar.swift', 'server.js', 'db.js', 'dues.js', 'public/app.js', 'public/index.html',
   'test/e2e.mjs', 'test/parity.mjs', 'render.yaml', '.env.example',
   'macos/Sources/StoneSquareSign/APIClient.swift', 'macos/Sources/StoneSquareSign/Models.swift',
   'macos/Sources/StoneSquareSign/Views.swift'];

@@ -23,6 +23,8 @@ struct User: Codable, Identifiable, Equatable {
         case "officer": break
         default: break
         }
+        if role != "member" { defaults.append("calendar.view") }
+        if ["secretary", "assistant_secretary", "warden"].contains(role) { defaults.append("building.view") }
         return defaults.contains(capability)
     }
     var canSign: Bool { can("signature.manage") }
@@ -44,6 +46,8 @@ struct User: Codable, Identifiable, Equatable {
         case .approvals: return canReadApprovals
         case .candidateTracker: return can("candidates.view")
         case .proposalReview: return role == "owner" || canProposeDispensation
+        case .building: return can("building.view") || can("building.decide")
+        case .lodgeCalendar: return can("calendar.view") || can("calendar.manage")
         case .profile: return canSign
         case .settings: return can("settings.manage")
         case .activity, .access, .createDispensation: return role == "owner"
@@ -214,7 +218,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case activity, approvals, home, reportGenerator, minutes, treasury, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
+enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, minutes, treasury, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,

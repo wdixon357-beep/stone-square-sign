@@ -45,6 +45,7 @@ final class MinutesConflictFixture: URLProtocol {
 
 final class GenerationFixture: URLProtocol {
     static var response = Data()
+    static var statusCode = 200
     static var requests: [(method: String, path: String, body: Data)] = []
     static var beforeReply: (@MainActor (URLRequest) -> Void)?
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -66,7 +67,7 @@ final class GenerationFixture: URLProtocol {
             let payload = request.url!.path == "/api/generation/status"
                 ? Data(#"{"configured":true,"model":"gpt-5.6-terra","monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8)
                 : Self.response
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            let response = HTTPURLResponse(url: request.url!, statusCode: Self.statusCode, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: payload)
             client?.urlProtocolDidFinishLoading(self)
@@ -345,5 +346,59 @@ final class GenerationFixture: URLProtocol {
         print("PASS: periodic account refresh applies changed permissions without another sign-in")
         precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/auth/me" || $0.path == "/api/generation/status" || $0.path == "/api/proposals" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
         print("PASS: generation and proposal fixtures make no signing or document delivery requests")
+        let buildingPayload = Data(#"{"requests":[{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","start":"","end":"","spaces":["Hall"],"description":"Synthetic request","status":"pending","note":"","revision":"r1","requesterNotified":false}],"canDecide":true}"#.utf8)
+        let building = BuildingRequestsWorkspace()
+        var buildingReader = warden; buildingReader.permissions = ["building.view", "calendar.view"]
+        reportApp.user = buildingReader
+        GenerationFixture.response = buildingPayload
+        await building.load(using: reportApp)
+        let requestCount = GenerationFixture.requests.count
+        let unauthorizedDecision = await building.decide(building.requests[0], decision: "approved", note: "", using: reportApp)
+        precondition(!unauthorizedDecision && GenerationFixture.requests.count == requestCount)
+        var buildingDecider = buildingReader; buildingDecider.permissions = ["building.view", "building.decide", "calendar.view"]
+        reportApp.user = buildingDecider
+        GenerationFixture.beforeReply = { request in
+            precondition(request.url?.host == "generation-fixture.invalid")
+            precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-token")
+            GenerationFixture.statusCode = request.httpMethod == "POST" ? 409 : 200
+            GenerationFixture.response = request.httpMethod == "POST" ? Data(#"{"error":"The request changed."}"#.utf8) : buildingPayload
+        }
+        let staleDecision = await building.decide(building.requests[0], decision: "approved", note: "Synthetic note", using: reportApp)
+        precondition(!staleDecision && building.message.contains("latest details"))
+        let buildingDecision = GenerationFixture.requests.last { $0.path.hasSuffix("/decision") }!
+        let decisionBody = try JSONSerialization.jsonObject(with: buildingDecision.body) as! [String: Any]
+        precondition(decisionBody["revision"] as? String == "r1" && decisionBody["decision"] as? String == "approved")
+        GenerationFixture.beforeReply = nil; GenerationFixture.statusCode = 200
+        let approvedPayload = Data(#"{"request":{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","spaces":["Hall"],"description":"Synthetic request","status":"approved","revision":"r2","requesterNotified":false}}"#.utf8)
+        GenerationFixture.response = approvedPayload
+        let recordedDecision = await building.decide(building.requests[0], decision: "approved", note: "Synthetic note", using: reportApp)
+        precondition(recordedDecision && building.message.contains("not been confirmed") && building.requests[0].status == "approved")
+        print("PASS: building reads never decide, view-only accounts cannot decide, stale decisions reload, and notification status stays accurate")
+        let calendarPayload = Data(#"{"events":[{"id":"event-1","title":"Synthetic event","startDate":"2026-11-01","endDate":"2026-11-03","startTime":"","endTime":"","allDay":false,"location":"Hall","description":"Synthetic notes","category":"lodge","status":"tentative","source":"Lodge calendar","editable":true,"sourceUrl":"","revision":"3"}],"warnings":["External calendar unavailable."],"timezone":"America/New_York"}"#.utf8)
+        let calendar = LodgeCalendarWorkspace()
+        GenerationFixture.response = calendarPayload
+        let selectedDate = ISO8601DateFormatter().date(from: "2026-11-01T04:30:00Z")!
+        await calendar.load(date: selectedDate, using: reportApp)
+        let event = calendar.events[0]
+        precondition(event.includes(day: "2026-11-03") && !event.includes(day: "2026-11-04") && !event.allDay && event.timeLabel.isEmpty)
+        precondition(LodgeCalendarDates.range(selectedDate) == ("2026-11-01", "2026-11-30"))
+        precondition(!LodgeCalendarDates.valid("2026-02-30") && calendar.warnings.count == 1)
+        let eventDraft = LodgeEventDraft(event)
+        precondition(eventDraft.valid && eventDraft.status == "tentative" && eventDraft.revision == "3")
+        let beforeViewOnlySave = GenerationFixture.requests.count
+        let deniedCalendarSave = await calendar.save(eventDraft, event: event, date: selectedDate, using: reportApp)
+        precondition(!deniedCalendarSave && GenerationFixture.requests.count == beforeViewOnlySave)
+        reportApp.user = admin
+        GenerationFixture.beforeReply = { request in
+            GenerationFixture.response = request.httpMethod == "GET" ? calendarPayload : Data(#"{"ok":true}"#.utf8)
+        }
+        let calendarSaved = await calendar.save(eventDraft, event: event, date: selectedDate, using: reportApp)
+        precondition(calendarSaved)
+        let calendarWrite = GenerationFixture.requests.last { $0.path == "/api/lodge-calendar/event-1" && $0.method == "PUT" }!
+        let eventBody = try JSONSerialization.jsonObject(with: calendarWrite.body) as! [String: Any]
+        precondition(eventBody["revision"] as? String == "3" && eventBody["status"] as? String == "tentative" && eventBody["allDay"] as? Bool == false)
+        GenerationFixture.beforeReply = nil
+        precondition(AccessPermissions.normalized(["building.decide", "calendar.manage"]) == ["building.decide", "building.view", "calendar.manage", "calendar.view"])
+        print("PASS: calendar uses Eastern month ranges, inclusive dates, unknown times, visible source warnings and manager-only versioned edits")
     }
 }

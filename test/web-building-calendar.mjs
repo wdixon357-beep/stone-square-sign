@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { BuildingCalendarWorkspace, monthBounds, eventOccurs } from '../public/building-calendar.js';
+assert.deepEqual(monthBounds(new Date(2028,1,5)),{from:'2028-02-01',to:'2028-02-29'});
+assert.equal(eventOccurs({startDate:'2026-09-30',endDate:'2026-10-02'},'2026-10-02'),true);
+assert.equal(eventOccurs({startDate:'2026-09-30',endDate:'2026-10-02'},'2026-10-03'),false);
+const elements=new Map();
+class Element {constructor(){this.innerHTML='';this.textContent='';this.value='Reviewed note';this.hidden=false;}addEventListener(){}querySelector(key){const full=this.id+key;if(!elements.has(full))elements.set(full,new Element());return elements.get(full);}querySelectorAll(){return [];}scrollIntoView(){}}
+global.document={getElementById:id=>{if(!elements.has(id)){const e=new Element();e.id=id;elements.set(id,e);}return elements.get(id)}};
+let confirmed=false;global.window={confirm:()=>confirmed};
+const request={id:'SSL-TEST',organization:'Example Chapter',date:'2026-09-20',spaces:['Lodge building'],description:'Meeting',status:'pending',revision:7};
+let permissions=['building.view','calendar.view'], calls=[], failConflict=false;
+const workspace=new BuildingCalendarWorkspace({user:()=>({role:'officer',permissions}),api:async(path,init)=>{calls.push({path,init});if(init){if(failConflict)throw Object.assign(Error('changed'),{status:409});return{request};}return path.startsWith('/api/building')?{requests:[request],canDecide:true}:{events:[],warnings:[]};}});
+await workspace.building();assert.doesNotMatch(workspace.buildingRoot.querySelector('.building-requests').innerHTML,/data-building="approved"/);
+await workspace.decision({dataset:{building:'approved',id:request.id}});assert.equal(calls.filter(c=>c.init).length,0);
+permissions.push('building.decide');await workspace.building();assert.match(workspace.buildingRoot.querySelector('.building-requests').innerHTML,/sends its decision notifications/);
+await workspace.decision({dataset:{building:'approved',id:request.id}});assert.equal(calls.filter(c=>c.init).length,0);
+confirmed=true;await workspace.decision({dataset:{building:'approved',id:request.id}});assert.deepEqual(JSON.parse(calls.find(c=>c.init).init.body),{decision:'approved',note:'Reviewed note',revision:7});
+failConflict=true;await workspace.decision({dataset:{building:'denied',id:request.id}});assert.match(workspace.buildingRoot.querySelector('[data-message]').textContent,/changed before your decision/);failConflict=false;
+workspace.events=[{id:'remote',title:'Meeting',startDate:'2026-09-15',startTime:'',endTime:'',category:'building',source:'portal',editable:false}];workspace.renderEvents({from:'2026-09-01',to:'2026-09-30'});assert.match(workspace.calendarRoot.querySelector('#lodgeCalendarEvents').innerHTML,/Time not provided/);
+let editCalls=0;workspace.editEvent=()=>editCalls++;permissions.push('calendar.manage');await workspace.calendarAction({dataset:{calendar:'edit',id:'remote'}});assert.equal(editCalls,0);
+const writes=calls.filter(c=>c.init).length;await workspace.calendarAction({dataset:{calendar:'delete',id:'remote'}});assert.equal(calls.filter(c=>c.init).length,writes);
+workspace.calendarDirty=true;const count=calls.length;await workspace.calendar();assert.equal(calls.length,count);workspace.calendarDirty=false;
+global.FormData=class{constructor(form){this.data=form.data;}*[Symbol.iterator](){yield*Object.entries(this.data);}has(key){return Object.hasOwn(this.data,key);}};
+const form={data:{title:'Lodge event',startDate:'2026-09-25',endDate:'2026-09-26',startTime:'',endTime:'',category:'lodge',location:'Lodge',description:'Details'},querySelector:()=>new Element(),querySelectorAll:()=>[]};workspace.editingEvent={id:'custom',revision:3,status:'tentative',source:'Verified Lodge announcement',sourceUrl:'https://example.org/event'};workspace.calendar=async()=>{};
+confirmed=false;await workspace.saveEvent(form);assert.equal(calls.filter(c=>c.init).length,writes);
+confirmed=true;await workspace.saveEvent(form);const saved=calls.filter(c=>c.init).at(-1);assert.equal(saved.init.method,'PUT');assert.equal(saved.path,'/api/lodge-calendar/custom');assert.equal(JSON.parse(saved.init.body).revision,3);assert.equal(JSON.parse(saved.init.body).allDay,false);assert.equal(JSON.parse(saved.init.body).status,'tentative');assert.equal(JSON.parse(saved.init.body).source,'Verified Lodge announcement');assert.equal(JSON.parse(saved.init.body).sourceUrl,'https://example.org/event');
+form.data.status='cancelled';await workspace.saveEvent(form);assert.equal(JSON.parse(calls.filter(c=>c.init).at(-1).init.body).status,'cancelled');
+console.log('PASS: building permissions, explicit notifications/confirmation, stale revisions, inclusive calendar dates, unknown times, immutable source events, retained edits, confirmed calendar writes.');
