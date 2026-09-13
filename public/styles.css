@@ -550,3 +550,9 @@ a { overflow-wrap: anywhere; }
   .calendar-form-grid { grid-template-columns: 1fr; }
   .calendar-toolbar h2 { order: -1; flex-basis: 100%; }
 }
+@media (min-width: 651px) and (max-width: 1000px) {
+  .calendar-weekdays, .calendar-empty { display: none; }
+  .calendar-grid { display: block; }
+  .calendar-day { min-height: 0; margin-bottom: 12px; padding: 12px; }
+  .calendar-day:not(:has(.calendar-event)) { display: none; }
+}
