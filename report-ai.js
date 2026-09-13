@@ -33,6 +33,15 @@ export async function organizeReport(input,{schema,generateStructured}={}) {
     if(field.kind==='budget') {
       const compact=text=>text.split('\n').map(line=>line.trim().replace(/^[-*•]\s+/,'').replace(/[.;]$/,'').replace(/\s+/g,' ').toLowerCase()).filter(Boolean).join('\n');
       if(compact(item.value)!==compact(item.quote))throw fail('A suggested budget changed a source item, amount or payer. Review the original budget notes.',502);
+      let at=source.indexOf(item.quote), wholeRow=false;
+      while(at>=0) {
+        const before=source.slice(0,at),after=source.slice(at+item.quote.length);
+        const starts=!before.trim()||/\n[ \t]*$/.test(before)||/[.!?]\s+$/.test(before);
+        const ends=!after.trim()||/^[ \t]*\r?\n/.test(after)||/^[.!?](?:\s|$)/.test(after)||(/[.!?]$/.test(item.quote)&&/^\s/.test(after));
+        if(starts&&ends){wholeRow=true;break;}
+        at=source.indexOf(item.quote,at+1);
+      }
+      if(!wholeRow)throw fail('The budget source reference omitted part of a row. Keep the complete item, amount and payer.',502);
     }
     if(item.field==='approved' && (!/\b(?:approved|authorized|voted|carried|passed)\b/i.test(item.quote) || /\b(?:no|not|never|denied|rejected|pending|proposed|requested)\b/i.test(item.quote)))throw fail('The source does not clearly establish approved funds. Review the recorded decision.',502);
     if(field.kind==='money') {

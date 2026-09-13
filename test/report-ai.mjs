@@ -16,4 +16,5 @@ await assert.rejects(run({suggestions:[{field:'time',value:'21:00',quote:'Dinner
 const timed=await run({suggestions:[{field:'time',value:'18:00',quote:'Dinner starts at 6:00 PM.'}],warnings:[]},{...input,source:'Dinner starts at 6:00 PM.'});assert.equal(timed.fields.time,'18:00');
 await assert.rejects(run({suggestions:[{field:'budget',value:'Food, 300',quote:'Food, 300, Stone Square.'}],warnings:[]}),/budget changed/);
 const approved=await run({suggestions:[{field:'approved',value:'500',quote:'The Lodge approved the $500 request.'}],warnings:[]},{...input,source:'The Lodge approved the $500 request.'});assert.equal(approved.fields.approved,'500');
+await assert.rejects(run({suggestions:[{field:'budget',value:'Food, 300',quote:'Food, 300'}],warnings:[]}),/omitted part of a row/);
 console.log('Report field organization, evidence, amounts, dates, identity boundaries and input retention passed without paid calls.');
