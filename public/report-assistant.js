@@ -1,0 +1,18 @@
+const origin='https://request.stonesquare22pha.org';
+const $=id=>document.getElementById(id);
+let context=null,suggestions=null,sourceKey='',busy=false;
+const status=text=>$('status').textContent=text;
+const api=async(path,body)=>{const token=localStorage.getItem('stone-square-sign-token')||'';const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},...(body?{body:JSON.stringify(body)}:{})});const data=await r.json();if(!r.ok)throw Object.assign(new Error(data.error||'The request could not be completed.'),{status:r.status});return data;};
+async function check(){try{await api('/api/auth/me');$('signin').hidden=true;$('organize').disabled=!context||busy;status(context?'Your report is connected. Paste notes to begin.':'Open this assistant from the Report Generator.');}catch(e){$('signin').hidden=false;$('organize').disabled=true;status('Sign in, then return here and choose Check sign-in.');}}
+window.addEventListener('message',event=>{if(event.origin!==origin||event.source!==window.opener||event.data?.kind!=='report-assistant-context'||context)return;const v=event.data.context;if(!v||typeof v.type!=='string'||typeof v.master!=='boolean'||!v.fields||typeof v.fields!=='object'||Array.isArray(v.fields))return;context=structuredClone(v);check();});
+$('check').onclick=check;
+$('source').oninput=()=>{suggestions=null;$('suggestions').hidden=true;};
+$('organize').onclick=async()=>{
+ if(!context||busy||!$('source').value.trim())return status('Enter your report notes first.');
+ busy=true;$('organize').disabled=true;$('apply').disabled=true;suggestions=null;$('suggestions').hidden=true;sourceKey=$('source').value;status('Organizing your notes…');
+ try{const result=await api('/api/reports/organize',{...context,source:sourceKey});if($('source').value!==sourceKey)return status('Your notes changed. Organize them again to use the latest version.');suggestions=result;$('fields').replaceChildren();$('warnings').replaceChildren();for(const warning of result.warnings){const p=document.createElement('p');p.textContent=warning;$('warnings').append(p);}for(const [key,value]of Object.entries(result.fields)){const div=document.createElement('div');div.className='field';const h=document.createElement('h3');h.textContent=result.fieldLabels?.[key]||key.replace(/([A-Z])/g,' $1').replace(/^./,s=>s.toUpperCase());const p=document.createElement('p');p.textContent=value;div.append(h,p);const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Source reference';const quote=document.createElement('p');quote.textContent=result.evidence.filter(e=>e.field===key).map(e=>e.quote).join('\n');details.append(summary,quote);div.append(details);$('fields').append(div);}$('suggestions').hidden=false;$('apply').disabled=!Object.keys(result.fields).length;status('Review these suggestions. Your report has not changed.');}
+ catch(e){status(e.message);if(e.status===401)$('signin').hidden=false;}
+ finally{busy=false;$('organize').disabled=false;}
+};
+$('apply').onclick=()=>{if(!suggestions||busy||sourceKey!==$('source').value)return;if(!window.opener||window.opener.closed)return status('The report window is closed. Your suggestions remain here for review.');window.opener.postMessage({kind:'report-assistant-apply',fields:suggestions.fields},origin);$('apply').disabled=true;status('Suggestions sent to your report. Return there to review the entries and prepare the preview.');};
+if(window.opener)window.opener.postMessage({kind:'report-assistant-ready'},origin);else status('Open this assistant using Organize from notes in the Report Generator.');

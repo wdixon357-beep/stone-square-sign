@@ -1,3 +1,4 @@
+import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -3105,6 +3106,17 @@ app.get('/api/documents/:id/audit', requireAuth, requireDocumentAccess, async (r
 app.get('/', (_req, res) => res.sendFile(path.join(APP_DIR, 'public', 'index.html')));
 
 mountActivityRoutes(app, { requireAuth, requireOwner, rateLimit });
+
+app.post('/api/reports/organize', requireAuth, rateLimit({key:'report-organize',maximum:12,windowMs:3600000}), async (req,res,next) => {
+  try {
+    if(!['owner','secretary','assistant_secretary','warden','treasurer','assistant_treasurer','treasury_preparer'].includes(req.user.role))return res.status(403).json({error:'Report assistance is available to authorized Lodge officers.'});
+    if(req.body.master === true && req.user.role !== 'owner')return res.status(403).json({error:"Only the Worshipful Master can organize a Worshipful Master's report."});
+    const generateStructured=generationFor(req.user.id);
+    if(!generateStructured)return res.status(503).json({error:'Report assistance is not configured. You can still complete the report manually.'});
+    const result=await organizeReport(req.body,{schema:await reportSchema(),generateStructured});
+    res.setHeader('Cache-Control','no-store');res.json(result);
+  }catch(error){next(error);}
+});
 
 app.get('/api/generation/status', requireAuth, async (req, res, next) => {
   try { res.setHeader('Cache-Control', 'no-store'); res.json(await generationStatus({ includeBudget: req.user.role === 'owner' })); } catch (error) { next(error); }

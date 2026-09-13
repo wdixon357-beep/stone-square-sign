@@ -154,7 +154,7 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
     if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) throw new TypeError('A valid officer account is required');
     const user = String(Number(userId));
     return async ({ purpose, schemaName, schema, instructions, input }) => {
-      if (!['minutes', 'treasury'].includes(purpose)) throw new TypeError('Unsupported report generation kind');
+      if (!['minutes', 'treasury', 'report'].includes(purpose)) throw new TypeError('Unsupported report generation kind');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(schemaName || '') || typeof instructions !== 'string' || !instructions.trim()) throw new TypeError('A report schema and instructions are required');
       validateSchema(schema);
       const source = typeof input === 'string' ? input : JSON.stringify(input);

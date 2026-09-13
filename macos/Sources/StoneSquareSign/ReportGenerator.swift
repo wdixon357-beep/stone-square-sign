@@ -14,6 +14,13 @@ struct NativeReportField: Identifiable {
     }
 }
 
+struct ReportOrganization: Decodable {
+    struct Evidence: Decodable { let field: String; let quote: String }
+    let fields: [String: String]
+    let warnings: [String]
+    let evidence: [Evidence]
+}
+
 // Native controls consume the same published schema and report endpoint as the web.
 // The Sign session and stored Lodge signatures are never passed to this service.
 @MainActor
@@ -26,6 +33,11 @@ final class ReportBrowserModel: ObservableObject {
     @Published var phone = ""
     @Published var type = "officer"
     @Published var fields: [String: String] = [:]
+    @Published var source = ""
+    @Published var organization: ReportOrganization?
+    @Published var organizing = false
+    private var organizationKey: Data?
+    private var revision = 0
     @Published var reviewed = false
     @Published var signatureName = ""
     @Published var pdf: Data?
@@ -55,6 +67,7 @@ final class ReportBrowserModel: ObservableObject {
         isOfficer = raw["isOfficer"] as? Bool ?? true; name = raw["name"] as? String ?? ""
         email = raw["email"] as? String ?? ""; phone = raw["phone"] as? String ?? ""
         type = raw["type"] as? String ?? "officer"; fields = raw["fields"] as? [String: String] ?? [:]
+        source = raw["source"] as? String ?? ""
         clientId = raw["clientId"] as? String ?? UUID().uuidString
         draftSaved = true
     }
@@ -67,9 +80,10 @@ final class ReportBrowserModel: ObservableObject {
         return try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
     }
     func changed() {
-        reviewed = false; previewKey = nil
+        reviewed = false; signatureName = ""; previewKey = nil; pdf = nil
+        organization = nil; organizationKey = nil; revision += 1
         draftSaved = false
-        var object = payload(); object["reviewed"] = false; object["signatureName"] = ""; object["savedAt"] = Date().timeIntervalSince1970
+        var object = payload(); object["source"] = source; object["reviewed"] = false; object["signatureName"] = ""; object["savedAt"] = Date().timeIntervalSince1970
         if let url = persistenceURL, let data = try? JSONSerialization.data(withJSONObject: object) {
             do {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -78,6 +92,47 @@ final class ReportBrowserModel: ObservableObject {
                 draftSaved = true
             } catch { self.error = "This draft could not be saved on this Mac. Keep the report open and save a PDF when ready." }
         }
+    }
+    private var organizerFieldIDs: Set<String> {
+        Set(reportFields.flatMap { $0.kind == "choices" ? [$0.id, $0.id + "Other"] : [$0.id] })
+    }
+    private func organizerKey() -> Data? {
+        try? JSONSerialization.data(withJSONObject: ["source": source, "type": type, "master": isMaster, "fields": fields], options: .sortedKeys)
+    }
+    func organize(using model: AppModel) async {
+        guard !busy, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let key = organizerKey() else { return }
+        let startingRevision = revision
+        busy = true; organizing = true; organization = nil; organizationKey = nil; error = nil; message = ""
+        defer { busy = false; organizing = false }
+        do {
+            let requestFields = fields.filter { organizerFieldIDs.contains($0.key) }
+            let body = try JSONSerialization.data(withJSONObject: ["source": source, "type": type, "master": isMaster, "fields": requestFields])
+            let result: ReportOrganization = try await model.request("/api/reports/organize", method: "POST", body: body)
+            guard startingRevision == revision, key == organizerKey() else {
+                message = "The report changed. Organize it again to review current suggestions."
+                return
+            }
+            organization = result; organizationKey = key
+            message = result.fields.isEmpty ? "No supported field suggestions were found. Review the notes and warnings." : "Suggestions are ready for your review."
+        } catch {
+            guard startingRevision == revision, key == organizerKey() else { return }
+            let detail = error.localizedDescription.contains("404") || error is DecodingError
+                ? "Report organization is currently unavailable."
+                : error.localizedDescription
+            self.error = "The report could not be organized. \(detail) Your notes and report fields remain in this draft."
+        }
+    }
+    func applyOrganization() {
+        guard let result = organization, organizationKey == organizerKey() else {
+            organization = nil
+            message = "The report changed. Organize it again before applying suggestions."
+            return
+        }
+        let allowed = organizerFieldIDs
+        for (field, value) in result.fields where allowed.contains(field) { fields[field] = value }
+        changed()
+        message = "Suggestions applied. Review the fields and build a new preview before signing."
     }
     func loadIfNeeded() async {
         guard schema.isEmpty else { return }
@@ -135,12 +190,13 @@ final class ReportBrowserModel: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
     func startOver() {
-        fields = [:]; reviewed = false; signatureName = ""; pdf = nil; message = ""; error = nil
+        source = ""; fields = [:]; reviewed = false; signatureName = ""; pdf = nil; message = ""; error = nil
         clientId = UUID().uuidString; changed()
     }
 }
 
 struct ReportGeneratorView: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var browser: ReportBrowserModel
     @State private var confirmSend = false
     @State private var confirmReset = false
@@ -195,6 +251,7 @@ struct ReportGeneratorView: View {
                                     Text("Your selected report determines the sections in the document.").font(.caption).foregroundStyle(.secondary)
                                 } header: { Text("Document") }
                             } else if step == 1 {
+                                organizer
                                 Section {
                                     ForEach(browser.reportFields) { field in reportField(field) }
                                 } header: { Text(reportTitle) }
@@ -258,6 +315,41 @@ struct ReportGeneratorView: View {
         .alert("Start a new report?", isPresented: $confirmReset) {
             Button("Clear report", role: .destructive) { browser.startOver(); step = 0 }; Button("Cancel", role: .cancel) {}
         } message: { Text("The saved report fields will be cleared. Your contact details remain available.") }
+    }
+
+    private var organizer: some View {
+        Section {
+            Text("Paste notes or source text, then review the suggested report fields before applying them.").font(.callout).foregroundStyle(.secondary)
+            TextEditor(text: Binding(get: { browser.source }, set: { browser.source = $0; browser.changed() }))
+                .font(.body).scrollContentBackground(.hidden).frame(minHeight: 150).padding(8)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.secondary.opacity(0.2)))
+                .accessibilityLabel("Report source notes")
+            Button(browser.organizing ? "Organizing…" : "Organize report") { Task { await browser.organize(using: model) } }
+                .disabled(browser.busy || browser.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Text("Uses the Lodge's approved generation allowance. Your notes are retained on this Mac.").font(.caption).foregroundStyle(.secondary)
+            if let result = browser.organization {
+                ForEach(Array(result.warnings.enumerated()), id: \.offset) { _, warning in
+                    Label(warning, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+                }
+                ForEach(result.fields.keys.sorted(), id: \.self) { field in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(browser.reportFields.first { $0.id == field || $0.id + "Other" == field }?.label ?? field).font(.headline)
+                        if let existing = browser.fields[field], !existing.isEmpty {
+                            Text("Current: \(existing)").font(.callout).foregroundStyle(.secondary)
+                        }
+                        Text(result.fields[field] ?? "").textSelection(.enabled)
+                        ForEach(Array(result.evidence.filter { $0.field == field }.enumerated()), id: \.offset) { _, evidence in
+                            Text("Source: \(evidence.quote)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                    }
+                }
+                HStack {
+                    Button("Apply suggestions") { browser.applyOrganization() }.disabled(result.fields.isEmpty)
+                    Button("Dismiss") { browser.organization = nil; browser.message = "" }
+                }
+            }
+        } header: { Text("Organize your notes") }
     }
 
     private var previewPane: some View {

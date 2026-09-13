@@ -109,7 +109,7 @@ final class GenerationFixture: URLProtocol {
         await model.prepare(send: true)
         precondition(ReportFixture.deliveries == 0)
         print("PASS: content changes invalidate preview and block stale approval")
-        await model.prepare(send: false); model.reviewed = true
+        await model.prepare(send: false); model.reviewed = true; model.signatureName = "QA Officer"
         await model.prepare(send: true)
         precondition(ReportFixture.deliveries == 1 && model.message.contains("Signed report emailed"))
         print("PASS: reviewed current report reaches only the isolated delivery fixture")
@@ -141,6 +141,70 @@ final class GenerationFixture: URLProtocol {
         generationConfig.protocolClasses = [GenerationFixture.self]
         let generationSession = URLSession(configuration: generationConfig)
         defer { generationSession.invalidateAndCancel() }
+        let reportApp = AppModel(session: generationSession, savedSessionToken: "synthetic-token")
+        let savedServer = reportApp.serverAddress
+        reportApp.serverAddress = "https://generation-fixture.invalid"
+        defer { reportApp.serverAddress = savedServer }
+        let report = ReportBrowserModel(persistenceURL: scratch.appendingPathComponent("organizer.json"))
+        report.schema = model.schema
+        report.source = "The committee met on Tuesday."
+        report.changed()
+        let sourceRestored = ReportBrowserModel(persistenceURL: report.persistenceURL)
+        precondition(sourceRestored.source == report.source)
+        GenerationFixture.response = Data(#"{"fields":{"summary":"The committee met on Tuesday."},"warnings":["Confirm the meeting date."],"evidence":[{"field":"summary","quote":"The committee met on Tuesday."}]}"#.utf8)
+        GenerationFixture.beforeReply = { request in
+            precondition(request.url?.host == "generation-fixture.invalid")
+            precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-token")
+        }
+        await report.organize(using: reportApp)
+        GenerationFixture.beforeReply = nil
+        precondition(report.fields.isEmpty && report.organization?.fields["summary"] != nil)
+        let reportRequest = GenerationFixture.requests.last!
+        let reportBody = try JSONSerialization.jsonObject(with: reportRequest.body) as! [String: Any]
+        precondition(reportRequest.path == "/api/reports/organize" && reportBody["fields"] as? [String: String] == [:])
+        precondition(report.organization?.warnings.count == 1 && report.organization?.evidence.count == 1)
+        report.fields["retained"] = "Keep this field."
+        report.applyOrganization()
+        precondition(report.fields["summary"] == nil)
+        await report.organize(using: reportApp)
+        report.reviewed = true; report.signatureName = "QA Officer"; report.pdf = ReportFixture.pdf
+        report.applyOrganization()
+        precondition(report.fields["summary"] == report.source && report.fields["retained"] == "Keep this field.")
+        precondition(!report.reviewed && report.signatureName.isEmpty && report.pdf == nil)
+        print("PASS: report source persists; incomplete reports organize without changing fields until explicit Apply, which resets review and retains other fields")
+        GenerationFixture.beforeReply = { _ in report.source = "Changed while organizing."; report.changed() }
+        let previousFields = report.fields
+        await report.organize(using: reportApp)
+        precondition(report.organization == nil && report.fields == previousFields && !report.busy)
+        GenerationFixture.beforeReply = nil
+        report.startOver()
+        precondition(report.source.isEmpty && report.organization == nil)
+        print("PASS: changed report snapshots reject stale suggestions, and new reports clear the source")
+
+        report.schema = ["types": [
+            "officer": ["fields": [["id": "activities", "kind": "long"]]],
+            "committee": ["fields": [["id": "summary", "kind": "long"], ["id": "decisions", "kind": "choices"]]]]]
+        report.type = "officer"
+        report.fields = ["activities": "Keep the officer activity."]
+        report.type = "committee"
+        report.fields["summary"] = "Existing committee summary."
+        report.fields["summaryOther"] = "Keep unrelated local value."
+        report.fields["decisionsOther"] = "Supported other choice."
+        report.source = "The committee met on Tuesday."
+        report.changed()
+        GenerationFixture.response = Data(#"{"fields":{"summary":"The committee met on Tuesday.","summaryOther":"Must not apply.","decisionsOther":"Updated choice."},"warnings":[],"evidence":[]}"#.utf8)
+        await report.organize(using: reportApp)
+        let switchedRequest = GenerationFixture.requests.last!
+        let switchedBody = try JSONSerialization.jsonObject(with: switchedRequest.body) as! [String: Any]
+        let switchedFields = switchedBody["fields"] as! [String: String]
+        precondition(switchedBody["type"] as? String == "committee")
+        precondition(switchedFields == ["summary": "Existing committee summary.", "decisionsOther": "Supported other choice."])
+        report.applyOrganization()
+        precondition(report.fields["activities"] == "Keep the officer activity.")
+        precondition(report.fields["summaryOther"] == "Keep unrelated local value.")
+        precondition(report.fields["summary"] == report.source && report.fields["decisionsOther"] == "Updated choice.")
+        print("PASS: changing report type sends only current fields and choice Other values while preserving unrelated local fields")
+
         let organizing = MinutesWorkspace(session: generationSession)
         organizing.baseURL = URL(string: "https://generation-fixture.invalid"); organizing.token = "synthetic-token"
         let status = await GenerationStatus.load(using: organizing)

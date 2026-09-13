@@ -77,6 +77,10 @@ import {appendFile, readFile, access} from 'node:fs/promises';
 import {createGenerator, setGenerationForTests} from ${JSON.stringify(new URL('../ai-generation.js', import.meta.url).href)};
 import {generateMinutesDraft, MINUTES_SCHEMA} from ${JSON.stringify(new URL('../minutes.js', import.meta.url).href)};
 const callsFile = ${JSON.stringify(callsFile)}, controlFile = ${JSON.stringify(controlFile)}, releaseFile = ${JSON.stringify(releaseFile)};
+globalThis.fetch = async url => {
+  if(String(url)!=='https://request.stonesquare22pha.org/api/report?schema=1')throw Error('Unexpected schema destination');
+  return Response.json({types:{officer:{name:'Officer Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}},masterTypes:{officer:{name:'WM Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}}});
+};
 const fetchImpl = async (url, options) => {
   if (String(url) !== 'https://api.openai.com/v1/responses') throw new Error('Unexpected network destination in the provider mock.');
   await appendFile(callsFile, 'called\\n');
@@ -90,7 +94,9 @@ const fetchImpl = async (url, options) => {
   const inputText = typeof rawInput === 'string' ? rawInput : rawInput?.find(item=>item.type==='input_text')?.text;
   const input = JSON.parse(inputText);
   let result;
-  if (body.text.format.name === 'stone_square_meeting_minutes') {
+  if (body.text.format.name === 'stone_square_officer_report') {
+    result={suggestions:[{field:'title',value:'Synthetic report notes',quote:'Synthetic report notes'}],warnings:[]};
+  } else if (body.text.format.name === 'stone_square_meeting_minutes') {
     const local = await generateMinutesDraft(input.source, {sourceType:input.sourceType});
     const draft = Object.fromEntries(Object.keys(MINUTES_SCHEMA.properties).map(key=>[key,local[key]]));
     const evidence=[];
@@ -182,6 +188,19 @@ try {
   result = await api(`/api/minutes/${minutes.id}/preparer-attest`, owner.token, 'POST', {expectedUpdatedAt: minutes.updatedAt});
   check('Minutes attestation makes no provider call', result.status === 200 && await providerCalls() === count);
   check('Attested minutes reject reorganization before a provider call', (await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: result.data.minutes.updatedAt})).status === 409 && await providerCalls() === count);
+  await control({mode:'success'});
+  const reportInput={source:'Synthetic report notes',type:'officer',master:false,fields:{}};
+  const countBeforeReport=await providerCalls();
+  check('Report assistance requires sign-in', (await api('/api/reports/organize',null,'POST',reportInput)).status===401);
+  check('Unassigned members cannot spend the report allowance', (await api('/api/reports/organize',uploadOnly.token,'POST',reportInput)).status===403);
+  check('WM report organization requires owner role', (await api('/api/reports/organize',preparer.token,'POST',{...reportInput,master:true})).status===403);
+  check('Invalid report fields are rejected before paid generation', (await api('/api/reports/organize',owner.token,'POST',{...reportInput,fields:{signatureName:'x'}})).status===400 && await providerCalls()===countBeforeReport);
+  const organized=await api('/api/reports/organize',owner.token,'POST',reportInput);
+  check('Owner receives supported report suggestions', organized.status===200 && organized.data.fields.title==='Synthetic report notes');
+  check('Report suggestions do not include identity or signature approval', !Object.hasOwn(organized.data.fields,'signatureName') && !Object.hasOwn(organized.data.fields,'reviewed'));
+  const afterReport=await providerCalls();
+  await api('/api/reports/organize',owner.token,'POST',reportInput);
+  check('Repeated identical organization uses the shared cache', await providerCalls()===afterReport);
   console.log(`${passed} generation route checks passed with an isolated mocked provider.`);
 } finally {
   await stop();

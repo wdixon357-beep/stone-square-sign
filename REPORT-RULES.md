@@ -41,3 +41,7 @@ Opening/closing times, an individual Brother's missed instruction months, and co
 | Dates, preview and signatures | public/minutes-dates.js, minutes-pdf.js, minutes-document.js, minutes-changes.js | minutes-format, minutes-changes, e2e |
 | Treasury evidence and arithmetic | treasury-source.js, treasury.js, treasury-routes.js | treasury-source, treasury-ai, treasury-e2e |
 | Paid generation and authorization | ai-generation.js, server.js | ai-generation, generation-routes, e2e |
+
+## General Report Generator assistance
+
+Officer, committee, event and formal reports can organize pasted notes into the selected report fields. This uses the same authenticated Terra integration and shared $5 monthly limit. Preserve original notes and existing entries; show suggestions and source evidence before the user applies them. Never change identity, signatures, review confirmations or send a report during organization. Invalidate the old preview and signature confirmation when suggestions are applied. Keep report calculations in the existing renderer, preserve payer-attributed budgets and proposals versus decisions, and leave unknowns for review. The public generator opens the authenticated Sign assistant; credentials never cross into the public report page.
