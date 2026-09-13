@@ -57,7 +57,7 @@ function quotedDates(quote) {
 }
 
 function quotedAmounts(quote) {
-  return [...quote.matchAll(/(?<![\w./-])(?:\(?-?\$\s*\d[\d,]*(?:\.\d{1,2})?\)?|\(?-?\d[\d,]*(?:\.\d{1,2})?\)?)(?![\w./-])/g)]
+  return [...quote.matchAll(/(?<![\w./-])(?:\(?-?\$\s*\d[\d,]*(?:\.\d{1,2})?\)?|\(?-?\d[\d,]*(?:\.\d{1,2})?\)?)(?![\w/-]|\.\d)/g)]
     .map(match => money(match[0])).filter(value => value !== null);
 }
 
@@ -91,6 +91,23 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   let rejected = 0;
   const fieldPaths = new WeakMap();
   const acceptedEvidence = new Set();
+  const evidencePositions = new WeakMap();
+  const sourceLines = source.split('\n');
+  const lineStarts = [0];
+  for (let index = 0; index < source.length; index++) if (source[index] === '\n') lineStarts.push(index + 1);
+  const lineAt = offset => {
+    let low = 0, high = lineStarts.length;
+    while (low + 1 < high) { const middle = Math.floor((low + high) / 2); if (lineStarts[middle] <= offset) low = middle; else high = middle; }
+    return low;
+  };
+  const occurrenceCache = new Map();
+  const occurrences = quote => {
+    if (occurrenceCache.has(quote)) return occurrenceCache.get(quote);
+    const positions = [];
+    for (let start = source.indexOf(quote); start !== -1; start = source.indexOf(quote, start + Math.max(1, quote.length))) positions.push(start);
+    occurrenceCache.set(quote, positions);
+    return positions;
+  };
   const indexFields = (value, path = '') => {
     if (Array.isArray(value)) value.forEach((item, index) => indexFields(item, `${path}[${index}]`));
     else if (value && typeof value === 'object') {
@@ -111,13 +128,24 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     if (!compact(quote).includes(compact(field.value))) { rejected += 1; return ''; }
     return accepted(field, field.value.trim());
   };
-  const amount = (field, absolute = false) => {
+  const amount = (field, absolute = false, accountId) => {
     const quote = evidence(field);
     if (quote === null) return null;
     const value = money(field.value);
     const supported = value !== null && (quotedAmounts(quote).some(candidate => candidate === value || (absolute && Math.abs(candidate) === value))
       || (value === 0 && /\b(?:none|zero)\b/i.test(quote) && !/\b(?:not|unknown|unsure)\b/i.test(quote)));
     if (!supported) { rejected += 1; return null; }
+    if (accountId) {
+      const supportedPositions = occurrences(quote).map(start => {
+        const context = new Set(lineAccounts.slice(lineAt(start), lineAt(start + quote.length - 1) + 1).filter(Boolean));
+        return { start, context };
+      // Preserve exact monetary support for ungrouped statement layouts, while
+      // rejecting a quote whose known account context contradicts this field.
+      }).filter(({ context }) => context.size === 0 || (context.size === 1 && context.has(accountId)))
+        .sort((left, right) => right.context.size - left.context.size);
+      if (!supportedPositions.length) { rejected += 1; return null; }
+      evidencePositions.set(field, supportedPositions[0].start);
+    }
     return accepted(field, dollars(value));
   };
   const date = (field, periodField) => {
@@ -130,20 +158,62 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   };
   const ids = new Set();
   const names = new Map();
-  const accounts = response.accounts.map((account, index) => {
+  const accountHeaders = response.accounts.map((account, index) => {
     const id = /^[a-z][a-z0-9_-]{0,39}$/.test(account.id) ? account.id : `account${index + 1}`;
     if (ids.has(id)) throw invalidResponse();
     ids.add(id);
     const name = text(account.name);
     names.set(id, name);
-    return { id, name: name || `Account ${index + 1}`, activityComplete: false,
-      ...Object.fromEntries(amountFields.map(field => [field, amount(account[field], !['openingBalance', 'statementBalance', 'bookBalance'].includes(field))])) };
+    return { id, name: name || `Account ${index + 1}`, activityComplete: false };
   });
-  const accountReference = field => {
+  // A short quote such as "checking" can identify "Checking account" only
+  // when the verified source names make that alias unique. Model-created IDs
+  // are never treated as source evidence on their own.
+  const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const aliases = new Map([...names].map(([id, name]) => [id, [...new Set([
+    compact(name), compact(name).replace(/\b(?:bank\s+)?accounts?\b/g, '').trim(),
+    ...compact(name).match(/\b(?:checking|savings|money market)\b/g) ?? [],
+  ])].filter(Boolean)]));
+  const mentionedAccounts = value => {
+    const matches = [...aliases].flatMap(([id, candidates]) => candidates.flatMap(alias =>
+      [...compact(value).matchAll(new RegExp(`(?<![a-z0-9])${escape(alias)}(?![a-z0-9])`, 'gi'))].map(match => ({ id, start: match.index, end: match.index + match[0].length }))));
+    // Prefer a full source name over an alias contained in that same span;
+    // equal short aliases shared by two accounts remain ambiguous.
+    return new Set(matches.filter(match => !matches.some(other => other.start <= match.start && other.end >= match.end && other.end - other.start > match.end - match.start)).map(match => match.id));
+  };
+  const ambiguousAccount = Symbol('ambiguous source accounts');
+  let currentAccount = null;
+  const lineAccounts = sourceLines.map(line => {
+    const mentioned = mentionedAccounts(line);
+    const heading = compact(line).replace(/^(?:bank\s+)?account(?:\s+name)?\s*:\s*/, '');
+    const leading = new Set([...aliases].filter(([, candidates]) => candidates.some(alias => new RegExp(`^${escape(alias)}(?=$|[\\s.:,;(])`, 'i').test(heading))).map(([id]) => id));
+    if (leading.size) currentAccount = mentioned.size === 1 && leading.has([...mentioned][0]) ? [...mentioned][0] : ambiguousAccount;
+    return mentioned.size === 1 ? [...mentioned][0] : mentioned.size > 1 ? ambiguousAccount : currentAccount;
+  });
+  const accounts = accountHeaders.map((account, index) => ({ ...account,
+    ...Object.fromEntries(amountFields.map(field => [field, amount(response.accounts[index][field], !['openingBalance', 'statementBalance', 'bookBalance'].includes(field), account.id)])) }));
+  const accountReference = (field, row) => {
     const quote = evidence(field);
     if (quote === null) return '';
-    const name = names.get(field.value);
-    if (!name || !compact(quote).includes(compact(name))) { rejected += 1; return ''; }
+    const named = mentionedAccounts(quote);
+    if (named.size !== 1 || !named.has(field.value)) { rejected += 1; return ''; }
+    let candidateLines = null;
+    for (const key of ['date', 'description', 'amount', 'reference', 'name']) {
+      const anchor = row?.[key];
+      if (!anchor?.value || !anchor.evidence || !source.includes(anchor.evidence)) continue;
+      const lines = new Set(occurrences(anchor.evidence).flatMap(start => {
+        const first = lineAt(start), last = lineAt(start + anchor.evidence.length - 1);
+        return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+      }));
+      candidateLines = candidateLines === null ? lines : new Set([...candidateLines].filter(line => lines.has(line)));
+    }
+    if (candidateLines !== null) {
+      const context = new Set([...candidateLines].map(line => lineAccounts[line]).filter(Boolean));
+      const fullNameQuoted = compact(quote).includes(compact(names.get(field.value)));
+      if ((context.size && (context.size !== 1 || !context.has(field.value))) || (!context.size && !fullNameQuoted)) { rejected += 1; return ''; }
+      const matchingPosition = occurrences(quote).find(start => candidateLines.has(lineAt(start)));
+      if (matchingPosition !== undefined) evidencePositions.set(field, matchingPosition);
+    }
     return accepted(field, field.value);
   };
   const direction = field => {
@@ -161,8 +231,8 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   };
   const draft = {
     periodStart: date(response.periodStart, 'periodStart'), periodEnd: date(response.periodEnd, 'periodEnd'), presentedOn: date(response.presentedOn), bankName: text(response.bankName), accounts,
-    transactions: response.transactions.map(row => ({ date: date(row.date), account: accountReference(row.account), kind: direction(row.kind), description: text(row.description), amount: amount(row.amount, true), reference: text(row.reference), category: text(row.category) })),
-    funds: response.funds.map(row => ({ name: text(row.name), account: accountReference(row.account), amount: amount(row.amount), restriction: text(row.restriction) })),
+    transactions: response.transactions.map(row => ({ date: date(row.date), account: accountReference(row.account, row), kind: direction(row.kind), description: text(row.description), amount: amount(row.amount, true), reference: text(row.reference), category: text(row.category) })),
+    funds: response.funds.map(row => ({ name: text(row.name), account: accountReference(row.account, row), amount: amount(row.amount), restriction: text(row.restriction) })),
     obligations: response.obligations.map(row => ({ name: text(row.name), dueDate: date(row.dueDate), amount: amount(row.amount), note: text(row.note) })),
     remarks: text(response.remarks), sourceReviewed: false, fundsReviewed: false, obligationsReviewed: false,
     sourceNames, extractionNotes: [...sourceNotes, 'Terra (GPT-5.6) organized this draft; source verification is required.', 'Terra retained the imported source text for a complete officer review.'], unmappedLines: retainedSource(source),
@@ -173,12 +243,12 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   // A quote repeated in the source points explicitly to its first occurrence.
   let note = '';
   for (const field of acceptedEvidence) {
-    const start = source.indexOf(field.evidence);
+    const start = evidencePositions.get(field) ?? source.indexOf(field.evidence);
     const end = start + field.evidence.length - 1;
-    const firstLine = source.slice(0, start).split('\n').length;
-    const lastLine = source.slice(0, end).split('\n').length;
+    const firstLine = lineAt(start) + 1;
+    const lastLine = lineAt(end) + 1;
     const location = firstLine === lastLine ? `line ${firstLine}` : `lines ${firstLine} through ${lastLine}`;
-    const repeated = source.indexOf(field.evidence, start + 1) !== -1 ? ' (first matching occurrence)' : '';
+    const repeated = occurrences(field.evidence).length > 1 ? evidencePositions.has(field) ? ' (matching account context)' : ' (first matching occurrence)' : '';
     const reference = `Source evidence: ${fieldPaths.get(field)} → ${location}${repeated}.`;
     if (note && note.length + reference.length + 1 > 1000) { draft.extractionNotes.push(note); note = ''; }
     note += `${note ? '\n' : ''}${reference}`;

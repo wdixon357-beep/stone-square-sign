@@ -211,9 +211,16 @@ struct WorkspaceView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Label(alert.title, systemImage: "bell.badge.fill")
+                                    .font(.callout.weight(.semibold))
                                 Text("Submitted by \(alert.submittedBy)").font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)

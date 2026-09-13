@@ -1,0 +1,185 @@
+{
+  "source": "SYNTHETIC ACTIVATION TEST: fictional banking information, not a real Lodge report.\r\nReporting period: September 1, 2026 through September 30, 2026.\r\nChecking account. Opening balance: $1,000.00. Closing statement balance: $1,150.00.\r\nSeptember 4, 2026: deposit, member dues, $200.00, checking.\r\nSeptember 8, 2026: payment, office supplies, $50.00, checking.\r\nSavings account. Opening balance: $500.00. Closing statement balance: $500.00.\r\nNo other transactions were provided. Outstanding checks, pending deposits, fenced funds and unpaid bills are not documented and require review.",
+  "response": {
+    "periodStart": {
+      "value": "2026-09-01",
+      "evidence": "Reporting period: September 1, 2026 through September 30, 2026."
+    },
+    "periodEnd": {
+      "value": "2026-09-30",
+      "evidence": "Reporting period: September 1, 2026 through September 30, 2026."
+    },
+    "presentedOn": {
+      "value": null,
+      "evidence": ""
+    },
+    "bankName": {
+      "value": null,
+      "evidence": ""
+    },
+    "accounts": [
+      {
+        "id": "checking",
+        "name": {
+          "value": "Checking account",
+          "evidence": "Checking account."
+        },
+        "openingBalance": {
+          "value": "$1,000.00",
+          "evidence": "Opening balance: $1,000.00."
+        },
+        "statementBalance": {
+          "value": "$1,150.00",
+          "evidence": "Closing statement balance: $1,150.00."
+        },
+        "bookBalance": {
+          "value": null,
+          "evidence": ""
+        },
+        "receipts": {
+          "value": null,
+          "evidence": ""
+        },
+        "disbursements": {
+          "value": null,
+          "evidence": ""
+        },
+        "transfersIn": {
+          "value": null,
+          "evidence": ""
+        },
+        "transfersOut": {
+          "value": null,
+          "evidence": ""
+        },
+        "depositsInTransit": {
+          "value": null,
+          "evidence": ""
+        },
+        "outstandingChecks": {
+          "value": null,
+          "evidence": ""
+        },
+        "bankHold": {
+          "value": null,
+          "evidence": ""
+        }
+      },
+      {
+        "id": "savings",
+        "name": {
+          "value": "Savings account",
+          "evidence": "Savings account."
+        },
+        "openingBalance": {
+          "value": "$500.00",
+          "evidence": "Opening balance: $500.00."
+        },
+        "statementBalance": {
+          "value": "$500.00",
+          "evidence": "Closing statement balance: $500.00."
+        },
+        "bookBalance": {
+          "value": null,
+          "evidence": ""
+        },
+        "receipts": {
+          "value": null,
+          "evidence": ""
+        },
+        "disbursements": {
+          "value": null,
+          "evidence": ""
+        },
+        "transfersIn": {
+          "value": null,
+          "evidence": ""
+        },
+        "transfersOut": {
+          "value": null,
+          "evidence": ""
+        },
+        "depositsInTransit": {
+          "value": null,
+          "evidence": ""
+        },
+        "outstandingChecks": {
+          "value": null,
+          "evidence": ""
+        },
+        "bankHold": {
+          "value": null,
+          "evidence": ""
+        }
+      }
+    ],
+    "transactions": [
+      {
+        "date": {
+          "value": "2026-09-04",
+          "evidence": "September 4, 2026"
+        },
+        "account": {
+          "value": "checking",
+          "evidence": "checking"
+        },
+        "kind": {
+          "value": "receipt",
+          "evidence": "deposit"
+        },
+        "description": {
+          "value": "member dues",
+          "evidence": "member dues"
+        },
+        "amount": {
+          "value": "$200.00",
+          "evidence": "$200.00"
+        },
+        "reference": {
+          "value": null,
+          "evidence": ""
+        },
+        "category": {
+          "value": null,
+          "evidence": ""
+        }
+      },
+      {
+        "date": {
+          "value": "2026-09-08",
+          "evidence": "September 8, 2026"
+        },
+        "account": {
+          "value": "checking",
+          "evidence": "checking"
+        },
+        "kind": {
+          "value": "payment",
+          "evidence": "payment"
+        },
+        "description": {
+          "value": "office supplies",
+          "evidence": "office supplies"
+        },
+        "amount": {
+          "value": "$50.00",
+          "evidence": "$50.00"
+        },
+        "reference": {
+          "value": null,
+          "evidence": ""
+        },
+        "category": {
+          "value": null,
+          "evidence": ""
+        }
+      }
+    ],
+    "funds": [],
+    "obligations": [],
+    "remarks": {
+      "value": "SYNTHETIC ACTIVATION TEST: fictional banking information, not a real Lodge report.\r\nNo other transactions were provided. Outstanding checks, pending deposits, fenced funds and unpaid bills are not documented and require review.",
+      "evidence": "SYNTHETIC ACTIVATION TEST: fictional banking information, not a real Lodge report.\r\nNo other transactions were provided. Outstanding checks, pending deposits, fenced funds and unpaid bills are not documented and require review."
+    }
+  }
+}

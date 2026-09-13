@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { generateTreasuryDraft, TREASURY_AI_SCHEMA } from '../treasury-ai.js';
 import { organizeTreasury, calculateTreasury } from '../treasury.js';
 
@@ -108,4 +109,39 @@ const many = response();
 many.transactions = Array.from({length:500}, () => structuredClone(many.transactions[0]));
 const packed = await generateTreasuryDraft(source, {generateStructured: async () => many});
 check('references for the maximum activity rows survive normalizer limits', packed.extractionNotes.join('\n').includes('Source evidence: transactions[499].amount → line 6.') && packed.extractionNotes.length <= 1000 && packed.extractionNotes.every(note => note.length <= 1000));
+
+const synthetic = JSON.parse(readFileSync(new URL('./fixtures/treasury-terra-synthetic.json', import.meta.url), 'utf8'));
+const replay = async (source = synthetic.source, response = structuredClone(synthetic.response)) => generateTreasuryDraft(source, { generateStructured: async () => response });
+const replayed = await replay();
+check('cached synthetic provider response retains all four sentence-terminated balances', replayed.accounts[0].openingBalance === '1000.00' && replayed.accounts[0].statementBalance === '1150.00' && replayed.accounts[1].openingBalance === '500.00' && replayed.accounts[1].statementBalance === '500.00');
+check('unique short account evidence resolves within each actual transaction row', replayed.transactions.every(row => row.account === 'checking') && replayed.extractionNotes.join('\n').includes('transactions[1].account → line 5'));
+const wrongBalance = structuredClone(synthetic.response);
+wrongBalance.accounts[0].openingBalance = cite('$500.00', 'Opening balance: $500.00.');
+check('balance from a different account cannot be assigned using a valid but unrelated quote', (await replay(synthetic.source, wrongBalance)).accounts[0].openingBalance === null);
+const wrongAccount = structuredClone(synthetic.response);
+wrongAccount.transactions[0].account = cite('savings', 'Savings account.');
+check('transaction account must agree with its source-row context', (await replay(synthetic.source, wrongAccount)).transactions[0].account === '');
+const twoChecking = structuredClone(synthetic.response);
+twoChecking.accounts[1].name = cite('Business checking account', 'Business checking account.');
+const ambiguousSource = synthetic.source.replace('Savings account.', 'Business checking account.');
+check('short checking alias stays unresolved when two source accounts share that word', (await replay(ambiguousSource, twoChecking)).transactions.every(row => row.account === ''));
+const excessivePrecision = structuredClone(synthetic.response);
+excessivePrecision.accounts[0].openingBalance = cite('$1000.00', 'Opening balance: $1,000.009.');
+check('sentence punctuation support does not round or truncate excessive monetary precision', (await replay(synthetic.source.replace('Opening balance: $1,000.00.', 'Opening balance: $1,000.009.'), excessivePrecision)).accounts[0].openingBalance === null);
+const dateFragment = structuredClone(synthetic.response);
+dateFragment.accounts[0].openingBalance = cite('9', '2026-09-04.');
+check('date components are never accepted as monetary evidence', (await replay(synthetic.source.replace('Opening balance: $1,000.00.', '2026-09-04.'), dateFragment)).accounts[0].openingBalance === null);
+for (const prefix of ['Account:', 'Bank Account:', 'Account name:']) {
+  const prefixed = structuredClone(synthetic.response);
+  prefixed.accounts = [prefixed.accounts[0]]; prefixed.transactions = [];
+  prefixed.accounts[0].name = cite('Test Checking', `${prefix} Test Checking`);
+  const prefixedSource = `${prefix} Test Checking\nOpening balance: $1,000.00.\nClosing statement balance: $1,150.00.`;
+  const prefixedOutput = await replay(prefixedSource, prefixed);
+  check(`${prefix} source heading preserves explicitly quoted account balances`, prefixedOutput.accounts[0].openingBalance === '1000.00' && prefixedOutput.accounts[0].statementBalance === '1150.00');
+}
+const ungrouped = structuredClone(synthetic.response);
+ungrouped.accounts = [ungrouped.accounts[0]]; ungrouped.transactions = [];
+ungrouped.accounts[0].name = cite('Test Checking', 'Test Checking');
+const ungroupedOutput = await replay('Opening balance: $1,000.00.\nClosing statement balance: $1,150.00.\nStatement account is Test Checking.', ungrouped);
+check('existing exact monetary support is preserved when source layout has no preceding account heading', ungroupedOutput.accounts[0].openingBalance === '1000.00' && ungroupedOutput.accounts[0].statementBalance === '1150.00');
 console.log(`${passed} treasury structured extraction checks passed.`);

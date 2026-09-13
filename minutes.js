@@ -130,7 +130,9 @@ function checkedGeneratedDraft(response, source, localDraft) {
   const references = new Map();
   const coverage = new Set();
   for (const item of evidence) {
-    if ((!requiredFields.has(item.field) && item.field !== 'meetingType') || !item.quote.trim() || !source.includes(item.quote)) {
+    const warningReference = /^warnings\[(0|[1-9]\d*)\]$/.exec(item.field);
+    const existingWarning = warningReference && Object.hasOwn(generated.warnings, warningReference[1]);
+    if ((!requiredFields.has(item.field) && item.field !== 'meetingType' && !existingWarning) || !item.quote.trim() || !source.includes(item.quote)) {
       throw generationError('Minutes generation returned a source reference that could not be verified. Please try again.');
     }
     const entries = references.get(item.field) || [];
