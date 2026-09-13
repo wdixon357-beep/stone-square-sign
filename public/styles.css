@@ -556,3 +556,4 @@ a { overflow-wrap: anywhere; }
   .calendar-day { min-height: 0; margin-bottom: 12px; padding: 12px; }
   .calendar-day:not(:has(.calendar-event)) { display: none; }
 }
+#calendarSection .content-head .primary:not([hidden]) { display: inline-flex; }
