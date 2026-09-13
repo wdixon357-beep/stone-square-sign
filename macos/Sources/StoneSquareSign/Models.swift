@@ -7,12 +7,47 @@ struct User: Codable, Identifiable, Equatable {
     let role: String
     let hasSignature: Bool
     var treasuryAccess: String? = nil
-    var canSign: Bool { ["owner","secretary","assistant_secretary","signer","treasurer","assistant_treasurer","treasury_preparer","warden"].contains(role) }
-    var canUseTreasury: Bool { treasuryAccess != nil || ["owner","secretary","assistant_secretary","treasurer","assistant_treasurer","treasury_preparer"].contains(role) }
-
-    var canReadDues: Bool { ["owner", "secretary", "assistant_secretary", "warden"].contains(role) }
-    var canProposeDispensation: Bool { role == "warden" }
+    var permissions: [String]? = nil
+    func can(_ capability: String) -> Bool {
+        if role == "owner" { return true }
+        if let permissions { return permissions.contains(capability) }
+        // Compatibility with older sessions; a server-supplied list always takes precedence.
+        var defaults = ["reports.create", "minutes.view", "treasury.view", "signature.manage", "settings.manage"]
+        switch role {
+        case "secretary": defaults += ["minutes.prepare", "treasury.prepare", "treasury.upload", "dues.view", "documents.status", "documents.sign", "candidates.view"]
+        case "assistant_secretary": defaults += ["minutes.prepare", "treasury.prepare", "dues.view", "documents.status", "documents.sign", "candidates.view"]
+        case "treasurer": defaults = ["treasury.prepare", "treasury.upload", "dues.view", "signature.manage", "settings.manage"]
+        case "assistant_treasurer", "treasury_preparer": defaults = ["treasury.prepare", "dues.view", "signature.manage", "settings.manage"]
+        case "warden": defaults += ["dues.view", "documents.status", "candidates.view", "proposals.create"]
+        case "member": defaults = []
+        case "officer": break
+        default: break
+        }
+        return defaults.contains(capability)
+    }
+    var canSign: Bool { can("signature.manage") }
+    var canUseTreasury: Bool { can("treasury.view") || can("treasury.prepare") || can("treasury.upload") }
+    var canReadMinutes: Bool { can("minutes.view") || can("minutes.prepare") }
+    var canReadDues: Bool { can("dues.view") }
+    var canReadApprovals: Bool { ["owner", "secretary", "assistant_secretary", "viewer"].contains(role) && can("documents.status") }
+    var canProposeDispensation: Bool { can("proposals.create") }
     var proposalWorkspaceTitle: String { role == "owner" ? "Warden Proposals" : "My Dispensation Proposals" }
+    func canOpen(_ section: AppSection?) -> Bool {
+        switch section {
+        case .home, nil: return true
+        case .reportGenerator: return can("reports.create")
+        case .minutes: return canReadMinutes
+        case .treasury: return canUseTreasury
+        case .dues: return canReadDues
+        case .documents: return can("documents.status")
+        case .approvals: return canReadApprovals
+        case .candidateTracker: return can("candidates.view")
+        case .proposalReview: return role == "owner" || canProposeDispensation
+        case .profile: return canSign
+        case .settings: return can("settings.manage")
+        case .activity, .access, .createDispensation: return role == "owner"
+        }
+    }
 
     var roleLabel: String { Self.roleLabel(for: role) }
 
@@ -27,6 +62,7 @@ struct User: Codable, Identifiable, Equatable {
         case "member": return "Lodge Member"
         case "warden": return "Warden"
         case "viewer": return "Lodge Viewer"
+        case "officer": return "Lodge Officer"
         default: return "Signer"
         }
     }

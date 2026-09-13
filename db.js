@@ -365,6 +365,8 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'documents', 'template_kind', 'TEXT');
   await addColumn(exec, 'reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");
   await addColumn(exec, 'users', 'access_revoked_at', 'TEXT');
+  await addColumn(exec, 'users', 'permissions_json', 'TEXT');
+  await addColumn(exec, 'invitations', 'permissions_json', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'preparer_attested_at', 'TEXT');
   await addColumn(exec, 'meeting_minutes', 'master_attested_by_user_id', 'INTEGER REFERENCES users(id)');
   await addColumn(exec, 'meeting_minutes', 'master_attested_at', 'TEXT');

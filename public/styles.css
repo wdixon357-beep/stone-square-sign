@@ -518,3 +518,9 @@ a { overflow-wrap: anywhere; }
 .minutes-date-control > input[type="date"] { width: 42px; min-width: 42px; max-width: 42px; padding-inline: 7px; color: transparent; }
 .minutes-date-control > input[type="date"]::-webkit-datetime-edit { display: none; }
 .minutes-date-control > input[type="date"]::-webkit-calendar-picker-indicator { margin: 0; padding: 0; cursor: pointer; }
+
+.account-access { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.account-access summary { cursor: pointer; font-weight: 600; }
+.permission-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; border: 0; padding: 10px 0; margin: 8px 0; }
+.permission-grid label { display: flex; gap: 9px; align-items: flex-start; margin: 0; }
+.permission-grid input { width: 18px; height: 18px; flex: 0 0 18px; margin: 2px 0; }

@@ -204,7 +204,7 @@ struct MeetingMinutesView: View {
     @State private var pendingAction: String?
     @State private var approvalDate = ""
     @State private var approvalNote = ""
-    private var editable: Bool { workspace.selected?.status == "draft" || (workspace.selected?.status == "awaiting_master_attestation" && model.user?.role == "owner") }
+    private var editable: Bool { model.user?.can("minutes.prepare") == true && (workspace.selected?.status == "draft" || (workspace.selected?.status == "awaiting_master_attestation" && model.user?.role == "owner")) }
     private func text(_ key: WritableKeyPath<MinutesDraft, String?>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key] ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 })
     }
@@ -403,7 +403,7 @@ struct MeetingMinutesView: View {
             Text("Record actions").font(.headline)
             Button("Download saved Word record") { Task { await workspace.downloadWord() } }.disabled(workspace.dirty)
             if let record = workspace.selected {
-                if record.status == "draft" && ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && record.createdByUserId == model.user?.id {
+                if record.status == "draft" && model.user?.can("minutes.prepare") == true && record.createdByUserId == model.user?.id {
                     Button(actionLabel("preparer-attest")) { pendingAction = "preparer-attest" }.disabled(workspace.dirty)
                 }
                 if model.user?.role == "owner" && record.status == "awaiting_master_attestation" {

@@ -1,3 +1,4 @@
+import { hasPermission, resolvePermissions, mountAccessRoutes } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
 import path from 'node:path';
@@ -209,13 +210,15 @@ const createAuthToken = async (userId, req) => {
 
 const userForResponse = async (user) => {
   const saved = await dbGet('SELECT 1 FROM profile_signatures WHERE user_id = ?', [user.id]);
+  const accessUser = await dbGet('SELECT role,permissions_json FROM users WHERE id=?',[user.id]);
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     role: user.role,
     hasSignature: Boolean(saved),
-    treasuryAccess: await treasuryAccess(user),
+    permissions: resolvePermissions(accessUser || user),
+    treasuryAccess: await treasuryAccess({ ...user, ...accessUser }),
   };
 };
 
@@ -239,7 +242,7 @@ const WARDEN_EMAILS = new Set(
     .map((address) => address.trim().toLowerCase())
     .filter(Boolean),
 );
-const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member'];
+const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member', 'officer'];
 
 const requireAuth = async (req, res, next) => {
   try {
@@ -248,7 +251,7 @@ const requireAuth = async (req, res, next) => {
     if (!token) return res.status(401).json({ error: 'Sign in is required.' });
     const tokenHash = hashSecret(token);
     const row = await dbGet(
-      `SELECT users.id, users.email, users.name, users.role, users.access_revoked_at, sessions.expires_at
+      `SELECT users.id, users.email, users.name, users.role, users.permissions_json, users.access_revoked_at, sessions.expires_at
        FROM sessions JOIN users ON users.id = sessions.user_id
        WHERE sessions.token = ?`,
       [tokenHash],
@@ -269,6 +272,7 @@ const requireAuth = async (req, res, next) => {
         row.expires_at, tokenHash,
       ]);
     }
+    row.permissions = resolvePermissions(row);
     req.user = row;
     req.authTokenHash = tokenHash;
     // Provider and spending diagnostics belong only to the administrator. Keep
@@ -305,7 +309,7 @@ const requireOwner = (req, res, next) => {
 };
 
 const requireDocumentAccess = (req, res, next) => {
-  if (!SIGNING_ROLES.has(req.user.role)) {
+  if (!hasPermission(req.user, 'documents.sign')) {
     return res.status(403).json({
       error: req.user.role === 'warden'
         ? 'Wardens propose dispensations. They do not open or sign Lodge documents.'
@@ -316,21 +320,21 @@ const requireDocumentAccess = (req, res, next) => {
 };
 
 const requireMinutesAccess = (req, res, next) => {
-  if (!MINUTES_ROLES.has(req.user.role)) {
+  if (!hasPermission(req.user, 'minutes.prepare')) {
     return res.status(403).json({ error: 'Meeting minutes are restricted to the Worshipful Master and the Secretaries.' });
   }
   next();
 };
 
 const requireSecretaryOrOwner = (req, res, next) => {
-  if (!new Set(['owner', 'secretary']).has(req.user.role)) {
+  if (!new Set(['owner', 'secretary']).has(req.user.role) || !hasPermission(req.user,'minutes.prepare')) {
     return res.status(403).json({ error: 'The Secretary records distribution after the Worshipful Master authorizes it.' });
   }
   next();
 };
 
 const requireMinutesPreparer = (req, res, next) => {
-  if (!MINUTES_ROLES.has(req.user.role)) {
+  if (!hasPermission(req.user, 'minutes.prepare')) {
     return res.status(403).json({ error: 'Only the Worshipful Master or a Secretary can attest to a draft.' });
   }
   next();
@@ -340,7 +344,7 @@ const requireMinutesPreparer = (req, res, next) => {
  * rather than only at invite time, so removing an address revokes access immediately. */
 const requireWarden = (req, res, next) => {
   if(req.user.role==='owner')return next();
-  if (req.user.role !== 'warden' || !WARDEN_EMAILS.has(String(req.user.email || '').toLowerCase())) {
+  if (!hasPermission(req.user, 'proposals.create')) {
     return res.status(403).json({ error: 'This is for the Senior and Junior Wardens.' });
   }
   next();
@@ -540,7 +544,7 @@ const requestBaseUrl = (req) =>
 const runMigrations = () => initSchema();
 
 const participantForDocument = async (document, user) => {
-  if (user.role === 'owner' || user.role === 'viewer') return true;
+  if (user.role === 'owner') return true;
   if (document.owner_user_id === user.id) return true;
   return Boolean(await dbGet(
     `SELECT 1 FROM document_signers
@@ -1252,6 +1256,7 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
         activatedUserId = inserted.lastID;
       }
       if (invitation) {
+        await dbRun('UPDATE users SET permissions_json=? WHERE id=?',[invitation.permissions_json || null,activatedUserId]);
         const used = await dbRun(
           'UPDATE invitations SET used_at = ? WHERE id = ? AND used_at IS NULL',
           [nowIso(), invitation.id],
@@ -1386,6 +1391,7 @@ app.post('/api/auth/reset-password', rateLimit({ key: 'reset-submit', maximum: 8
 app.post('/api/tracker/handoff', requireAuth, rateLimit({ key: 'tracker-handoff', maximum: 30, windowMs: 60 * 60 * 1000 }), (req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
+    if(!hasPermission(req.user,'candidates.view'))return res.status(403).json({error:'Candidate Tracker access is not enabled.'});
     res.json({ url: createTrackerHandoffUrl(req.user) });
   } catch (error) {
     next(error);
@@ -1407,7 +1413,7 @@ app.get('/api/events', requireAuth, (req, res) => {
   });
 });
 
-const requireSignatureProfile = (req, res, next) => ['treasurer', 'assistant_treasurer', 'treasury_preparer', 'warden'].includes(req.user.role) ? next() : requireDocumentAccess(req, res, next);
+const requireSignatureProfile = (req,res,next) => hasPermission(req.user,'signature.manage') ? next() : res.status(403).json({error:'Signature profile access is not enabled.'});
 app.get('/api/profile/signature', requireAuth, requireSignatureProfile, async (req, res, next) => {
   try {
     const signature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
@@ -1458,7 +1464,7 @@ app.get('/api/officers', requireAuth, requireOwner, async (_req, res, next) => {
   try {
     const officers = await dbAll(
       `SELECT role, name, email, created_at FROM users
-       WHERE role IN ('secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member')
+       WHERE role IN ('secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member', 'officer')
        AND email NOT LIKE '%.local' AND access_revoked_at IS NULL
        ORDER BY role DESC`,
     );
@@ -1508,12 +1514,13 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
         );
         if (pending) throw httpError(409, 'That office already has a pending invitation.');
       }
+      const previousInvite = await dbGet('SELECT permissions_json FROM invitations WHERE email = ? AND used_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE', [email]);
       await dbRun('DELETE FROM invitations WHERE email = ? AND used_at IS NULL', [email]);
       await dbRun(
         `INSERT INTO invitations
-         (email, name, role, token_hash, invited_by_user_id, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [email, name, role, hashSecret(token), req.user.id, expiresAt, nowIso()],
+         (email, name, role, token_hash, invited_by_user_id, expires_at, created_at, permissions_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [email, name, role, hashSecret(token), req.user.id, expiresAt, nowIso(), previousInvite?.permissions_json ?? null],
       );
     });
     const inviteUrl = `${requestBaseUrl(req)}/?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
@@ -1623,7 +1630,7 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
 /* Dues. Restricted to the Worshipful Master, the Secretaries and the Wardens. The ledger names who is behind on his dues, so viewers are refused
  * outright rather than shown an empty page. */
 const requireDuesAccess = (req, res, next) => {
-  if (!DUES_ROLES.has(req.user.role)) {
+  if (!hasPermission(req.user,'dues.view')) {
     return res.status(403).json({ error: 'Dues access is restricted to authorized Lodge officers.' });
   }
   next();
@@ -1668,7 +1675,9 @@ app.get('/api/minutes/review-alerts', requireAuth, requireOwner, async (_req, re
   } catch (error) { next(error); }
 });
 
-app.get('/api/minutes', requireAuth, requireMinutesAccess, async (_req, res, next) => {
+const finalMinutes = row => ['ready_for_distribution','distributed','approved_by_lodge'].includes(row.status) && Boolean(row.master_attested_at);
+const requireMinutesView = (req,res,next) => hasPermission(req.user,'minutes.view') ? next() : res.status(403).json({error:'Meeting minutes access is not enabled.'});
+app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) => {
   try {
     const rows = await dbAll(
       `SELECT m.*,
@@ -1684,7 +1693,11 @@ app.get('/api/minutes', requireAuth, requireMinutesAccess, async (_req, res, nex
        WHERE m.status <> 'deleted'
        ORDER BY COALESCE(m.meeting_date, m.created_at) DESC`,
     );
-    res.json({ minutes: rows.map(minutesForResponse) });
+    const preparer=hasPermission(req.user,'minutes.prepare');
+    res.json({ minutes: rows.filter(row=>preparer||finalMinutes(row)).map(row=>{
+      const record=minutesForResponse(row);
+      return preparer?record:{...record,sourceName:null,submittedDraft:null,masterChanges:[],approvalNote:null,draft:normalizeMinutesDraft({meetingDate:row.meeting_date,meetingType:record.draft.meetingType,degree:record.draft.degree})};
+    }) });
   } catch (error) {
     next(error);
   }
@@ -1987,6 +2000,13 @@ const minutesArtifactContext = async (row, draft) => {
   };
 };
 
+app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next)=>{try{
+  const row=await getMinutesRow(req.params.id);
+  if(!row||(!hasPermission(req.user,'minutes.prepare')&&!finalMinutes(row)))return res.status(404).json({error:'Finished meeting minutes not found.'});
+  const bytes=await buildMinutesPdf(await minutesArtifactContext(row,normalizeMinutesDraft(JSON.parse(row.draft_json))));
+  res.setHeader('Cache-Control','no-store');res.type('application/pdf').send(bytes);
+}catch(e){next(e)}});
+
 app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,
   rateLimit({ key: 'minutes-preview', maximum: 600, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
     try {
@@ -2021,7 +2041,9 @@ app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, 
 });
 
 app.get('/api/documents', requireAuth, async (req, res, next) => {
-  if(!['owner','secretary','assistant_secretary','signer','viewer','warden'].includes(req.user.role))return res.status(403).json({error:'Document access has not been assigned to this account.'});
+  if(!hasPermission(req.user,'documents.status'))return res.status(403).json({error:'Document access has not been assigned to this account.'});
+  const statusOnly=!hasPermission(req.user,'documents.sign');
+  const queueRole=req.user.role==='owner'?'owner':statusOnly?(req.user.role==='viewer'?'viewer':'warden'):'signer';
   try {
     const rows = await dbAll(
       `SELECT d.id, d.title, d.original_name, d.status, d.created_at, d.updated_at,
@@ -2037,7 +2059,7 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
        ORDER BY CASE d.status WHEN 'pending' THEN 0 WHEN 'partially_signed' THEN 1 ELSE 2 END,
                 CASE WHEN d.status IN ('completed', 'rescinded') THEN d.updated_at END DESC,
                 d.created_at ASC`,
-      [req.user.role, req.user.id, req.user.id, req.user.role, req.user.role],
+      [queueRole, req.user.id, req.user.id, req.user.role, queueRole],
     );
     const documents = [];
     for (const row of rows) {
@@ -2046,7 +2068,7 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
          FROM document_signers WHERE document_id = ? ORDER BY id`,
         [row.id],
       );
-      if (['viewer', 'warden'].includes(req.user.role)) {
+      if (statusOnly) {
         documents.push({
           id: row.id,
           title: row.title,
@@ -2972,7 +2994,7 @@ app.get('/api/documents/:id/endorsed', requireAuth, requireDocumentAccess, async
 app.get('/api/approvals', requireAuth, (req, res, next) => {
   /* This route returns every dispensation the Lodge has ever filed. It carried requireAuth
    * only, so any authenticated account saw the lot. Wardens are deliberately excluded. */
-  if (!APPROVAL_QUEUE_ROLES.has(req.user.role)) {
+  if (!APPROVAL_QUEUE_ROLES.has(req.user.role) || !hasPermission(req.user, 'documents.status')) {
     return res.status(403).json({ error: 'The approvals record is for the Master and the Secretaries.' });
   }
   next();
@@ -3148,7 +3170,7 @@ mountActivityRoutes(app, { requireAuth, requireOwner, rateLimit });
 
 app.post('/api/reports/organize', requireAuth, rateLimit({key:'report-organize',maximum:12,windowMs:3600000}), async (req,res,next) => {
   try {
-    if(!['owner','secretary','assistant_secretary','warden','treasurer','assistant_treasurer','treasury_preparer'].includes(req.user.role))return res.status(403).json({error:'Report assistance is available to authorized Lodge officers.'});
+    if(!hasPermission(req.user,'reports.create'))return res.status(403).json({error:'Report assistance is available to authorized Lodge officers.'});
     if(req.body.master === true && req.user.role !== 'owner')return res.status(403).json({error:"Only the Worshipful Master can organize a Worshipful Master's report."});
     const generateStructured=generationFor(req.user.id);
     if(!generateStructured)return res.status(503).json({error:'Report assistance is not configured. You can still complete the report manually.'});
@@ -3160,6 +3182,8 @@ app.post('/api/reports/organize', requireAuth, rateLimit({key:'report-organize',
 app.get('/api/generation/status', requireAuth, async (req, res, next) => {
   try { res.setHeader('Cache-Control', 'no-store'); res.json(await generationStatus({ includeBudget: req.user.role === 'owner' })); } catch (error) { next(error); }
 });
+
+mountAccessRoutes(app,{requireAuth,requireOwner});
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 

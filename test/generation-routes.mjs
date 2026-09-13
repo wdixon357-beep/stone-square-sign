@@ -136,6 +136,8 @@ try {
   await start(true);
   owner = await registerOwner();
   const preparer = await officer(owner, 'treasury_preparer');
+  // This fixture explicitly receives upload access; ordinary preparers do not.
+  assert.equal((await api('/api/admin/access',owner.token,'PUT',{key:`user:${preparer.user.id}`,permissions:[...preparer.user.permissions,'treasury.upload']})).status,200);
   const uploadOnly = await officer(owner, 'member');
   const warden = await officer(owner, 'warden');
   const secretary = await officer(owner, 'secretary');

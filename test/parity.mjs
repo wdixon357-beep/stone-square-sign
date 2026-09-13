@@ -30,6 +30,8 @@ const PAIRS = {
   approvalsNav: 'approvals',
   proposalReviewNav: 'proposalReview',
   profileButton: 'profile',
+  settingsNav: 'settings',
+  accessNav: 'access',
 };
 
 /* Deliberate asymmetries. Each needs a reason, so the list stays honest. */
@@ -40,8 +42,6 @@ const WEB_ONLY = {
     + 'deciding side IS on the Mac, as proposalReview.',
 };
 const MAC_ONLY = {
-  settings: 'the Mac app has to be told which server to talk to; the web page is served by it',
-  access: 'officer access is a panel on the web home screen rather than its own section',
   candidateTracker: 'the web side links out to the Tracker instead of embedding it',
 };
 
@@ -88,12 +88,19 @@ check('the Mac app defaults to the hosted service, not localhost',
   /let defaultServerAddress = "https:\/\//.test(client) && !/\?\? "http:\/\/localhost/.test(client));
 check('the Mac app consumes the same live event stream as the web page',
   client.includes('/api/events') && read('public/app.js').includes('/api/events'));
-check('both clients honour the same dues roles',
-  /owner", "secretary", "assistant_secretary"/.test(macViews)
-  && /'owner', 'secretary', 'assistant_secretary'/.test(read('public/app.js')));
-check('the Worshipful Master can open the minutes generator on the web',
-  /'owner', 'secretary', 'assistant_secretary'/.test(read('public/app.js'))
+check('both clients gate dues on the server-supplied dues.view permission',
+  models.includes('can("dues.view")') && read('public/app.js').includes("can('dues.view', user)")
+  && models.includes('if let permissions { return permissions.contains(capability) }')
+  && read('public/app.js').includes('user?.permissions?.includes(permission)'));
+check('both clients separate minutes preparation from final record viewing',
+  models.includes('can("minutes.view") || can("minutes.prepare")')
+  && macViews.includes('model.user?.can("minutes.prepare") == true')
+  && read('public/app.js').includes("if (!can('minutes.prepare')) return;")
+  && read('public/app.js').includes('/api/minutes/${item.id}/pdf')
   && read('server.js').includes("app.post('/api/minutes/generate', requireAuth, requireMinutesAccess"));
+check('both clients keep the owner capable of administering all areas',
+  models.includes('if role == "owner" { return true }')
+  && read('public/app.js').includes("user?.role === 'owner' ||"));
 check('the Mac app opens the authenticated minutes workspace',
   macMinutes.includes("/api/minutes")
   && macMinutes.includes('forHTTPHeaderField: "Authorization"')
@@ -151,8 +158,8 @@ check('both clients say plainly when an approval has no endorsed copy behind it'
   && /No approval document on file/.test(macViews));
 
 check('both clients show a Brother invited as a viewer, not only the two Secretaries',
-  /\['viewer','warden','member'(?:,'treasury_preparer')?\]\.includes\(invite.role\)/.test(read('public/app.js'))
-  && /\["viewer","member","warden"(?:,"treasury_preparer")?\]\.contains\(\$0.role\)/.test(macViews)
+  /\['viewer','warden','member'(?:,'treasury_preparer')?(?:,'officer')?\]\.includes\(invite.role\)/.test(read('public/app.js'))
+  && /\["viewer","member","warden"(?:,"treasury_preparer")?(?:,"officer")?\]\.contains\(\$0.role\)/.test(macViews)
   && macViews.includes('pendingInvitations.filter'));
 
 /* A workspace section has to live inside <div class="content">. Put one outside and it

@@ -117,6 +117,7 @@
           <div class="user-block"><span id="userInitials"></span><div><strong id="whoami"></strong><small id="userRole"></small></div></div>
           <nav>
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
+            <button id="accessNav" class="nav-item owner-only" type="button"><span>ACC</span> Officer Access</button>
             <button id="activityNav" class="nav-item owner-only" type="button"><span>ACT</span> Officer Activity</button>
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
@@ -127,6 +128,7 @@
             <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> My Dispensation Proposals</button>
             <button id="proposalReviewNav" class="nav-item owner-only" type="button"><span>&#9998;</span> Warden Proposals</button>
             <button id="duesNav" class="nav-item dues-only" type="button"><span>$</span> Dues</button>
+            <button id="settingsNav" class="nav-item" type="button"><span>⚙</span> My Settings</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
           </nav>
           <div class="sidebar-foot">
@@ -142,6 +144,7 @@
             <div><strong id="sessionNoticeTitle"></strong><p>Your sign-in renews automatically when you use this device near the end of that period. Sign out when you are finished on a shared device.</p></div>
             <button id="dismissSessionNotice" class="secondary" type="button" aria-label="Dismiss sign-in notice">Got it</button>
           </section>
+          <p id="permissionRefreshNotice" class="helper hidden" role="status"></p>
           <section id="minutesReviewAlerts" class="hidden" role="status" aria-live="polite" aria-label="Minutes awaiting your review"></section>
           <section id="landingSection" class="landing-section">
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
@@ -150,12 +153,13 @@
               <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
-              <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small>Upload a Plaud transcript and prepare the draft</small></span><b>›</b></button>
+              <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small id="minutesMenuDescription">Read finalized meeting minutes</small></span><b>›</b></button>
               <button id="activityMenuCard" class="document-menu-card owner-only" type="button"><i>ACT</i><span><strong>Officer Activity</strong><small>Sign-ins, recorded actions and estimated active time</small></span><b>›</b></button>
-              <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small>Upload banking records, prepare and review</small></span><b>›</b></button>
-              <a class="document-menu-card signer-only" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
+              <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small id="treasuryMenuDescription">Read finalized treasurer reports</small></span><b>›</b></button>
+              <a class="document-menu-card candidate-only" href="https://tracker.stonesquare22pha.org/" target="_blank" rel="noopener noreferrer"><i>CT</i><span><strong>Candidate Tracker</strong><small>Open the Candidate Tracker</small></span><b>›</b></a>
             </div>
           </section>
+          <section id="settingsSection" class="hidden"><div class="content-head"><div><h1>My Settings</h1><p>Your account and this device.</p></div></div><div class="panel"><h2 id="settingsName"></h2><p id="settingsEmail"></p><p>You stay signed in for up to 90 days on this device. Your sign-in renews when you use it near the end of that period. Sign out when finished on a shared device.</p><div class="row-buttons"><button id="settingsSignature" class="secondary" type="button">Manage my signature</button><button id="settingsSignout" class="secondary" type="button">Sign out on this device</button></div></div></section>
           <section id="activitySection" class="hidden"></section>
           <section id="treasurySection" class="hidden"></section>
           <section id="reportsSection" class="hidden">
@@ -187,8 +191,9 @@
               </form>
             </section>
 
-            <section id="officerPanel" class="panel owner-only">
+            <section id="officerPanel" class="panel owner-only" tabindex="-1">
               <div class="panel-title"><div><p class="eyebrow">ACCESS CONTROL</p><h2>Officer accounts</h2></div></div>
+              <div id="accessControls"></div>
               <div id="officerList" class="officer-list"></div>
               <button id="openInvite" class="secondary full" type="button">Invite an officer</button>
             </section>
@@ -205,12 +210,12 @@
               <div>
                 <p class="eyebrow">RESTRICTED OFFICER RECORD</p>
                 <h1>Meeting minutes</h1>
-              <p>The Worshipful Master, Adrian, or McDuffie can prepare the minutes. The preparing officer reviews and attests. The Worshipful Master reviews, records any corrections, and authorizes distribution.</p>
+              <p id="minutesPageDescription">Read finalized meeting minutes.</p>
               </div>
               <button id="minutesRefresh" class="secondary" type="button">Refresh</button>
             </div>
 
-            <div class="minutes-workflow" aria-label="Minutes workflow">
+            <div class="minutes-workflow preparer-only" aria-label="Minutes workflow">
               <span><b>1</b> Prepare notes or a transcript</span>
               <span><b>2</b> Review the organized draft</span>
               <span><b>3</b> Preparer and Master attest</span>
@@ -231,15 +236,15 @@
             </section>
 
             <section class="records">
-              <div class="records-head"><div><p class="eyebrow">MINUTES RECORD</p><h2>Drafts and approved minutes</h2></div></div>
-              <div id="minutesList" class="minutes-list"></div>
+              <div class="records-head"><div><p class="eyebrow">MINUTES RECORD</p><h2>Meeting minutes</h2></div></div>
+              <p id="minutesReadMessage" class="message" role="status"></p><div id="minutesList" class="minutes-list"></div>
             </section>
           </section>
 
           <section id="duesSection" class="hidden">
             <div class="content-head">
               <div>
-                <p class="eyebrow">RESTRICTED TO THE WORSHIPFUL MASTER AND THE SECRETARIES</p>
+                <p class="eyebrow">LODGE DUES RECORD</p>
                 <h1>Dues</h1>
                 <p id="duesYearLine">Reconciled live against the Lodge&rsquo;s Zeffy campaigns.</p>
               </div>
@@ -570,7 +575,7 @@
           <button id="closeInvite" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">OFFICER ACCESS</p><h2 id="inviteTitle">Send private invitation</h2>
           <form id="inviteForm">
-            <label for="inviteRole">Access level</label><select id="inviteRole"><option value="secretary">Secretary</option><option value="assistant_secretary">Assistant Secretary</option><option value="viewer">Lodge Viewer</option><option value="warden">Warden</option><option value="member">Lodge Member (permissions assigned separately)</option><option value="treasurer">Treasurer</option><option value="assistant_treasurer">Assistant Treasurer</option><option value="treasury_preparer">Treasury Report Preparer</option></select>
+            <label for="inviteRole">Access level</label><select id="inviteRole"><option value="secretary">Secretary</option><option value="assistant_secretary">Assistant Secretary</option><option value="viewer">Lodge Viewer</option><option value="warden">Warden</option><option value="officer">Lodge Officer</option><option value="member">Lodge Member (permissions assigned separately)</option><option value="treasurer">Treasurer</option><option value="assistant_treasurer">Assistant Treasurer</option><option value="treasury_preparer">Treasury Report Preparer</option></select>
             <label for="inviteName">Full name</label><input id="inviteName" type="text" required />
             <label for="inviteEmail">Email address</label><input id="inviteEmail" type="email" required />
             <button class="primary" type="submit">Create invitation</button>

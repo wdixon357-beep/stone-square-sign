@@ -116,6 +116,7 @@ struct RootView: View {
 
     private func checkPendingSignatureNotice() {
         guard let user = model.user,
+              (user.role == "owner" || user.can("documents.sign")),
               (user.hasSignature || !user.canSign),
               pendingNoticeUserId != user.id else { return }
         let pending = user.role == "owner" || user.role == "viewer"
@@ -211,20 +212,20 @@ struct WorkspaceView: View {
                 }
                 List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
-                if model.user?.role != "member" { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
-                if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
+                if model.user?.can("reports.create") == true { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
+                if model.user?.canReadMinutes == true {
                     Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes)
                 }
                 if model.user?.canUseTreasury == true { Label("Treasurer Reports", systemImage: "chart.bar.doc.horizontal.fill").tag(AppSection.treasury) }
-                if model.user?.role != "member" { Label("Live Queue", systemImage: "list.number").tag(AppSection.documents) }
-                if model.user?.role != "member" { Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker) }
+                if model.user?.can("documents.status") == true { Label("Live Queue", systemImage: "list.number").tag(AppSection.documents) }
+                if model.user?.can("candidates.view") == true { Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker) }
                 if model.user?.role == "owner" {
                         Label("Create Dispensation", systemImage: "doc.badge.plus").tag(AppSection.createDispensation)
                         Label("Warden Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                         Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
                         Label("Officer Activity",systemImage:"clock.arrow.circlepath").tag(AppSection.activity)
                     }
-                    if model.user?.role != "member" { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
+                    if model.user?.canReadApprovals == true { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
                     if model.user?.role == "owner" {
                     }
                     if model.user?.canReadDues == true {
@@ -234,7 +235,7 @@ struct WorkspaceView: View {
                         Label("My Dispensation Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                     }
                     if model.user?.canSign == true { Label("Signature Profile", systemImage: "signature").tag(AppSection.profile) }
-                    Label("Service Settings", systemImage: "network").tag(AppSection.settings)
+                    if model.user?.can("settings.manage") == true { Label("Service Settings", systemImage: "network").tag(AppSection.settings) }
                 }
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 0, maxHeight: .infinity)
@@ -306,7 +307,9 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private var workspaceContent: some View {
-        switch selection {
+        if model.user?.canOpen(selection) != true {
+            ContentUnavailableView("This workspace is not assigned", systemImage: "lock")
+        } else { switch selection {
         case .home:
             LandingDashboardView(
                 openDispensations: { selection = .documents },
@@ -318,9 +321,11 @@ struct WorkspaceView: View {
         case .reportGenerator:
             ReportGeneratorView(browser: reportBrowser)
         case .minutes:
-            MeetingMinutesView(workspace: minutesWorkspace)
+            if model.user?.can("minutes.prepare") == true { MeetingMinutesView(workspace: minutesWorkspace) }
+            else { FinalReportBrowserView(kind: .minutes) }
         case .treasury:
-            TreasuryView(workspace: treasuryWorkspace)
+            if model.user?.can("treasury.prepare") == true || model.user?.can("treasury.upload") == true { TreasuryView(workspace: treasuryWorkspace) }
+            else { FinalReportBrowserView(kind: .treasury) }
         case .candidateTracker:
             NativeCandidateTrackerView()
         case .createDispensation: DispensationBuilderView()
@@ -335,7 +340,7 @@ struct WorkspaceView: View {
         case .profile: SignatureProfileView()
         case .settings: SettingsView()
         default: DocumentsView()
-        }
+        } }
     }
 }
 
@@ -968,17 +973,17 @@ struct LandingDashboardView: View {
             NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
             List {
                 Section("Reports and records") {
-                    if model.user?.role != "member" {
-                        homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports)
+                    if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports) }
+                    if model.user?.can("documents.status") == true {
                         homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) awaiting action" : "Open the document queue", "doc.text.fill", action: openDispensations)
                     }
-                    if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
-                        homeRow("Meeting Minutes", "Prepare, review and attest to meeting records", "text.document.fill", action: openMinutes)
+                    if model.user?.canReadMinutes == true {
+                        homeRow("Meeting Minutes", model.user?.can("minutes.prepare") == true ? "Prepare, review and attest to meeting records" : "Read finalized meeting records", "text.document.fill", action: openMinutes)
                     }
                     if model.user?.canUseTreasury == true {
-                        homeRow("Treasurer Reports", "Upload banking records, prepare and review", "chart.bar.doc.horizontal.fill", action: openTreasury)
+                        homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? "Prepare and review treasurer reports" : model.user?.can("treasury.upload") == true ? "Provide banking records and view reports" : "Read finalized treasurer reports", "chart.bar.doc.horizontal.fill", action: openTreasury)
                     }
-                    if model.user?.role != "member" {
+                    if model.user?.can("candidates.view") == true {
                         homeRow("Candidate Tracker", "Open candidate and membership records", "person.text.rectangle", action: openCandidateTracker)
                     }
                 }
@@ -1220,7 +1225,7 @@ struct DocumentRow: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                if document.needsSignature && !document.isTerminal {
+                if model.user?.can("documents.sign") == true && document.needsSignature && !document.isTerminal {
                     Button("Review and sign", action: sign)
                         .buttonStyle(.borderedProminent).tint(.accentColor)
                 }
@@ -1336,6 +1341,7 @@ struct OfficerAccessView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 NativeWorkspaceHeader(title: "Officer Access", subtitle: "Invitations and account access", symbol: "person.badge.key").padding(.horizontal, -22)
+                NativeAccountPermissionsView()
                 /* One card per man, in one grid, so a Lodge Viewer reads exactly the way the
                  * two Secretaries do. Viewers previously had nowhere to appear at all, which made
                  * an invited Brother invisible until he signed in. */
@@ -1346,9 +1352,9 @@ struct OfficerAccessView: View {
                       "Assistant Secretary", model.seatState(role: "assistant_secretary")),
                      (model.seatName(role: "treasurer", fallback: "Treasurer"), "Treasurer", model.seatState(role: "treasurer")),
                      (model.seatName(role: "assistant_treasurer", fallback: "Assistant Treasurer"), "Assistant Treasurer", model.seatState(role: "assistant_treasurer"))]
-                    + model.officers.filter { ["viewer","member","warden","treasury_preparer"].contains($0.role) }
+                    + model.officers.filter { ["viewer","member","warden","treasury_preparer","officer"].contains($0.role) }
                         .map { ($0.name, User.roleLabel(for: $0.role), OfficerSeatState.active) }
-                    + model.pendingInvitations.filter { ["viewer","member","warden","treasury_preparer"].contains($0.role) }
+                    + model.pendingInvitations.filter { ["viewer","member","warden","treasury_preparer","officer"].contains($0.role) }
                         .map { ($0.name, User.roleLabel(for: $0.role), OfficerSeatState.pending) }
                 VStack(spacing: 0) {
                     ForEach(Array(seats.enumerated()), id: \.offset) { _, seat in
@@ -1362,6 +1368,7 @@ struct OfficerAccessView: View {
                     Text("Treasurer").tag("treasurer")
                     Text("Assistant Treasurer").tag("assistant_treasurer")
                     Text("Treasury Report Preparer").tag("treasury_preparer")
+                        Text("Lodge Officer").tag("officer")
                         Text("Lodge Viewer").tag("viewer")
                         Text("Lodge Member (permissions assigned separately)").tag("member")
                     }

@@ -403,8 +403,19 @@ final class AppModel: ObservableObject {
     }
 
     func refresh(silent: Bool = false) async {
+        let currentToken = token
+        if currentToken != nil {
+            do {
+                let account: MeResponse = try await request("/api/auth/me")
+                guard currentToken == token else { return }
+                user = account.user
+            } catch {
+                if !silent { show(error) }
+                return
+            }
+        }
         await refreshMinutesReviewAlerts()
-        guard ["owner", "secretary", "assistant_secretary", "signer", "viewer", "warden"].contains(user?.role ?? "") else {
+        guard user?.can("documents.status") == true else {
             documents = []
             return
         }

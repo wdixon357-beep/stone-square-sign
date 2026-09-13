@@ -5,7 +5,11 @@ These are William Dixon-Saunders's settled requirements. Update this record, the
 ## Officer access and administrative details
 
 - Jamal Sadler and Xavier White have the Warden work areas: dispensation statuses, read-only dues and Candidate Tracker, Report Generator, their own signature profile, and My Dispensation Proposals. Each Warden sees his own proposal submissions, feedback and status. The Worshipful Master sees and reviews all proposals.
-- Warden access does not grant minutes, treasury, officer administration, private approvals, executed document downloads, or signing someone else's dispensation. Signature profile access is separate from document signing authority.
+- Jamal and Xavier can view finalized minutes and treasurer reports, with no preparation or editing. Xavier also has bank-material upload access. Neither has officer administration, private approvals, executed dispensation downloads, or signing authority for someone else's dispensation.
+- McDuffie and Adrian can prepare minutes and treasurer reports, use Report Generator, view dues and Candidate Tracker, and manage their own signature and settings. McDuffie can upload banking material; Adrian cannot.
+- John Brown and David Marable can prepare treasurer reports, use Report Generator, view dues, and manage their own signature and settings. John can upload banking material; David cannot. Neither receives minutes or Candidate Tracker access.
+- Other officers receive Report Generator, finalized minutes and treasurer reports, and their own signature and settings. Kenny Davis and Bobby Collins are excluded from the current invitation rollout at William's direction.
+- The Worshipful Master retains all capabilities and can change individual capabilities in Officer Access. Preparation, finalized report viewing, and banking uploads are separate permissions. Changes must be enforced by the shared service, not just hidden navigation. Signature profile access is separate from document signing authority.
 - Generation provider/model names, usage, charges and remaining allowance are visible only to the Worshipful Master. Non-owner API responses and interface notices use neutral report-assistance wording; hiding a label alone is insufficient.
 
 ## Minutes

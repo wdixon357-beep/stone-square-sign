@@ -13,19 +13,30 @@ try{
  const password='Private treasury test password';
  const owner=(await api('/api/auth/register',null,'POST',{email:'treasury-owner@example.org',name:'WM Test Reviewer',password})).data;
  async function officer(role){const email=role+'@example.org';const invite=(await api('/api/officers/invite',owner.token,'POST',{email,name:'Test '+role,role})).data;const result=await api('/api/auth/register',null,'POST',{email,name:'Test '+role,password,invitationToken:new URL(invite.inviteUrl).searchParams.get('invite')});check(role+' can register through its invitation',result.status===201);return result.data;}
+ async function permissions(user,values){const result=await api('/api/admin/access',owner.token,'PUT',{key:`user:${user.user.id}`,permissions:values});assert.equal(result.status,200,JSON.stringify(result.data));}
  const treasurer=await officer('treasurer'),secretary=await officer('secretary'),viewer=await officer('viewer');
  for(const u of [owner,treasurer])check('Signature profile works for '+u.user.role,(await api('/api/profile/signature',u.token,'PUT',{signatureData:'data:image/png;base64,'+(await readFile(new URL('./signature.b64',import.meta.url),'utf8')).trim(),signatureType:'drawn'})).status===200);
  check('Anonymous cannot read treasury',(await api('/api/treasury')).status===401);check('Viewer cannot read banking records',(await api('/api/treasury',viewer.token)).status===403);check('Treasurer does not gain minutes access',(await api('/api/minutes',treasurer.token)).status===403);
+ await permissions(viewer,['treasury.view']);
+ check('A finished-report viewer initially sees no drafts',(await api('/api/treasury',viewer.token)).data.reports.length===0);
  const form=new FormData();form.set('sourceText',notes);let response=await api('/api/treasury/generate',treasurer.token,'POST',form);check('Typed source generates a persisted report',response.status===201);let r=response.data.report;
  check('Unknown confirmations block attestation',(await api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision})).status===409);
  check('Secretary cannot overwrite another preparer draft',(await api(`/api/treasury/${r.id}`,secretary.token,'PUT',{draft:completeTreasuryFixture,revision:r.revision})).status===403);
- response=await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:completeTreasuryFixture,revision:r.revision});check('Reconciled corrections save',response.status===200);r=response.data.report;
+ const confidentialFixture={...completeTreasuryFixture,sourceNames:['private-statement-name.txt'],unmappedLines:['Private extracted source marker'],extractionNotes:['Private extraction marker']};
+ response=await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:confidentialFixture,revision:r.revision});check('Reconciled corrections save',response.status===200);r=response.data.report;
+ check('Viewer cannot request an unsigned PDF',(await api(`/api/treasury/${r.id}/pdf`,viewer.token)).status===404);
  check('Stale save rejected',(await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:completeTreasuryFixture,revision:1})).status===409);
  check('Cannot distribute an unsigned draft',(await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision})).status===403);
  response=await api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision});check('Preparing officer signature finalizes the report',response.status===200&&response.data.report.status==='ready_for_distribution');r=response.data.report;
  check('Email failure is visible without losing the report',response.data.notificationWarnings.length>0);
  check('WM attestation endpoint is removed',(await api(`/api/treasury/${r.id}/master-attest`,owner.token,'POST',{revision:r.revision})).status===404);
  check('Signed snapshot belongs to the preparer',r.preparerAttestedAt&&JSON.stringify(r.submittedDraft)===JSON.stringify(r.draft));
+ const finished=r;
+ const visible=(await api('/api/treasury',viewer.token)).data.reports;
+ check('Final-only reader receives the signed report',visible.length===1&&visible[0].id===r.id&&visible[0].draft.accounts[0].statementBalance===r.submittedDraft.accounts[0].statementBalance);
+ check('Final list strips source material and the separate submission snapshot',visible[0].submittedDraft===null&&visible[0].draft.sourceNames.length===0&&visible[0].draft.unmappedLines.length===0&&visible[0].draft.extractionNotes.length===0&&!JSON.stringify(visible).includes('Private extraction marker'));
+ const finalPdf=await api(`/api/treasury/${r.id}/pdf`,viewer.token);check('Final-only reader can download a signed PDF',finalPdf.status===200&&finalPdf.data.subarray(0,4).toString()==='%PDF');
+ for(const [path,method,body] of [[`/${r.id}/source`,'GET'],[`/${r.id}/sources/unknown`,'GET'],['/preparers','GET'],['/drafts','POST'],['/generate','POST',{sourceText:notes}],[`/${r.id}/assign`,'POST',{revision:r.revision,preparerUserId:viewer.user.id}],[`/${r.id}`,'PUT',{revision:r.revision,draft:completeTreasuryFixture}],[`/${r.id}/preview`,'POST',{}],[`/${r.id}/organize`,'POST',{revision:r.revision}],[`/${r.id}/preparer-attest`,'POST',{revision:r.revision}],[`/${r.id}/mark-distributed`,'POST',{revision:r.revision}],[`/${r.id}`,'DELETE']])check('Final-only permission blocks '+method+' '+path,(await api('/api/treasury'+path,viewer.token,method,body)).status===403);
  check('Repeat signature cannot finalize again',(await api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision})).status===403);
  const revised=structuredClone(r.draft);revised.remarks='Attempt to change a finalized report';
  const preview=await api(`/api/treasury/${r.id}/preview`,treasurer.token,'POST',{draft:{}});check('Signed PDF renders',preview.status===200&&preview.data.subarray(0,4).toString()==='%PDF');
@@ -39,7 +50,7 @@ try{
  check('Report preparer cannot access dispensations',(await api('/api/documents',assistant.token)).status===403);
  check('Basic member has no treasury permission',(await api('/api/treasury',member.token)).status===403);
  check('Basic member has no document access',(await api('/api/documents',member.token)).status===403);
- check('Basic member cannot save signatures',(await api('/api/profile/signature',member.token,'PUT',{})).status===403);
+ check('Basic member has only its own signature access',(await api('/api/auth/me',member.token)).data.user.permissions.includes('signature.manage'));
  check('Only owner grants upload permission',(await api(`/api/treasury/access/${member.user.id}`,secretary.token,'PUT',{enabled:true})).status===403);
  check('Owner can grant upload-only access',(await api(`/api/treasury/access/${member.user.id}`,owner.token,'PUT',{enabled:true})).status===200);
  check('Upload capability survives sign-in refresh',(await api('/api/auth/me',member.token)).data.user.treasuryAccess==='upload');
@@ -48,7 +59,7 @@ try{
  check('Saved upload asks who will prepare',shared.status==='awaiting_preparer'&&shared.preparerUserId===null&&shared.uploadedBy==='Test secretary');
  check('Unassigned upload cannot be signed',(await api(`/api/treasury/${shared.id}/preparer-attest`,secretary.token,'POST',{revision:shared.revision})).status===403);
  check('Upload-only member cannot see another uploader records',!(await api('/api/treasury',member.token)).data.reports.some(r=>r.id===shared.id));
- check('Private source URL is protected',(await api(`/api/treasury/${shared.id}/source`,member.token)).status===404);
+ check('Private source URL is protected',(await api(`/api/treasury/${shared.id}/source`,member.token)).status===403);
  check('Cannot assign a basic member as preparer',(await api(`/api/treasury/${shared.id}/assign`,secretary.token,'POST',{revision:shared.revision,preparerUserId:member.user.id})).status===400);
  const assigned=await api(`/api/treasury/${shared.id}/assign`,secretary.token,'POST',{revision:shared.revision,preparerUserId:assistant.user.id});shared=assigned.data.report;
  check('Secretary hands records to Treasury Report Preparer',assigned.status===200&&shared.preparerUserId===assistant.user.id&&shared.createdByUserId===secretary.user.id&&shared.preparerRole==='treasury_preparer');
@@ -58,7 +69,7 @@ try{
  check('Assigned preparer reads original notes and file list',originals.text.includes(notes)&&originals.files[0].name==='banking-notes.txt');
  const originalFile=await api(`/api/treasury/${shared.id}/sources/${originals.files[0].id}`,assistant.token);
  check('Original file downloads unchanged',originalFile.status===200&&originalFile.data.toString()===notes);
- check('Another uploader cannot download the original file',(await api(`/api/treasury/${shared.id}/sources/${originals.files[0].id}`,member.token)).status===404);
+ check('Another uploader cannot download the original file',(await api(`/api/treasury/${shared.id}/sources/${originals.files[0].id}`,member.token)).status===403);
  check('Uploader cannot overwrite assigned preparer work',(await api(`/api/treasury/${shared.id}`,secretary.token,'PUT',{revision:shared.revision,draft:completeTreasuryFixture})).status===403);
  check('Uploader cannot sign for the assigned preparer',(await api(`/api/treasury/${shared.id}/preparer-attest`,secretary.token,'POST',{revision:shared.revision})).status===403);
  shared=(await api(`/api/treasury/${shared.id}`,assistant.token,'PUT',{revision:shared.revision,draft:completeTreasuryFixture})).data.report;
@@ -71,9 +82,13 @@ try{
  const ownUpload=new FormData();ownUpload.set('sourceText',notes);
  const uploadOnly=(await api('/api/treasury/generate',member.token,'POST',ownUpload)).data.report;
  check('Upload-only account must select a preparer',uploadOnly.status==='awaiting_preparer');
- check('Upload-only account can hand off its records',(await api(`/api/treasury/${uploadOnly.id}/assign`,member.token,'POST',{revision:uploadOnly.revision,preparerUserId:assistant.user.id})).status===200);
+ check('Upload-only response hides working source-derived fields',uploadOnly.draft.bankName===''&&uploadOnly.draft.transactions.length===0&&uploadOnly.submittedDraft===null);
+ check('Upload-only account can see its pending upload and final reports',(await api('/api/treasury',member.token)).data.reports.some(r=>r.id===uploadOnly.id)&&(await api('/api/treasury',member.token)).data.reports.some(r=>r.id===finished.id));
+ check('Upload-only account cannot assign reports',(await api(`/api/treasury/${uploadOnly.id}/assign`,member.token,'POST',{revision:uploadOnly.revision,preparerUserId:assistant.user.id})).status===403);
+ for(const [path,method,body] of [['/drafts','POST'],['/preparers','GET'],[`/${uploadOnly.id}/source`,'GET'],[`/${uploadOnly.id}/preview`,'POST',{}],[`/${uploadOnly.id}/organize`,'POST',{revision:uploadOnly.revision}],[`/${uploadOnly.id}`,'PUT',{revision:uploadOnly.revision,draft:completeTreasuryFixture}],[`/${uploadOnly.id}/preparer-attest`,'POST',{revision:uploadOnly.revision}],[`/${uploadOnly.id}`,'DELETE']])check('Upload-only blocks '+method+' '+path,(await api('/api/treasury'+path,member.token,method,body)).status===403);
  await api(`/api/treasury/access/${member.user.id}`,owner.token,'PUT',{enabled:false});
- check('Removing upload permission takes effect immediately',(await api('/api/treasury',member.token)).status===403);
+ check('Removing upload permission leaves finished viewing only',(await api('/api/auth/me',member.token)).data.user.treasuryAccess==='view'&&!(await api('/api/treasury',member.token)).data.reports.some(r=>r.id===uploadOnly.id));
+ check('Removing upload permission blocks further banking notes immediately',(await api('/api/treasury/generate',member.token,'POST',ownUpload)).status===403);
  const bankOnly=new FormData();bankOnly.set('sourceText',notes);bankOnly.set('intent','save');
  let available=(await api('/api/treasury/generate',secretary.token,'POST',bankOnly)).data.report;
  check('Save banking information does not assign any preparer',available.status==='awaiting_preparer'&&available.preparerUserId===null&&available.createdBy==='');
@@ -91,5 +106,29 @@ try{
  check('Unrecognized upload choice is rejected',(await api('/api/treasury/generate',secretary.token,'POST',invalidIntent)).status===400);
  await api(`/api/treasury/access/${member.user.id}`,owner.token,'PUT',{enabled:true});
  check('Upload-only access cannot choose to complete a report',(await api('/api/treasury/generate',member.token,'POST',completing)).status===403);
+ const adrian=await officer('assistant_secretary');
+ const adrianAccess=(await api('/api/auth/me',adrian.token)).data.user.permissions;
+ check('Assistant Secretary prepares reports without a bank-upload grant',adrianAccess.includes('treasury.prepare')&&!adrianAccess.includes('treasury.upload'));
+ check('Treasury Report Preparer also lacks default bank-upload access',!(await api('/api/auth/me',assistant.token)).data.user.permissions.includes('treasury.upload'));
+ for(const u of [adrian,assistant]){
+   check(u.user.role+' cannot upload typed notes',(await api('/api/treasury/generate',u.token,'POST',completing)).status===403);
+   const deniedFile=new FormData();deniedFile.append('files',new Blob([notes]),'bank.txt');check(u.user.role+' cannot upload files',(await api('/api/treasury/generate',u.token,'POST',deniedFile)).status===403);
+ }
+ let manual=(await api('/api/treasury/drafts',adrian.token,'POST',{sourceText:'Ignored forged source',draft:completeTreasuryFixture})).data.report;
+ check('Preparer starts an empty report without upload access',manual.status==='draft'&&manual.preparerUserId===adrian.user.id&&manual.draft.periodStart===''&&manual.draft.transactions.length===0);
+ check('Manual draft contains no uploaded source',(await api(`/api/treasury/${manual.id}/source`,adrian.token)).data.text==='');
+ check('Empty manual source cannot trigger organization',(await api(`/api/treasury/${manual.id}/organize`,adrian.token,'POST',{revision:manual.revision})).status===400);
+ const manualSave=await api(`/api/treasury/${manual.id}`,adrian.token,'PUT',{revision:manual.revision,draft:completeTreasuryFixture});manual=manualSave.data.report;check('Preparer without bank access can enter and save financial report fields',manualSave.status===200&&manual.calculation.ready);
+ const claim=await api(`/api/treasury/${uploadOnly.id}/assign`,assistant.token,'POST',{revision:uploadOnly.revision,preparerUserId:assistant.user.id});check('Preparer without upload can claim banking records for a report',claim.status===200&&claim.data.report.preparerUserId===assistant.user.id);
+ const claimedSource=await api(`/api/treasury/${uploadOnly.id}/source`,assistant.token);
+ assert.equal(claimedSource.status,200,JSON.stringify(claimedSource.data));
+ check('Claiming preparer can read the saved banking material',claimedSource.data.text.replaceAll('\r\n','\n')===notes);
+ const ownerManual=await api('/api/treasury/drafts',owner.token,'POST');check('WM retains manual report preparation',ownerManual.status===201);
+ await permissions(treasurer,['treasury.view']);
+ check('Explicit permissions override Treasurer office immediately',(await api('/api/treasury/drafts',treasurer.token,'POST')).status===403&&(await api('/api/treasury/generate',treasurer.token,'POST',completing)).status===403);
+ check('Revoked preparation hides prior own drafts and source',!(await api('/api/treasury',treasurer.token)).data.reports.some(r=>r.id===ownReport.id)&&(await api(`/api/treasury/${ownReport.id}/source`,treasurer.token)).status===403);
+ check('Preparer choices reflect explicit overrides',!(await api('/api/treasury/preparers',owner.token)).data.preparers.some(u=>u.id===treasurer.user.id));
+ await permissions(member,[]);
+ check('Explicit disabled permissions override retained legacy upload grants',(await api('/api/treasury',member.token)).status===403&&(await api('/api/treasury/generate',member.token,'POST',ownUpload)).status===403);
  console.log(`${passed} treasurer workflow checks passed.`);
 }finally{server.kill();}

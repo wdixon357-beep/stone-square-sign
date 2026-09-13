@@ -145,6 +145,7 @@ const roleLabel = (role) => ({
   treasurer: 'Treasurer',
   assistant_treasurer: 'Assistant Treasurer',
   treasury_preparer: 'Treasury Report Preparer',
+  officer: 'Lodge Officer',
   member: 'Lodge Member',
   viewer: 'Lodge Viewer',
   warden: 'Warden',
@@ -183,21 +184,19 @@ const easternGreeting = () => {
 
 /* Who is ever asked for a saved signature. An allowlist, so a new role is never trapped
  * behind the forced signature modal that has no dismiss control. */
-const CAN_SIGN = new Set(['warden', 'owner', 'secretary', 'assistant_secretary', 'signer', 'treasurer', 'assistant_treasurer', 'treasury_preparer']);
+const can = (permission, user = state.user) => user?.role === 'owner' || Boolean(user?.permissions?.includes(permission));
 
-const enterWorkspace = async (user, session) => {
-  state.user = user;
-  const sessionDays = Number(session?.lifetimeDays);
-  const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
-  $('sessionNotice').classList.toggle('hidden', !hasSessionPolicy);
-  $('sessionDetails').classList.toggle('hidden', !hasSessionPolicy);
-  if (hasSessionPolicy) $('sessionNoticeTitle').textContent = `You will stay signed in for ${sessionDays} days on this device.`;
-  if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.token&&state.user)});}
-  if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
-  const maySeeTreasury = Boolean(user.treasuryAccess);
+const applyWorkspacePermissions = user => {
+  $('minutesPageDescription').textContent = can('minutes.prepare', user) ? 'Prepare and review meeting minutes. The preparing officer attests, and the Worshipful Master reviews and authorizes distribution.' : 'Read finalized meeting minutes.';
+  $('minutesMenuDescription').textContent = can('minutes.prepare', user) ? 'Prepare, review and attest to meeting records' : 'Read finalized meeting minutes';
+  $('treasuryMenuDescription').textContent = can('treasury.prepare', user) ? (can('treasury.upload', user) ? 'Upload records, prepare and review reports' : 'Prepare reports and review assigned banking records') : (can('treasury.upload', user) ? 'Provide banking records and read finalized reports' : 'Read finalized treasurer reports');
+  const maySeeTreasury = can('treasury.view', user) || can('treasury.prepare', user) || can('treasury.upload', user);
   document.querySelectorAll('.treasury-only').forEach(el => el.classList.toggle('hidden', !maySeeTreasury));
-  ['reportsNav','reportsMenuCard'].forEach(id => $(id).classList.toggle('hidden',user.role==='member'));
-  $('profileButton').classList.toggle('hidden',!CAN_SIGN.has(user.role));
+  ['reportsNav','reportsMenuCard'].forEach(id => $(id).classList.toggle('hidden', !can('reports.create', user)));
+  $('settingsNav').classList.toggle('hidden', !can('settings.manage', user));
+  $('settingsName').textContent = user.name; $('settingsEmail').textContent = user.email;
+  $('settingsSignature').classList.toggle('hidden', !can('signature.manage', user));
+  $('profileButton').classList.toggle('hidden',!can('signature.manage', user));
   $('whoami').textContent = user.name;
   $('userRole').textContent = roleLabel(user.role);
   $('userInitials').textContent = initials(user.name);
@@ -210,20 +209,19 @@ const enterWorkspace = async (user, session) => {
   /* Wardens can read Lodge status and submit their own proposals. Administrative
    * decisions remain restricted by the server and the owner controls. */
   document.querySelectorAll('.warden-only').forEach((element) => {
-    element.classList.toggle('hidden', !['owner','warden'].includes(user.role));
+    element.classList.toggle('hidden', user.role === 'owner' || !can('proposals.create', user));
   });
-  if (user.role === 'warden') {
-    const line = document.querySelector('.landing-head p:not(.eyebrow)');
-    if (line) line.textContent = 'View Lodge status, prepare reports, and follow your dispensation proposals.';
-  }
+  const line = document.querySelector('.landing-head p:not(.eyebrow)');
+  if (line) line.textContent = user.role === 'warden' ? 'View Lodge status, prepare reports, and follow your dispensation proposals.' : 'Choose the area you want to open.';
   document.querySelectorAll('.signer-only').forEach((element) => {
-    element.classList.toggle('hidden', ['treasurer','assistant_treasurer','treasury_preparer','member'].includes(user.role));
+    element.classList.toggle('hidden', !can('documents.status', user));
   });
   /* Dues names the men who are behind, so a viewer is not shown the tile at all.
    * The server refuses him regardless; this avoids dangling a locked door. */
-  $('approvalsNav').classList.toggle('hidden', user.role === 'warden' || ['treasurer','assistant_treasurer','treasury_preparer','member'].includes(user.role));
-  const maySeeDues = ['owner', 'secretary', 'assistant_secretary', 'warden'].includes(user.role);
-  const maySeeMinutes = ['owner', 'secretary', 'assistant_secretary'].includes(user.role);
+  document.querySelectorAll('.candidate-only').forEach(element => element.classList.toggle('hidden', !can('candidates.view', user)));
+  $('approvalsNav').classList.toggle('hidden', !can('documents.status', user) || !['owner','secretary','assistant_secretary','signer','viewer'].includes(user.role));
+  const maySeeDues = can('dues.view', user);
+  const maySeeMinutes = can('minutes.view', user) || can('minutes.prepare', user);
   document.querySelectorAll('.dues-only').forEach((element) => {
     element.classList.toggle('hidden', !maySeeDues);
   });
@@ -231,8 +229,21 @@ const enterWorkspace = async (user, session) => {
     element.classList.toggle('hidden', !maySeeMinutes);
   });
   document.querySelectorAll('.preparer-only').forEach((element) => {
-    element.classList.toggle('hidden', !['owner', 'secretary', 'assistant_secretary'].includes(user.role));
+    element.classList.toggle('hidden', !can('minutes.prepare', user));
   });
+  return { maySeeTreasury, maySeeMinutes };
+};
+
+const enterWorkspace = async (user, session) => {
+  state.user = user;
+  const sessionDays = Number(session?.lifetimeDays);
+  const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
+  $('sessionNotice').classList.toggle('hidden', !hasSessionPolicy);
+  $('sessionDetails').classList.toggle('hidden', !hasSessionPolicy);
+  if (hasSessionPolicy) $('sessionNoticeTitle').textContent = `You will stay signed in for ${sessionDays} days on this device.`;
+  if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.token&&state.user)});}
+  if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
+  const { maySeeTreasury, maySeeMinutes } = applyWorkspacePermissions(user);
   showWorkspaceSection(requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
@@ -242,12 +253,44 @@ const enterWorkspace = async (user, session) => {
     user.role === 'owner' ? renderOfficers() : Promise.resolve(),
     user.role === 'owner' ? loadSubmissionProfiles() : Promise.resolve(),
   ]);
-  if (user.hasSignature || !CAN_SIGN.has(user.role)) showPendingSignatureNotice(user, documents || []);
+  if (user.hasSignature || !can('signature.manage', user)) showPendingSignatureNotice(user, documents || []);
   startRealtime();
   /* Only roles that actually sign are asked for a signature. This modal has no close button
    * when forced, so a role that can never sign would be trapped behind it with no way out. */
-  if (!user.hasSignature && CAN_SIGN.has(user.role)) window.setTimeout(() => openSignatureSetup(true), 150);
+  if (!user.hasSignature && can('signature.manage', user)) window.setTimeout(() => openSignatureSetup(true), 150);
 };
+
+// Refresh access without rebuilding forms, clearing drafts, or restarting the workspace.
+let permissionRefreshBusy = false;
+const refreshSessionPermissions = async () => {
+  if (permissionRefreshBusy || !state.token || !state.user) return;
+  permissionRefreshBusy = true;
+  const token = state.token;
+  try {
+    const { user } = await apiFetch('/api/auth/me');
+    if (state.token !== token || !user || user.id !== state.user?.id) return;
+    const before = JSON.stringify([state.user.role, [...(state.user.permissions || [])].sort()]);
+    const after = JSON.stringify([user.role, [...(user.permissions || [])].sort()]);
+    state.user = user;
+    if (before === after) return;
+    applyWorkspacePermissions(user);
+    showWorkspaceSection(state.activeSection || 'home', { skipLoad: true });
+    treasuryWorkspace?.refreshPermissions();
+    if (can('documents.status')) void renderDocuments();
+    if (!can('documents.sign')) hide($('signModal'));
+    if (!can('minutes.prepare')) hide($('minutesEditorModal'));
+    if (!can('signature.manage')) hide($('signatureSetupModal'));
+    $('permissionRefreshNotice').textContent = 'Your access has been updated. Entries on this page have been kept.';
+    show($('permissionRefreshNotice'));
+  } catch(error) {
+    if (error.status === 401 && state.token === token) {
+      hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
+      setMessage(authMessage, 'Your session is no longer authorized. Sign in again to continue.', true);
+    }
+  } finally { permissionRefreshBusy = false; }
+};
+window.setInterval(refreshSessionPermissions, 30000);
+window.addEventListener('focus', refreshSessionPermissions);
 
 const applySubmissionProfiles = () => {
   const owner = state.submissionProfiles.worshipful_master;
@@ -303,11 +346,16 @@ const loadSubmissionProfiles = async () => {
 };
 
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
-  if(section==='activity'&&state.user?.role!=='owner')section='home';
+  const sectionPermissions = { reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.view'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
+  if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
+  $('settingsSection').classList.toggle('hidden', section !== 'settings');
+  $('settingsNav').classList.toggle('active', section === 'settings');
+  if(['activity','builder','proposalReview'].includes(section)&&state.user?.role!=='owner')section='home';
+  state.activeSection = section;
   activityTracker?.visit(section);
   $('activitySection').classList.toggle('hidden',section!=='activity');
   $('activityNav').classList.toggle('active',section==='activity');
-  if(section==='activity')activityWorkspace?.load();
+  if(section==='activity'&&!skipLoad)activityWorkspace?.load();
   $('treasurySection').classList.toggle('hidden', section !== 'treasury');
   $('treasuryNav').classList.toggle('active', section === 'treasury');
   if (section === 'treasury' && !skipLoad) treasuryWorkspace?.list();
@@ -320,7 +368,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   const builder = section === 'builder';
   const queue = section === 'queue';
   const dues = section === 'dues';
-  const approvals = section === 'approvals' && state.user?.role !== 'warden';
+  const approvals = section === 'approvals' && can('documents.status') && ['owner','secretary','assistant_secretary','signer','viewer'].includes(state.user?.role);
   const minutes = section === 'minutes';
   const proposals = section === 'proposals';
   const proposalReview = section === 'proposalReview';
@@ -340,10 +388,10 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('minutesNav').classList.toggle('active', minutes);
   $('proposalsNav').classList.toggle('active', proposals);
   $('proposalReviewNav').classList.toggle('active', proposalReview);
-  if (dues) renderDues();
-  if (approvals) renderApprovals();
-  if (minutes) renderMinutes();
-  if (proposals || proposalReview) renderProposals();
+  if (dues && !skipLoad) renderDues();
+  if (approvals && !skipLoad) renderApprovals();
+  if (minutes && !skipLoad) renderMinutes();
+  if ((proposals || proposalReview) && !skipLoad) renderProposals();
   /* Zeffy payments arrive from outside the app, so no in-app event can announce
    * them. While the dues page is the one on screen, re-read it on a timer so two
    * officers looking at once see the same figures. */
@@ -439,7 +487,7 @@ setInterval(() => { if (state.token && state.user?.role === 'owner') refreshMinu
 
 const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch, state.user?.role));
 const renderMinutes = async () => {
-  void refreshGenerationStatus($('minutesGenerationStatus'));
+  if (can('minutes.prepare')) void refreshGenerationStatus($('minutesGenerationStatus'));
   try {
     const payload = await apiFetch('/api/minutes');
     state.minutes = payload.minutes || [];
@@ -451,7 +499,7 @@ const renderMinutes = async () => {
       const title = document.createElement('h3');
       title.textContent = 'No meeting minutes yet';
       const note = document.createElement('p');
-      note.textContent = 'Upload the Plaud transcript above to create the first draft.';
+      note.textContent = can('minutes.prepare') ? 'Upload meeting notes or a transcript above to create the first draft.' : 'Finalized minutes will appear here when available.';
       empty.append(title, note);
       list.append(empty);
       return;
@@ -476,10 +524,14 @@ const renderMinutes = async () => {
       const open = document.createElement('button');
       open.className = 'secondary small';
       open.type = 'button';
-      open.textContent = 'Review';
-      open.addEventListener('click', () => openMinutesEditor(item.id));
+      open.textContent = can('minutes.prepare') ? 'Review' : 'View PDF';
+      open.addEventListener('click', async () => {
+        if (can('minutes.prepare')) return openMinutesEditor(item.id);
+        try { showPdfBlob(await apiFetch(`/api/minutes/${item.id}/pdf`), `Minutes of ${minutesDateLabel(item)}`); }
+        catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
+      });
       actions.append(open);
-      if (item.status === 'draft' && (state.user.role === 'owner' || item.createdByUserId === state.user.id)) {
+      if (can('minutes.prepare') && item.status === 'draft' && (state.user.role === 'owner' || item.createdByUserId === state.user.id)) {
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary small danger-text'; remove.textContent = 'Delete';
         remove.addEventListener('click', async () => {
@@ -629,7 +681,7 @@ const updateMinutesEditorControls = (item) => {
   document.querySelectorAll('.remove-section').forEach(button => { button.disabled = !editable; });
   $('saveMinutes').classList.toggle('hidden', !editable);
   $('submitMinutesReview').classList.toggle('hidden', item.status !== 'draft'
-    || !['owner', 'secretary', 'assistant_secretary'].includes(role) || item.createdByUserId !== state.user.id);
+    || !can('minutes.prepare') || item.createdByUserId !== state.user.id);
   $('authorizeMinutes').classList.toggle('hidden', role !== 'owner' || item.status !== 'awaiting_master_attestation');
   $('markMinutesDistributed').classList.toggle('hidden', item.status !== 'ready_for_distribution'
     || !['owner', 'secretary'].includes(role));
@@ -648,6 +700,7 @@ const updateMinutesEditorControls = (item) => {
 };
 
 const openMinutesEditor = (id) => {
+  if (!can('minutes.prepare')) return;
   setMinutesView(false);
   const item = state.minutes.find((entry) => entry.id === id);
   if (!item) return;
@@ -1019,6 +1072,12 @@ $('proposalForm')?.addEventListener('submit', async (event) => {
 
 $('approvalsNav').addEventListener('click', () => showWorkspaceSection('approvals'));
 $('approvalsRefresh').addEventListener('click', () => renderApprovals());
+$('accessNav').addEventListener('click', () => {
+  if (state.user?.role !== 'owner') return;
+  showWorkspaceSection('queue');
+  $('officerPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('officerPanel').focus({ preventScroll: true });
+});
 $('activityNav').addEventListener('click',()=>showWorkspaceSection('activity'));
 $('activityMenuCard').addEventListener('click',()=>showWorkspaceSection('activity'));
 $('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'));
@@ -1028,6 +1087,9 @@ $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('repor
 $('minutesNav').addEventListener('click', () => showWorkspaceSection('minutes'));
 $('minutesMenuCard').addEventListener('click', () => showWorkspaceSection('minutes'));
 $('minutesRefresh').addEventListener('click', () => renderMinutes());
+$('settingsNav').addEventListener('click', () => showWorkspaceSection('settings'));
+$('settingsSignature').addEventListener('click', () => openSignatureSetup(false));
+$('settingsSignout').addEventListener('click', () => $('logoutBtn').click());
 $('homeNav').addEventListener('click', () => showWorkspaceSection('home'));
 $('queueNav').addEventListener('click', () => showWorkspaceSection('queue'));
 $('builderNav').addEventListener('click', () => showWorkspaceSection('builder'));
@@ -1254,7 +1316,7 @@ const startRealtime = async () => {
 };
 
 const renderDocuments = async () => {
-  if (!['owner','secretary','assistant_secretary','signer','viewer','warden'].includes(state.user?.role)) return [];
+  if (!can('documents.status')) return [];
   try {
     const { documents } = await apiFetch('/api/documents');
     $('metricAll').textContent = documents.length;
@@ -1296,8 +1358,8 @@ const renderDocuments = async () => {
       openButton.className = 'text-button';
       openButton.textContent = 'View PDF';
       openButton.addEventListener('click', () => openPdf(doc.id, doc.original_name));
-      actions.appendChild(openButton);
-      if (doc.needsSignature && !['completed', 'rescinded'].includes(doc.status)) {
+      if (state.user?.role === 'owner' || (can('documents.sign') && ['secretary','assistant_secretary','signer'].includes(state.user?.role))) actions.appendChild(openButton);
+      if (can('documents.sign') && doc.needsSignature && !['completed', 'rescinded'].includes(doc.status)) {
         const signButton = window.document.createElement('button');
         signButton.className = 'primary compact';
         signButton.textContent = 'Review and sign';
@@ -1406,7 +1468,7 @@ const renderDocuments = async () => {
         });
         actions.appendChild(rescindButton);
       }
-      if (['viewer', 'warden'].includes(state.user?.role)) actions.replaceChildren();
+      // Status access alone never supplies document or signature actions.
       list.appendChild(article);
     });
     return documents;
@@ -1478,6 +1540,8 @@ $('closePdf').addEventListener('click', () => {
 
 const renderOfficers = async () => {
   try {
+    const { renderAccessControls } = await import('/access-controls.js');
+    await renderAccessControls($('accessControls'), apiFetch);
     const { officers, pending = [] } = await apiFetch('/api/officers');
     const list = $('officerList');
     list.innerHTML = '';
@@ -1497,8 +1561,8 @@ const renderOfficers = async () => {
       seat('assistant_secretary', 'Adrian Reese'),
       seat('treasurer', 'Treasurer'),
       seat('assistant_treasurer', 'Assistant Treasurer'),
-      ...officers.filter((officer) => ['viewer','warden','member','treasury_preparer'].includes(officer.role)).map((o) => ({ ...o, state: 'active' })),
-      ...pending.filter((invite) => ['viewer','warden','member','treasury_preparer'].includes(invite.role)).map((i) => ({ ...i, state: 'pending' })),
+      ...officers.filter((officer) => ['viewer','warden','member','treasury_preparer','officer'].includes(officer.role)).map((o) => ({ ...o, state: 'active' })),
+      ...pending.filter((invite) => ['viewer','warden','member','treasury_preparer','officer'].includes(invite.role)).map((i) => ({ ...i, state: 'pending' })),
     ];
     entries.forEach((officer) => {
       const row = window.document.createElement('div');
@@ -2013,7 +2077,7 @@ const openSignatureSetup = (required = false) => {
   $('closeSignatureSetup').classList.toggle('hidden', required);
   $('signatureSetupTitle').textContent = required ? 'Create your signature to continue' : 'Change your saved signature';
   $('signatureSetupHelp').textContent = required
-    ? 'Choose how your signature should appear before opening the live document queue.'
+    ? 'Choose how your signature should appear when you sign a report or an assigned document.'
     : 'The new signature will be used on documents you sign after it is saved.';
   $('typedSignatureName').value = state.user?.name || '';
   $('signatureInitials').value = signatureInitialsFromName(state.user?.name || '');

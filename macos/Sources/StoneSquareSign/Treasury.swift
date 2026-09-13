@@ -19,6 +19,11 @@ struct TreasuryDraft: Codable, Equatable {
     var remarks: String; var unmappedLines: [String]; var sourceNames: [String]; var extractionNotes: [String]
 }
 struct TreasuryRecord: Codable, Identifiable { var id: String; var status: String; var revision: Int; var createdByUserId: Int; var preparerUserId: Int?; var uploadedBy: String; var createdBy: String; var preparerRole: String; var draft: TreasuryDraft }
+extension TreasuryRecord {
+    func canOpen(for user: User?) -> Bool {
+        user?.can("treasury.prepare") == true || (user?.can("treasury.view") == true && ["ready_for_distribution", "distributed"].contains(status))
+    }
+}
 struct TreasuryPayload: Decodable { var report: TreasuryRecord; var notificationWarnings: [String]? }
 struct TreasuryList: Decodable { var reports: [TreasuryRecord] }
 struct ReorganizedTreasuryPayload: Decodable { var draft: TreasuryDraft }
@@ -81,6 +86,14 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
         do{_=try await transport.request("/api/treasury/access/\(user.id)",method:"PUT",body:JSONSerialization.data(withJSONObject:["enabled":!user.uploadEnabled]));await loadAccess()}catch{message=error.localizedDescription}
     }
     func close() { previewTask?.cancel(); generation += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
+    func createBlank() async {
+        guard !busy else { return }; busy = true; defer { busy = false }
+        do {
+            let bytes = try await transport.request("/api/treasury/drafts", method: "POST")
+            let report = try JSONDecoder().decode(TreasuryPayload.self, from: bytes).report
+            open(report); await refresh(); message = "Blank report created. Enter the reporting details and amounts."
+        } catch { message = error.localizedDescription }
+    }
     func generate() async {
         guard !busy else { return }; busy = true; defer { busy = false }
         message = "Reading banking information. Scanned pages may take a minute."
@@ -158,7 +171,8 @@ struct TreasuryView: View {
     @State private var deleting: TreasuryRecord?; @State private var leave = false
     @State private var editorSection = 0
     @State private var confirmReorganize = false
-    var editable: Bool { guard let r = workspace.selected else { return false }; return r.status == "draft" && (r.preparerUserId == model.user?.id || model.user?.role == "owner") }
+    @State private var readonlyReport: TreasuryRecord?
+    var editable: Bool { guard model.user?.can("treasury.prepare") == true, let r = workspace.selected else { return false }; return r.status == "draft" && (r.preparerUserId == model.user?.id || model.user?.role == "owner") }
     func text(_ path: WritableKeyPath<TreasuryDraft,String>) -> Binding<String> { Binding(get:{workspace.draft?[keyPath:path] ?? ""},set:{workspace.draft?[keyPath:path]=$0}) }
     func flag(_ path: WritableKeyPath<TreasuryDraft,Bool>) -> Binding<Bool> { Binding(get:{workspace.draft?[keyPath:path] ?? false},set:{workspace.draft?[keyPath:path]=$0}) }
     var body: some View {
@@ -175,6 +189,7 @@ struct TreasuryView: View {
             if !workspace.message.isEmpty { Text(workspace.message).font(.callout).padding(14) }
         }.background(Color(nsColor:.windowBackgroundColor)).disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh(); await workspace.loadAccess() }
+        .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
         .onChange(of:workspace.draft) { old,new in if old != nil && new != nil { workspace.dirty = new != workspace.selected?.draft; workspace.preview() } }
         .alert("Delete this unsigned report?",isPresented:Binding(get:{deleting != nil},set:{if !$0 { deleting = nil }})) { Button("Delete",role:.destructive) { if let record = deleting { Task { await workspace.remove(record) } } }; Button("Cancel",role:.cancel) {} }
         .alert("Leave unsaved changes?",isPresented:$leave) { Button("Leave changes",role:.destructive) { workspace.close() }; Button("Keep editing",role:.cancel) {} }
@@ -184,7 +199,9 @@ struct TreasuryView: View {
         } message: { Text("This replaces your unsaved entries with a new draft from the original banking records. Review the result before saving.") }
     }
     var sourceView: some View {
-        Form { Section {
+        Form {
+            if model.user?.can("treasury.prepare") == true { Section { Button("Create blank report") { Task { await workspace.createBlank() } }.buttonStyle(.borderedProminent) } }
+            if model.user?.can("treasury.upload") == true { Section {
             GroupBox("Bank statements, screenshots or typed notes") { VStack(alignment:.leading,spacing:12) {
                 GenerationStatusView(status: workspace.generationStatus)
                 Button("Choose files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.files=panel.urls } }
@@ -194,15 +211,15 @@ struct TreasuryView: View {
                 TextEditor(text:$workspace.source).font(.body).frame(minHeight:160).border(Color.gray.opacity(0.25))
                 Picker("What would you like to do?",selection:$workspace.uploadIntent) {
                     Text("Save banking information for a report").tag("save")
-                    if ["owner","treasurer","assistant_treasurer","treasury_preparer","secretary","assistant_secretary"].contains(model.user?.role ?? "") {Text("I’m completing the report").tag("complete")}
+                    if model.user?.can("treasury.prepare") == true {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
                 Text(model.user?.role == "owner" ? "Save the information for later, or open the prefilled report and complete it yourself. Saving banking information for later does not use the generation allowance." : "Save the information for later, or open the prefilled report and complete it yourself.").font(.caption)
                 Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent)
-            }.padding(12) }
+            }.padding(12) } }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
                 ForEach(workspace.accessUsers.filter { !$0.canPrepare }) { user in HStack { Text(user.name); Spacer(); Button(user.uploadEnabled ? "Remove upload access" : "Allow bank record uploads") { Task { await workspace.setUploadAccess(user) } } } }
             } }
-            ForEach(workspace.records) { record in HStack { VStack(alignment:.leading) { Text(record.draft.periodEnd.isEmpty ? "Reporting date needs review" : record.draft.periodEnd).font(.headline);Text("\(record.preparerUserId == model.user?.id ? "Assigned to you" : record.createdBy.isEmpty ? "Available for a preparer" : record.createdBy) · Uploaded by \(record.uploadedBy) · \((record.status == "awaiting_preparer" ? "Banking information saved for a report" : record.status.replacingOccurrences(of:"_",with:" ")))").font(.caption) }; Spacer();Button("Review") { workspace.open(record) }; if ["draft","awaiting_preparer"].contains(record.status) && (model.user?.role == "owner" || record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id) { Button("Delete",role:.destructive) { deleting=record } } }.padding(14).background(.background,in:RoundedRectangle(cornerRadius:12)) }
+            ForEach(workspace.records) { record in HStack { VStack(alignment:.leading) { Text(record.draft.periodEnd.isEmpty ? "Reporting date needs review" : record.draft.periodEnd).font(.headline);Text("\(record.preparerUserId == model.user?.id ? "Assigned to you" : record.createdBy.isEmpty ? "Available for a preparer" : record.createdBy) · Uploaded by \(record.uploadedBy) · \((record.status == "awaiting_preparer" ? "Banking information saved for a report" : record.status.replacingOccurrences(of:"_",with:" ")))").font(.caption) }; Spacer();if record.canOpen(for: model.user) { Button("Review") { if model.user?.can("treasury.prepare") != true && ["ready_for_distribution", "distributed"].contains(record.status) { readonlyReport = record } else { workspace.open(record) } } }; if model.user?.can("treasury.prepare") == true && ["draft","awaiting_preparer"].contains(record.status) && (model.user?.role == "owner" || record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id) { Button("Delete",role:.destructive) { deleting=record } } }.padding(14).background(.background,in:RoundedRectangle(cornerRadius:12)) }
         } }.formStyle(.grouped)
     }
     var editor: some View {
@@ -256,7 +273,7 @@ struct TreasuryView: View {
             if record.status == "awaiting_preparer" {
                 Text("Banking information saved").font(.headline)
                 Text("These records are available for an authorized preparer. No one has been assigned automatically.").font(.callout)
-                if ["owner","treasurer","assistant_treasurer","treasury_preparer","secretary","assistant_secretary"].contains(model.user?.role ?? "") { Button("I’m completing this report") { workspace.selectedPreparer=model.user?.id ?? 0;Task {await workspace.assign()} }.buttonStyle(.borderedProminent) }
+                if model.user?.can("treasury.prepare") == true { Button("I’m completing this report") { workspace.selectedPreparer=model.user?.id ?? 0;Task {await workspace.assign()} }.buttonStyle(.borderedProminent) }
             } else {Text("Preparing officer: \(record.createdBy)").font(.headline)}
             if ["draft","awaiting_preparer"].contains(record.status) && (record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id || model.user?.role == "owner") {
                 DisclosureGroup(record.status == "awaiting_preparer" ? "Assign a preparing officer (optional)" : "Change preparing officer") { assignmentPicker }
@@ -316,7 +333,7 @@ struct TreasuryView: View {
         if editable { Button("Save corrections") { Task { _ = await workspace.save() } } }
         if let r=workspace.selected {
             if model.user?.role == "owner" && r.status == "draft" && r.preparerUserId != model.user?.id {Button("Prepare this report as WM"){workspace.selectedPreparer=model.user?.id ?? 0;Task{await workspace.assign()}}.buttonStyle(.borderedProminent)}
-            if r.status == "draft" && r.preparerUserId == model.user?.id { Button("Sign and finalize report") { Task { await workspace.action("preparer-attest") } }.buttonStyle(.borderedProminent) }
+            if model.user?.can("treasury.prepare") == true && r.status == "draft" && r.preparerUserId == model.user?.id { Button("Sign and finalize report") { Task { await workspace.action("preparer-attest") } }.buttonStyle(.borderedProminent) }
             if r.status == "ready_for_distribution" && ["owner","secretary"].contains(model.user?.role ?? "") { Button("Mark as distributed") { Task { await workspace.action("mark-distributed") } } }
         }
     } }
