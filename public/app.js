@@ -910,7 +910,7 @@ const proposalFields = () => ({
   locationName: $('propLocation').value.trim(),
   streetAddress: $('propStreet').value.trim(),
   cityState: $('propCityState').value.trim(),
-  requestDate: new Date().toISOString().slice(0, 10),
+  requestDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
   proposerNote: $('propNote').value.trim(),
 });
 

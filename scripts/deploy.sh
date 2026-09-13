@@ -27,7 +27,7 @@ WANT_VERSION=$(node -p "require('./package.json').version")
 echo "deploying server version $WANT_VERSION, client build $WANT_HASH"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$RENDER_DEPLOY_HOOK")
-if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+if [ "$code" != "200" ] && [ "$code" != "201" ] && [ "$code" != "202" ]; then
   echo "Render refused the deploy hook, HTTP $code. The hook may be stale; copy a fresh one."
   exit 1
 fi
