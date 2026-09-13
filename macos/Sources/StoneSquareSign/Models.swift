@@ -31,6 +31,7 @@ struct User: Codable, Identifiable, Equatable {
     var canReadDues: Bool { can("dues.view") }
     var canReadApprovals: Bool { ["owner", "secretary", "assistant_secretary", "viewer"].contains(role) && can("documents.status") }
     var canProposeDispensation: Bool { can("proposals.create") }
+    var showsPersonalProposals: Bool { role != "owner" && canProposeDispensation }
     var proposalWorkspaceTitle: String { role == "owner" ? "Warden Proposals" : "My Dispensation Proposals" }
     func canOpen(_ section: AppSection?) -> Bool {
         switch section {

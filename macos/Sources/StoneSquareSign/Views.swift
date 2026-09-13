@@ -231,7 +231,7 @@ struct WorkspaceView: View {
                     if model.user?.canReadDues == true {
                         Label("Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.dues)
                     }
-                    if model.user?.canProposeDispensation == true {
+                    if model.user?.showsPersonalProposals == true {
                         Label("My Dispensation Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                     }
                     if model.user?.canSign == true { Label("Signature Profile", systemImage: "signature").tag(AppSection.profile) }
