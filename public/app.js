@@ -67,7 +67,7 @@ document.addEventListener('pointerdown', event => {
 }, true);
 document.addEventListener('keydown', noteWebActivity, true);
 const webUpdateIsBusy = () => webUpdateRequests > 0 || Boolean(
-  state.editingMinutesId || state.signingDocumentId || treasuryWorkspace?.busy ||
+  state.editingMinutesId || state.signingDocumentId || treasuryWorkspace?.busy || buildingCalendarWorkspace?.requestBusy ||
   document.querySelector('.modal:not(.hidden)') ||
   [...document.querySelectorAll('button[disabled]')].some(button => button.getClientRects().length)
 );
@@ -191,7 +191,7 @@ const applyWorkspacePermissions = user => {
   $('minutesPageDescription').textContent = can('minutes.prepare', user) ? 'Prepare and review meeting minutes. The preparing officer attests, and the Worshipful Master reviews and authorizes distribution.' : 'Read finalized meeting minutes.';
   $('minutesMenuDescription').textContent = can('minutes.prepare', user) ? 'Prepare, review and attest to meeting records' : 'Read finalized meeting minutes';
   $('treasuryMenuDescription').textContent = can('treasury.prepare', user) ? (can('treasury.upload', user) ? 'Upload records, prepare and review reports' : 'Prepare reports and review assigned banking records') : (can('treasury.upload', user) ? 'Provide banking records and read finalized reports' : 'Read finalized treasurer reports');
-  document.querySelectorAll('.building-only').forEach(element => element.classList.toggle('hidden', !can('building.view', user)));
+  document.querySelectorAll('.building-only').forEach(element => element.classList.toggle('hidden', !(can('building.view', user) || can('building.request', user))));
   document.querySelectorAll('.calendar-only').forEach(element => element.classList.toggle('hidden', !can('calendar.view', user)));
   const maySeeTreasury = can('treasury.view', user) || can('treasury.prepare', user) || can('treasury.upload', user);
   document.querySelectorAll('.treasury-only').forEach(el => el.classList.toggle('hidden', !maySeeTreasury));
@@ -351,7 +351,7 @@ const loadSubmissionProfiles = async () => {
 };
 
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
-  const sectionPermissions = { building: ['building.view'], calendar: ['calendar.view'], reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.view'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
+  const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.view'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
   if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
   $('buildingSection').classList.toggle('hidden', section !== 'building');
   $('calendarSection').classList.toggle('hidden', section !== 'calendar');

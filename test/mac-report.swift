@@ -400,5 +400,45 @@ final class GenerationFixture: URLProtocol {
         GenerationFixture.beforeReply = nil
         precondition(AccessPermissions.normalized(["building.decide", "calendar.manage"]) == ["building.decide", "building.view", "calendar.manage", "calendar.view"])
         print("PASS: calendar uses Eastern month ranges, inclusive dates, unknown times, visible source warnings and manager-only versioned edits")
+        var requester = warden; requester.permissions = ["building.request"]
+        reportApp.user = requester
+        precondition(requester.canOpen(.building) && !requester.can("building.view"))
+        let beforeQueue = GenerationFixture.requests.count
+        await building.load(using: reportApp)
+        precondition(GenerationFixture.requests.count == beforeQueue && building.requests.isEmpty)
+        let newRequest = NewBuildingRequestWorkspace()
+        newRequest.draft.bookings = [BuildingBooking(date: "2026-11-01", start: "13:00", end: "15:00")]
+        newRequest.draft.spaces = ["Lodge building", "Back yard"]
+        newRequest.draft.phone = "555-0100"; newRequest.draft.details = "Synthetic Lodge event"
+        precondition(newRequest.draft.validationMessage == nil && !newRequest.canSubmit)
+        GenerationFixture.response = Data(#"{"busy":[{"date":"2026-11-01","start":"14:00","end":"16:00","label":"Pending hold","status":"pending","allDay":false}]}"#.utf8)
+        await newRequest.checkAvailability(using: reportApp)
+        precondition(newRequest.conflicts.count == 1 && !newRequest.canSubmit)
+        newRequest.draft.bookings[0].end = "14:00"
+        precondition(!newRequest.availabilityCurrent)
+        await newRequest.checkAvailability(using: reportApp)
+        precondition(newRequest.conflicts.isEmpty && newRequest.canSubmit)
+        GenerationFixture.response = Data(#"{"busy":[{"date":"2026-11-01","label":"Unknown time","allDay":false}]}"#.utf8)
+        await newRequest.checkAvailability(using: reportApp)
+        precondition(!newRequest.availabilityWarning.isEmpty && !newRequest.canSubmit)
+        newRequest.warningAcknowledged = true
+        precondition(newRequest.canSubmit)
+        GenerationFixture.statusCode = 503; GenerationFixture.response = Data(#"{"error":"Synthetic unavailable"}"#.utf8)
+        let originalID = newRequest.draft.submissionId
+        let failedSubmit = await newRequest.submit(using: reportApp)
+        precondition(!failedSubmit && newRequest.retryPending && newRequest.draft.submissionId == originalID)
+        let firstSubmit = GenerationFixture.requests.last!.body
+        let submittedFields = try JSONSerialization.jsonObject(with: firstSubmit) as! [String: Any]
+        precondition(submittedFields["purpose"] as? String == "Synthetic Lodge event" && submittedFields["acknowledgeAvailabilityWarning"] as? Bool == true)
+        precondition(submittedFields["name"] == nil && submittedFields["email"] == nil && submittedFields["organization"] == nil)
+        let beforeRetryCheck = GenerationFixture.requests.count
+        await newRequest.checkAvailability(using: reportApp)
+        precondition(GenerationFixture.requests.count == beforeRetryCheck)
+        GenerationFixture.statusCode = 200; GenerationFixture.response = Data(#"{"ok":true,"ref":"synthetic-ref","refs":["synthetic-ref"],"wmNotified":false}"#.utf8)
+        let recovered = await newRequest.submit(using: reportApp)
+        precondition(recovered && GenerationFixture.requests.last!.body == firstSubmit && newRequest.receipt?.references == ["synthetic-ref"] && !newRequest.hasUnsubmittedChanges)
+        newRequest.startNew()
+        precondition(newRequest.draft.submissionId != originalID && !newRequest.retryPending)
+        print("PASS: native Lodge requests isolate queue access, block pending overlaps, require availability review and acknowledgment, and recover receipts with an identical frozen submission")
     }
 }

@@ -1,12 +1,12 @@
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
 export const CAPABILITIES = [
- ['building.view','View building requests'],['building.decide','Approve or decline building requests'],['calendar.view','View Lodge Calendar'],['calendar.manage','Manage Lodge Calendar events'],
+ ['building.request','Request use of the Lodge building'],['building.view','View building requests'],['building.decide','Approve or decline building requests'],['calendar.view','View Lodge Calendar'],['calendar.manage','Manage Lodge Calendar events'],
  ['reports.create','Prepare reports'],['minutes.view','View finished meeting minutes'],['minutes.prepare','Prepare and edit meeting minutes'],
  ['treasury.view','View finished treasurer reports'],['treasury.prepare','Prepare and edit treasurer reports'],['treasury.upload','Provide bank records and screenshots'],
  ['dues.view','View dues'],['documents.status','View dispensation statuses'],['documents.sign','Sign assigned dispensations'],['candidates.view','View Candidate Tracker'],
  ['proposals.create','Submit and track personal dispensation proposals'],['signature.manage','Manage own signature'],['settings.manage','Own service settings']
 ].map(([id,label])=>({id,label}));
-const personal=['signature.manage','settings.manage'];
+const personal=['building.request','signature.manage','settings.manage'];
 const reader=['calendar.view','reports.create','minutes.view','treasury.view',...personal];
 export function normalizePermissions(values){
  if(!Array.isArray(values)||values.some(v=>!CAPABILITIES.some(c=>c.id===v)))throw Object.assign(new Error('Choose valid officer permissions.'),{statusCode:400});

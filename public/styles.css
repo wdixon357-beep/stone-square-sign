@@ -557,3 +557,11 @@ a { overflow-wrap: anywhere; }
   .calendar-day:not(:has(.calendar-event)) { display: none; }
 }
 #calendarSection .content-head .primary:not([hidden]) { display: inline-flex; }
+
+.building-request-form { margin: 18px 0; }
+.building-booking-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 10px; align-items: end; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.building-request-form fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+#buildingRequestAvailability p { overflow-wrap: anywhere; }
+@media (max-width: 650px) { .building-booking-row { grid-template-columns: 1fr 1fr; } .building-booking-row > label:first-child { grid-column: 1 / -1; } }
+.building-request-form > label { display: block; margin-top: 16px; }
+.building-request-form > button { display: block; margin: 12px 0; }

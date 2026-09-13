@@ -981,7 +981,7 @@ struct LandingDashboardView: View {
             NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
             List {
                 Section("Reports and records") {
-                    if model.user?.canOpen(.building) == true { homeRow("Building Requests", "View requests and recorded decisions", "building.2", action: openBuilding) }
+                    if model.user?.canOpen(.building) == true { homeRow("Building Requests", model.user?.can("building.view") == true ? "Submit building requests and view recorded decisions" : "Submit a request to use the Lodge building", "building.2", action: openBuilding) }
                     if model.user?.canOpen(.lodgeCalendar) == true { homeRow("Lodge Calendar", "View scheduled events", "calendar", action: openCalendar) }
                     if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports) }
                     if model.user?.can("documents.status") == true {

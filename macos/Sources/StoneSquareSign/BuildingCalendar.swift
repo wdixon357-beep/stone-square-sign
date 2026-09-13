@@ -32,6 +32,7 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
     @Published var busy = false
     @Published var message = ""
     @discardableResult func load(using model: AppModel) async -> Bool {
+        guard model.user?.can("building.view") == true else { requests = []; canDecide = false; return false }
         busy = true; defer { busy = false }
         do {
             let result: BuildingRequestsResponse = try await model.request("/api/building/requests")
@@ -60,6 +61,8 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
 struct BuildingRequestsView: View {
     @EnvironmentObject private var model: AppModel
     @StateObject private var workspace = BuildingRequestsWorkspace()
+    @StateObject private var newRequest = NewBuildingRequestWorkspace()
+    @State private var showingNewRequest = false
     @State private var selectedID: String?
     @State private var filter = "all"
     @State private var note = ""
@@ -69,9 +72,10 @@ struct BuildingRequestsView: View {
     var body: some View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Building Requests", subtitle: "Requests to use the Lodge building", symbol: "building.2") {
-                Button("Refresh") { Task { await workspace.load(using: model) } }.disabled(workspace.busy)
+                if model.user?.can("building.view") == true { Button("Refresh") { Task { await workspace.load(using: model) } }.disabled(workspace.busy) }
+                if model.user?.can("building.request") == true { Button("New Building Request") { showingNewRequest = true }.buttonStyle(.borderedProminent) }
             }
-            HSplitView {
+            if model.user?.can("building.view") == true { HSplitView {
                 VStack {
                     Picker("Status", selection: $filter) { Text("All").tag("all"); Text("Pending").tag("pending"); Text("Approved").tag("approved"); Text("Declined").tag("denied") }.padding(12)
                     List(visible, selection: $selectedID) { request in
@@ -103,12 +107,14 @@ struct BuildingRequestsView: View {
                     }.formStyle(.grouped)
                 } else { ContentUnavailableView(visible.isEmpty ? "No requests available" : "Choose a request", systemImage: "building.2").frame(maxWidth: .infinity, maxHeight: .infinity) }
             }.disabled(workspace.busy)
+            } else { ContentUnavailableView("Request building use", systemImage: "building.2", description: Text("Use New Building Request to choose dates and spaces, check availability, and submit your request for review.")).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if workspace.busy { ProgressView().padding(8) }
             if !workspace.message.isEmpty { Text(workspace.message).font(.callout).padding(12) }
         }
         .task { await workspace.load(using: model) }
+        .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
         .onChange(of: selectedID) { _, _ in note = "" }
-        .updateDraftGuard(active: !note.isEmpty || workspace.busy, reason: "Finish your building request note before updating.")
+        .updateDraftGuard(active: !note.isEmpty || workspace.busy || newRequest.hasUnsubmittedChanges || newRequest.busy, reason: "Finish your building request draft before updating.")
         .alert(decision == "approved" ? "Approve this building request?" : "Decline this building request?", isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } })) {
             Button("Confirm decision") {
                 if let request = selected, let decision { Task { if await workspace.decide(request, decision: decision, note: note, using: model) { note = "" } } }
@@ -320,5 +326,191 @@ private struct LodgeCalendarEditor: View {
         }.frame(width: 650, height: 620)
         .interactiveDismissDisabled(workspace.busy)
         .updateDraftGuard(reason: "Finish or cancel your calendar event changes before updating.")
+    }
+}
+
+struct BuildingBooking: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var date = LodgeCalendarDates.key(Date())
+    var start = ""
+    var end = ""
+    enum CodingKeys: String, CodingKey { case date, start, end }
+    var valid: Bool { LodgeCalendarDates.valid(date) && Self.validTime(start) && Self.validTime(end) && end > start }
+    static func validTime(_ value: String) -> Bool { value.range(of: #"^([01][0-9]|2[0-3]):[0-5][0-9]$"#, options: .regularExpression) != nil }
+}
+struct NewBuildingRequestDraft: Encodable, Equatable {
+    static let availableSpaces = ["Lodge building", "Back yard", "Front yard"]
+    var bookings = [BuildingBooking()]
+    var spaces: [String] = []
+    var phone = ""
+    var details = ""
+    var submissionId = UUID().uuidString
+    enum CodingKeys: String, CodingKey { case bookings, spaces, phone, details = "purpose", submissionId }
+    var validationMessage: String? {
+        guard (1...12).contains(bookings.count), bookings.allSatisfy(\.valid) else { return "Enter 1 to 12 dates with valid start and end times. Use HH:MM in Eastern Time." }
+        guard Set(bookings.map { $0.date }).count == bookings.count else { return "List each date only once." }
+        guard bookings.allSatisfy({ $0.date >= LodgeCalendarDates.key(Date()) }) else { return "Choose today or an upcoming date." }
+        guard phone.count <= 40, details.count <= 1000 else { return "Use no more than 40 characters for the phone number and 1,000 for event details." }
+        guard !spaces.isEmpty, spaces.allSatisfy(Self.availableSpaces.contains) else { return "Choose at least one space." }
+        guard !phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Enter a contact phone number." }
+        guard !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Describe the event and how the space will be used." }
+        return nil
+    }
+    var availabilityKey: Data? {
+        struct Schedule: Encodable { let bookings: [BuildingBooking]; let spaces: [String] }
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        return try? encoder.encode(Schedule(bookings: bookings, spaces: spaces.sorted()))
+    }
+}
+struct BuildingBusyEntry: Decodable, Identifiable {
+    var id: String { [date, start ?? "", end ?? "", label, status ?? ""].joined(separator: "|") }
+    let date: String; let start: String?; let end: String?; let label: String; let status: String?; let allDay: Bool?
+    var active: Bool { !["denied", "declined", "cancelled", "canceled"].contains(status?.lowercased() ?? "") }
+    var knownTimes: Bool { allDay == true || (BuildingBooking.validTime(start ?? "") && BuildingBooking.validTime(end ?? "") && (end ?? "") > (start ?? "")) }
+    func overlaps(_ booking: BuildingBooking) -> Bool {
+        guard active, date == booking.date else { return false }
+        if allDay == true { return true }
+        guard knownTimes, let start, let end else { return false }
+        return start < booking.end && end > booking.start
+    }
+}
+struct BuildingAvailabilityResponse: Decodable { let busy: [BuildingBusyEntry]; let warning: String? }
+struct BuildingSubmissionReceipt: Decodable {
+    let ok: Bool; let ref: String?; let refs: [String]?; let wmNotified: Bool
+    var references: [String] { if let refs, !refs.isEmpty { return refs }; return ref.map { [$0] } ?? [] }
+}
+
+@MainActor final class NewBuildingRequestWorkspace: ObservableObject {
+    @Published var draft = NewBuildingRequestDraft()
+    @Published var busy = false
+    @Published var message = ""
+    @Published var availability: [BuildingBusyEntry] = []
+    @Published var availabilityWarning = ""
+    @Published var warningAcknowledged = false
+    @Published var receipt: BuildingSubmissionReceipt?
+    @Published private(set) var retryPending = false
+    private var pendingBody: Data?
+    private var baseline: NewBuildingRequestDraft
+    private var checkedKey: Data?
+    init() { let initial = NewBuildingRequestDraft(); draft = initial; baseline = initial }
+    var hasUnsubmittedChanges: Bool { receipt == nil && draft != baseline }
+    var availabilityCurrent: Bool { checkedKey != nil && checkedKey == draft.availabilityKey }
+    var conflicts: [BuildingBusyEntry] { availability.filter { entry in draft.bookings.contains { entry.overlaps($0) } } }
+    var canSubmit: Bool { !busy && receipt == nil && (retryPending || (draft.validationMessage == nil && availabilityCurrent && conflicts.isEmpty && (availabilityWarning.isEmpty || warningAcknowledged))) }
+    func startNew() { pendingBody = nil; retryPending = false; draft = NewBuildingRequestDraft(); baseline = draft; checkedKey = nil; receipt = nil; message = ""; availability = []; availabilityWarning = ""; warningAcknowledged = false }
+    func checkAvailability(using model: AppModel) async {
+        guard !busy, !retryPending, model.user?.can("building.request") == true, !draft.bookings.isEmpty, draft.bookings.allSatisfy(\.valid), let key = draft.availabilityKey else { return }
+        let dates = draft.bookings.map(\.date).sorted()
+        busy = true; defer { busy = false }
+        warningAcknowledged = false; availabilityWarning = ""; availability = []; checkedKey = nil; message = ""
+        do {
+            let result: BuildingAvailabilityResponse = try await model.request("/api/building/availability?from=\(dates.first!)&to=\(dates.last!)")
+            guard key == draft.availabilityKey else { return }
+            availability = result.busy
+            var warnings = [result.warning ?? ""].filter { !$0.isEmpty }
+            if result.busy.contains(where: { $0.active && dates.contains($0.date) && !$0.knownTimes }) { warnings.append("Some calendar entries have incomplete times. Availability needs further review.") }
+            availabilityWarning = warnings.joined(separator: " "); checkedKey = key
+        } catch {
+            guard key == draft.availabilityKey else { return }
+            availabilityWarning = "Availability could not be confirmed. \(error.localizedDescription)"; checkedKey = key
+        }
+    }
+    func submit(using model: AppModel) async -> Bool {
+        guard canSubmit, model.user?.can("building.request") == true else { return false }
+        busy = true; defer { busy = false }
+        do {
+            if pendingBody == nil {
+                var payload = try JSONSerialization.jsonObject(with: JSONEncoder().encode(draft)) as! [String: Any]
+                payload["acknowledgeAvailabilityWarning"] = !availabilityWarning.isEmpty && warningAcknowledged
+                pendingBody = try JSONSerialization.data(withJSONObject: payload)
+            }
+            let result: BuildingSubmissionReceipt = try await model.request("/api/building/requests", method: "POST", body: pendingBody)
+            guard result.ok, !result.references.isEmpty else { throw ClientError.invalidResponse }
+            retryPending = false; pendingBody = nil; receipt = result; message = "Request submitted for review. This is not an approved reservation."
+            return true
+        } catch ClientError.rejected(let detail) { pendingBody = nil; retryPending = false; checkedKey = nil; message = detail; return false }
+        catch ClientError.conflict(let detail) {
+            if detail.contains("The building calendar shows") {
+                pendingBody = nil; retryPending = false; checkedKey = nil
+            } else { retryPending = pendingBody != nil }
+            message = detail; return false
+        }
+        catch { retryPending = pendingBody != nil; message = "Submission could not be confirmed. Retry this same request to recover its receipt. " + error.localizedDescription; return false }
+    }
+}
+
+private struct NewBuildingRequestView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var workspace: NewBuildingRequestWorkspace
+    @State private var confirmingSubmit = false
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("New Building Request").font(.title2.weight(.semibold)).padding(20)
+            if let receipt = workspace.receipt {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label("Submitted for review", systemImage: "checkmark.circle").font(.title3)
+                    Text("Your request is pending. Building use has not been approved.")
+                    ForEach(receipt.references, id: \.self) { Text("Reference: \($0)").textSelection(.enabled) }
+                    Text(receipt.wmNotified ? "The Worshipful Master was notified." : "Notification to the Worshipful Master has not been confirmed.").font(.callout)
+                    HStack { Button("Start another request") { workspace.startNew() }; Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent) }
+                }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                Form {
+                    Section("Lodge request") {
+                        LabeledContent("Organization", value: "Stone Square Lodge No. 22")
+                        LabeledContent("Requested by", value: model.user?.name ?? "")
+                        TextField("Contact phone", text: $workspace.draft.phone)
+                        TextField("Event details", text: $workspace.draft.details, axis: .vertical).lineLimit(4...8)
+                    }
+                    Section("Requested dates and times") {
+                        ForEach($workspace.draft.bookings) { $booking in
+                            HStack {
+                                TextField("YYYY-MM-DD", text: $booking.date).accessibilityLabel("Requested date")
+                                TextField("Start HH:MM", text: $booking.start).accessibilityLabel("Start time")
+                                TextField("End HH:MM", text: $booking.end).accessibilityLabel("End time")
+                                Button { workspace.draft.bookings.removeAll { $0.id == booking.id } } label: { Image(systemName: "minus.circle") }.disabled(workspace.draft.bookings.count == 1).accessibilityLabel("Remove requested date")
+                            }
+                        }
+                        Button("Add date") { workspace.draft.bookings.append(BuildingBooking()) }.disabled(workspace.draft.bookings.count >= 12)
+                        Text("Include setup and cleanup time. Times use the 24-hour clock in Eastern Time.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section("Spaces") {
+                        ForEach(NewBuildingRequestDraft.availableSpaces, id: \.self) { space in
+                            Toggle(space, isOn: Binding(get: { workspace.draft.spaces.contains(space) }, set: { selected in
+                                if selected { workspace.draft.spaces.append(space) } else { workspace.draft.spaces.removeAll { $0 == space } }
+                            })).toggleStyle(.checkbox)
+                        }
+                    }
+                    Section("Availability review") {
+                        Button("Check availability") { Task { await workspace.checkAvailability(using: model) } }.disabled(!workspace.draft.bookings.allSatisfy(\.valid))
+                        if workspace.availabilityCurrent {
+                            if workspace.conflicts.isEmpty && workspace.availabilityWarning.isEmpty { Text("No known overlapping bookings were found. The request still requires approval.").font(.callout) }
+                            else if !workspace.conflicts.isEmpty {
+                                Text("Choose another date or time. These bookings overlap your request:").foregroundStyle(.red)
+                                ForEach(Array(workspace.conflicts.enumerated()), id: \.offset) { _, entry in Text("\(entry.date) · \(entry.label) · \(entry.allDay == true ? "All day" : [entry.start ?? "", entry.end ?? ""].joined(separator: " to "))") }
+                            }
+                            if !workspace.availabilityWarning.isEmpty {
+                                Text(workspace.availabilityWarning).foregroundStyle(.orange)
+                                Toggle("I understand availability is incomplete and needs further review.", isOn: $workspace.warningAcknowledged).toggleStyle(.checkbox)
+                            }
+                        } else { Text("Check availability after choosing your dates, times and spaces.").font(.caption).foregroundStyle(.secondary) }
+                    }
+                    if let validation = workspace.draft.validationMessage { Text(validation).font(.caption).foregroundStyle(.secondary) }
+                    if !workspace.message.isEmpty { Text(workspace.message).foregroundStyle(.red) }
+                }.formStyle(.grouped).disabled(workspace.busy || workspace.retryPending)
+                HStack {
+                    Button("Close") { dismiss() }.disabled(workspace.busy)
+                    Spacer()
+                    if workspace.busy { ProgressView().controlSize(.small) }
+                    Button(workspace.retryPending ? "Retry same request" : "Submit request") { confirmingSubmit = true }.buttonStyle(.borderedProminent).disabled(!workspace.canSubmit)
+                }.padding(18)
+            }
+        }.frame(width: 790, height: 760)
+        .interactiveDismissDisabled(workspace.busy)
+        .alert("Submit this building request?", isPresented: $confirmingSubmit) {
+            Button("Submit request") { Task { _ = await workspace.submit(using: model) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text(workspace.availabilityWarning.isEmpty ? "This sends your requested dates and details for review and sends the request notifications. It does not approve building use." : "Availability could not be fully confirmed. You have acknowledged that further review is needed. This sends your request and its notifications; it does not approve building use.") }
     }
 }

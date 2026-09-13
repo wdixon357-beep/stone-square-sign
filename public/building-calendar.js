@@ -5,23 +5,109 @@ export const monthBounds = date => {
 };
 export const eventOccurs = (event, date) => event.startDate <= date && (event.endDate || event.startDate) >= date;
 const eventTime = event => event.allDay ? 'All day' : event.startTime ? `${event.startTime}${event.endTime ? ' to '+event.endTime : ''}` : 'Time not provided';
+export const BUILDING_SPACES = ['Lodge building','Back yard','Front yard'];
+export function validateBuildingRequest(request){
+  if(!request.bookings?.length||request.bookings.length>12)return 'Choose between one and twelve dates.';
+  if(!request.spaces?.length||request.spaces.some(space=>!BUILDING_SPACES.includes(space)))return 'Select at least one part of the property.';
+  if(!String(request.purpose||'').trim())return 'Describe the Lodge event.';
+  const seen=new Set();
+  for(const booking of request.bookings){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(booking.date)||Number.isNaN(Date.parse(booking.date+'T12:00:00Z'))||new Date(booking.date+'T12:00:00Z').toISOString().slice(0,10)!==booking.date)return 'Enter a valid date for every booking.';
+    if(seen.has(booking.date))return 'Use one booking row per date.';seen.add(booking.date);
+    if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(booking.start)||!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(booking.end)||booking.end<=booking.start)return 'Each date needs a start and later end time. Times are Eastern.';
+  }
+  return '';
+}
+export const buildingOverlaps=(bookings,busy)=>bookings.flatMap(booking=>busy.filter(block=>block.date===booking.date&&block.status!=='denied'&&(block.allDay||(block.start&&block.end&&booking.start<block.end&&booking.end>block.start))).map(block=>({...block,requestedDate:booking.date})));
 export class BuildingCalendarWorkspace {
   constructor({api,user}) {this.api=api;this.user=user;this.month=new Date();this.calendarMode='month';this.buildingSequence=0;this.calendarSequence=0;this.buildingRoot=document.getElementById('buildingSection');this.calendarRoot=document.getElementById('calendarSection');this.bind();}
   can(key){return this.user()?.role==='owner'||Boolean(this.user()?.permissions?.includes(key));}
   bind(){
     this.calendarRoot.addEventListener('input', event=>{if(event.target.closest('#calendarEventForm'))this.calendarDirty=true;});
-    this.buildingRoot.addEventListener('click',event=>{const button=event.target.closest('[data-building]');if(button)this.decision(button);});
+    this.buildingRoot.addEventListener('click',event=>{const button=event.target.closest('[data-building]');if(button){if(button.dataset.building.startsWith('request-'))void this.requestAction(button);else void this.decision(button);}});
+    this.buildingRoot.addEventListener('input',event=>{if(event.target.closest('#buildingRequestForm')){this.availabilityKey=null;}});
+    this.buildingRoot.addEventListener('submit',event=>{if(event.target.id==='buildingRequestForm'){event.preventDefault();void this.submitRequest(event.target);}});
     this.calendarRoot.addEventListener('click',event=>{const button=event.target.closest('[data-calendar]');if(button)this.calendarAction(button);});
     this.calendarRoot.addEventListener('submit',event=>{if(event.target.id==='calendarEventForm'){event.preventDefault();void this.saveEvent(event.target);}});
   }
   message(root,text){const element=root.querySelector('[data-message]');if(element)element.textContent=text;}
   async building(){
-    if(!this.can('building.view'))return;
+    if(!this.can('building.view')&&!this.can('building.request'))return;
+    if(this.buildingUserId!==this.user()?.id){this.requestFormOpen=false;this.requestSubmissionId=null;this.pendingRequestPayload=null;this.buildingUserId=this.user()?.id;}
     const sequence=++this.buildingSequence;
-    this.buildingRoot.innerHTML='<div class="content-head"><div><h1>Building Requests</h1><p>Requests submitted through the existing building portal.</p></div><button class="secondary" data-building="refresh">Refresh</button></div><p data-message role="status"></p><div class="building-requests"></div>';
+    if(!this.requestFormOpen)this.buildingRoot.innerHTML='<div class="content-head"><div><h1>Building Requests</h1><p>Requests submitted through the existing building portal.</p></div><button class="secondary" data-building="refresh">Refresh</button></div><p data-message role="status"></p><div id="buildingRequestComposer"></div><div class="building-requests"></div>';
+    if(this.can('building.request')&&!this.requestFormOpen){const button=document.createElement('button');button.className='primary';button.type='button';button.dataset.building='request-new';button.textContent='New Building Request';this.buildingRoot.querySelector('#buildingRequestComposer').append(button);}
+    if(!this.can('building.view')){this.buildingRoot.querySelector('.building-requests').replaceChildren();if(!this.requestFormOpen)this.newRequest();return;}
     try{const result=await this.api('/api/building/requests');if(sequence!==this.buildingSequence)return;this.requests=result.requests;this.mayDecide=result.canDecide;
       this.buildingRoot.querySelector('.building-requests').innerHTML=this.requests.length?this.requests.map(request=>`<article class="panel building-request"><div class="content-head"><div><h2>${escape(request.organization)}</h2><p>${escape(request.date)} · ${escape(request.start||'Time not provided')}${request.end?' to '+escape(request.end):''}</p></div><span class="status">${escape(request.status)}</span></div><p>${escape(request.spaces?.join(', '))}</p><p>${escape(request.description)}</p><p>${escape(request.contactName)}${request.contact?' · '+escape(request.contact):''}</p><p>Reference: ${escape(request.id)}</p>${request.note?`<p>Decision note: ${escape(request.note)}</p>`:''}${request.decidedBy?`<p>Recorded by ${escape(request.decidedBy)}${request.decidedAt?' · '+escape(request.decidedAt):''}</p>`:''}${request.status!=='pending'?`<p>${request.requesterNotified?'Requester notification recorded.':'Requester notification has not been confirmed.'}</p>`:''}${this.can('building.decide')&&result.canDecide?`<div data-building-controls><label for="building-note-${escape(request.id)}">Note to the requester</label><textarea id="building-note-${escape(request.id)}" maxlength="2000">${escape(request.note||'')}</textarea><p class="helper">Approving or declining uses the existing portal and sends its decision notifications to the requester and officers.</p><div class="row-buttons"><button class="primary" data-building="approved" data-id="${escape(request.id)}">Approve</button><button class="secondary" data-building="denied" data-id="${escape(request.id)}">Decline</button></div></div>`:''}</article>`).join(''):'<p>No building requests.</p>';
     }catch(error){this.message(this.buildingRoot,error.message||'Building requests could not load.');}
+  }
+  newRequest(){
+    if(!this.can('building.request')||this.requestBusy)return;
+    if(this.requestFormOpen)return;
+    this.requestFormOpen=true;this.pendingRequestPayload=null;this.requestSubmissionId=crypto.randomUUID();this.availabilityKey=null;
+    const account=this.user();
+    this.buildingRoot.querySelector('#buildingRequestComposer').innerHTML=`<form id="buildingRequestForm" class="panel building-request-form"><h2>New Building Request</h2><p>This request is for Stone Square Lodge No. 22 use, submitted under ${escape(account.name)}${account.email?' ('+escape(account.email)+')':''}. Private-party rentals use the public building request process.</p><fieldset><legend>Property requested</legend>${BUILDING_SPACES.map((space,index)=>`<label class="calendar-checkbox"><input type="checkbox" name="space" value="${space}" ${index===0?'checked':''}> ${space}</label>`).join('')}</fieldset><h3>Dates and times</h3><p class="helper">Times are Eastern. Add one row per date, up to twelve dates.</p><div id="buildingBookingRows"></div><button class="secondary" type="button" data-building="request-add">Add another date</button><label>Event details<textarea name="purpose" required maxlength="1000"></textarea></label><label>Phone (optional)<input name="phone" type="tel" maxlength="40" autocomplete="tel"></label><button class="secondary" type="button" data-building="request-check">Review availability</button><div id="buildingRequestAvailability" role="status"></div><p class="helper">Submitting sends the request through the existing building portal and its notifications. It does not reserve the property. Wait for written Lodge approval before making arrangements that depend on the space.</p><div class="row-buttons"><button class="primary" type="submit">Submit building request</button><button class="secondary" type="button" data-building="request-cancel">Cancel</button></div><p id="buildingRequestMessage" role="status"></p></form>`;
+    this.addBookingRow();
+  }
+  addBookingRow(){
+    const rows=this.buildingRoot.querySelector('#buildingBookingRows');if(rows.children.length>=12)return;
+    const row=document.createElement('div');row.className='building-booking-row';row.innerHTML='<label>Date<input type="date" data-booking="date" required></label><label>Start (Eastern)<input type="time" data-booking="start" required></label><label>End (Eastern)<input type="time" data-booking="end" required></label><button type="button" class="secondary" data-building="request-remove" aria-label="Remove this date">Remove</button>';rows.append(row);this.availabilityKey=null;
+  }
+  collectRequest(form){return{bookings:[...form.querySelectorAll('.building-booking-row')].map(row=>Object.fromEntries([...row.querySelectorAll('[data-booking]')].map(input=>[input.dataset.booking,input.value]))),spaces:[...form.querySelectorAll('[name="space"]:checked')].map(input=>input.value),phone:form.querySelector('[name="phone"]').value.trim(),purpose:form.querySelector('[name="purpose"]').value.trim(),submissionId:this.requestSubmissionId};}
+  async requestAction(button){
+    if(this.requestBusy||!this.can('building.request'))return;
+    if(this.pendingRequestPayload){this.buildingRoot.querySelector('#buildingRequestMessage').textContent='The previous submission has not been confirmed. Retry the original request before making changes.';return;}
+    const action=button.dataset.building;
+    if(action==='request-new')return this.newRequest();
+    if(action==='request-add')return this.addBookingRow();
+    if(action==='request-remove'){if(this.buildingRoot.querySelector('#buildingBookingRows').children.length>1){button.closest('.building-booking-row').remove();this.availabilityKey=null;}return;}
+    if(action==='request-cancel'){if(!window.confirm('Discard this unsent building request?'))return;this.requestFormOpen=false;this.requestSubmissionId=null;return this.building();}
+    if(action==='request-check')return this.checkRequestAvailability(this.buildingRoot.querySelector('#buildingRequestForm'));
+  }
+  async checkRequestAvailability(form){
+    const sequence=this.requestAvailabilitySequence=(this.requestAvailabilitySequence||0)+1;
+    const payload=this.collectRequest(form),message=form.querySelector('#buildingRequestMessage'),error=validateBuildingRequest(payload);if(error){message.textContent=error;return false;}
+    const key=JSON.stringify(payload.bookings),dates=payload.bookings.map(booking=>booking.date).sort();
+    const availability=form.querySelector('#buildingRequestAvailability');availability.textContent='Checking the existing building calendar…';
+    let busy=[],warning='';
+    try{const result=await this.api(`/api/building/availability?from=${dates[0]}&to=${dates.at(-1)}`);if(!Array.isArray(result.busy))throw Error();busy=result.busy;warning=result.warning||'';}
+    catch{warning='Building availability could not be confirmed. This request still requires written Lodge approval.';}
+    if(sequence!==this.requestAvailabilitySequence)return false;
+    if(busy.some(block=>payload.bookings.some(booking=>booking.date===block.date)&&block.status!=='denied'&&!block.allDay&&(!block.start||!block.end)))warning=[warning,'Some building entries have unconfirmed times. Availability is not confirmed.'].filter(Boolean).join(' ');
+    if(JSON.stringify(this.collectRequest(form).bookings)!==key){message.textContent='The requested dates changed. Review availability again.';return false;}
+    this.availabilityKey=key;this.availabilityWarning=warning;this.requestConflicts=buildingOverlaps(payload.bookings,busy);
+    availability.replaceChildren();
+    for(const booking of payload.bookings){const blocks=busy.filter(block=>block.date===booking.date&&block.status!=='denied');const item=document.createElement('p');item.textContent=booking.date+': '+(blocks.length?blocks.map(block=>`${block.label||'Building use'} (${block.status==='pending'?'pending hold':'booked'}, ${block.allDay?'all day':(block.start||'time not provided')+(block.end?' to '+block.end:'')})`).join('; '):'No entries returned for this date.');availability.append(item);}
+    if(warning){const item=document.createElement('p');item.className='calendar-warnings';item.textContent=warning;availability.append(item);}
+    message.textContent=this.requestConflicts.length?'A requested time overlaps a booking or pending hold. Choose another date or time and review availability again.':'Availability reviewed. Submission is a request, not approval.';
+    return this.requestConflicts.length===0;
+  }
+  async submitRequest(form){
+    if(this.requestBusy||!this.can('building.request'))return;
+    const message=form.querySelector('#buildingRequestMessage');let payload=this.collectRequest(form);const error=validateBuildingRequest(payload);if(error){message.textContent=error;return;}
+    const retry=Boolean(this.pendingRequestPayload);
+    if(retry){
+      const previous={...this.pendingRequestPayload};delete previous.acknowledgeAvailabilityWarning;
+      if(JSON.stringify(previous)!==JSON.stringify(payload)){message.textContent='The previous submission is unconfirmed. Restore its original entries before retrying; a changed request cannot reuse this identifier.';return;}
+      payload={...this.pendingRequestPayload};
+    }
+    this.requestBusy=true;const controls=[...form.querySelectorAll('input,textarea,button')].map(element=>({element,disabled:element.disabled}));controls.forEach(({element})=>element.disabled=true);
+    try{
+      if(!retry&&!await this.checkRequestAvailability(form))return;
+      const warning=this.availabilityWarning?`\n\nAvailability warning: ${this.availabilityWarning} By continuing, you acknowledge that availability is unconfirmed.`:'';
+      if(!window.confirm(retry?'Retry the original building request with the same identifier? This checks the earlier submission and does not approve or reserve the property.':`Submit this Lodge building request for ${payload.bookings.length} date${payload.bookings.length===1?'':'s'}? The portal will send request notifications. This is not approval or a confirmed reservation.${warning}`))return;
+      if(!retry)payload.acknowledgeAvailabilityWarning=Boolean(this.availabilityWarning);
+      this.pendingRequestPayload=structuredClone(payload);
+      const result=await this.api('/api/building/requests',{method:'POST',body:JSON.stringify(payload)});if(!result.ok)throw Error('The request could not be confirmed. Your entries remain here for retry.');
+      this.requestFormOpen=false;this.requestSubmissionId=null;this.pendingRequestPayload=null;
+      const refs=result.refs?.length?result.refs:[result.ref];
+      form.innerHTML=`<h2>Request submitted for review</h2><p>Reference${refs.length===1?'':'s'}: <strong>${refs.map(escape).join(', ')}</strong></p><p>This is not approval. Wait for written Lodge confirmation.</p><p>${result.wmNotified?'Worshipful Master notification recorded.':'Worshipful Master notification has not been confirmed.'}</p><button type="button" class="secondary" data-building="request-new">New Building Request</button>`;
+    }catch(error){
+      if(error.status>=400&&error.status<500)this.pendingRequestPayload=null;
+      message.textContent=this.pendingRequestPayload?'The submission could not be confirmed. Your original entries and request identifier are preserved. Select Submit building request to retry the same request.':error.message||'Submission could not be completed. Your entries are preserved.';
+    }
+    finally{this.requestBusy=false;controls.forEach(({element,disabled})=>{if(element.isConnected)element.disabled=element.matches?.('input,textarea')?Boolean(this.pendingRequestPayload):disabled;});}
   }
   async decision(button){
     if(button.dataset.building==='refresh')return this.building();
@@ -89,5 +175,5 @@ export class BuildingCalendarWorkspace {
     catch(error){message.textContent=error.status===409?'This event changed. Your edits remain here; reopen the calendar to review the latest record before saving again.':error.message;}
     finally{this.calendarBusy=false;controls.forEach(({element,disabled})=>{if(element.isConnected)element.disabled=disabled;});if(button.isConnected)button.disabled=false;}
   }
-  refreshPermissions(){this.buildingRoot.querySelectorAll('[data-building-controls]').forEach(element=>element.hidden=!this.can('building.decide'));this.calendarRoot.querySelectorAll('[data-calendar-manage],#calendarEventForm').forEach(element=>element.hidden=!this.can('calendar.manage'));}
+  refreshPermissions(){this.buildingRoot.querySelectorAll('#buildingRequestForm,[data-building="request-new"]').forEach(element=>element.hidden=!this.can('building.request'));const queue=this.buildingRoot.querySelector('.building-requests');if(queue)queue.hidden=!this.can('building.view');this.buildingRoot.querySelectorAll('[data-building-controls]').forEach(element=>element.hidden=!this.can('building.decide'));this.calendarRoot.querySelectorAll('[data-calendar-manage],#calendarEventForm').forEach(element=>element.hidden=!this.can('calendar.manage'));}
 }

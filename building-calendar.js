@@ -14,6 +14,22 @@ export function calendarEvent(input){
  const sourceUrl=s('sourceUrl',2000);if(sourceUrl){try{if(!['https:','http:'].includes(new URL(sourceUrl).protocol))throw Error();}catch{throw fail(400,'Use a valid event information link.');}}
  return {title,startDate,endDate,startTime,endTime,allDay:Boolean(input?.allDay)&&!startTime,location:s('location',500),description:s('description',10000),category,status,source:s('source',300)||'Lodge calendar',sourceUrl};
 }
+export function buildingSubmission(input,user) {
+ const text=(key,max)=>String(input?.[key]??'').trim().slice(0,max);
+ const submissionId=text('submissionId',64);
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(submissionId))throw fail(400,'Start a new building request before submitting.');
+ const purpose=text('purpose',1000),phone=text('phone',40);
+ if(!purpose)throw fail(400,'Describe the event or activity.');
+ const spaces=Array.isArray(input?.spaces)?[...new Set(input.spaces)]:[];
+ if(!spaces.length||spaces.some(v=>!['Lodge building','Back yard','Front yard'].includes(v)))throw fail(400,'Select the spaces you need.');
+ if(!Array.isArray(input?.bookings)||input.bookings.length<1||input.bookings.length>12)throw fail(400,'Include between one and twelve dates.');
+ const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+ const bookings=input.bookings.map(b=>({date:String(b?.date||''),start:String(b?.start||''),end:String(b?.end||'')}));
+ if(bookings.some(b=>!validDate(b.date)||b.date<today||!TIME.test(b.start)||!TIME.test(b.end)||b.end<=b.start))throw fail(400,'Use valid upcoming dates and an end time later than the start time.');
+ if(new Set(bookings.map(b=>b.date)).size!==bookings.length)throw fail(400,'List each date only once.');
+ if(!user?.name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email||''))throw fail(400,'Your officer account needs a name and valid email address.');
+ return {org:'Stone Square Lodge No. 22',name:user.name,contact:user.email,phone,purpose,spaces,bookings:bookings.sort((a,b)=>a.date.localeCompare(b.date)),clientSubmissionKey:crypto.createHash('sha256').update(String(user.id)+':'+submissionId).digest('hex')};
+}
 export async function initializeBuildingCalendar(){await dbRun(`CREATE TABLE IF NOT EXISTS lodge_calendar_events (id TEXT PRIMARY KEY,event_json TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,created_by INTEGER REFERENCES users(id),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT)`);}
 const showEvent=(r,editable)=>({...JSON.parse(r.event_json),id:r.id,revision:String(r.revision),editable});
 const audit=(req,action,details)=>dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',[req.user.id,action,req.ip,JSON.stringify(details),new Date().toISOString()]);
@@ -26,6 +42,28 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch}){
   if(!response.ok)throw fail([400,401,403,404,409].includes(response.status)?response.status:502,payload.error||'Building Requests could not be loaded.');
   return payload;
  };
+ const availability=async(from,to)=>{
+  if(!validDate(from)||!validDate(to)||to<from||(Date.parse(to)-Date.parse(from))/86400000>370)throw fail(400,'Choose a calendar range of no more than one year.');
+  try{const response=await fetcher(PORTAL+'/api/calendar?from='+from+'&to='+to,{redirect:'error',signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error();const data=await response.json();if(!Array.isArray(data.busy))throw Error();return {busy:data.busy,warning:data.warning||null};}
+  catch{return {busy:[],warning:'Building availability could not be fully checked. Your request will need a conflict review before approval.'};}
+ };
+ app.get('/api/building/availability',requireAuth,permit('building.request'),async(req,res,next)=>{try{res.setHeader('Cache-Control','no-store');res.json(await availability(String(req.query.from||''),String(req.query.to||'')));}catch(e){next(e)}});
+ app.post('/api/building/requests',requireAuth,permit('building.request'),async(req,res,next)=>{try{
+  const body=buildingSubmission(req.body,req.user);
+  // An existing reference wins over a new availability check on a retry, because
+  // the request's own pending hold otherwise appears to conflict with itself.
+  const prior=await remote('/api/reservation?submission='+body.clientSubmissionKey+'&fingerprint='+crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex'),req);
+  if(prior.ok&&Array.isArray(prior.refs)&&prior.refs.length){res.json(prior);return;}
+  const calendar=await availability(body.bookings[0].date,body.bookings.at(-1).date);
+  const conflict=body.bookings.find(b=>calendar.busy.some(e=>e.date===b.date&&e.status!=='denied'&&(e.allDay||(e.start&&e.end&&e.start<b.end&&e.end>b.start))));
+  if(calendar.busy.some(e=>body.bookings.some(b=>b.date===e.date)&&e.status!=='denied'&&!e.allDay&&(!e.start||!e.end)))calendar.warning=[calendar.warning,'Some calendar entries have incomplete times and need review before approval.'].filter(Boolean).join(' ');
+  if(conflict)throw fail(409,'The building calendar shows a booking or pending hold on '+conflict.date+'. Choose another time.');
+  if(calendar.warning&&req.body.acknowledgeAvailabilityWarning!==true)throw fail(400,'Availability is incomplete. Review and acknowledge the warning before submitting.');
+  const result=await remote('/api/reservation',req,body);
+  if(!result.ok||!Array.isArray(result.refs)||!result.refs.length)throw fail(502,'The request outcome could not be confirmed. Keep this form and try again to retrieve its reference.');
+  await audit(req,'building_request_submitted',{refs:result.refs,dates:body.bookings.map(b=>b.date)});
+  res.status(201).json(result);
+ }catch(e){next(e)}});
  app.get('/api/building/requests',requireAuth,permit('building.view'),async(req,res,next)=>{try{const payload=await remote('/api/reservation?list&dashboard=1',req);if(!Array.isArray(payload.requests)||payload.store===false)throw fail(503,'Building request storage is temporarily unavailable.');res.setHeader('Cache-Control','no-store');res.json({requests:payload.requests,canDecide:hasPermission(req.user,'building.decide')&&(req.user.role==='owner'||req.user.role==='warden')});}catch(e){next(e)}});
  app.post('/api/building/requests/:id/decision',requireAuth,permit('building.decide'),async(req,res,next)=>{try{
   if(req.user.role!=='owner'&&req.user.role!=='warden')throw fail(403,'Building decisions are assigned to the Worshipful Master and Xavier White.');

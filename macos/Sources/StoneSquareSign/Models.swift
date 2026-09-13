@@ -23,7 +23,7 @@ struct User: Codable, Identifiable, Equatable {
         case "officer": break
         default: break
         }
-        if role != "member" { defaults.append("calendar.view") }
+        if role != "member" { defaults += ["calendar.view", "building.request"] }
         if ["secretary", "assistant_secretary", "warden"].contains(role) { defaults.append("building.view") }
         return defaults.contains(capability)
     }
@@ -46,7 +46,7 @@ struct User: Codable, Identifiable, Equatable {
         case .approvals: return canReadApprovals
         case .candidateTracker: return can("candidates.view")
         case .proposalReview: return role == "owner" || canProposeDispensation
-        case .building: return can("building.view") || can("building.decide")
+        case .building: return can("building.request") || can("building.view") || can("building.decide")
         case .lodgeCalendar: return can("calendar.view") || can("calendar.manage")
         case .profile: return canSign
         case .settings: return can("settings.manage")

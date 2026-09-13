@@ -7,7 +7,7 @@ function setup() {
   let now = 100000, reloads = 0, confirmCalls = 0, confirmResult = false, version = 'new';
   const events = {}, text = { textContent: '' }, button = { addEventListener: (_, fn) => { events.apply = fn; } };
   const banner = { classList: { toggle: () => {} }, querySelector: () => text };
-  const ctx = { CLIENT_BUILD_VERSION: 'old', state: {}, treasuryWorkspace: null, Date: { now: () => now },
+  const ctx = { CLIENT_BUILD_VERSION: 'old', state: {}, treasuryWorkspace: null, buildingCalendarWorkspace: null, Date: { now: () => now },
     document: { activeElement: null, addEventListener: (kind, fn) => { events[kind] = fn; }, querySelector: () => null, querySelectorAll: () => [] },
     window: { setTimeout() {}, setInterval() {}, location: { reload: () => reloads++ }, confirm: () => { confirmCalls++; return confirmResult; } },
     $: id => id === 'applyWebUpdate' ? button : banner,
