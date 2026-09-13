@@ -1575,14 +1575,19 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
 app.put('/api/officers/invitations/role', requireAuth, requireOwner, async (req, res, next) => {
   try {
     const email = normalizeEmail(req.body?.email);
-    if (req.body?.role !== 'warden') return res.status(400).json({ error: 'This action assigns a Warden invitation.' });
-    if (!WARDEN_EMAILS.has(email)) return res.status(403).json({ error: 'This address is not configured for a Warden seat.' });
+    const role = req.body?.role;
+    if (!['warden', 'assistant_treasurer'].includes(role)) return res.status(400).json({ error: 'Choose an available invitation office.' });
+    if (role === 'warden' && !WARDEN_EMAILS.has(email)) return res.status(403).json({ error: 'This address is not configured for a Warden seat.' });
     await withTransaction(async () => {
       const invite = await dbGet('SELECT id, role FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ? FOR UPDATE', [email, nowIso()]);
       if (!invite) throw httpError(404, 'An active pending invitation was not found.');
-      await dbRun("UPDATE invitations SET role = 'warden' WHERE id = ?", [invite.id]);
+      if (role === 'assistant_treasurer') {
+        if (!['treasury_preparer', 'assistant_treasurer'].includes(invite.role)) throw httpError(400, 'This correction applies to an existing treasury preparer invitation.');
+        if (await dbGet("SELECT 1 FROM users WHERE role='assistant_treasurer' AND access_revoked_at IS NULL AND email<>?", [email]) || await dbGet("SELECT 1 FROM invitations WHERE role='assistant_treasurer' AND used_at IS NULL AND expires_at>? AND id<>?", [nowIso(), invite.id])) throw httpError(409, 'Assistant Treasurer already has an account or invitation.');
+      }
+      await dbRun('UPDATE invitations SET role = ? WHERE id = ?', [role, invite.id]);
       await addAudit({ userId: req.user.id, action: 'officer_invitation_role_changed', ip: req.ip,
-        details: { email, before: invite.role, after: 'warden' } });
+        details: { email, before: invite.role, after: role } });
     });
     res.json({ ok: true });
   } catch (error) { next(error); }
