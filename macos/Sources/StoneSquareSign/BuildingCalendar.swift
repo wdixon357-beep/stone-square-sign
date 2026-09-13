@@ -332,8 +332,25 @@ private struct LodgeCalendarEditor: View {
 struct BuildingBooking: Codable, Equatable, Identifiable {
     var id = UUID()
     var date = LodgeCalendarDates.key(Date())
-    var start = ""
-    var end = ""
+    var start = "09:00"
+    var end = "10:00"
+    var dateSelection: Date {
+        get { Self.formatter("yyyy-MM-dd").date(from: date) ?? Date() }
+        set { date = LodgeCalendarDates.key(newValue) }
+    }
+    var startSelection: Date {
+        get { Self.formatter("yyyy-MM-dd HH:mm").date(from: "2000-01-01 " + start)! }
+        set { start = Self.formatter("HH:mm").string(from: newValue) }
+    }
+    var endSelection: Date {
+        get { Self.formatter("yyyy-MM-dd HH:mm").date(from: "2000-01-01 " + end)! }
+        set { end = Self.formatter("HH:mm").string(from: newValue) }
+    }
+    private static func formatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = LodgeCalendarDates.calendar.timeZone; formatter.dateFormat = format
+        return formatter
+    }
     enum CodingKeys: String, CodingKey { case date, start, end }
     var valid: Bool { LodgeCalendarDates.valid(date) && Self.validTime(start) && Self.validTime(end) && end > start }
     static func validTime(_ value: String) -> Bool { value.range(of: #"^([01][0-9]|2[0-3]):[0-5][0-9]$"#, options: .regularExpression) != nil }
@@ -352,7 +369,6 @@ struct NewBuildingRequestDraft: Encodable, Equatable {
         guard bookings.allSatisfy({ $0.date >= LodgeCalendarDates.key(Date()) }) else { return "Choose today or an upcoming date." }
         guard phone.count <= 40, details.count <= 1000 else { return "Use no more than 40 characters for the phone number and 1,000 for event details." }
         guard !spaces.isEmpty, spaces.allSatisfy(Self.availableSpaces.contains) else { return "Choose at least one space." }
-        guard !phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Enter a contact phone number." }
         guard !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Describe the event and how the space will be used." }
         return nil
     }
@@ -460,20 +476,29 @@ private struct NewBuildingRequestView: View {
                     Section("Lodge request") {
                         LabeledContent("Organization", value: "Stone Square Lodge No. 22")
                         LabeledContent("Requested by", value: model.user?.name ?? "")
-                        TextField("Contact phone", text: $workspace.draft.phone)
+                        TextField("Contact phone (optional)", text: $workspace.draft.phone)
                         TextField("Event details", text: $workspace.draft.details, axis: .vertical).lineLimit(4...8)
                     }
                     Section("Requested dates and times") {
                         ForEach($workspace.draft.bookings) { $booking in
-                            HStack {
-                                TextField("YYYY-MM-DD", text: $booking.date).accessibilityLabel("Requested date")
-                                TextField("Start HH:MM", text: $booking.start).accessibilityLabel("Start time")
-                                TextField("End HH:MM", text: $booking.end).accessibilityLabel("End time")
+                            HStack(alignment: .bottom, spacing: 20) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Date").font(.caption).foregroundStyle(.secondary)
+                                    DatePicker("Requested date", selection: $booking.dateSelection, displayedComponents: .date).labelsHidden().datePickerStyle(.compact)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Start time").font(.caption).foregroundStyle(.secondary)
+                                    DatePicker("Start time", selection: $booking.startSelection, displayedComponents: .hourAndMinute).labelsHidden().datePickerStyle(.compact)
+                                }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("End time").font(.caption).foregroundStyle(.secondary)
+                                    DatePicker("End time", selection: $booking.endSelection, displayedComponents: .hourAndMinute).labelsHidden().datePickerStyle(.compact)
+                                }
                                 Button { workspace.draft.bookings.removeAll { $0.id == booking.id } } label: { Image(systemName: "minus.circle") }.disabled(workspace.draft.bookings.count == 1).accessibilityLabel("Remove requested date")
                             }
                         }
                         Button("Add date") { workspace.draft.bookings.append(BuildingBooking()) }.disabled(workspace.draft.bookings.count >= 12)
-                        Text("Include setup and cleanup time. Times use the 24-hour clock in Eastern Time.").font(.caption).foregroundStyle(.secondary)
+                        Text("Include setup and cleanup time. All dates and times are Eastern Time.").font(.caption).foregroundStyle(.secondary)
                     }
                     Section("Spaces") {
                         ForEach(NewBuildingRequestDraft.availableSpaces, id: \.self) { space in
@@ -507,6 +532,8 @@ private struct NewBuildingRequestView: View {
                 }.padding(18)
             }
         }.frame(width: 790, height: 760)
+        .environment(\.timeZone, LodgeCalendarDates.calendar.timeZone)
+        .environment(\.calendar, LodgeCalendarDates.calendar)
         .interactiveDismissDisabled(workspace.busy)
         .alert("Submit this building request?", isPresented: $confirmingSubmit) {
             Button("Submit request") { Task { _ = await workspace.submit(using: model) } }

@@ -406,10 +406,18 @@ final class GenerationFixture: URLProtocol {
         let beforeQueue = GenerationFixture.requests.count
         await building.load(using: reportApp)
         precondition(GenerationFixture.requests.count == beforeQueue && building.requests.isEmpty)
+        var pickerBooking = BuildingBooking()
+        precondition(pickerBooking.start == "09:00" && pickerBooking.end == "10:00")
+        pickerBooking.dateSelection = ISO8601DateFormatter().date(from: "2026-11-02T01:00:00Z")!
+        precondition(pickerBooking.date == "2026-11-01")
+        pickerBooking.startSelection = ISO8601DateFormatter().date(from: "2000-01-01T14:30:00Z")!
+        precondition(pickerBooking.start == "09:30")
+        pickerBooking.endSelection = ISO8601DateFormatter().date(from: "2000-01-01T15:30:00Z")!
+        precondition(pickerBooking.end == "10:30" && pickerBooking.valid)
         let newRequest = NewBuildingRequestWorkspace()
         newRequest.draft.bookings = [BuildingBooking(date: "2026-11-01", start: "13:00", end: "15:00")]
         newRequest.draft.spaces = ["Lodge building", "Back yard"]
-        newRequest.draft.phone = "555-0100"; newRequest.draft.details = "Synthetic Lodge event"
+        newRequest.draft.phone = ""; newRequest.draft.details = "Synthetic Lodge event"
         precondition(newRequest.draft.validationMessage == nil && !newRequest.canSubmit)
         GenerationFixture.response = Data(#"{"busy":[{"date":"2026-11-01","start":"14:00","end":"16:00","label":"Pending hold","status":"pending","allDay":false}]}"#.utf8)
         await newRequest.checkAvailability(using: reportApp)

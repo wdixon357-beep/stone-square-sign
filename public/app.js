@@ -57,6 +57,13 @@ let webUpdateHasEntries = false;
 let webUpdateLastActivity = Date.now();
 let webUpdateRequests = 0;
 let webUpdateCheckBusy = false;
+let webUpdateDeferred = false;
+try { webUpdateDeferred = sessionStorage.getItem('stone-square-web-update-deferred') === '1'; } catch {}
+$('deferWebUpdate').addEventListener('click', () => {
+  webUpdateDeferred = true;
+  $('webUpdateBanner').classList.add('hidden');
+  try { sessionStorage.setItem('stone-square-web-update-deferred', '1'); } catch {}
+});
 const noteWebActivity = () => { webUpdateLastActivity = Date.now(); };
 const noteWebEntries = () => { webUpdateHasEntries = true; noteWebActivity(); };
 document.addEventListener('input', noteWebEntries, true);
@@ -72,12 +79,13 @@ const webUpdateIsBusy = () => webUpdateRequests > 0 || Boolean(
   [...document.querySelectorAll('button[disabled]')].some(button => button.getClientRects().length)
 );
 const checkForWebUpdate = async () => {
-  if (webUpdateCheckBusy) return;
+  if (webUpdateCheckBusy || webUpdateDeferred) return;
   webUpdateCheckBusy = true;
   try {
     const response = await fetch('/api/version', { cache: 'no-store' });
     if (!response.ok) return;
     const { version } = await response.json();
+    if (webUpdateDeferred) return;
     const available = Boolean(version && version !== CLIENT_BUILD_VERSION);
     const banner = $('webUpdateBanner');
     banner.classList.toggle('hidden', !available);
@@ -97,7 +105,7 @@ const checkForWebUpdate = async () => {
 
 $('applyWebUpdate').addEventListener('click', () => {
   if (webUpdateIsBusy()) {
-    $('webUpdateBanner').querySelector('span').textContent = 'Finish the current action and close any open editor before updating.';
+    $('webUpdateBanner').querySelector('span').textContent = 'Your current work is still open. Choose Later to keep working, or finish and close the editor before updating.';
     return;
   }
   if (webUpdateHasEntries && !window.confirm('Reload for the website update? Any entries you have not saved will be lost. Select Cancel to return and save your work.')) return;
