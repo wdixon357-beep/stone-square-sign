@@ -12,9 +12,12 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var readyToRestart = false
     @Published private(set) var status = ""
     @Published private(set) var canCheck = false
-    var unfinishedWork: (() -> String?)?
+    private var workspaceGuards: [UUID: () -> String?] = [:]
     private var editorGuards: [UUID: String] = [:]
-    var unfinishedWorkReason: String? { editorGuards.values.sorted().first ?? unfinishedWork?() }
+    var unfinishedWorkReason: String? {
+        editorGuards.values.sorted().first ?? workspaceGuards.values.compactMap { $0() }.sorted().first
+    }
+    func setWorkspaceGuard(_ id: UUID, check: (() -> String?)?) { workspaceGuards[id] = check }
     func setEditorGuard(_ id: UUID, reason: String?) { editorGuards[id] = reason }
 
     private var controller: SPUStandardUpdaterController?

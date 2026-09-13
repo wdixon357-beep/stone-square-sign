@@ -188,6 +188,7 @@ struct AuthenticationView: View {
 struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
     @State private var selection: AppSection? = .home
+    @State private var updateGuardID = UUID()
     @StateObject private var reportBrowser = ReportBrowserModel()
     @StateObject private var minutesWorkspace = MinutesWorkspace()
     @StateObject private var treasuryWorkspace = TreasuryWorkspace()
@@ -261,11 +262,11 @@ struct WorkspaceView: View {
         }
         .task { activityPresence.start(model);await model.refresh() }
         .onAppear {
-            AppUpdater.shared.unfinishedWork = {
+            AppUpdater.shared.setWorkspaceGuard(updateGuardID) {
                 AppUpdater.unfinishedReportWork(report: reportBrowser, minutes: minutesWorkspace, treasury: treasuryWorkspace, operationInProgress: model.isBusy)
             }
         }
-        .onDisappear { activityPresence.stop(); AppUpdater.shared.unfinishedWork = nil }
+        .onDisappear { activityPresence.stop(); AppUpdater.shared.setWorkspaceGuard(updateGuardID, check: nil) }
         .onChange(of:selection){_,section in activityPresence.visit(section)}
         .onChange(of: model.requestedSection) { _, requested in
             guard let requested else { return }

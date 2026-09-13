@@ -273,10 +273,18 @@ final class GenerationFixture: URLProtocol {
         precondition(updater.unfinishedWorkReason == "Unfinished candidate record")
         updater.setEditorGuard(editorID, reason: nil)
         precondition(updater.unfinishedWorkReason == nil)
-        updater.unfinishedWork = { "Unsaved workspace" }
+        let firstWindow = UUID(), secondWindow = UUID()
+        updater.setWorkspaceGuard(firstWindow) { "Unsaved workspace" }
+        updater.setWorkspaceGuard(secondWindow) { nil }
         precondition(updater.unfinishedWorkReason == "Unsaved workspace")
-        updater.unfinishedWork = nil
+        updater.setWorkspaceGuard(secondWindow, check: nil)
+        precondition(updater.unfinishedWorkReason == "Unsaved workspace")
+        updater.setWorkspaceGuard(secondWindow) { "Second window edits" }
+        updater.setWorkspaceGuard(firstWindow, check: nil)
+        precondition(updater.unfinishedWorkReason == "Second window edits")
+        updater.setWorkspaceGuard(secondWindow, check: nil)
         precondition(updater.unfinishedWorkReason == nil)
+        print("PASS: each window retains its update guard when another window opens or closes")
         print("PASS: updater blocks unfinished operations and report input but permits saved local notes and loaded banking sources")
         precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/generation/status" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
         print("PASS: reorganization fixtures make no save, sign, delivery or new-report requests")
