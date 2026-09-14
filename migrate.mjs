@@ -43,6 +43,7 @@ const BLOBS = {
   documents: { key: 'id', cols: ['file_bytes', 'signed_bytes'] },
   document_signers: { key: 'id', cols: ['signature_bytes'] },
   profile_signatures: { key: 'user_id', cols: ['signature_bytes'] },
+  historical_reports: { key: 'id', cols: ['original_bytes', 'rendered_pdf_bytes'] },
 };
 
 const sha = (buf) => (buf == null ? null : crypto.createHash('sha256').update(Buffer.from(buf)).digest('hex'));

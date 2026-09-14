@@ -1,6 +1,6 @@
 {
   "name": "stone-square-sign",
-  "version": "1.20.3",
+  "version": "1.21.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,7 +10,9 @@
     "start": "node server.js",
     "build:mac": "./macos/scripts/build-app.sh --install",
     "import:history": "node scripts/import-historical-dispensations.mjs",
-    "test": "node test/deploy-workflow.mjs && node test/auth-sessions.mjs && node test/agenda.mjs && node test/mac-agenda.mjs && node test/web-release-quality.mjs && node test/web-independent-review.mjs && node test/web-report-handoff.mjs && node test/web-building-request.mjs && node test/building-request-submit.mjs && node test/building-calendar.mjs && node test/web-building-calendar.mjs && node test/access-permissions.mjs && node test/web-permissions.mjs && node test/web-permission-refresh.mjs && node test/treasury-permissions.mjs && node test/web-access.mjs && node test/web-updates.mjs && node test/report-ai.mjs && node test/ai-generation.mjs && node test/minutes-ai.mjs && node test/treasury-ai.mjs && node test/generation-routes.mjs && node test/production-check.mjs && node test/activity.mjs && node test/treasury.mjs && node test/treasury-source.mjs && node test/treasury-e2e.mjs && node test/session-policy.mjs && node test/minutes-alerts.mjs && node test/minutes-local.mjs && node test/minutes-format.mjs && node test/minutes-changes.mjs && node test/parity.mjs && node test/mac-compiles.mjs && node test/mac-session.mjs && node test/mac-minutes-dates.mjs && node test/mac-report.mjs && node test/e2e.mjs",
+    "import:archives": "node scripts/import-historical-reports.mjs --dry-run --write-manifest /tmp/stone-square-historical-archive-manifest.json",
+    "import:archives:production": "node scripts/import-historical-reports.mjs --confirm-production --manifest /tmp/stone-square-historical-archive-manifest.json",
+    "test": "node test/deploy-workflow.mjs && node test/historical-archives.mjs && node test/migration-archive-blobs.mjs && node test/auth-sessions.mjs && node test/agenda.mjs && node test/mac-agenda.mjs && node test/web-release-quality.mjs && node test/web-independent-review.mjs && node test/web-report-handoff.mjs && node test/web-building-request.mjs && node test/building-request-submit.mjs && node test/building-calendar.mjs && node test/web-building-calendar.mjs && node test/access-permissions.mjs && node test/web-permissions.mjs && node test/web-permission-refresh.mjs && node test/treasury-permissions.mjs && node test/web-access.mjs && node test/web-updates.mjs && node test/report-ai.mjs && node test/ai-generation.mjs && node test/minutes-ai.mjs && node test/treasury-ai.mjs && node test/generation-routes.mjs && node test/production-check.mjs && node test/activity.mjs && node test/treasury.mjs && node test/treasury-source.mjs && node test/treasury-e2e.mjs && node test/session-policy.mjs && node test/minutes-alerts.mjs && node test/minutes-local.mjs && node test/minutes-format.mjs && node test/minutes-changes.mjs && node test/parity.mjs && node test/mac-compiles.mjs && node test/mac-session.mjs && node test/mac-minutes-dates.mjs && node test/mac-report.mjs && node test/e2e.mjs",
     "test:production": "node test/production-check.mjs",
     "test:parity": "node test/parity.mjs",
     "test:mac": "node test/mac-compiles.mjs"

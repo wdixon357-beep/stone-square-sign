@@ -32,8 +32,8 @@ struct User: Codable, Identifiable, Equatable {
         switch role {
         case "secretary": defaults += ["minutes.prepare", "treasury.prepare", "treasury.upload", "dues.view", "documents.status", "documents.sign", "candidates.view"]
         case "assistant_secretary": defaults += ["minutes.prepare", "treasury.prepare", "dues.view", "documents.status", "documents.sign", "candidates.view"]
-        case "treasurer": defaults = ["treasury.prepare", "treasury.upload", "dues.view", "signature.manage", "settings.manage"]
-        case "assistant_treasurer", "treasury_preparer": defaults = ["treasury.prepare", "dues.view", "signature.manage", "settings.manage"]
+        case "treasurer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "treasury.upload", "dues.view", "signature.manage", "settings.manage"]
+        case "assistant_treasurer", "treasury_preparer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "dues.view", "signature.manage", "settings.manage"]
         case "warden": defaults += ["dues.view", "documents.status", "candidates.view", "proposals.create"]
         case "member": defaults = []
         case "officer": break

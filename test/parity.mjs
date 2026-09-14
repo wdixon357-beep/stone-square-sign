@@ -126,6 +126,14 @@ check('both clients separate minutes preparation from final record viewing',
   && read('public/app.js').includes("if (!can('minutes.prepare')) return;")
   && read('public/app.js').includes('/api/minutes/${item.id}/pdf')
   && read('server.js').includes("app.post('/api/minutes/generate', requireAuth, requireMinutesAccess"));
+check('both clients show secured historical minutes and treasurer archives inside the Dashboard',
+  read('public/app.js').includes('/api/archives/minutes')
+  && read('public/treasury.js').includes('/api/archives/treasury')
+  && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('/api/archives/\\(kind.rawValue)')
+  && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Close report'));
+check('treasurer archive previews return to the list without opening a browser tab',
+  read('public/treasury.js').includes('data-treasury="back"')
+  && !read('public/treasury.js').includes('target="_blank"'));
 check('both clients keep the owner capable of administering all areas',
   models.includes('if role == "owner" { return true }')
   && read('public/app.js').includes("user?.role === 'owner' ||"));

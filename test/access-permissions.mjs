@@ -39,7 +39,7 @@ try{
  const assistant=await accept(await invite(owner,'assistant_secretary'));check('Adrian role can prepare treasury but cannot upload',assistant.user.permissions.includes('treasury.prepare')&&!assistant.user.permissions.includes('treasury.upload'));
  check('Assistant secretary can start blank treasury report',(await api('/api/treasury/drafts',assistant.token,'POST',{})).status===201);
  check('Assistant secretary cannot upload bank source',(await api('/api/treasury/generate',assistant.token,'POST',{})).status===403);
- const treasurer=await accept(await invite(owner,'treasurer'));check('Treasurer has dues and upload but not minutes',treasurer.user.permissions.includes('dues.view')&&treasurer.user.permissions.includes('treasury.upload')&&!treasurer.user.permissions.includes('minutes.view'));
+ const treasurer=await accept(await invite(owner,'treasurer'));check('Treasurer has dues, upload, and universal minutes viewing',treasurer.user.permissions.includes('dues.view')&&treasurer.user.permissions.includes('treasury.upload')&&treasurer.user.permissions.includes('minutes.view'));
  const warden=await accept(await invite(owner,'warden'));check('Warden has own proposals and final reports',warden.user.permissions.includes('proposals.create')&&warden.user.permissions.includes('minutes.view')&&warden.user.permissions.includes('treasury.view'));
  const viewer=await accept(await invite(owner,'viewer'));
  const pdf=await PDFDocument.create();pdf.addPage();const docForm=new FormData();docForm.set('document',new Blob([await pdf.save()],{type:'application/pdf'}),'test.pdf');docForm.set('title','Unassigned synthetic document');
@@ -59,12 +59,17 @@ try{
  const corrected=(await api('/api/officers',owner.token)).data.pending.find(x=>x.email===treasuryInvite.email);
  check('Corrected office preserves invitation expiry',corrected.role==='assistant_treasurer'&&corrected.expires_at===expiryBefore);
  const assistantTreasurer=await accept(treasuryInvite);
- check('Original link accepts correct office and preserves restricted access',assistantTreasurer.user.role==='assistant_treasurer'&&JSON.stringify(normalizePermissions(assistantTreasurer.user.permissions))===JSON.stringify(normalizePermissions(treasuryPermissions)));
+ check('Original link accepts correct office and preserves restricted access',assistantTreasurer.user.role==='assistant_treasurer'&&JSON.stringify(normalizePermissions(assistantTreasurer.user.permissions,'assistant_treasurer'))===JSON.stringify(normalizePermissions(treasuryPermissions,'assistant_treasurer')));
  const otherEmail='other-treasury@example.org';
  assert.equal((await api('/api/officers/invite',owner.token,'POST',{email:otherEmail,name:'Other test preparer',role:'treasury_preparer',sendEmail:false})).status,201);
  check('An occupied Assistant Treasurer seat cannot be assigned again',(await api('/api/officers/invitations/role',owner.token,'PUT',{email:otherEmail,role:'assistant_treasurer'})).status===409);
  check('Preparer implies view permission',normalizePermissions(['minutes.prepare']).includes('minutes.view'));
- check('An explicit empty permission list stays empty',resolvePermissions({role:'secretary',permissions_json:'[]'}).length===0);
+ check('Universal archives cannot be removed from an officer',JSON.stringify(resolvePermissions({role:'secretary',permissions_json:'[]'}))===JSON.stringify(['minutes.view','treasury.view']));
+ check('Member access does not gain officer archives',resolvePermissions({role:'member',permissions_json:'[]'}).length===0);
+ check('Officer can list both historical archives',(await api('/api/archives/minutes',officer.token)).status===200&&(await api('/api/archives/treasury',officer.token)).status===200);
+ check('Owner can move an officer to a member account',(await api(`/api/admin/accounts/${officer.user.id}/role`,owner.token,'PUT',{role:'member'})).status===200);
+ const demoted=await api('/api/auth/login',null,'POST',{email:officerInvite.email,password});
+ check('A demoted account loses role-provided archives',demoted.status===200&&(await api('/api/archives/minutes',demoted.data.token)).status===403&&(await api('/api/archives/treasury',demoted.data.token)).status===403);
  console.log(`${checks} granular access checks passed.`);
  if(process.env.ACCESS_PREVIEW==='1'){console.log(`PREVIEW ${base} login access-warden@example.org password ${password}`);await new Promise(()=>{});}
 }finally{server.kill('SIGTERM');}

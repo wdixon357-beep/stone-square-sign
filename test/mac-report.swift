@@ -111,6 +111,10 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
 
 @main struct NativeReportTests {
     @MainActor static func main() async throws {
+        let archiveJSON = Data(#"{"id":"historical-1","title":"Meeting Minutes, January 1, 2024","recordDate":"2024-01-01"}"#.utf8)
+        let archiveRecord = try JSONDecoder().decode(FinalReportBrowserView.ArchiveRecord.self, from: archiveJSON)
+        precondition(archiveRecord.id == "historical-1" && archiveRecord.recordDate == "2024-01-01")
+        print("PASS: native archive list decodes the exact minimal API payload")
         precondition(LodgeDateTime.display("2026-06-15T21:01:00.000Z") == "Monday, June 15, 2026 at 5:01 PM EDT")
         precondition(LodgeDateTime.display("2026-12-15T21:01:00Z") == "Tuesday, December 15, 2026 at 4:01 PM EST")
         print("PASS: native queue timestamps use readable Eastern dates and times")

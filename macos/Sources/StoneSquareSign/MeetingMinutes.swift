@@ -229,6 +229,7 @@ struct MeetingMinutesView: View {
     @State private var pendingAction: String?
     @State private var approvalDate = ""
     @State private var approvalNote = ""
+    @State private var showingHistory = false
     private var editable: Bool { model.user?.can("minutes.prepare") == true && (workspace.selected?.status == "draft" || (workspace.selected?.status == "awaiting_master_attestation" && model.user?.role == "owner")) }
     private func text(_ key: WritableKeyPath<MinutesDraft, String?>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key] ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 })
@@ -244,7 +245,10 @@ struct MeetingMinutesView: View {
                     if workspace.dirty { Text("Unsaved changes").font(.caption).foregroundStyle(.secondary) }
                     Button("Back to records") { if workspace.dirty { confirmClose = true } else { workspace.close() } }
                     if editable { Button("Save corrections") { Task { await workspace.save() } }.buttonStyle(.borderedProminent) }
-                } else { Button("Refresh", systemImage: "arrow.clockwise") { Task { await workspace.refresh() } } }
+                } else {
+                    Button("Historical minutes") { showingHistory = true }
+                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await workspace.refresh() } }
+                }
             }
             if workspace.selected != nil, workspace.draft != nil { editor } else { recordList }
             if !workspace.message.isEmpty {
@@ -259,6 +263,7 @@ struct MeetingMinutesView: View {
         .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.24)) { appeared = true } }
         .disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh() }
+        .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .minutes, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
         .onChange(of: workspace.draft) { old, new in
             guard old != nil, old != new else { return }
             workspace.dirty = new != workspace.selected?.draft; workspace.updatePreview()

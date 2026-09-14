@@ -1,5 +1,5 @@
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
-import { hasPermission, resolvePermissions, mountAccessRoutes } from './access-control.js';
+import { hasPermission, resolvePermissions, mountAccessRoutes, UNIVERSAL_RECORD_ROLES } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
 import path from 'node:path';
@@ -29,6 +29,7 @@ import { initGenerationSchema, generationFor, generationStatus } from './ai-gene
 import { closingReviewIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
+import { mountArchiveRoutes } from './archive-routes.js';
 
 dotenv.config();
 
@@ -1733,7 +1734,7 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
   if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({error:'Choose an active account.'});
   if(!INVITABLE_ROLES.includes(role))return res.status(400).json({error:'Choose an available account role.'});
   await withTransaction(async()=>{
-   const account=await dbGet('SELECT id,name,email,role,access_revoked_at FROM users WHERE id=? FOR UPDATE',[id]);
+   const account=await dbGet('SELECT id,name,email,role,permissions_json,access_revoked_at FROM users WHERE id=? FOR UPDATE',[id]);
    if(!account||account.access_revoked_at)throw httpError(404,'Active account not found.');
    if(account.role==='owner'||id===req.user.id)throw httpError(403,'The Worshipful Master administrator account is permanent.');
    if(role==='warden'&&!WARDEN_EMAILS.has(account.email))throw httpError(403,'This email is not configured for a Warden seat.');
@@ -1743,7 +1744,11 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
     if(await dbGet('SELECT 1 FROM invitations WHERE role=? AND used_at IS NULL AND expires_at>? AND email<>?',[role,nowIso(),account.email]))throw httpError(409,'That office already has a pending invitation.');
    }
    if(account.role===role)return;
-   await dbRun('UPDATE users SET role=? WHERE id=?',[role,id]);
+   let permissions=account.permissions_json;
+   if(UNIVERSAL_RECORD_ROLES.has(account.role)&&!UNIVERSAL_RECORD_ROLES.has(role)&&permissions!==null){
+    try{permissions=JSON.stringify(JSON.parse(permissions).filter(value=>!['minutes.view','treasury.view'].includes(value)));}catch{permissions='[]';}
+   }
+   await dbRun('UPDATE users SET role=?, permissions_json=? WHERE id=?',[role,permissions,id]);
    await endUserActivity(id,'Account permissions changed');
    await dbRun('DELETE FROM sessions WHERE user_id=?',[id]);
    await addAudit({userId:req.user.id,action:'officer_role_changed',ip:req.ip,details:{userId:id,name:account.name,before:account.role,after:role}});
@@ -3442,6 +3447,7 @@ app.get('/api/generation/status', requireAuth, async (req, res, next) => {
 mountAccessRoutes(app,{requireAuth,requireOwner});
 mountBuildingCalendar(app,{requireAuth});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
+mountArchiveRoutes(app, { requireAuth });
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 

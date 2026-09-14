@@ -15,6 +15,7 @@ export async function renderAccessControls(root, api) {
       for (const capability of capabilities) {
         const label = document.createElement('label'), input = document.createElement('input'), text = document.createElement('span');
         input.type = 'checkbox'; input.value = capability.id; input.checked = account.permissions.includes(capability.id); text.textContent = capability.label; label.append(input, text); fieldset.append(label);
+        if (['secretary','assistant_secretary','treasurer','assistant_treasurer','treasury_preparer','warden','officer'].includes(account.role) && ['minutes.view','treasury.view'].includes(capability.id)) { input.disabled = true; text.textContent += ' · Included for every officer'; }
       }
       fieldset.addEventListener('change', () => root.dirtyAccessKeys.add(account.key));
       const save = document.createElement('button'); save.type = 'button'; save.className = 'secondary'; save.textContent = 'Save access';

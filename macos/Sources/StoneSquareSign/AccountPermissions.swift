@@ -7,7 +7,7 @@ struct AccessAccount: Decodable, Identifiable {
     let pending: Bool; let revoked: Bool; let permissions: [String]
 }
 enum AccessPermissions {
-    static func normalized(_ selected: Set<String>) -> Set<String> {
+    static func normalized(_ selected: Set<String>, role: String? = nil) -> Set<String> {
         var values = selected
         if values.contains("building.decide") { values.insert("building.view") }
         if values.contains("calendar.manage") { values.insert("calendar.view") }
@@ -15,6 +15,9 @@ enum AccessPermissions {
         if values.contains("treasury.prepare") || values.contains("treasury.upload") { values.insert("treasury.view") }
         if values.contains("documents.sign") { values.insert("documents.status") }
         if values.contains("candidates.edit") { values.insert("candidates.view") }
+        if let role, ["secretary", "assistant_secretary", "treasurer", "assistant_treasurer", "treasury_preparer", "warden", "officer"].contains(role) {
+            values.insert("minutes.view"); values.insert("treasury.view")
+        }
         return values
     }
 }
@@ -43,7 +46,7 @@ struct NativeAccountPermissionsView: View {
                                         var values = drafts[account.key] ?? Set(account.permissions)
                                         if enabled { values.insert(capability.id) } else { values.remove(capability.id) }
                                         drafts[account.key] = values == Set(account.permissions) ? nil : values
-                                    })).toggleStyle(.checkbox)
+                                    })).toggleStyle(.checkbox).disabled(["secretary", "assistant_secretary", "treasurer", "assistant_treasurer", "treasury_preparer", "warden", "officer"].contains(account.role) && ["minutes.view", "treasury.view"].contains(capability.id))
                                 }
                                 Button("Save permissions") { Task { await save(account) } }
                                     .disabled(drafts[account.key] == nil || drafts[account.key] == Set(account.permissions))
@@ -66,7 +69,7 @@ struct NativeAccountPermissionsView: View {
     }
     private func save(_ account: AccessAccount) async {
         guard !busy, account.role != "owner", let values = drafts[account.key] else { return }
-        let normalized = AccessPermissions.normalized(values)
+        let normalized = AccessPermissions.normalized(values, role: account.role)
         busy = true; defer { busy = false }
         do {
             let body = try JSONSerialization.data(withJSONObject: ["key": account.key, "permissions": normalized.sorted()])

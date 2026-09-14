@@ -16,7 +16,7 @@ try{
  async function permissions(user,values){const result=await api('/api/admin/access',owner.token,'PUT',{key:`user:${user.user.id}`,permissions:values});assert.equal(result.status,200,JSON.stringify(result.data));}
  const treasurer=await officer('treasurer'),secretary=await officer('secretary'),viewer=await officer('viewer');
  for(const u of [owner,treasurer])check('Signature profile works for '+u.user.role,(await api('/api/profile/signature',u.token,'PUT',{signatureData:'data:image/png;base64,'+(await readFile(new URL('./signature.b64',import.meta.url),'utf8')).trim(),signatureType:'drawn'})).status===200);
- check('Anonymous cannot read treasury',(await api('/api/treasury')).status===401);check('Viewer cannot read banking records',(await api('/api/treasury',viewer.token)).status===403);check('Treasurer does not gain minutes access',(await api('/api/minutes',treasurer.token)).status===403);
+ check('Anonymous cannot read treasury',(await api('/api/treasury')).status===401);check('Viewer cannot read banking records',(await api('/api/treasury',viewer.token)).status===403);check('Treasurer receives universal finalized minutes access',(await api('/api/minutes',treasurer.token)).status===200);
  await permissions(viewer,['treasury.view']);
  check('A finished-report viewer initially sees no drafts',(await api('/api/treasury',viewer.token)).data.reports.length===0);
  const form=new FormData();form.set('sourceText',notes);let response=await api('/api/treasury/generate',treasurer.token,'POST',form);check('Typed source generates a persisted report',response.status===201);let r=response.data.report;
@@ -46,7 +46,7 @@ try{
  response=await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision});check('Secretary records distribution without WM review',response.status===200&&response.data.report.status==='distributed');
  const upload=new FormData();upload.append('files',new Blob([notes]),'notes.txt');r=(await api('/api/treasury/generate',treasurer.token,'POST',upload)).data.report;check('TXT upload preserves original extracted source',(await api(`/api/treasury/${r.id}/source`,treasurer.token)).data.text===notes);check('Unsigned report deletes',(await api(`/api/treasury/${r.id}`,treasurer.token,'DELETE')).status===200);
  const assistant=await officer('treasury_preparer'),member=await officer('member');
- check('Report preparer cannot access minutes',(await api('/api/minutes',assistant.token)).status===403);
+ check('Report preparer receives universal finalized minutes access',(await api('/api/minutes',assistant.token)).status===200);
  check('Report preparer cannot access dispensations',(await api('/api/documents',assistant.token)).status===403);
  check('Basic member has no treasury permission',(await api('/api/treasury',member.token)).status===403);
  check('Basic member has no document access',(await api('/api/documents',member.token)).status===403);

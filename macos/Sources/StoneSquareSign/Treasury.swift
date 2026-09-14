@@ -176,6 +176,7 @@ struct TreasuryView: View {
     @State private var editorSection = 0
     @State private var confirmReorganize = false
     @State private var readonlyReport: TreasuryRecord?
+    @State private var showingHistory = false
     @State private var pendingWorkflowAction: String?
     @State private var pendingAccessUser: TreasuryAccessUser?
     @State private var confirmingAssignment = false
@@ -192,6 +193,7 @@ struct TreasuryView: View {
         VStack(alignment:.leading,spacing:0) {
             NativeWorkspaceHeader(title: "Treasurer Reports", subtitle: workspace.selected == nil ? "Prepare a report from banking records" : "Review entries and the formatted report", symbol: "chart.bar.doc.horizontal.fill") {
                 if workspace.selected != nil { Button("All reports") { if workspace.dirty { leave = true } else { workspace.close() } } }
+                else { Button("Historical reports") { showingHistory = true } }
             }
             if workspace.serviceUpdateRequired {
                 VStack(spacing: 16) {
@@ -207,7 +209,8 @@ struct TreasuryView: View {
             }
         }.background(Color(nsColor:.windowBackgroundColor)).disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh(); await workspace.loadAccess() }
-        .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
+        .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id, onClose: { readonlyReport = nil }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
+        .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .treasury, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
         .onChange(of:workspace.draft) { old,new in if old != nil && new != nil { workspace.dirty = new != workspace.selected?.draft; workspace.preview() } }
         .alert("Delete this unsigned report?",isPresented:Binding(get:{deleting != nil},set:{if !$0 { deleting = nil }})) { Button("Delete",role:.destructive) { if let record = deleting { Task { await workspace.remove(record) } } }; Button("Cancel",role:.cancel) {} }
         .alert("Leave unsaved changes?",isPresented:$leave) { Button("Leave changes",role:.destructive) { workspace.close() }; Button("Keep editing",role:.cancel) {} }

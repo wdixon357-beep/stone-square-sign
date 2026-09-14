@@ -799,11 +799,15 @@ const refreshGenerationStatus = element => import('/generation-status.js').then(
 const renderMinutes = async () => {
   if (can('minutes.prepare')) void refreshGenerationStatus($('minutesGenerationStatus'));
   try {
-    const payload = await apiFetch('/api/minutes');
+    const [payload, archivePayload] = await Promise.all([
+      apiFetch('/api/minutes'),
+      apiFetch('/api/archives/minutes'),
+    ]);
     state.minutes = payload.minutes || [];
+    const archive = archivePayload.records || [];
     const list = $('minutesList');
     list.replaceChildren();
-    if (!state.minutes.length) {
+    if (!state.minutes.length && !archive.length) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
       const title = document.createElement('h3');
@@ -855,6 +859,28 @@ const renderMinutes = async () => {
       row.append(icon, main, status, actions);
       list.append(row);
     });
+    if (archive.length) {
+      const heading = document.createElement('h2');
+      heading.className = 'archive-heading';
+      heading.textContent = 'Historical meeting minutes';
+      list.append(heading);
+      archive.forEach((item) => {
+        const row = document.createElement('article'); row.className = 'minutes-row';
+        const icon = document.createElement('div'); icon.className = 'doc-icon'; icon.textContent = 'MIN';
+        const main = document.createElement('div');
+        const title = document.createElement('h3'); title.textContent = item.title;
+        const detail = document.createElement('p'); detail.textContent = 'Historical Lodge archive';
+        main.append(title, detail);
+        const status = document.createElement('span'); status.className = 'status completed'; status.textContent = 'Archive';
+        const actions = document.createElement('div'); actions.className = 'minutes-row-actions';
+        const open = document.createElement('button'); open.className = 'secondary small'; open.type = 'button'; open.textContent = 'View PDF';
+        open.addEventListener('click', async () => {
+          try { showPdfBlob(await apiFetch(`/api/archives/minutes/${item.id}/pdf`), item.title); }
+          catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
+        });
+        actions.append(open); row.append(icon, main, status, actions); list.append(row);
+      });
+    }
     return true;
   } catch (error) {
     setMessage($('minutesMessage'), error.message, true);

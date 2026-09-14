@@ -280,6 +280,27 @@ export const initSchema = async (exec = run) => {
   )`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_meeting_minutes_date
     ON meeting_minutes(meeting_date, created_at)`);
+  /* Read only records imported from the Lodge's historical archive. These are
+   * deliberately separate from current workflows so an old file is never
+   * assigned a modern approval, attestation, or distribution status. */
+  await exec(`CREATE TABLE IF NOT EXISTS historical_reports (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('minutes', 'treasury')),
+    title TEXT NOT NULL,
+    record_date TEXT,
+    original_name TEXT NOT NULL,
+    original_mime TEXT NOT NULL,
+    original_bytes BYTEA NOT NULL,
+    rendered_pdf_bytes BYTEA NOT NULL,
+    original_sha256 TEXT NOT NULL,
+    rendered_sha256 TEXT NOT NULL,
+    source_label TEXT NOT NULL,
+    evidence_status TEXT NOT NULL DEFAULT 'historical_archive',
+    imported_at TEXT NOT NULL,
+    UNIQUE (kind, original_sha256)
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_historical_reports_kind_date
+    ON historical_reports(kind, record_date DESC, title)`);
   /* Agendas are private working documents created only by the Lodge owner. */
   await exec(`CREATE TABLE IF NOT EXISTS agendas (
     id TEXT PRIMARY KEY,
