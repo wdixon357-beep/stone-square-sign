@@ -280,6 +280,21 @@ export const initSchema = async (exec = run) => {
   )`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_meeting_minutes_date
     ON meeting_minutes(meeting_date, created_at)`);
+  /* Agendas are private working documents created only by the Lodge owner. */
+  await exec(`CREATE TABLE IF NOT EXISTS agendas (
+    id TEXT PRIMARY KEY,
+    meeting_date TEXT,
+    draft_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    updated_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_agendas_date
+    ON agendas(meeting_date, updated_at)`);
   await exec(`CREATE TABLE IF NOT EXISTS office_slots (
     role TEXT PRIMARY KEY
   )`);

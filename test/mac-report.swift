@@ -351,18 +351,22 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         precondition(treasury.draft == treasuryDraft && treasury.selected?.revision == 4)
         print("PASS: late treasury generation cannot replace a newer report revision")
         treasury.close(); GenerationFixture.beforeReply = nil
-        model.startOver(); organizing.close(); treasury.close()
-        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false) == nil)
+        let agenda = AgendaWorkspace()
+        model.startOver(); organizing.close(); treasury.close(); agenda.close()
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false) == nil)
         organizing.dirty = true
-        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false)?.contains("Meeting Minutes edits") == true)
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("Meeting Minutes edits") == true)
         organizing.dirty = false; organizing.source = "Unsaved source"
-        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false)?.contains("source notes") == true)
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("source notes") == true)
         organizing.source = ""; treasury.source = "Unsaved banking source"
-        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false)?.contains("source material") == true)
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("source material") == true)
         treasury.source = ""; treasury.originalText = "Previously saved banking source"
         model.source = "Locally saved report notes"; model.changed()
-        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: false) == nil)
-        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, operationInProgress: true) != nil)
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false) == nil)
+        agenda.dirty = true
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("Agenda Creator edits") == true)
+        agenda.dirty = false
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: true) != nil)
         let updater = AppUpdater()
         let editorID = UUID()
         updater.setEditorGuard(editorID, reason: "Unfinished candidate record")

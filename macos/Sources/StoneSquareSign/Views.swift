@@ -195,6 +195,7 @@ struct WorkspaceView: View {
     @StateObject private var reportBrowser = ReportBrowserModel()
     @StateObject private var minutesWorkspace = MinutesWorkspace()
     @StateObject private var treasuryWorkspace = TreasuryWorkspace()
+    @StateObject private var agendaWorkspace = AgendaWorkspace()
     @StateObject private var activityPresence = ActivityPresence()
 
     var body: some View {
@@ -220,6 +221,7 @@ struct WorkspaceView: View {
                 if model.user?.canReadMinutes == true {
                     Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes)
                 }
+                if model.user?.role == "owner" { Label("Agenda Creator", systemImage: "list.number").tag(AppSection.agenda) }
                 if model.user?.canUseTreasury == true { Label("Treasurer Reports", systemImage: "chart.bar.doc.horizontal.fill").tag(AppSection.treasury) }
                 if model.user?.can("documents.status") == true { Label("Live Queue", systemImage: "list.number").tag(AppSection.documents) }
                 if model.user?.can("candidates.view") == true { Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker) }
@@ -271,7 +273,7 @@ struct WorkspaceView: View {
         .task { activityPresence.start(model);await model.refresh() }
         .onAppear {
             AppUpdater.shared.setWorkspaceGuard(updateGuardID) {
-                AppUpdater.unfinishedReportWork(report: reportBrowser, minutes: minutesWorkspace, treasury: treasuryWorkspace, operationInProgress: model.isBusy)
+                AppUpdater.unfinishedReportWork(report: reportBrowser, minutes: minutesWorkspace, treasury: treasuryWorkspace, agenda: agendaWorkspace, operationInProgress: model.isBusy)
             }
         }
         .onDisappear { activityPresence.stop(); AppUpdater.shared.setWorkspaceGuard(updateGuardID, check: nil) }
@@ -326,6 +328,7 @@ struct WorkspaceView: View {
                 openCandidateTracker: { selection = .candidateTracker },
                 openReports: { selection = .reportGenerator },
                 openMinutes: { selection = .minutes },
+                openAgenda: { selection = .agenda },
                 openTreasury: { selection = .treasury },
                 openBuilding: { selection = .building },
                 openCalendar: { selection = .lodgeCalendar }
@@ -337,6 +340,7 @@ struct WorkspaceView: View {
         case .minutes:
             if model.user?.can("minutes.prepare") == true { MeetingMinutesView(workspace: minutesWorkspace) }
             else { FinalReportBrowserView(kind: .minutes) }
+        case .agenda: if model.user?.role == "owner" { AgendaCreatorView(workspace: agendaWorkspace) }
         case .treasury:
             if model.user?.can("treasury.prepare") == true || model.user?.can("treasury.upload") == true { TreasuryView(workspace: treasuryWorkspace) }
             else { FinalReportBrowserView(kind: .treasury) }
@@ -981,6 +985,7 @@ struct LandingDashboardView: View {
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
     let openMinutes: () -> Void
+    let openAgenda: () -> Void
     let openTreasury: () -> Void
     let openBuilding: () -> Void
     let openCalendar: () -> Void
@@ -1015,6 +1020,7 @@ struct LandingDashboardView: View {
                     if model.user?.canReadMinutes == true {
                         homeRow("Meeting Minutes", model.user?.can("minutes.prepare") == true ? "Prepare, review and attest to meeting records" : "Read finalized meeting records", "text.document.fill", action: openMinutes)
                     }
+                    if model.user?.role == "owner" { homeRow("Agenda Creator", "Create and preview the Lodge meeting agenda", "list.number", action: openAgenda) }
                     if model.user?.canUseTreasury == true {
                         homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? "Prepare and review treasurer reports" : model.user?.can("treasury.upload") == true ? "Provide banking records and view reports" : "Read finalized treasurer reports", "chart.bar.doc.horizontal.fill", action: openTreasury)
                     }

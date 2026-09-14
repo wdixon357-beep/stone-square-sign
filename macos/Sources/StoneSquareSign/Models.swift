@@ -56,6 +56,7 @@ struct User: Codable, Identifiable, Equatable {
         case .home, nil: return true
         case .reportGenerator: return can("reports.create")
         case .minutes: return canReadMinutes
+        case .agenda: return role == "owner"
         case .treasury: return canUseTreasury
         case .dues: return canReadDues
         case .documents: return can("documents.status")
@@ -237,7 +238,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, minutes, treasury, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
+enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,

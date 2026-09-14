@@ -24,26 +24,27 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var observation: AnyCancellable?
     private var resumeInstall: (() -> Void)?
 
-    static func unfinishedReportWork(report: ReportBrowserModel, minutes: MinutesWorkspace, treasury: TreasuryWorkspace, operationInProgress: Bool) -> String? {
-                if operationInProgress || report.busy || minutes.busy || treasury.busy {
-                    return "An operation is still running. Wait for it to finish, then try the update again."
-                }
-                if minutes.dirty || (minutes.draft != nil && minutes.draft != minutes.selected?.draft) {
-                    return "Save or discard your Meeting Minutes edits before updating."
-                }
-                if !minutes.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minutes.fileURL != nil {
-                    return "Save or clear the source notes in Meeting Minutes before updating."
-                }
-                if treasury.dirty || (treasury.draft != nil && treasury.draft != treasury.selected?.draft) {
-                    return "Save or discard your Treasurer Report edits before updating."
-                }
-                if !treasury.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !treasury.files.isEmpty {
-                    return "Save or clear the source material in Treasurer Reports before updating."
-                }
-                if !report.draftSaved && (!report.fields.isEmpty || !report.source.isEmpty) {
-                    return "Your Report Generator draft has not saved on this Mac. Keep it open and save your work before updating."
-                }
-                return nil
+    static func unfinishedReportWork(report: ReportBrowserModel, minutes: MinutesWorkspace, treasury: TreasuryWorkspace, agenda: AgendaWorkspace, operationInProgress: Bool) -> String? {
+        if operationInProgress || report.busy || minutes.busy || treasury.busy || agenda.busy {
+            return "An operation is still running. Wait for it to finish, then try the update again."
+        }
+        if minutes.dirty || (minutes.draft != nil && minutes.draft != minutes.selected?.draft) {
+            return "Save or discard your Meeting Minutes edits before updating."
+        }
+        if !minutes.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minutes.fileURL != nil {
+            return "Save or clear the source notes in Meeting Minutes before updating."
+        }
+        if treasury.dirty || (treasury.draft != nil && treasury.draft != treasury.selected?.draft) {
+            return "Save or discard your Treasurer Report edits before updating."
+        }
+        if !treasury.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !treasury.files.isEmpty {
+            return "Save or clear the source material in Treasurer Reports before updating."
+        }
+        if agenda.dirty { return "Save or discard your Agenda Creator edits before updating." }
+        if !report.draftSaved && (!report.fields.isEmpty || !report.source.isEmpty) {
+            return "Your Report Generator draft has not saved on this Mac. Keep it open and save your work before updating."
+        }
+        return nil
     }
 
     func start() {

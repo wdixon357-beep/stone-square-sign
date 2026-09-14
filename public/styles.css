@@ -542,6 +542,21 @@ a { overflow-wrap: anywhere; }
 .calendar-event span, .calendar-event small { display: block; margin-top: 3px; font-size: 11px; }
 .calendar-agenda { display: grid; gap: 12px; }
 .calendar-agenda article { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+
+.agenda-list { display: grid; gap: 12px; }
+.agenda-record { align-items: center; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 18px; justify-content: space-between; padding: 18px; }
+.agenda-record h2 { font-size: 1.05rem; margin: 0 0 5px; }
+.agenda-record p { color: var(--muted); margin: 0; }
+.agenda-workspace { display: grid; gap: 18px; grid-template-columns: minmax(360px, .92fr) minmax(400px, 1.08fr); }
+.agenda-editor { display: grid; gap: 16px; min-width: 0; }
+.agenda-preview { align-self: start; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; min-width: 0; padding: 16px; position: sticky; top: 18px; }
+#agendaSection .content-head .primary { display: inline-flex; }
+.agenda-details-grid, .agenda-section-fields { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.agenda-section-card { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.agenda-section-head { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-bottom: 10px; }
+.agenda-officer-row { display: grid; gap: 10px; grid-template-columns: minmax(150px, .8fr) minmax(190px, 1.2fr); margin: 8px 0; }
+@media (max-width: 980px) { .agenda-workspace { grid-template-columns: 1fr; } .agenda-preview { position: static; } }
+@media (max-width: 600px) { .agenda-details-grid, .agenda-section-fields, .agenda-officer-row { grid-template-columns: 1fr; } .agenda-record, .agenda-section-head { align-items: stretch; flex-direction: column; } }
 .calendar-warnings { color: #8a481c; white-space: pre-wrap; }
 .calendar-details { margin-top: 20px; }
 .calendar-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

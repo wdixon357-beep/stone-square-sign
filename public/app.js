@@ -42,6 +42,7 @@ const state = {
   minutesSourceDirty: false,
 };
 let treasuryWorkspace;
+let agendaWorkspace;
 let buildingCalendarWorkspace;
 let activityWorkspace,activityTracker;
 const requestedWorkspaceSection = new URLSearchParams(window.location.search).get('section');
@@ -136,6 +137,7 @@ const hasUnsavedWorkspace = section => ({
   builder: state.dispensationDirty,
   minutes: state.minutesSourceDirty,
   treasury: Boolean(treasuryWorkspace?.dirty),
+  agenda: Boolean(typeof agendaWorkspace !== 'undefined' && agendaWorkspace?.dirty),
   calendar: Boolean(buildingCalendarWorkspace?.calendarDirty),
   building: Boolean(buildingCalendarWorkspace?.hasUnsavedRequest?.()),
   queue: Boolean($('accessControls')?.dirtyAccessKeys?.size),
@@ -368,9 +370,10 @@ const enterWorkspace = async (user, session) => {
   if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.user)});}
   if (!buildingCalendarWorkspace) { const { BuildingCalendarWorkspace } = await import('/building-calendar.js'); buildingCalendarWorkspace = new BuildingCalendarWorkspace({api: apiFetch, user: () => state.user}); }
   if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
+  if (!agendaWorkspace && user.role === 'owner') { const { AgendaWorkspace } = await import('/agenda.js'); agendaWorkspace = new AgendaWorkspace({ api: apiFetch, user: () => state.user }); }
   const { maySeeTreasury, maySeeMinutes } = applyWorkspacePermissions(user);
   restoreWebDrafts();
-  showWorkspaceSection(requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
+  showWorkspaceSection(requestedWorkspaceSection === 'agenda' && user.role === 'owner' ? 'agenda' : requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
   await refreshMinutesReviewAlerts();
@@ -611,12 +614,15 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (section === 'calendar' && !skipLoad) buildingCalendarWorkspace?.calendar();
   $('settingsSection').classList.toggle('hidden', section !== 'settings');
   $('settingsNav').classList.toggle('active', section === 'settings');
-  if(['activity','builder','proposalReview'].includes(section)&&state.user?.role!=='owner')section='home';
+  if(['activity','builder','proposalReview','agenda'].includes(section)&&state.user?.role!=='owner')section='home';
   state.activeSection = section;
   activityTracker?.visit(section);
   $('activitySection').classList.toggle('hidden',section!=='activity');
   $('activityNav').classList.toggle('active',section==='activity');
   if(section==='activity'&&!skipLoad)activityWorkspace?.load();
+  $('agendaSection').classList.toggle('hidden', section !== 'agenda');
+  $('agendaNav').classList.toggle('active', section === 'agenda');
+  if (section === 'agenda' && !skipLoad) agendaWorkspace?.list();
   $('treasurySection').classList.toggle('hidden', section !== 'treasury');
   $('treasuryNav').classList.toggle('active', section === 'treasury');
   if (section === 'treasury' && !skipLoad) treasuryWorkspace?.list();
@@ -1412,6 +1418,8 @@ $('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'
 $('treasuryMenuCard').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
 $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
+$('agendaNav').addEventListener('click', () => showWorkspaceSection('agenda'));
+$('agendaMenuCard').addEventListener('click', () => showWorkspaceSection('agenda'));
 $('candidateMenuCard').addEventListener('click', () => { void openCandidateTracker(); });
 $('reportSeparateTab').addEventListener('click', () => { void loadReportGenerator({ separate: true }); });
 $('minutesNav').addEventListener('click', () => showWorkspaceSection('minutes'));

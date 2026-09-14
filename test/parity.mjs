@@ -25,6 +25,7 @@ const PAIRS = {
   proposalsNav: 'proposalReview',
   reportsNav: 'reportGenerator',
   minutesNav: 'minutes',
+  agendaNav: 'agenda',
   treasuryNav: 'treasury',
   activityNav: 'activity',
   queueNav: 'documents',

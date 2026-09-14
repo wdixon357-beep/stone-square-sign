@@ -28,6 +28,7 @@ import { minutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
 import { closingReviewIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
+import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 
 dotenv.config();
 
@@ -3439,6 +3440,7 @@ app.get('/api/generation/status', requireAuth, async (req, res, next) => {
 
 mountAccessRoutes(app,{requireAuth,requireOwner});
 mountBuildingCalendar(app,{requireAuth});
+mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 
@@ -3465,6 +3467,7 @@ validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
 await initializeBuildingCalendar();
+await initAgendaSchema();
 await initTreasurySchema();
 await initGenerationSchema();
 await initActivitySchema();

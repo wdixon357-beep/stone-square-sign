@@ -124,6 +124,7 @@
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
             <button id="minutesNav" class="nav-item minutes-only" type="button"><span>MIN</span> Meeting Minutes</button>
+            <button id="agendaNav" class="nav-item owner-only" type="button"><span>AG</span> Agenda Creator</button>
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
             <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
@@ -158,6 +159,7 @@
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
               <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small id="minutesMenuDescription">Read finalized meeting minutes</small></span><b>›</b></button>
+              <button id="agendaMenuCard" class="document-menu-card owner-only" type="button"><i>AG</i><span><strong>Agenda Creator</strong><small>Create and preview the Lodge meeting agenda</small></span><b>›</b></button>
               <button id="activityMenuCard" class="document-menu-card owner-only" type="button"><i>ACT</i><span><strong>Officer Activity</strong><small>Sign-ins, recorded actions and estimated active time</small></span><b>›</b></button>
               <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small id="treasuryMenuDescription">Read finalized treasurer reports</small></span><b>›</b></button>
               <button id="candidateMenuCard" class="document-menu-card candidate-only" type="button"><i>CT</i><span><strong>Candidate Tracker</strong><small id="candidateMenuDescription">Open the Candidate Tracker</small></span><b>›</b></button>
@@ -174,6 +176,7 @@
             <p id="reportGeneratorMessage" class="message" role="status"></p>
             <iframe id="reportGeneratorFrame" title="Report Generator" referrerpolicy="no-referrer"></iframe>
           </section>
+          <section id="agendaSection" class="hidden"></section>
           <section id="queueSection">
           <div class="content-head">
             <div><p class="eyebrow">REAL TIME SIGNING QUEUE</p><h1>Lodge documents</h1><p>New requests and signatures load automatically on every connected device.</p></div>
