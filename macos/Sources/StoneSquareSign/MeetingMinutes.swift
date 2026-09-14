@@ -81,6 +81,21 @@ final class MinutesWorkspace: ObservableObject {
         do { records = try JSONDecoder().decode(MinutesListPayload.self, from: await request("/api/minutes")).minutes }
         catch { message = error.localizedDescription }
     }
+    func openReviewedRecord(id: String) async -> Bool {
+        do {
+            let loaded = try JSONDecoder().decode(MinutesListPayload.self, from: await request("/api/minutes")).minutes
+            records = loaded
+            guard let record = loaded.first(where: { $0.id == id }) else {
+                message = "The reviewed minutes could not be found. The alert will remain until the record is available."
+                return false
+            }
+            open(record)
+            return true
+        } catch {
+            message = "The reviewed minutes could not be opened. The alert will remain until the record loads successfully."
+            return false
+        }
+    }
     func refreshGenerationStatus() async { generationStatus = await GenerationStatus.load(using: self) }
     func open(_ record: MinutesRecord) {
         previewTask?.cancel(); revision += 1

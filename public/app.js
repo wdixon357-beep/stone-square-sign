@@ -735,14 +735,18 @@ const refreshMinutesReviewAlerts = async () => {
       button.style.cssText = 'display:block;width:100%;text-align:left;white-space:normal;margin-bottom:12px';
       button.textContent = `${alert.title}. ${alert.message || `Submitted by ${alert.submittedBy}. Open for review.`}`;
       button.addEventListener('click', async () => {
+        showWorkspaceSection('minutes');
+        if (!await renderMinutes()) return;
+        const record = state.minutes.find(item => item.id === alert.id);
+        if (!record) {
+          setMessage($('minutesMessage'), 'The reviewed minutes could not be opened. The alert will remain until the record loads successfully.', true);
+          return;
+        }
+        openMinutesEditor(record.id);
         if (alert.kind === 'preparer_completion') {
           try { await apiFetch(`/api/minutes/${alert.id}/completion-alert-seen`, { method: 'POST' }); }
-          catch { /* Open the signed record even if acknowledging the alert must be retried. */ }
+          catch { /* The record is open. Keep the alert visible so acknowledgment can be retried. */ }
         }
-        showWorkspaceSection('minutes');
-        await renderMinutes();
-        const record = state.minutes.find(item => item.id === alert.id);
-        if (record) openMinutesEditor(record.id);
         await refreshMinutesReviewAlerts();
       });
       return button;
@@ -769,7 +773,7 @@ const renderMinutes = async () => {
       note.textContent = can('minutes.prepare') ? 'Upload meeting notes or a transcript above to create the first draft.' : 'Finalized minutes will appear here when available.';
       empty.append(title, note);
       list.append(empty);
-      return;
+      return true;
     }
     state.minutes.forEach((item) => {
       const row = document.createElement('article');
@@ -812,8 +816,10 @@ const renderMinutes = async () => {
       row.append(icon, main, status, actions);
       list.append(row);
     });
+    return true;
   } catch (error) {
     setMessage($('minutesMessage'), error.message, true);
+    return false;
   }
 };
 

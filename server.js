@@ -2100,7 +2100,11 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     );
     broadcast('minutes_review_changed');
     broadcast('minutes_completion_changed');
-    const recipients = await dbAll("SELECT DISTINCT email FROM users WHERE access_revoked_at IS NULL AND (role = 'secretary' OR id = ?)", [row.created_by_user_id]);
+    const recipientCandidates = await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND (role = 'secretary' OR id = ?)", [row.created_by_user_id]);
+    const recipients = [...new Map(recipientCandidates
+      .filter(candidate => hasPermission(candidate, 'minutes.prepare'))
+      .map(candidate => [normalizeEmail(candidate.email), candidate]))
+      .values()];
     const changes = row.master_changes_json ? JSON.parse(row.master_changes_json) : [];
     const changedSections = changes.map(change => change.field).join(', ');
     const notificationWarnings = [];

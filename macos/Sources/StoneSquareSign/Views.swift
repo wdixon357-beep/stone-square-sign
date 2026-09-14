@@ -288,7 +288,12 @@ struct WorkspaceView: View {
             ForEach(model.minutesReviewAlerts) { alert in
                 Button {
                     selection = .minutes
-                    Task { await model.markMinutesAlertSeen(alert) }
+                    Task {
+                        minutesWorkspace.configure(model)
+                        if await minutesWorkspace.openReviewedRecord(id: alert.id) {
+                            await model.markMinutesAlertSeen(alert)
+                        }
+                    }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Label(alert.title, systemImage: "bell.badge.fill")

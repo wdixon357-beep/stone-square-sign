@@ -627,7 +627,24 @@ try {
   const afterReopen = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('returning minutes to draft removes the pending review alert', !afterReopen.payload.alerts.some(a => a.id === secretaryMinutesId));
   const secretaryResubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
+  const accessBeforeSecretaryReview = await api('GET', '/api/admin/access', { token: wmToken });
+  const secretaryAccess = accessBeforeSecretaryReview.payload.accounts?.find(account => account.email === 'mcduff8995@example.org' && !account.pending);
+  check('the Secretary account is available for the completion notice access check', Boolean(secretaryAccess));
+  const withoutMinutes = secretaryAccess.permissions.filter(permission => !permission.startsWith('minutes.'));
+  const disabledSecretaryMinutes = await api('PUT', '/api/admin/access', {
+    token: wmToken, body: { key: secretaryAccess.key, permissions: withoutMinutes },
+  });
+  check('the Master can disable the Secretary minutes workspace before review completes', disabledSecretaryMinutes.status === 200);
+  const completionMailBeforeDisabledReview = deliveredMail.length;
   const secretaryReviewed = await api('POST', `/api/minutes/${secretaryMinutesId}/master-attest`, { token: wmToken });
+  check('disabled Minutes access prevents the completion email and distribution action',
+    secretaryReviewed.status === 200
+      && deliveredMail.length === completionMailBeforeDisabledReview
+      && (await api('POST', `/api/minutes/${secretaryMinutesId}/mark-distributed`, { token: secToken })).status === 403);
+  const restoredSecretaryMinutes = await api('PUT', '/api/admin/access', {
+    token: wmToken, body: { key: secretaryAccess.key, permissions: secretaryAccess.permissions },
+  });
+  check('restoring Minutes access takes effect without another sign in', restoredSecretaryMinutes.status === 200);
   const secretaryCompletion = await api('GET', '/api/minutes/completion-alerts', { token: secToken });
   check('McDuffie receives the same reviewed and signed alert when he prepares the minutes',
     secretaryResubmission.status === 200 && secretaryReviewed.status === 200

@@ -29,6 +29,7 @@ assert.match(app, /\/api\/auth\/sessions\/revoke-others/, 'My Settings must supp
 assert.match(app, /notificationWarnings/, 'notification delivery warnings must remain visible after successful writes');
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'the preparing officer must receive a reviewed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening reviewed minutes must acknowledge only that preparing officer alert');
+assert.ok(app.indexOf('openMinutesEditor(record.id)') < app.indexOf('completion-alert-seen'), 'reviewed minutes must open before their alert is acknowledged');
 assert.match(app, /beforeunload/, 'unfinished long-form work must be protected on reload');
 assert.match(app, /sessionStorage/, 'non-sensitive drafts must recover within the current tab');
 assert.doesNotMatch(read('../public/treasury.js'), /sessionStorage|localStorage/, 'banking data must not be retained in browser storage');

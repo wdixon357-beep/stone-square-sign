@@ -107,11 +107,49 @@ final class GenerationFixture: URLProtocol {
     override func stopLoading() {}
 }
 
+struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
+
 @main struct NativeReportTests {
     @MainActor static func main() async throws {
         precondition(LodgeDateTime.display("2026-06-15T21:01:00.000Z") == "Monday, June 15, 2026 at 5:01 PM EDT")
         precondition(LodgeDateTime.display("2026-12-15T21:01:00Z") == "Tuesday, December 15, 2026 at 4:01 PM EST")
         print("PASS: native queue timestamps use readable Eastern dates and times")
+        let alertConfig = URLSessionConfiguration.ephemeral
+        alertConfig.protocolClasses = [GenerationFixture.self]
+        let alertSession = URLSession(configuration: alertConfig)
+        defer { alertSession.invalidateAndCancel() }
+        let reviewedDraft = MinutesDraft(
+            organizerVersion: 2, sourceType: "notes", meetingDate: "2026-09-03",
+            meetingType: "Stated Communication", degree: "Third Degree of Masonry",
+            openingTime: "7:36 PM", closingTime: "10:30 PM", presiding: "WM Dixon-Saunders",
+            quorum: "Yes", nextMeeting: "Thursday, September 17, 2026",
+            prayerRequested: true, closingPrayerGiven: true, present: [], excused: [], visitors: [],
+            officerAttendance: [], income: [], expenses: [], sections: [], warnings: [], sensitiveReview: [], actionItems: []
+        )
+        let reviewedRecord = MinutesRecord(
+            masterChanges: [], submittedDraft: reviewedDraft, id: "reviewed-minutes", draft: reviewedDraft,
+            status: "ready_for_distribution", createdBy: "Adrian Reese", updatedAt: "2026-09-13T23:00:00Z",
+            createdByUserId: 2, preparerRole: "assistant_secretary", preparerAttestedAt: "2026-09-13T22:00:00Z",
+            masterAttestedAt: "2026-09-13T23:00:00Z", approvedByLodgeOn: nil, approvalNote: nil
+        )
+        GenerationFixture.response = try JSONEncoder().encode(MinutesEnvelope(minutes: [reviewedRecord]))
+        GenerationFixture.statusCode = 200
+        let minutesApp = AppModel(session: alertSession, savedSessionToken: "synthetic-token")
+        let savedMinutesServer = minutesApp.serverAddress
+        minutesApp.serverAddress = "https://minutes-fixture.invalid"
+        defer { minutesApp.serverAddress = savedMinutesServer }
+        let alertWorkspace = MinutesWorkspace(session: alertSession)
+        alertWorkspace.configure(minutesApp)
+        alertWorkspace.token = "synthetic-token"
+        let reviewedOpened = await alertWorkspace.openReviewedRecord(id: reviewedRecord.id)
+        precondition(reviewedOpened, "reviewed alert did not open the matching minutes")
+        precondition(alertWorkspace.selected?.id == reviewedRecord.id, "reviewed alert selected the wrong minutes")
+        GenerationFixture.statusCode = 503
+        let missingOpened = await alertWorkspace.openReviewedRecord(id: "missing-minutes")
+        precondition(!missingOpened, "failed minutes load incorrectly reported success")
+        print("PASS: native reviewed-minutes alerts clear only after the matching record opens")
+        GenerationFixture.statusCode = 200
+        GenerationFixture.requests = []
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: scratch) }
         let config = URLSessionConfiguration.ephemeral
