@@ -214,7 +214,7 @@ try {
   check('Minutes attestation makes no provider call', result.status === 200 && await providerCalls() === count);
   check('Attested minutes reject reorganization before a provider call', (await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: result.data.minutes.updatedAt})).status === 409 && await providerCalls() === count);
   const secretaryMinutes = (await api('/api/minutes', secretary.token)).data.minutes.find(item => item.id === minutes.id);
-  check('Secretaries receive minutes without provider or cost notices', Boolean(secretaryMinutes) && !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(secretaryMinutes.draft.warnings)));
+  check('Another preparer cannot read unfinished minutes or their provider notices', !secretaryMinutes);
   await control({mode:'success'});
   const reportInput={source:'Synthetic report notes',type:'officer',master:false,fields:{}};
   const countBeforeReport=await providerCalls();

@@ -35,9 +35,11 @@ assert.match(app, /\/api\/auth\/sessions\/revoke-others/, 'My Settings must supp
 assert.match(app, /notificationWarnings/, 'notification delivery warnings must remain visible after successful writes');
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'the preparing officer must receive a reviewed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening reviewed minutes must acknowledge only that preparing officer alert');
-assert.match(app, /Signed and ready for McDuffie or Reese/, 'the website must name both Secretaries on an authorized minutes draft');
+assert.match(app, /Signed and available to all officers/, 'the website must state when signed minutes are available to officers');
 assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either Secretary must be allowed to record distribution');
-assert.match(nativeMinutes, /Signed and ready for McDuffie or Reese/, 'the Mac app must use the same minutes status wording');
+assert.match(nativeMinutes, /Signed and available to all officers/, 'the Mac app must use the same minutes status wording');
+assert.match(app, /event: minutes_records_changed/, 'the website must refresh an open minutes archive after publication');
+assert.match(nativeAPI, /event: minutes_records_changed/, 'the Mac app must refresh an open minutes archive after publication');
 assert.ok(app.indexOf('openMinutesEditor(record.id)') < app.indexOf('completion-alert-seen'), 'reviewed minutes must open before their alert is acknowledged');
 assert.match(html, /id="treasuryAlerts"[^>]+aria-live="polite"/, 'waiting banking records must have a persistent accessible alert region');
 assert.match(app, /\/api\/treasury\/alerts/, 'the website must refresh waiting banking-record alerts');

@@ -33,8 +33,10 @@ try{
  check('Unfinished minutes PDF cannot be guessed',(await api(`/api/minutes/${m.minutes.id}/pdf`,officer.token)).status===404);
  check('Arbitrary minutes preview blocked',(await api(`/api/minutes/${m.minutes.id}/preview`,officer.token,'POST',{})).status===403);
  const grant=[...selected,'minutes.prepare'];check('Owner grants preparation independently of role',(await api('/api/admin/access',owner.token,'PUT',{key,permissions:grant})).status===200);
- check('Existing session immediately gains draft access',(await api('/api/minutes',officer.token)).data.minutes.some(x=>x.id===m.minutes.id));
+ check('Preparation access does not expose another preparer draft',!(await api('/api/minutes',officer.token)).data.minutes.some(x=>x.id===m.minutes.id));
  check('Existing session receives updated capabilities',(await api('/api/auth/me',officer.token)).data.user.permissions.includes('minutes.prepare'));
+ const ownForm=new FormData();ownForm.set('transcriptText',source);const ownResponse=await fetch(base+'/api/minutes/generate',{method:'POST',headers:{Authorization:`Bearer ${officer.token}`},body:ownForm});const ownMinutes=await ownResponse.json();
+ check('A preparer can create and read his own unfinished minutes',ownResponse.status===201&&(await api('/api/minutes',officer.token)).data.minutes.some(x=>x.id===ownMinutes.minutes.id));
  await api('/api/admin/access',owner.token,'PUT',{key,permissions:selected});check('Revocation immediately hides drafts',(await api('/api/minutes',officer.token)).data.minutes.length===0);
  const assistant=await accept(await invite(owner,'assistant_secretary'));check('Adrian role can prepare treasury but cannot upload',assistant.user.permissions.includes('treasury.prepare')&&!assistant.user.permissions.includes('treasury.upload'));
  check('Assistant secretary can start blank treasury report',(await api('/api/treasury/drafts',assistant.token,'POST',{})).status===201);

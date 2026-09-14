@@ -167,6 +167,7 @@ enum BiometricCredentialStore {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
+    @Published var minutesRecordsRevision = 0
     @Published var treasuryAlerts: [TreasuryAlert] = []
     @Published var user: User?
     @Published var signInSession: SignInSession?
@@ -517,6 +518,9 @@ final class AppModel: ObservableObject {
                         if Task.isCancelled { break }
                         if line == "event: minutes_review_changed" || line == "event: minutes_completion_changed" {
                             await self.refreshMinutesReviewAlerts()
+                        }
+                        if line == "event: minutes_records_changed" {
+                            self.minutesRecordsRevision += 1
                         }
                         if line == "event: treasury_changed" {
                             await self.refreshTreasuryAlerts()

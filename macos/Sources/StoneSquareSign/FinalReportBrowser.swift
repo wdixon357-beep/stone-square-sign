@@ -58,6 +58,7 @@ struct FinalReportBrowserView: View {
             if !message.isEmpty { Text(message).font(.callout).padding(12) }
         }
         .task(id: kind) { transport.configure(model); await refresh(); if let initialSelection { selectedID = "current:\(initialSelection)" } }
+        .onChange(of: model.minutesRecordsRevision) { _, _ in if kind == .minutes { Task { await refresh() } } }
         .onChange(of: selectedID) { _, id in pdf = nil; if let id { Task { await open(id) } } }
     }
     private func refresh() async {

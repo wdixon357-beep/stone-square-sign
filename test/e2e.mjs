@@ -432,6 +432,16 @@ try {
   const minutesViewer = await api('GET', '/api/minutes', { token: viewerToken });
   check('a viewer cannot read private meeting minutes', minutesViewer.status === 403,
     String(minutesViewer.status));
+  const accessForFinalReader = await api('GET', '/api/admin/access', { token: wmToken });
+  const finalReaderAccount = accessForFinalReader.payload.accounts.find(account => account.email === 'viewer22@example.org' && !account.pending);
+  const finalReaderGrant = await api('PUT', '/api/admin/access', { token: wmToken, body: {
+    key: finalReaderAccount.key, permissions: [...finalReaderAccount.permissions, 'minutes.view'],
+  } });
+  const officerToken = viewerToken;
+  const finalReaderSession = await api('GET', '/api/auth/me', { token: officerToken });
+  check('the Master can grant finalized minutes viewing without preparation access', finalReaderGrant.status === 200
+    && finalReaderSession.payload.user.permissions.includes('minutes.view')
+    && !finalReaderSession.payload.user.permissions.includes('minutes.prepare'));
   const ownerMinutesForm = new FormData();
   ownerMinutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '
     + 'A quorum was present. The Lodge discussed business, acted on a motion, and closed in due form. '
@@ -474,8 +484,20 @@ try {
     generatedMinutes.payload.minutes?.draft?.sensitiveReview?.length === 1
       && !JSON.stringify(generatedMinutes.payload.minutes.draft.sections).includes('medical diagnosis'));
   const minutesForSecretary = await api('GET', '/api/minutes', { token: secToken });
-  check('the Secretary can review the Assistant Secretary draft',
-    minutesForSecretary.status === 200 && minutesForSecretary.payload.minutes.some((m) => m.id === minutesId));
+  const minutesForOfficerBeforeSigning = await api('GET', '/api/minutes', { token: officerToken });
+  const privatePdfBeforeSigning = await api('GET', `/api/minutes/${minutesId}/pdf`, { token: officerToken });
+  const otherSecretaryPreview = await api('POST', `/api/minutes/${minutesId}/preview`, { token: secToken, body: { draft: generatedMinutes.payload.minutes.draft } });
+  const otherSecretaryReorganize = await api('POST', `/api/minutes/${minutesId}/reorganize`, { token: secToken,
+    body: { expectedUpdatedAt: generatedMinutes.payload.minutes.updatedAt } });
+  const otherSecretaryEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: secToken,
+    body: { draft: generatedMinutes.payload.minutes.draft, expectedUpdatedAt: generatedMinutes.payload.minutes.updatedAt } });
+  check('another Secretary cannot open the Assistant Secretary unfinished draft',
+    minutesForSecretary.status === 200 && !minutesForSecretary.payload.minutes.some((m) => m.id === minutesId)
+      && otherSecretaryPreview.status === 404 && otherSecretaryReorganize.status === 404 && otherSecretaryEdit.status === 404);
+  check('a final records officer cannot see minutes or their PDF before the Worshipful Master signs',
+    minutesForOfficerBeforeSigning.status === 200
+      && !minutesForOfficerBeforeSigning.payload.minutes.some((m) => m.id === minutesId)
+      && privatePdfBeforeSigning.status === 404);
   const minutesPreview = await api('POST', `/api/minutes/${minutesId}/preview`, {
     token: asstToken, body: { draft: generatedMinutes.payload.minutes.draft },
   });
@@ -555,10 +577,26 @@ try {
     token: wmToken, body: { signatureData: SIG, signatureType: 'drawn' },
   });
   check('the Worshipful Master saves the signature used on the minutes', minutesWmSig.status === 200);
+  const publicationStreamAbort = new AbortController();
+  const officerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${officerToken}` }, signal: publicationStreamAbort.signal });
+  let officerEvents = '';
+  const officerStreamReader = collectEvents(officerStream, text => { officerEvents += text; });
   const authorizedMinutes = await api('POST', `/api/minutes/${minutesId}/master-attest`, { token: wmToken });
-  check('the Worshipful Master can attest and return the signed draft to McDuffie',
+  await new Promise(resolve => setTimeout(resolve, 100));
+  publicationStreamAbort.abort();
+  await officerStreamReader;
+  check('the Worshipful Master can review, sign and publish the minutes to officers',
     authorizedMinutes.status === 200 && authorizedMinutes.payload.minutes.status === 'ready_for_distribution'
       && Boolean(authorizedMinutes.payload.minutes.masterAttestedAt));
+  check('publication immediately signals every signed in officer with minutes access',
+    officerEvents.includes('event: minutes_records_changed') && officerEvents.includes('"reason":"published"'));
+  const minutesForOfficerAfterSigning = await api('GET', '/api/minutes', { token: officerToken });
+  const signedPdfForOfficer = await api('GET', `/api/minutes/${minutesId}/pdf`, { token: officerToken });
+  const publishedRecord = minutesForOfficerAfterSigning.payload.minutes.find(item => item.id === minutesId);
+  check('the signed PDF appears for a final records officer without another upload or distribution step',
+    minutesForOfficerAfterSigning.status === 200 && publishedRecord?.status === 'ready_for_distribution'
+      && publishedRecord.sourceName === null && publishedRecord.submittedDraft === null
+      && signedPdfForOfficer.status === 200 && signedPdfForOfficer.payload.subarray(0, 4).toString() === '%PDF');
   const clearedAlerts = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('the review alert clears after the Master completes review', !clearedAlerts.payload.alerts.some(a => a.id === minutesId));
   const preparerCompletionAlerts = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });

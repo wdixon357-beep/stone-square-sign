@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 private func minutesStatusLabel(_ status: String) -> String {
     switch status {
-    case "ready_for_distribution": "Signed and ready for McDuffie or Reese"
+    case "ready_for_distribution": "Signed and available to all officers"
     case "distributed": "Distributed by the Secretary or Assistant Secretary"
     default: status.replacingOccurrences(of: "_", with: " ").capitalized
     }
@@ -263,6 +263,9 @@ struct MeetingMinutesView: View {
         .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.24)) { appeared = true } }
         .disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh() }
+        .onChange(of: model.minutesRecordsRevision) { _, _ in
+            if !workspace.dirty { Task { await workspace.refresh() } }
+        }
         .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .minutes, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
         .onChange(of: workspace.draft) { old, new in
             guard old != nil, old != new else { return }
@@ -281,7 +284,11 @@ struct MeetingMinutesView: View {
         .alert("Confirm record action", isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } })) {
             Button("Continue") { if let action = pendingAction { Task { await workspace.action(action, body: action == "lodge-approval" ? ["approvalDate": approvalDate, "approvalNote": approvalNote] : [:]) } } }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("\(actionLabel(pendingAction ?? ""))? Review the saved document before continuing.") }
+        } message: {
+            Text(pendingAction == "master-attest"
+                ? "Your signature will immediately publish the signed PDF to every officer in the Dashboard. Distribution to the Craft remains a separate recorded action."
+                : "\(actionLabel(pendingAction ?? ""))? Review the saved document before continuing.")
+        }
     }
     private var recordList: some View {
         ScrollView {
@@ -431,7 +438,7 @@ struct MeetingMinutesView: View {
         VStack(alignment: .leading) { Text(label).font(.subheadline.weight(.medium)); TextEditor(text: binding).font(.body).frame(height: 65).padding(4) }
     }
     private func actionLabel(_ action: String) -> String {
-        ["preparer-attest": "Attest and send to the Worshipful Master", "master-attest": "Attest and authorize distribution", "mark-distributed": "Record distribution", "reopen": "Reopen for corrections", "lodge-approval": "Record formal Lodge approval"][action] ?? action
+        ["preparer-attest": "Attest and send to the Worshipful Master", "master-attest": "Review, sign and publish to officers", "mark-distributed": "Record distribution", "reopen": "Reopen for corrections", "lodge-approval": "Record formal Lodge approval"][action] ?? action
     }
     private var workflow: some View {
         VStack(alignment: .leading, spacing: 12) {

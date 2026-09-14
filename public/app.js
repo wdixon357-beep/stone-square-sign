@@ -670,7 +670,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
 const MINUTES_STATUS = {
   draft: 'Working draft',
   awaiting_master_attestation: 'Waiting for the Worshipful Master',
-  ready_for_distribution: 'Signed and ready for McDuffie or Reese',
+  ready_for_distribution: 'Signed and available to all officers',
   distributed: 'Distributed by the Secretary or Assistant Secretary',
   approved_by_lodge: 'Approved by the Lodge',
 };
@@ -838,9 +838,10 @@ const renderMinutes = async () => {
       const open = document.createElement('button');
       open.className = 'secondary small';
       open.type = 'button';
-      open.textContent = can('minutes.prepare') ? 'Review' : 'View PDF';
+      const mayReview = can('minutes.prepare') && (state.user?.role === 'owner' || item.createdByUserId === state.user?.id);
+      open.textContent = mayReview ? 'Review' : 'View PDF';
       open.addEventListener('click', async () => {
-        if (can('minutes.prepare')) return openMinutesEditor(item.id);
+        if (mayReview) return openMinutesEditor(item.id);
         try { showPdfBlob(await apiFetch(`/api/minutes/${item.id}/pdf`), `Minutes of ${minutesDateLabel(item)}`); }
         catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
       });
@@ -1658,7 +1659,7 @@ $('submitMinutesReview').addEventListener('click', async () => {
 $('authorizeMinutes').addEventListener('click', async () => {
   try {
     await saveMinutesCorrections();
-    await minutesAction('master-attest', null, 'You attested to the reviewed minutes. The signed record and your corrections are available to the preparer and Secretary.');
+    await minutesAction('master-attest', null, 'You reviewed and signed the minutes. The signed PDF is now available to every officer. McDuffie or Reese can still record distribution to the Craft.');
   } catch (error) { setMessage($('minutesEditorMessage'), error.message, true); }
 });
 $('markMinutesDistributed').addEventListener('click', () => minutesAction(
@@ -1734,6 +1735,7 @@ const startRealtime = async () => {
         buffer = events.pop() || '';
         events.forEach((event) => {
           if (event.includes('event: minutes_review_changed') || event.includes('event: minutes_completion_changed')) refreshMinutesReviewAlerts();
+          if (event.includes('event: minutes_records_changed') && state.activeSection === 'minutes' && !state.minutesEditorDirty) renderMinutes();
           if (event.includes('event: treasury_changed')) refreshTreasuryAlerts();
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();
