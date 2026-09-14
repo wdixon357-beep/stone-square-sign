@@ -15,4 +15,5 @@ finally { globalThis.fetch=originalFetch; }
 const scan=await PDFDocument.create(),p=scan.addPage([612,792]),img=await scan.embedPng(image);p.drawImage(img,{x:0,y:0,width:612,height:792});
 result=await readTreasurySources([{originalname:'scanned-statement.pdf',buffer:Buffer.from(await scan.save())}]);assert.match(result.text,/1,200.00/);assert.match(result.notes.join(' '),/scan/);
 await assert.rejects(()=>readTreasurySources([{originalname:'broken.png',buffer:Buffer.from('not an image')}]),/not a readable/);
+assert.equal((await readTreasurySources([], 'No activity.', {minimumLength:3})).text,'No activity.');
 console.log('Treasurer PDF, screenshot and scanned PDF extraction tests passed.');

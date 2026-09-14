@@ -9,7 +9,34 @@ import { buildTreasuryPdf } from './treasury-pdf.js';
 import { treasuryMeetingCycle, treasuryCycleEnding, applyTreasuryMeetingCycle } from './treasury-period.js';
 const error = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 const bytes = v => v ? Buffer.from(v) : null;
-const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*1024*1024, files:5, fields:4, fieldSize:180000 }, fileFilter:(_req,file,done)=>/\.(pdf|png|jpe?g|txt)$/i.test(file.originalname)?done(null,true):done(error(400,'Choose a PDF, PNG, JPG or TXT file.')) });
+const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*1024*1024, files:5, fields:6, fieldSize:180000 }, fileFilter:(_req,file,done)=>/\.(pdf|png|jpe?g|txt)$/i.test(file.originalname)?done(null,true):done(error(400,'Choose a PDF, PNG, JPG or TXT file.')) });
+const uploadFields = upload.fields([{name:'files',maxCount:5},{name:'checkingFiles',maxCount:5},{name:'savingsFiles',maxCount:5}]);
+const fileList = files => Array.isArray(files) ? files : Object.values(files||{}).flat();
+async function accountSources(req) {
+  const legacy=Array.isArray(req.files)?req.files:fileList(req.files?.files);
+  const checking=fileList(req.files?.checkingFiles),savings=fileList(req.files?.savingsFiles);
+  if(!checking.length&&!savings.length&&!String(req.body.checkingSourceText||'').trim()&&!String(req.body.savingsSourceText||'').trim()){
+    const source=await readTreasurySources(legacy,req.body.sourceText);
+    return {...source,files:legacy.map(file=>({file,accountLabel:''}))};
+  }
+  const groups=[];
+  for(const [label,files,typed] of [['Checking',checking,req.body.checkingSourceText],['Savings',savings,req.body.savingsSourceText]]){
+    if(!files.length&&!String(typed||'').trim())continue;
+    const source=await readTreasurySources(files,typed,{minimumLength:3});
+    groups.push({label,source,files});
+  }
+  if(legacy.length||String(req.body.sourceText||'').trim()){
+    const source=await readTreasurySources(legacy,req.body.sourceText);
+    groups.push({label:'Additional banking information',source,files:legacy});
+  }
+  const text=groups.map(({label,source})=>`${label} account\n${source.text}`).join('\n\n');
+  return {
+    text,
+    names:groups.flatMap(({label,source})=>source.names.map(name=>`${label}: ${name}`)),
+    notes:groups.flatMap(({label,source})=>source.notes.map(note=>`${label}: ${note}`)),
+    files:groups.flatMap(({label,files})=>files.map(file=>({file,accountLabel:label}))),
+  };
+}
 const serial = row => ({ preparerUserId:row.preparer_user_id, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft:JSON.parse(row.draft_json), submittedDraft:row.submitted_json?JSON.parse(row.submitted_json):null, calculation:calculateTreasury(JSON.parse(row.draft_json)), preparerAttestedAt:row.preparer_attested_at });
 const fetchRecord = id => dbGet('SELECT * FROM treasury_reports WHERE id = ? AND deleted_at IS NULL',[id]);
 const canPrepare = user => hasPermission(user,'treasury.prepare');
@@ -41,6 +68,7 @@ export async function initTreasurySchema() {
   await dbRun("UPDATE treasury_reports SET preparer_user_id=created_by_user_id,uploader_name=preparer_name WHERE uploader_name IS NULL");
   await dbRun('CREATE TABLE IF NOT EXISTS treasury_upload_access (user_id INTEGER PRIMARY KEY REFERENCES users(id), granted_by INTEGER NOT NULL REFERENCES users(id), granted_at TEXT NOT NULL)');
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_sources (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), name TEXT NOT NULL, mime TEXT NOT NULL, bytes BYTEA NOT NULL)`);
+  await dbRun("ALTER TABLE treasury_sources ADD COLUMN IF NOT EXISTS account_label TEXT NOT NULL DEFAULT ''");
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_attestations (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), phase TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), draft_json TEXT NOT NULL, signature_bytes BYTEA NOT NULL, created_at TEXT NOT NULL)`);
   // Preserve existing upload grants once; an explicit permissions selection always wins.
   for(const user of await dbAll('SELECT u.* FROM users u JOIN treasury_upload_access g ON g.user_id=u.id WHERE u.permissions_json IS NULL')){
@@ -110,17 +138,17 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       await audit(req,id,'created',{manual:true});
     });broadcast('treasury_changed');res.status(201).json({report:serial(await fetchRecord(id))});
   }));
-  app.post('/api/treasury/generate',requireUpload,rateLimit({key:'treasury-generate',maximum:12,windowMs:3600000}),upload.array('files',5),route(async(req,res)=>{
-    if((req.files||[]).reduce((n,f)=>n+f.size,0)>20*1024*1024)throw error(400,'Keep the combined uploads under 20 MB.');
+  app.post('/api/treasury/generate',requireUpload,rateLimit({key:'treasury-generate',maximum:12,windowMs:3600000}),uploadFields,route(async(req,res)=>{
+    const uploaded=fileList(req.files);if(uploaded.reduce((n,f)=>n+f.size,0)>20*1024*1024)throw error(400,'Keep the combined uploads under 20 MB.');
     const intent=req.body.intent || (req.body.deferAssignment==='true'||req.treasuryAccess!=='prepare'?'save':'complete');
     if(!['save','complete'].includes(intent))throw error(400,'Choose whether to save banking information or complete the report.');
     if(intent==='complete'&&req.treasuryAccess!=='prepare')throw error(403,'This account can save banking information, but report preparation access is required to complete a report.');
     const deferAssignment=intent==='save';
-    const source=await readTreasurySources(req.files,req.body.sourceText);
+    const source=await accountSources(req);
     const draft=await generateTreasuryDraft(source.text,{sourceNames:source.names,sourceNotes:source.notes,meetingCycle:treasuryMeetingCycle(),generateStructured:deferAssignment?undefined:generationFor(req.user.id)}),id=crypto.randomUUID(),time=new Date().toISOString();
     await withTransaction(async()=>{
       await dbRun('INSERT INTO treasury_reports (id,draft_json,source_text,created_by_user_id,preparer_name,preparer_role,created_at,updated_at,preparer_user_id,uploader_name,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[id,JSON.stringify(draft),source.text,req.user.id,deferAssignment?'':req.user.name,deferAssignment?'':req.user.role,time,time,deferAssignment?null:req.user.id,req.user.name,deferAssignment?'awaiting_preparer':'draft']);
-      for(const f of req.files||[])await dbRun('INSERT INTO treasury_sources (id,report_id,name,mime,bytes) VALUES (?,?,?,?,?)',[crypto.randomUUID(),id,f.originalname.slice(0,150),f.mimetype,f.buffer]);
+      for(const {file:f,accountLabel} of source.files)await dbRun('INSERT INTO treasury_sources (id,report_id,name,mime,bytes,account_label) VALUES (?,?,?,?,?,?)',[crypto.randomUUID(),id,f.originalname.slice(0,150),f.mimetype,f.buffer,accountLabel]);
       await audit(req,id,'created');
     });
     broadcast('treasury_changed',{reason:deferAssignment?'banking_information_waiting':'report_started',reportId:id});
@@ -162,7 +190,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     res.json({draft});
   }));
   app.get('/api/treasury/:id/source',requirePrepare,route(async(req,res)=>{
-    const row=await record(req);const files=await dbAll('SELECT id,name,mime FROM treasury_sources WHERE report_id=? ORDER BY name',[row.id]);res.json({text:row.source_text,files});
+    const row=await record(req);const files=await dbAll('SELECT id,name,mime,account_label AS "accountLabel" FROM treasury_sources WHERE report_id=? ORDER BY account_label,name',[row.id]);res.json({text:row.source_text,files});
   }));
   app.get('/api/treasury/:id/sources/:sourceId',requirePrepare,route(async(req,res)=>{
     const row=await record(req),file=await dbGet('SELECT name,bytes FROM treasury_sources WHERE id=? AND report_id=?',[req.params.sourceId,row.id]);

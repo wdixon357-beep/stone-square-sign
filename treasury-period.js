@@ -1,4 +1,4 @@
-import { validDate } from './treasury.js';
+import { validDate, emptyAccount } from './treasury.js';
 
 const iso = date => date.toISOString().slice(0, 10);
 const atNoon = value => new Date(`${value}T12:00:00Z`);
@@ -49,6 +49,9 @@ export function applyTreasuryMeetingCycle(input, cycle, { excludeUncertain = tru
   draft.previousMeetingDate = cycle.previousMeeting;
   draft.periodStart = cycle.periodStart;
   draft.periodEnd = cycle.periodEnd;
+  draft.accounts = [...(draft.accounts || [])];
+  if(!draft.accounts.some(account=>account.id==='checking'))draft.accounts.unshift(emptyAccount());
+  if(!draft.accounts.some(account=>account.id==='savings'))draft.accounts.push(emptyAccount('savings','Savings'));
   const excluded = [];
   draft.transactions = (draft.transactions || []).filter(transaction => {
     const inWindow = transaction.date && transaction.date >= cycle.periodStart && transaction.date <= cycle.periodEnd;

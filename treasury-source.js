@@ -21,7 +21,7 @@ async function recognize(images) {
   } finally { clearTimeout(timer); await worker?.terminate(); readingImage = false; }
 }
 
-export async function readTreasurySources(files = [], typed = '') {
+export async function readTreasurySources(files = [], typed = '', { minimumLength = 25 } = {}) {
   const pieces = [], notes = [], names = [];
   if (String(typed).trim()) { pieces.push(String(typed).trim()); names.push('Typed banking notes'); }
   for (const file of files) {
@@ -50,7 +50,7 @@ export async function readTreasurySources(files = [], typed = '') {
     } finally { await parser.destroy(); }
   }
   const text = pieces.join('\n\n').trim();
-  if (text.length < 25) throw Object.assign(new Error('No usable banking information was found. Add typed notes or a clearer file.'), { statusCode: 400 });
+  if (text.length < minimumLength) throw Object.assign(new Error('No usable banking information was found. Add typed notes or a clearer file.'), { statusCode: 400 });
   if (text.length > 180000) throw Object.assign(new Error('This source is too long. Use a single reporting period.'), { statusCode: 400 });
   return { text, names, notes };
 }

@@ -30,7 +30,7 @@ struct ReorganizedTreasuryPayload: Decodable { var draft: TreasuryDraft }
 
 struct TreasuryPreparer: Codable, Identifiable { var id: Int; var name: String; var role: String }
 struct TreasuryPreparers: Codable { var preparers: [TreasuryPreparer] }
-struct TreasurySourceFile: Codable, Identifiable { var id: String; var name: String; var mime: String }
+struct TreasurySourceFile: Codable, Identifiable { var id: String; var name: String; var mime: String; var accountLabel: String? }
 struct TreasurySourcePayload: Codable { var text: String; var files: [TreasurySourceFile] }
 struct TreasuryAccessUser: Codable, Identifiable { var id: Int; var name: String; var role: String; var canPrepare: Bool; var uploadEnabled: Bool }
 struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
@@ -38,7 +38,7 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
 @MainActor final class TreasuryWorkspace: ObservableObject {
     @Published var records: [TreasuryRecord] = []; @Published var selected: TreasuryRecord?; @Published var draft: TreasuryDraft?
     @Published var uploadIntent = "save"
-    @Published var source = ""; @Published var files: [URL] = []; @Published var messageIsWarning = false; @Published var message = "" { didSet { messageIsWarning = false } }; @Published var busy = false
+    @Published var checkingSource = ""; @Published var checkingFiles: [URL] = []; @Published var savingsSource = ""; @Published var savingsFiles: [URL] = []; @Published var messageIsWarning = false; @Published var message = "" { didSet { messageIsWarning = false } }; @Published var busy = false
     @Published var pdf: Data?; @Published var previewMessage = ""; @Published var dirty = false
     @Published var preparers: [TreasuryPreparer] = []; @Published var selectedPreparer = 0
     @Published var originalText = ""; @Published var sourceFiles: [TreasurySourceFile] = []; @Published var accessUsers: [TreasuryAccessUser] = []
@@ -105,19 +105,20 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
             let boundary = "Treasury-\(UUID().uuidString)"; var data = Data()
             func append(_ value: String) { data.append(Data(value.utf8)) }
             append("--\(boundary)\r\nContent-Disposition: form-data; name=\"intent\"\r\n\r\n\(uploadIntent)\r\n")
-            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"sourceText\"\r\n\r\n\(source)\r\n")
-            if files.count > 5 { throw ClientError.server("Choose no more than five files.") }
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"checkingSourceText\"\r\n\r\n\(checkingSource)\r\n")
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"savingsSourceText\"\r\n\r\n\(savingsSource)\r\n")
+            if checkingFiles.count + savingsFiles.count > 5 { throw ClientError.server("Choose no more than five files total.") }
             var total = 0
-            for file in files {
+            for (field,files) in [("checkingFiles",checkingFiles),("savingsFiles",savingsFiles)] { for file in files {
                 let bytes = try Data(contentsOf: file); total += bytes.count
                 if bytes.count > 12*1024*1024 || total > 20*1024*1024 { throw ClientError.server("Use files under 12 MB each and 20 MB combined.") }
                 let name = file.lastPathComponent.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
-                append("--\(boundary)\r\nContent-Disposition: form-data; name=\"files\"; filename=\"\(name)\"\r\nContent-Type: application/octet-stream\r\n\r\n"); data.append(bytes); append("\r\n")
-            }
+                append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(field)\"; filename=\"\(name)\"\r\nContent-Type: application/octet-stream\r\n\r\n"); data.append(bytes); append("\r\n")
+            } }
             append("--\(boundary)--\r\n")
             let result = try await transport.request("/api/treasury/generate", method: "POST", body: data, contentType: "multipart/form-data; boundary=\(boundary)")
             let report = try JSONDecoder().decode(TreasuryPayload.self, from: result).report
-            await refresh(); source = ""; files = []
+            await refresh(); checkingSource = ""; checkingFiles = []; savingsSource = ""; savingsFiles = []
             if report.status == "awaiting_preparer" {close();message="Banking information saved. Authorized preparers have a Dashboard alert until one of them claims the report."}
             else {open(report);message="Review the prefilled information and complete your report."}
         } catch { message = error.localizedDescription }
@@ -254,19 +255,29 @@ struct TreasuryView: View {
         Form {
             if model.user?.can("treasury.prepare") == true { Section { Button("Create blank report") { Task { await workspace.createBlank() } }.buttonStyle(.borderedProminent) } }
             if model.user?.can("treasury.upload") == true { Section {
-            GroupBox("Bank statements, screenshots or typed notes") { VStack(alignment:.leading,spacing:12) {
+            GroupBox("Checking account information") { VStack(alignment:.leading,spacing:12) {
                 GenerationStatusView(status: workspace.generationStatus)
-                Button("Choose files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.files=panel.urls } }
-                ForEach(workspace.files,id:\.self) { Text($0.lastPathComponent).font(.caption) }
-                if !workspace.files.isEmpty { Button("Clear selected files") { workspace.files=[] } }
-                Text("Report dates are set automatically. Include account names and bank-posted dates for receipts, payments and transfers. Add any outstanding checks, pending deposits, fenced funds and unpaid bills.").font(.callout).foregroundStyle(.secondary)
-                TextEditor(text:$workspace.source).font(.body).frame(minHeight:160).border(Color.gray.opacity(0.25))
+                Button("Choose checking files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.checkingFiles=panel.urls } }
+                ForEach(workspace.checkingFiles,id:\.self) { Text($0.lastPathComponent).font(.caption) }
+                if !workspace.checkingFiles.isEmpty { Button("Clear checking files") { workspace.checkingFiles=[] } }
+                Text("Upload statements or screenshots, or paste checking transactions and balances below.").font(.callout).foregroundStyle(.secondary)
+                TextEditor(text:$workspace.checkingSource).font(.body).frame(minHeight:130).border(Color.gray.opacity(0.25))
+            }.padding(12) }
+            GroupBox("Savings account information") { VStack(alignment:.leading,spacing:12) {
+                Button("Choose savings files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.savingsFiles=panel.urls } }
+                ForEach(workspace.savingsFiles,id:\.self) { Text($0.lastPathComponent).font(.caption) }
+                if !workspace.savingsFiles.isEmpty { Button("Clear savings files") { workspace.savingsFiles=[] } }
+                Text("Upload statements or screenshots, or paste savings transactions and balances below.").font(.callout).foregroundStyle(.secondary)
+                TextEditor(text:$workspace.savingsSource).font(.body).frame(minHeight:130).border(Color.gray.opacity(0.25))
+            }.padding(12) }
+            GroupBox("Report handoff") { VStack(alignment:.leading,spacing:12) {
+                Text("Report dates are set automatically. Add bank-posted dates for transactions. Use no more than five files total.").font(.callout).foregroundStyle(.secondary)
                 Picker("What would you like to do?",selection:$workspace.uploadIntent) {
                     Text("Save banking information for a report").tag("save")
                     if model.user?.can("treasury.prepare") == true {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
                 Text(model.user?.role == "owner" ? "Save the information for later, or open the prefilled report and complete it yourself. Saving banking information for later does not use the generation allowance." : "Save the information for later, or open the prefilled report and complete it yourself.").font(.caption)
-                Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent)
+                Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.checkingSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.savingsSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.checkingFiles.isEmpty && workspace.savingsFiles.isEmpty)
             }.padding(12) } }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
                 ForEach(workspace.accessUsers.filter { !$0.canPrepare }) { user in HStack { Text(user.name); Spacer(); Button(user.uploadEnabled ? "Remove upload access" : "Allow bank record uploads") { pendingAccessUser = user } } }
@@ -296,7 +307,7 @@ struct TreasuryView: View {
                         Section("Source records") {
                             DisclosureGroup("Original banking records and notes") {
                                 Text(workspace.originalText).font(.caption).textSelection(.enabled)
-                                ForEach(workspace.sourceFiles) { file in Button("Save \(file.name)") { Task { await workspace.downloadSource(file) } } }
+                                ForEach(workspace.sourceFiles) { file in Button("Save \(file.accountLabel.map { $0 + ": " } ?? "")\(file.name)") { Task { await workspace.downloadSource(file) } } }
                             }
                             importReview
                         }

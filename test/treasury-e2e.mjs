@@ -20,6 +20,12 @@ try{
  await permissions(viewer,['treasury.view']);
  check('A finished-report viewer initially sees no drafts',(await api('/api/treasury',viewer.token)).data.reports.length===0);
  const form=new FormData();form.set('sourceText',notes);let response=await api('/api/treasury/generate',treasurer.token,'POST',form);check('Typed source generates a persisted report',response.status===201);let r=response.data.report;
+ const splitForm=new FormData();splitForm.set('intent','complete');splitForm.set('checkingSourceText',`${r.draft.periodStart} Deposit dues $40.00`);splitForm.set('savingsSourceText',`${r.draft.periodStart} Dividend earned $2.00`);splitForm.append('checkingFiles',new Blob(['Checking statement attachment for source grouping only.']),'checking.txt');splitForm.append('savingsFiles',new Blob(['Savings statement attachment for source grouping only.']),'savings.txt');
+ const splitResponse=await api('/api/treasury/generate',treasurer.token,'POST',splitForm),splitReport=splitResponse.data.report;
+ check('Checking and savings pasted activity stays with its labeled account',splitResponse.status===201&&splitReport.draft.transactions.some(row=>row.account==='checking'&&row.amount==='40.00')&&splitReport.draft.transactions.some(row=>row.account==='savings'&&row.amount==='2.00'));
+ const splitSources=(await api(`/api/treasury/${splitReport.id}/source`,treasurer.token)).data;
+ check('Checking and savings files retain their account labels without duplicate storage',splitSources.files.length===2&&splitSources.files.some(file=>file.name==='checking.txt'&&file.accountLabel==='Checking')&&splitSources.files.some(file=>file.name==='savings.txt'&&file.accountLabel==='Savings'));
+ await api(`/api/treasury/${splitReport.id}`,treasurer.token,'DELETE');
  const cycleFixture=structuredClone(completeTreasuryFixture);Object.assign(cycleFixture,{previousMeetingDate:r.draft.previousMeetingDate,periodStart:r.draft.periodStart,periodEnd:r.draft.periodEnd});cycleFixture.transactions.forEach(row=>row.date=r.draft.periodStart);
  check('Unknown confirmations block attestation',(await api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision})).status===409);
  check('Secretary cannot overwrite another preparer draft',(await api(`/api/treasury/${r.id}`,secretary.token,'PUT',{draft:completeTreasuryFixture,revision:r.revision})).status===403);

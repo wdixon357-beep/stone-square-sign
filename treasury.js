@@ -25,7 +25,7 @@ export function normalizeTreasury(input = {}) {
     funds: rows('funds', 50).map(f => ({ name: text(f.name, 120), account: text(f.account, 40), amount: amount(f.amount), restriction: text(f.restriction, 300) })),
     obligations: rows('obligations', 100).map(o => ({ name: text(o.name, 150), dueDate: validDate(o.dueDate), amount: amount(o.amount), note: text(o.note, 400) })),
     fundsReviewed: input.fundsReviewed === true, obligationsReviewed: input.obligationsReviewed === true, sourceReviewed: input.sourceReviewed === true,
-    remarks: text(input.remarks, 10000), unmappedLines: rows('unmappedLines', 1000).map(l => text(l, 1000)), sourceNames: rows('sourceNames', 5).map(n => text(n, 150)), extractionNotes: rows('extractionNotes', 1000).map(n => text(n, 1000)) };
+    remarks: text(input.remarks, 10000), unmappedLines: rows('unmappedLines', 1000).map(l => text(l, 1000)), sourceNames: rows('sourceNames', 10).map(n => text(n, 150)), extractionNotes: rows('extractionNotes', 1000).map(n => text(n, 1000)) };
 }
 const sum = values => values.some(v => v === null) ? null : values.reduce((a, b) => a + b, 0);
 export function calculateTreasury(input) {

@@ -37,7 +37,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         if treasury.dirty || (treasury.draft != nil && treasury.draft != treasury.selected?.draft) {
             return "Save or discard your Treasurer Report edits before updating."
         }
-        if !treasury.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !treasury.files.isEmpty {
+        if !treasury.checkingSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !treasury.savingsSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !treasury.checkingFiles.isEmpty || !treasury.savingsFiles.isEmpty {
             return "Save or clear the source material in Treasurer Reports before updating."
         }
         if agenda.dirty { return "Save or discard your Agenda Creator edits before updating." }
