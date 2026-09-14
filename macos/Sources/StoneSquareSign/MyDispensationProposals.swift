@@ -57,7 +57,7 @@ struct MyDispensationProposalsView: View {
                             if let document = proposal.document {
                                 if let status = document.status { Text("Dispensation status: \(status.replacingOccurrences(of: "_", with: " ").capitalized)") }
                                 if let approval = document.approvalStatus { Text("Approval status: \(approval.replacingOccurrences(of: "_", with: " ").capitalized)") }
-                                if let submitted = document.submittedAt, !submitted.isEmpty { Text("Submitted: \(submitted)").font(.caption) }
+                                if let submitted = document.submittedAt, !submitted.isEmpty { Text("Submitted: \(LodgeDateTime.display(submitted))").font(.caption) }
                             }
                         }.padding(.vertical, 8)
                     }

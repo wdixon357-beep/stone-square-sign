@@ -109,6 +109,9 @@ final class GenerationFixture: URLProtocol {
 
 @main struct NativeReportTests {
     @MainActor static func main() async throws {
+        precondition(LodgeDateTime.display("2026-06-15T21:01:00.000Z") == "Monday, June 15, 2026 at 5:01 PM EDT")
+        precondition(LodgeDateTime.display("2026-12-15T21:01:00Z") == "Tuesday, December 15, 2026 at 4:01 PM EST")
+        print("PASS: native queue timestamps use readable Eastern dates and times")
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: scratch) }
         let config = URLSessionConfiguration.ephemeral

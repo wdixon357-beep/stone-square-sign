@@ -1,5 +1,21 @@
 import Foundation
 
+enum LodgeDateTime {
+    static func display(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "Not recorded" }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        guard let date = fractional.date(from: value) ?? standard.date(from: value) else { return value }
+        let output = DateFormatter()
+        output.locale = Locale(identifier: "en_US")
+        output.timeZone = TimeZone(identifier: "America/New_York")
+        output.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a z"
+        return output.string(from: date)
+    }
+}
+
 struct User: Codable, Identifiable, Equatable {
     let id: Int
     let email: String

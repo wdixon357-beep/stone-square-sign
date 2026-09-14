@@ -1258,7 +1258,7 @@ struct DocumentRow: View {
                  * that misses its date, which is exactly how the invitations were lost. */
                 if document.isComplete && document.isDispensation {
                     if let sentAt = document.submittedAt {
-                        Text("Sent to the District Deputy \(sentAt)")
+                        Text("Sent to the District Deputy \(LodgeDateTime.display(sentAt))")
                             .font(.caption2).foregroundStyle(.secondary)
                     } else {
                         Text(document.submittedError.map { "NOT sent to the District Deputy. \($0)" }
