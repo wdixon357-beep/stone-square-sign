@@ -13,7 +13,7 @@ struct TreasuryTransaction: Codable, Equatable { var date = ""; var account = ""
 struct TreasuryFund: Codable, Equatable { var name = ""; var account = ""; var amount: String?; var restriction = "" }
 struct TreasuryObligation: Codable, Equatable { var name = ""; var dueDate = ""; var amount: String?; var note = "" }
 struct TreasuryDraft: Codable, Equatable {
-    var version: Int; var periodStart: String; var periodEnd: String; var presentedOn: String; var bankName: String
+    var version: Int; var previousMeetingDate: String?; var periodStart: String; var periodEnd: String; var presentedOn: String; var bankName: String
     var accounts: [TreasuryAccount]; var transactions: [TreasuryTransaction]; var funds: [TreasuryFund]; var obligations: [TreasuryObligation]
     var fundsReviewed: Bool; var obligationsReviewed: Bool; var sourceReviewed: Bool
     var remarks: String; var unmappedLines: [String]; var sourceNames: [String]; var extractionNotes: [String]
@@ -259,7 +259,7 @@ struct TreasuryView: View {
                 Button("Choose files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.files=panel.urls } }
                 ForEach(workspace.files,id:\.self) { Text($0.lastPathComponent).font(.caption) }
                 if !workspace.files.isEmpty { Button("Clear selected files") { workspace.files=[] } }
-                Text("Include the period, checking and savings balances, receipts, payments and transfers. Add any outstanding checks, pending deposits, fenced funds and unpaid bills.").font(.callout).foregroundStyle(.secondary)
+                Text("Report dates are set automatically. Include account names and bank-posted dates for receipts, payments and transfers. Add any outstanding checks, pending deposits, fenced funds and unpaid bills.").font(.callout).foregroundStyle(.secondary)
                 TextEditor(text:$workspace.source).font(.body).frame(minHeight:160).border(Color.gray.opacity(0.25))
                 Picker("What would you like to do?",selection:$workspace.uploadIntent) {
                     Text("Save banking information for a report").tag("save")
@@ -337,7 +337,7 @@ struct TreasuryView: View {
         Picker("Preparing officer",selection:$workspace.selectedPreparer) { Text("Choose an officer").tag(0);ForEach(workspace.preparers) { person in Text(person.name + (person.id == model.user?.id ? " (I will prepare it)" : "")).tag(person.id) } }
         Button("Continue with selected officer") { confirmingAssignment = true }.buttonStyle(.borderedProminent).disabled(workspace.selectedPreparer == 0)
     } }
-    var metadata: some View { GroupBox("Report details") { VStack { TextField("Period begins (YYYY-MM-DD)",text:text(\.periodStart));TextField("Period ends (YYYY-MM-DD)",text:text(\.periodEnd));TextField("Date presented (YYYY-MM-DD)",text:text(\.presentedOn));TextField("Bank or credit union",text:text(\.bankName)) }.padding(10) } }
+    var metadata: some View { GroupBox("Report details") { VStack(alignment:.leading) { Text("Only bank-posted activity after \(workspace.draft?.previousMeetingDate ?? "the previous stated meeting") through \(workspace.draft?.periodEnd.isEmpty == false ? workspace.draft?.periodEnd ?? "" : "the upcoming stated meeting") is included.").font(.caption).foregroundStyle(.secondary);TextField("First included date (YYYY-MM-DD)",text:text(\.periodStart)).disabled(true);TextField("Upcoming meeting date (YYYY-MM-DD)",text:text(\.periodEnd)).disabled(true);TextField("Date actually presented (YYYY-MM-DD)",text:text(\.presentedOn));TextField("Bank or credit union",text:text(\.bankName)) }.padding(10) } }
     var importReview: some View { DisclosureGroup("Source and import review") { Text(workspace.draft?.sourceNames.joined(separator:", ") ?? "");Text(workspace.draft?.extractionNotes.joined(separator:"\n") ?? "");Text("Review these lines that did not map to a financial field:").font(.caption);Text(workspace.draft?.unmappedLines.joined(separator:"\n") ?? "").font(.caption).textSelection(.enabled) } }
     func accountAmount(_ index:Int,_ key:WritableKeyPath<TreasuryAccount,String?>) -> Binding<String> { Binding(get:{workspace.draft?.accounts[index][keyPath:key] ?? ""},set:{workspace.draft?.accounts[index][keyPath:key]=$0}) }
     var accounts: some View {

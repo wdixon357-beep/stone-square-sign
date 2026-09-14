@@ -1,5 +1,6 @@
 import { TREASURY_REPORT_RULES } from './report-rules.js';
 import { organizeTreasury, normalizeTreasury, money, dollars, validDate } from './treasury.js';
+import { applyTreasuryMeetingCycle } from './treasury-period.js';
 
 const amountFields = ['openingBalance', 'statementBalance', 'bookBalance', 'receipts', 'disbursements', 'transfersIn', 'transfersOut', 'depositsInTransit', 'outstandingChecks', 'bankHold'];
 const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
@@ -74,14 +75,18 @@ function retainedSource(source) {
   return chunks;
 }
 
-export async function generateTreasuryDraft(sourceText, { generateStructured, sourceNames = [], sourceNotes = [] } = {}) {
+export async function generateTreasuryDraft(sourceText, { generateStructured, sourceNames = [], sourceNotes = [], meetingCycle = null } = {}) {
   const source = String(sourceText ?? '');
   if (source.length > 180000) throw Object.assign(new Error('This source is too long. Use a single reporting period.'), { statusCode: 400 });
-  if (!generateStructured) return organizeTreasury(source, { sourceNames, extractionNotes: sourceNotes });
+  if (!generateStructured) {
+    const organized = organizeTreasury(source, { sourceNames, extractionNotes: sourceNotes });
+    return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(organized, meetingCycle) : organized);
+  }
   if (typeof generateStructured !== 'function') throw new TypeError('generateStructured must be a function');
+  const cycleInstruction = meetingCycle ? `\nThe application has fixed this report to posted activity after ${meetingCycle.previousMeeting} through ${meetingCycle.periodEnd}. Include transaction rows only when their bank-posted date is from ${meetingCycle.periodStart} through ${meetingCycle.periodEnd}, inclusive. Do not use a transaction date, check date, monthly statement period, or pending date to replace the bank-posted date. Leave periodStart, periodEnd and presentedOn null because the application controls the reporting cycle and the actual presentation date.` : '';
   const response = await generateStructured({
-    purpose: 'treasury', schemaName: 'treasury_source_extraction', schema: TREASURY_AI_SCHEMA, instructions,
-    input: JSON.stringify({ sourceText: source, sourceNames, sourceNotes }),
+    purpose: 'treasury', schemaName: 'treasury_source_extraction', schema: TREASURY_AI_SCHEMA, instructions: instructions + cycleInstruction,
+    input: JSON.stringify({ sourceText: source, sourceNames, sourceNotes, meetingCycle }),
   });
   checkShape(response, TREASURY_AI_SCHEMA);
   let rejected = 0;
@@ -250,5 +255,5 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     note += `${note ? '\n' : ''}${reference}`;
   }
   if (note) draft.extractionNotes.push(note);
-  return normalizeTreasury(draft);
+  return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(draft, meetingCycle) : draft);
 }

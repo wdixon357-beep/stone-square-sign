@@ -71,6 +71,7 @@ async function officer(owner, role) {
   assert.equal(response.status, 201); return response.data;
 }
 const bankingForm = (intent = 'save') => {const form = new FormData(); form.set('sourceText', notes); form.set('intent', intent); return form;};
+const fixtureForCycle = report => {const draft=structuredClone(completeTreasuryFixture);Object.assign(draft,{previousMeetingDate:report.draft.previousMeetingDate,periodStart:report.draft.periodStart,periodEnd:report.draft.periodEnd});draft.transactions.forEach(row=>row.date=report.draft.periodStart);return draft;};
 const minutesForm = () => {const form = new FormData(); form.set('transcriptText', minutesSource); return form;};
 
 await writeFile(loaderFile, `
@@ -181,7 +182,7 @@ try {
   check('Provider failure retains the original source and saved draft', (await api(`/api/treasury/${report.id}/source`, preparer.token)).data.text === sourceBefore && (await api('/api/treasury', preparer.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
   result = await api(`/api/treasury/${report.id}/assign`, owner.token, 'POST', {revision: report.revision, preparerUserId: preparer.user.id});
   assert.equal(result.status, 200); report = result.data.report;
-  result = await api(`/api/treasury/${report.id}`, preparer.token, 'PUT', {revision: report.revision, draft: completeTreasuryFixture});
+  result = await api(`/api/treasury/${report.id}`, preparer.token, 'PUT', {revision: report.revision, draft: fixtureForCycle(report)});
   assert.equal(result.status, 200); report = result.data.report;
   const beforeSigning = await providerCalls();
   const signature = 'data:image/png;base64,' + (await readFile(new URL('./signature.b64', import.meta.url), 'utf8')).trim();

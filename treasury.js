@@ -20,7 +20,7 @@ export function normalizeTreasury(input = {}) {
   const accounts = (Array.isArray(input.accounts) ? input.accounts : [emptyAccount(), emptyAccount('savings', 'Savings')]).slice(0, 6).map((a, i) => ({ id: text(a.id || `account${i}`, 40), name: text(a.name || `Account ${i + 1}`, 80), activityComplete: a.activityComplete === true, ...Object.fromEntries(accountFields.map(k => [k, amount(a[k])])) }));
   if (new Set(accounts.map(a => a.id)).size !== accounts.length) throw Object.assign(new Error('Each account must have a unique identifier.'), { statusCode: 400 });
   const rows = (key, max = 500) => (Array.isArray(input[key]) ? input[key] : []).slice(0, max);
-  return { version: 1, periodStart: validDate(input.periodStart), periodEnd: validDate(input.periodEnd), presentedOn: validDate(input.presentedOn), bankName: text(input.bankName, 120), accounts,
+  return { version: 1, previousMeetingDate: validDate(input.previousMeetingDate), periodStart: validDate(input.periodStart), periodEnd: validDate(input.periodEnd), presentedOn: validDate(input.presentedOn), bankName: text(input.bankName, 120), accounts,
     transactions: rows('transactions').map(t => ({ date: validDate(t.date), account: text(t.account, 40), kind: ['receipt', 'payment', 'transfer_in', 'transfer_out'].includes(t.kind) ? t.kind : 'review', description: text(t.description, 500), amount: amount(t.amount), reference: text(t.reference, 80), category: text(t.category, 80) })),
     funds: rows('funds', 50).map(f => ({ name: text(f.name, 120), account: text(f.account, 40), amount: amount(f.amount), restriction: text(f.restriction, 300) })),
     obligations: rows('obligations', 100).map(o => ({ name: text(o.name, 150), dueDate: validDate(o.dueDate), amount: amount(o.amount), note: text(o.note, 400) })),
@@ -38,7 +38,7 @@ export function calculateTreasury(input) {
   if (!draft.obligationsReviewed) issues.push('Confirm unpaid bills and upcoming obligations.');
   for (const [i, t] of draft.transactions.entries()) {
     if (!accountIds.has(t.account) || t.kind === 'review' || money(t.amount) === null || money(t.amount) < 0) issues.push(`Review the account, direction and amount on activity row ${i + 1}.`);
-    if (t.date && ((draft.periodStart && t.date < draft.periodStart) || (draft.periodEnd && t.date > draft.periodEnd))) issues.push(`Activity row ${i + 1} is outside the report period.`);
+    if (t.date && ((draft.periodStart && t.date < draft.periodStart) || (draft.periodEnd && t.date > draft.periodEnd))) issues.push(`Activity row ${i + 1} is outside the report period and its meeting-cycle window.`);
   }
   for (const [i, f] of draft.funds.entries()) if (!accountIds.has(f.account) || money(f.amount) === null || money(f.amount) < 0) issues.push(`Review fenced fund ${i + 1}.`);
   for (const [i, o] of draft.obligations.entries()) if (!o.name || money(o.amount) === null || money(o.amount) < 0) issues.push(`Review obligation ${i + 1}.`);

@@ -37,7 +37,8 @@ try{
  const banking=new FormData();banking.set('intent','save');banking.set('sourceText','Period: August 2026\nChecking\nBeginning balance: $100.00\nEnding balance: $100.00\nNo receipts or payments.');
  const created=await api('/api/treasury/generate',treasurer.token,'POST',banking);check('Report activity fixture saves',created.status===201);
  const named=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
- check('Actions identify the report in readable language',named.events.some(e=>e.action==='treasury_created'&&e.detail.includes('Treasurer report')&&e.detail.includes('Aug 31, 2026')));
+ const expectedPeriod=new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(`${created.data.report.draft.periodEnd}T12:00:00Z`));
+ check('Actions identify the report in readable language',named.events.some(e=>e.action==='treasury_created'&&e.detail.includes('Treasurer report')&&e.detail.includes(expectedPeriod)));
  check('Session response excludes credentials and raw financial details',!JSON.stringify(activity).includes(treasurer.token)&&!JSON.stringify(activity).includes('auth_hash')&&!JSON.stringify(activity).includes('details_json'));
  const elapsed=activity.sessions[0].activeSeconds;
  await api('/api/activity/heartbeat',treasurer.token,'POST',{active:false,area:'treasury'},'mac');await new Promise(r=>setTimeout(r,1100));await api('/api/activity/heartbeat',treasurer.token,'POST',{active:false,area:'treasury'},'mac');

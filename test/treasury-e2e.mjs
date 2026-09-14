@@ -20,9 +20,10 @@ try{
  await permissions(viewer,['treasury.view']);
  check('A finished-report viewer initially sees no drafts',(await api('/api/treasury',viewer.token)).data.reports.length===0);
  const form=new FormData();form.set('sourceText',notes);let response=await api('/api/treasury/generate',treasurer.token,'POST',form);check('Typed source generates a persisted report',response.status===201);let r=response.data.report;
+ const cycleFixture=structuredClone(completeTreasuryFixture);Object.assign(cycleFixture,{previousMeetingDate:r.draft.previousMeetingDate,periodStart:r.draft.periodStart,periodEnd:r.draft.periodEnd});cycleFixture.transactions.forEach(row=>row.date=r.draft.periodStart);
  check('Unknown confirmations block attestation',(await api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision})).status===409);
  check('Secretary cannot overwrite another preparer draft',(await api(`/api/treasury/${r.id}`,secretary.token,'PUT',{draft:completeTreasuryFixture,revision:r.revision})).status===403);
- const confidentialFixture={...completeTreasuryFixture,sourceNames:['private-statement-name.txt'],unmappedLines:['Private extracted source marker'],extractionNotes:['Private extraction marker']};
+ const confidentialFixture={...cycleFixture,sourceNames:['private-statement-name.txt'],unmappedLines:['Private extracted source marker'],extractionNotes:['Private extraction marker']};
  response=await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:confidentialFixture,revision:r.revision});check('Reconciled corrections save',response.status===200);r=response.data.report;
  check('Viewer cannot request an unsigned PDF',(await api(`/api/treasury/${r.id}/pdf`,viewer.token)).status===404);
  check('Stale save rejected',(await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:completeTreasuryFixture,revision:1})).status===409);
@@ -72,7 +73,7 @@ try{
  check('Another uploader cannot download the original file',(await api(`/api/treasury/${shared.id}/sources/${originals.files[0].id}`,member.token)).status===403);
  check('Uploader cannot overwrite assigned preparer work',(await api(`/api/treasury/${shared.id}`,secretary.token,'PUT',{revision:shared.revision,draft:completeTreasuryFixture})).status===403);
  check('Uploader cannot sign for the assigned preparer',(await api(`/api/treasury/${shared.id}/preparer-attest`,secretary.token,'POST',{revision:shared.revision})).status===403);
- shared=(await api(`/api/treasury/${shared.id}`,assistant.token,'PUT',{revision:shared.revision,draft:completeTreasuryFixture})).data.report;
+ shared=(await api(`/api/treasury/${shared.id}`,assistant.token,'PUT',{revision:shared.revision,draft:cycleFixture})).data.report;
  await api('/api/profile/signature',assistant.token,'PUT',{signatureData:'data:image/png;base64,'+(await readFile(new URL('./signature.b64',import.meta.url),'utf8')).trim(),signatureType:'drawn'});
  const finalized=await api(`/api/treasury/${shared.id}/preparer-attest`,assistant.token,'POST',{revision:shared.revision});shared=finalized.data.report;
  check('Assigned preparer signs and finalizes without bank login',finalized.status===200&&shared.status==='ready_for_distribution');
@@ -120,10 +121,10 @@ try{
    const deniedFile=new FormData();deniedFile.append('files',new Blob([notes]),'bank.txt');check(u.user.role+' cannot upload files',(await api('/api/treasury/generate',u.token,'POST',deniedFile)).status===403);
  }
  let manual=(await api('/api/treasury/drafts',adrian.token,'POST',{sourceText:'Ignored forged source',draft:completeTreasuryFixture})).data.report;
- check('Preparer starts an empty report without upload access',manual.status==='draft'&&manual.preparerUserId===adrian.user.id&&manual.draft.periodStart===''&&manual.draft.transactions.length===0);
+ check('Preparer starts an empty report with the current meeting cycle',manual.status==='draft'&&manual.preparerUserId===adrian.user.id&&manual.draft.periodStart!==''&&manual.draft.periodEnd!==''&&manual.draft.transactions.length===0);
  check('Manual draft contains no uploaded source',(await api(`/api/treasury/${manual.id}/source`,adrian.token)).data.text==='');
  check('Empty manual source cannot trigger organization',(await api(`/api/treasury/${manual.id}/organize`,adrian.token,'POST',{revision:manual.revision})).status===400);
- const manualSave=await api(`/api/treasury/${manual.id}`,adrian.token,'PUT',{revision:manual.revision,draft:completeTreasuryFixture});manual=manualSave.data.report;check('Preparer without bank access can enter and save financial report fields',manualSave.status===200&&manual.calculation.ready);
+ const manualSave=await api(`/api/treasury/${manual.id}`,adrian.token,'PUT',{revision:manual.revision,draft:cycleFixture});manual=manualSave.data.report;check('Preparer without bank access can enter and save financial report fields',manualSave.status===200&&manual.calculation.ready);
  const claim=await api(`/api/treasury/${uploadOnly.id}/assign`,assistant.token,'POST',{revision:uploadOnly.revision,preparerUserId:assistant.user.id});check('Preparer without upload can claim banking records for a report',claim.status===200&&claim.data.report.preparerUserId===assistant.user.id);
  const claimedSource=await api(`/api/treasury/${uploadOnly.id}/source`,assistant.token);
  assert.equal(claimedSource.status,200,JSON.stringify(claimedSource.data));

@@ -55,6 +55,11 @@ const fallback = await generateTreasuryDraft(source, { sourceNames: ['synthetic.
 assert.deepEqual(fallback, organizeTreasury(source, { sourceNames: ['synthetic.txt'], extractionNotes: ['Synthetic OCR review note.'] }));
 check('without a model callback the existing deterministic parser is used unchanged', true);
 
+const cycleFiltered = await generateTreasuryDraft(`${source}\n09/05/2026 Deposit Fall event $75.00`, {
+  meetingCycle: { previousMeeting:'2026-09-03', periodStart:'2026-09-04', periodEnd:'2026-09-17' },
+});
+check('meeting-cycle generation excludes statement activity and monthly totals outside the cycle', cycleFiltered.periodStart === '2026-09-04' && cycleFiltered.periodEnd === '2026-09-17' && cycleFiltered.transactions.every(row => row.date >= '2026-09-04' && row.date <= '2026-09-17') && cycleFiltered.accounts.every(account => account.openingBalance === null && account.statementBalance === null));
+
 let request;
 const output = await generateTreasuryDraft(source, { sourceNames: ['synthetic.png'], sourceNotes: ['Synthetic screenshot was read with OCR. Check every amount.'], generateStructured: async value => { request = value; return response(); } });
 assert.equal(request.instructions, TREASURY_REPORT_RULES);
