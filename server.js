@@ -2237,6 +2237,18 @@ const minutesArtifactContext = async (row, draft, captured = {}) => {
   };
 };
 
+const publishedMinutesSnapshot = async (row) => {
+  const master=await dbGet(`SELECT a.draft_json, a.signature_bytes, u.name
+    FROM meeting_minutes_attestations a JOIN users u ON u.id=a.user_id
+    WHERE a.minutes_id=? AND a.phase='master' ORDER BY a.created_at DESC LIMIT 1`,[row.id]);
+  const preparer=await dbGet(`SELECT signature_bytes FROM meeting_minutes_attestations
+    WHERE minutes_id=? AND phase='preparer' ORDER BY created_at DESC LIMIT 1`,[row.id]);
+  if(!master||!preparer)return null;
+  return {draft:normalizeMinutesDraft(JSON.parse(master.draft_json)),captured:{
+    masterName:master.name,masterSignature:master.signature_bytes,preparerSignature:preparer.signature_bytes,
+  }};
+};
+
 app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next)=>{try{
   const row=await getMinutesRow(req.params.id);
   const mayOpenWorking=Boolean(row&&hasPermission(req.user,'minutes.prepare')&&canOpenWorkingMinutes(req.user,row));
@@ -2244,14 +2256,9 @@ app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next
   let draft=normalizeMinutesDraft(JSON.parse(row.draft_json));
   let captured={};
   if(finalMinutes(row)){
-    const master=await dbGet(`SELECT a.draft_json, a.signature_bytes, u.name
-      FROM meeting_minutes_attestations a JOIN users u ON u.id=a.user_id
-      WHERE a.minutes_id=? AND a.phase='master' ORDER BY a.created_at DESC LIMIT 1`,[row.id]);
-    const preparer=await dbGet(`SELECT signature_bytes FROM meeting_minutes_attestations
-      WHERE minutes_id=? AND phase='preparer' ORDER BY created_at DESC LIMIT 1`,[row.id]);
-    if(!master||!preparer)return res.status(404).json({error:'Signed meeting minutes are not available.'});
-    draft=normalizeMinutesDraft(JSON.parse(master.draft_json));
-    captured={masterName:master.name,masterSignature:master.signature_bytes,preparerSignature:preparer.signature_bytes};
+    const snapshot=await publishedMinutesSnapshot(row);
+    if(!snapshot)return res.status(404).json({error:'Signed meeting minutes are not available.'});
+    ({draft,captured}=snapshot);
   }
   const bytes=await buildMinutesPdf(await minutesArtifactContext(row,draft,captured));
   if(finalMinutes(row))await addAudit({userId:req.user.id,action:'minutes_signed_pdf_viewed',ip:req.ip,userAgent:req.get('user-agent')||'',details:{minutesId:row.id}});
@@ -2283,8 +2290,14 @@ app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, 
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (!canOpenWorkingMinutes(req.user, row) && !finalMinutes(row)) return res.status(404).json({ error: 'Meeting minutes not found.' });
-    const draft = normalizeMinutesDraft(JSON.parse(row.draft_json));
-    const bytes = await buildMinutesDocx(await minutesArtifactContext(row, draft));
+    let draft = normalizeMinutesDraft(JSON.parse(row.draft_json));
+    let captured = {};
+    if (finalMinutes(row)) {
+      const snapshot = await publishedMinutesSnapshot(row);
+      if (!snapshot) return res.status(404).json({ error: 'Signed meeting minutes are not available.' });
+      ({ draft, captured } = snapshot);
+    }
+    const bytes = await buildMinutesDocx(await minutesArtifactContext(row, draft, captured));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${minutesFileName(draft, row.status)}"`);
     res.send(bytes);

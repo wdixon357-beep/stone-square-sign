@@ -35,6 +35,7 @@ const state = {
   editingMinutesUpdatedAt: null,
   minutesPreviewUrl: '',
   minutesEditorDirty: false,
+  minutesRecordsRefreshPending: false,
   reportHandoffExpiresAt: 0,
   reportHandoff: null,
   proposalDirty: false,
@@ -797,6 +798,7 @@ setInterval(() => { if (can('treasury.prepare')) refreshTreasuryAlerts(); }, 200
 
 const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch, state.user?.role));
 const renderMinutes = async () => {
+  state.minutesRecordsRefreshPending = false;
   if (can('minutes.prepare')) void refreshGenerationStatus($('minutesGenerationStatus'));
   try {
     const [payload, archivePayload] = await Promise.all([
@@ -1580,6 +1582,7 @@ $('closeMinutesEditor').addEventListener('click', () => {
   minutesPdfViewer?.clear();
   $('minutesPreviewDownload').removeAttribute('href');
   hide($('minutesPreviewDownload'));
+  if (state.minutesRecordsRefreshPending) renderMinutes();
 });
 $('minutesEditView').addEventListener('click', () => setMinutesView(false));
 $('minutesPreviewView').addEventListener('click', () => setMinutesView(true));
@@ -1735,7 +1738,10 @@ const startRealtime = async () => {
         buffer = events.pop() || '';
         events.forEach((event) => {
           if (event.includes('event: minutes_review_changed') || event.includes('event: minutes_completion_changed')) refreshMinutesReviewAlerts();
-          if (event.includes('event: minutes_records_changed') && state.activeSection === 'minutes' && !state.minutesEditorDirty) renderMinutes();
+          if (event.includes('event: minutes_records_changed') && state.activeSection === 'minutes') {
+            if (state.minutesEditorDirty) state.minutesRecordsRefreshPending = true;
+            else renderMinutes();
+          }
           if (event.includes('event: treasury_changed')) refreshTreasuryAlerts();
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();

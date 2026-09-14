@@ -230,6 +230,8 @@ struct MeetingMinutesView: View {
     @State private var approvalDate = ""
     @State private var approvalNote = ""
     @State private var showingHistory = false
+    @State private var readonlyRecord: MinutesRecord?
+    @State private var deferredRecordsRefresh = false
     private var editable: Bool { model.user?.can("minutes.prepare") == true && (workspace.selected?.status == "draft" || (workspace.selected?.status == "awaiting_master_attestation" && model.user?.role == "owner")) }
     private func text(_ key: WritableKeyPath<MinutesDraft, String?>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key] ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 })
@@ -264,9 +266,13 @@ struct MeetingMinutesView: View {
         .disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh() }
         .onChange(of: model.minutesRecordsRevision) { _, _ in
-            if !workspace.dirty { Task { await workspace.refresh() } }
+            if workspace.dirty { deferredRecordsRefresh = true }
+            else { Task { await workspace.refresh() } }
         }
         .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .minutes, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
+        .sheet(item: $readonlyRecord) { record in
+            FinalReportBrowserView(kind: .minutes, initialSelection: record.id, onClose: { readonlyRecord = nil }).environmentObject(model).frame(minWidth: 800, minHeight: 650)
+        }
         .onChange(of: workspace.draft) { old, new in
             guard old != nil, old != new else { return }
             workspace.dirty = new != workspace.selected?.draft; workspace.updatePreview()
@@ -279,7 +285,10 @@ struct MeetingMinutesView: View {
             Button("Reorganize") { Task { await workspace.reorganize() } }; Button("Cancel", role: .cancel) {}
         } message: { Text("This replaces the editor contents with a fresh draft. Review it before saving.") }
         .alert("Leave unsaved corrections?", isPresented: $confirmClose) {
-            Button("Discard corrections", role: .destructive) { workspace.close() }; Button("Keep editing", role: .cancel) {}
+            Button("Discard corrections", role: .destructive) {
+                workspace.close()
+                if deferredRecordsRefresh { deferredRecordsRefresh = false; Task { await workspace.refresh() } }
+            }; Button("Keep editing", role: .cancel) {}
         }
         .alert("Confirm record action", isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } })) {
             Button("Continue") { if let action = pendingAction { Task { await workspace.action(action, body: action == "lodge-approval" ? ["approvalDate": approvalDate, "approvalNote": approvalNote] : [:]) } } }
@@ -324,7 +333,10 @@ struct MeetingMinutesView: View {
                         }
                         Spacer()
                         Text(minutesStatusLabel(record.status)).font(.caption).foregroundStyle(.secondary)
-                        Button("Review") { workspace.open(record) }
+                        let mayReview = model.user?.role == "owner" || record.createdByUserId == model.user?.id
+                        Button(mayReview ? "Review" : "View PDF") {
+                            if mayReview { workspace.open(record) } else { readonlyRecord = record }
+                        }
                         if record.status == "draft" && (model.user?.role == "owner" || record.createdByUserId == model.user?.id) {
                             Button("Delete", role: .destructive) { deleting = record }
                         }

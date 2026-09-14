@@ -40,6 +40,8 @@ assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either 
 assert.match(nativeMinutes, /Signed and available to all officers/, 'the Mac app must use the same minutes status wording');
 assert.match(app, /event: minutes_records_changed/, 'the website must refresh an open minutes archive after publication');
 assert.match(nativeAPI, /event: minutes_records_changed/, 'the Mac app must refresh an open minutes archive after publication');
+assert.match(nativeMinutes, /mayReview \? "Review" : "View PDF"/, 'the Mac app must open another preparer signed minutes as a finalized PDF');
+assert.match(server, /publishedMinutesSnapshot[\s\S]*buildMinutesDocx/, 'finalized Word copies must use captured attestation snapshots');
 assert.ok(app.indexOf('openMinutesEditor(record.id)') < app.indexOf('completion-alert-seen'), 'reviewed minutes must open before their alert is acknowledged');
 assert.match(html, /id="treasuryAlerts"[^>]+aria-live="polite"/, 'waiting banking records must have a persistent accessible alert region');
 assert.match(app, /\/api\/treasury\/alerts/, 'the website must refresh waiting banking-record alerts');
