@@ -279,14 +279,8 @@ export const buildMinutesPdf = async ({
     ruleHeading(title || 'Meeting Business');
     renderBlocks(sectionBlocks(section));
   }
-  ensure(masterChanges.length ? 260 : 220);
-  ruleHeading('Attestation and Distribution');
+  ensure(170);
   const preparerTitle = preparerOffice(preparedBy, preparerRole);
-  paragraphs(isOfficial
-    ? `Approved by the Lodge${approvedByLodgeOn ? ` on ${fullDate(approvedByLodgeOn)}` : ''}.`
-    : masterAttestedAt ? "The Worshipful Master has authorized distribution of this draft. Formal Lodge approval remains pending."
-      : "Working draft for officer review. Distribution requires the Worshipful Master's authorization.", { size: 9 });
-  if (masterChanges.length) paragraphs("The preparing officer attested to the submitted version. The Worshipful Master's corrections and the original signed submission are retained in the record.", { size: 8 });
   const signatureY = y - 94;
   page.drawText('PREPARING OFFICER', {x: 61, y: y - 12, size: 8, font: bold, color: NAVY});
   page.drawText('WORSHIPFUL MASTER REVIEW', {x: 333, y: y - 12, size: 8, font: bold, color: NAVY});

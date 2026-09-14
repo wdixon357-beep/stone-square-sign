@@ -155,6 +155,7 @@ const legacyPdf = new PDFParse({data:await buildMinutesPdf({...ctx,draft:legacyD
 try {
   const rendered = (await legacyPdf.getText()).text;
   assert.doesNotMatch(rendered, /PRAISE REPORTS?|None (?:recorded|reported)|No entry recorded|ROLL CALL AND QUORUM|ATTENDANCE AND VISITORS/i);
+  assert.doesNotMatch(rendered, /ATTESTATION AND DISTRIBUTION|authorized distribution of this draft|Formal Lodge approval remains pending|original signed submission/i);
   assert.match(rendered, /Alex Example/); assert.match(rendered, /Victor Example/);
 } finally {await legacyPdf.destroy();}
 assert.equal(JSON.stringify(legacyDraft), legacyRecordSnapshot, 'rendering legacy submitted content never mutates the record');
@@ -223,6 +224,7 @@ try {
   await fs.writeFile(docx, await buildMinutesDocx({...ctx,draft:legacyDraft,status:'awaiting_master_attestation'}));
   const legacyXml = execFileSync('/usr/bin/unzip', ['-p', docx, 'word/document.xml'], {encoding:'utf8'});
   assert.doesNotMatch(legacyXml, /PRAISE REPORTS?|None (?:recorded|reported)|No entry recorded|ROLL CALL AND QUORUM/i);
+  assert.doesNotMatch(legacyXml, /Officer Attestations|authorized distribution of this draft|Formal Lodge approval remains pending|original signed submission/i);
   assert.match(legacyXml, /Alex Example/); assert.match(legacyXml, /Victor Example/);
 } finally { await fs.rm(tmp, {recursive:true, force:true}); }
 console.log('Minutes bullets, emphasis, seal, closing facts, officer roles and Word parity passed.');

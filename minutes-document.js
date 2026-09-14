@@ -145,8 +145,6 @@ export const buildMinutesDocx = async ({
       sectionHeading(item.heading || 'Meeting Notes'),
       ...bodyParagraphs(item, item.heading === 'Closing of the Lodge'),
     ]),
-    sectionHeading('Officer Attestations'),
-    ...(masterChanges.length ? [paragraph("The preparing officer attested to the submitted version. The Worshipful Master's corrections and the original signed submission are retained in the record.")] : []),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       columnWidths: [4750, 4750],

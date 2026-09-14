@@ -63,7 +63,7 @@ export async function buildTreasuryPdf({ draft, status = 'draft', preparedBy = '
   if(calc.issues.length){heading('Items Requiring Review');for(const issue of calc.issues)paragraph(issue,true);}
   // The compact attestation block fits in 150 points. Using its exact footprint avoids
   // pushing it onto an otherwise empty final page in a typical two-page report.
-  room(150);heading('Preparing Officer Attestation');
+  room(150);heading('Preparing Officer');
   for(const [x,label,name,role,signature] of [[42,'PREPARING OFFICER',preparedBy,TREASURY_OFFICES[preparerRole]||'',preparerSignature]]){
     page.drawText(label,{x,y,size:9,font:bold,color:navy});
     if(signature){const img=await pdf.embedPng(signature);const scale=Math.min(218/img.width,34/img.height);page.drawImage(img,{x:x+8,y:y-42,width:img.width*scale,height:img.height*scale});}
