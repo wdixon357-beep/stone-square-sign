@@ -34,7 +34,7 @@ export class TreasuryWorkspace {
         const form=new FormData();form.append('intent',this.root.querySelector('input[name=treasuryIntent]:checked').value);form.append('sourceText',this.root.querySelector('#treasurySourceText').value);for(const file of this.root.querySelector('#treasuryFiles').files)form.append('files',file);
         sourceControls.forEach(({element})=>{element.disabled=true;});
         this.message('Reading your banking information. Scanned pages may take a minute.');
-        const {report}=await this.api('/api/treasury/generate',{method:'POST',body:form});if(report.status==='awaiting_preparer'){await this.list();this.message('Banking information saved. No preparing officer has been assigned. An authorized preparer can start the report when ready.');}else{this.open(report);}
+        const {report}=await this.api('/api/treasury/generate',{method:'POST',body:form});if(report.status==='awaiting_preparer'){await this.list();this.message('Banking information saved. Authorized preparers have a Dashboard alert until one of them claims the report.');}else{this.open(report);}
       }else if(action==='organize'){
         if(!confirm('Reorganize the original banking source? This replaces the fields currently shown. Review the result before saving.'))return;
         const id=this.record.id,revision=this.record.revision,before=JSON.stringify(this.draft);
@@ -69,7 +69,7 @@ export class TreasuryWorkspace {
     });
   }
   canOpenFinal(record){return this.can('treasury.view')&&['ready_for_distribution','distributed'].includes(record?.status);}
-  canEdit(){return this.can('treasury.prepare')&&this.record.status==='draft'&&(this.record.preparerUserId===this.user().id||this.user().role==='owner');}
+  canEdit(){return this.can('treasury.prepare')&&this.record.status==='draft'&&this.record.preparerUserId===this.user().id;}
   async openFinal(record){
     if(!this.canOpenFinal(record))return;
     const blob=await this.api(`/api/treasury/${record.id}/pdf`);
@@ -83,7 +83,7 @@ export class TreasuryWorkspace {
     const id=this.record.id;const [source,{preparers}]=await Promise.all([this.api(`/api/treasury/${id}/source`),this.api('/api/treasury/preparers')]);
     if(this.record?.id!==id)return;this.sourceFiles=source.files;
     this.root.querySelector('#treasuryOriginals').innerHTML=`<pre>${esc(source.text)}</pre>${source.files.map(f=>`<p><button class="secondary" data-treasury="source-file" data-id="${f.id}">Download ${esc(f.name)}</button></p>`).join('')}`;
-    const mayAssign=['draft','awaiting_preparer'].includes(this.record.status)&&(this.record.createdByUserId===this.user().id||this.record.preparerUserId===this.user().id||this.user().role==='owner');
+    const mayAssign=(this.record.status==='awaiting_preparer'&&(this.record.createdByUserId===this.user().id||this.user().role==='owner'))||(this.record.status==='draft'&&this.user().role==='owner');
     const assignment=`<p>Select yourself to continue, or hand the records and prefilled draft to another officer.</p><label class="treasury-field">Preparing officer<select id="treasuryPreparer"><option value="">Choose an officer</option>${preparers.map(p=>`<option value="${p.id}" ${p.id===this.record.preparerUserId?'selected':''}>${esc(p.name)}${p.id===this.user().id?' (I will prepare it)':''}</option>`).join('')}</select></label><button data-treasury="assign" class="primary">Continue with selected officer</button>`;
     const pending=this.record.status==='awaiting_preparer';
     this.root.querySelector('#treasuryHandoff').innerHTML=`<p>Uploaded by <strong>${esc(this.record.uploadedBy)}</strong></p>${pending?`<section class="treasury-group"><h2>Banking information saved</h2><p>These records are available for an authorized preparer. No one has been assigned automatically.</p>${this.can('treasury.prepare')?'<button data-treasury="start-report" class="primary">I’m completing this report</button>':''}</section>`:`<p>Preparing officer: <strong>${esc(this.record.createdBy)}</strong>${this.record.preparerUserId===this.user().id?' (assigned to you)':''}</p>`}${mayAssign?`<details><summary>${pending?'Assign a preparing officer (optional)':'Change preparing officer'}</summary>${assignment}</details>`:''}`;

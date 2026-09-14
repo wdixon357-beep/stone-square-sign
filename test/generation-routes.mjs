@@ -172,9 +172,17 @@ try {
   check('Saving treasury edits makes no provider call', await providerCalls() === beforeEditing);
   await control({mode: 'error'});
   const sourceBefore = (await api(`/api/treasury/${report.id}/source`, preparer.token)).data.text;
+  result = await api(`/api/treasury/${report.id}/assign`, owner.token, 'POST', {revision: report.revision, preparerUserId: owner.user.id});
+  check('WM explicitly takes over before editing another preparer report', result.status === 200 && result.data.report.preparerUserId === owner.user.id);
+  report = result.data.report;
+  check('The prior preparer loses write access after WM takeover', (await api(`/api/treasury/${report.id}`, preparer.token, 'PUT', {revision: report.revision, draft: completeTreasuryFixture})).status === 403);
   result = await api(`/api/treasury/${report.id}/organize`, owner.token, 'POST', {revision: report.revision});
-  check('WM can organize any unsigned treasury draft and sees provider failure', result.status >= 500 && await providerCalls() > beforeEditing);
+  check('WM sees the provider failure after taking over the draft', result.status >= 500 && await providerCalls() > beforeEditing);
   check('Provider failure retains the original source and saved draft', (await api(`/api/treasury/${report.id}/source`, preparer.token)).data.text === sourceBefore && (await api('/api/treasury', preparer.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
+  result = await api(`/api/treasury/${report.id}/assign`, owner.token, 'POST', {revision: report.revision, preparerUserId: preparer.user.id});
+  assert.equal(result.status, 200); report = result.data.report;
+  result = await api(`/api/treasury/${report.id}`, preparer.token, 'PUT', {revision: report.revision, draft: completeTreasuryFixture});
+  assert.equal(result.status, 200); report = result.data.report;
   const beforeSigning = await providerCalls();
   const signature = 'data:image/png;base64,' + (await readFile(new URL('./signature.b64', import.meta.url), 'utf8')).trim();
   assert.equal((await api('/api/profile/signature', preparer.token, 'PUT', {signatureData: signature, signatureType: 'drawn'})).status, 200);

@@ -213,6 +213,10 @@ struct WorkspaceView: View {
                     }
                     .frame(height: model.minutesReviewAlerts.count == 1 ? 88 : 160)
                 }
+                if !model.treasuryAlerts.isEmpty {
+                    ScrollView { treasuryAlertButtons }
+                        .frame(height: model.treasuryAlerts.count == 1 ? 88 : 160)
+                }
                 List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
                 if model.user?.canOpen(.building) == true { Label("Building Requests", systemImage: "building.2").tag(AppSection.building) }
@@ -312,6 +316,39 @@ struct WorkspaceView: View {
                 }
                 .buttonStyle(.plain)
                 .help("\(alert.title). Submitted by \(alert.submittedBy)")
+                .padding(.horizontal, 22)
+            }
+        }
+    }
+
+    private var treasuryAlertButtons: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.treasuryAlerts) { alert in
+                Button {
+                    selection = .treasury
+                    Task {
+                        treasuryWorkspace.configure(model)
+                        await treasuryWorkspace.refresh()
+                        if let record = treasuryWorkspace.records.first(where: { $0.id == alert.id && $0.status == "awaiting_preparer" && $0.preparerUserId == nil }) {
+                            treasuryWorkspace.open(record)
+                        } else {
+                            treasuryWorkspace.message = "This banking information has already been claimed. The report list is current."
+                            await model.refreshTreasuryAlerts()
+                        }
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(alert.title, systemImage: "bell.badge.fill")
+                            .font(.callout.weight(.semibold)).lineLimit(2)
+                        Text(alert.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                    .frame(height: 80, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(alert.message)
                 .padding(.horizontal, 22)
             }
         }
@@ -1022,7 +1059,7 @@ struct LandingDashboardView: View {
                     }
                     if model.user?.role == "owner" { homeRow("Agenda Creator", "Create and preview the Lodge meeting agenda", "list.number", action: openAgenda) }
                     if model.user?.canUseTreasury == true {
-                        homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? "Prepare and review treasurer reports" : model.user?.can("treasury.upload") == true ? "Provide banking records and view reports" : "Read finalized treasurer reports", "chart.bar.doc.horizontal.fill", action: openTreasury)
+                        homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? (model.treasuryAlerts.isEmpty ? "Prepare and review treasurer reports" : "\(model.treasuryAlerts.count) banking record\(model.treasuryAlerts.count == 1 ? "" : "s") awaiting a preparer") : model.user?.can("treasury.upload") == true ? "Provide banking records and view reports" : "Read finalized treasurer reports", "chart.bar.doc.horizontal.fill", action: openTreasury)
                     }
                     if model.user?.can("candidates.view") == true {
                         homeRow("Candidate Tracker", "Open candidate and membership records", "person.text.rectangle", action: openCandidateTracker)

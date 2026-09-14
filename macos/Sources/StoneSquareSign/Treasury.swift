@@ -118,7 +118,7 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
             let result = try await transport.request("/api/treasury/generate", method: "POST", body: data, contentType: "multipart/form-data; boundary=\(boundary)")
             let report = try JSONDecoder().decode(TreasuryPayload.self, from: result).report
             await refresh(); source = ""; files = []
-            if report.status == "awaiting_preparer" {close();message="Banking information saved. No preparing officer has been assigned. An authorized preparer can start the report when ready."}
+            if report.status == "awaiting_preparer" {close();message="Banking information saved. Authorized preparers have a Dashboard alert until one of them claims the report."}
             else {open(report);message="Review the prefilled information and complete your report."}
         } catch { message = error.localizedDescription }
         await refreshGenerationStatus()
@@ -179,7 +179,7 @@ struct TreasuryView: View {
     @State private var pendingWorkflowAction: String?
     @State private var pendingAccessUser: TreasuryAccessUser?
     @State private var confirmingAssignment = false
-    var editable: Bool { guard model.user?.can("treasury.prepare") == true, let r = workspace.selected else { return false }; return r.status == "draft" && (r.preparerUserId == model.user?.id || model.user?.role == "owner") }
+    var editable: Bool { guard model.user?.can("treasury.prepare") == true, let r = workspace.selected else { return false }; return r.status == "draft" && r.preparerUserId == model.user?.id }
     var canFinalize: Bool {
         guard editable, let draft = workspace.draft else { return false }
         return draft.sourceReviewed && draft.fundsReviewed && draft.obligationsReviewed
@@ -324,7 +324,7 @@ struct TreasuryView: View {
                 Text("These records are available for an authorized preparer. No one has been assigned automatically.").font(.callout)
                 if model.user?.can("treasury.prepare") == true { Button("I’m completing this report") { workspace.selectedPreparer = model.user?.id ?? 0; confirmingAssignment = true }.buttonStyle(.borderedProminent) }
             } else {Text("Preparing officer: \(record.createdBy)").font(.headline)}
-            if ["draft","awaiting_preparer"].contains(record.status) && (record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id || model.user?.role == "owner") {
+            if (record.status == "awaiting_preparer" && (record.createdByUserId == model.user?.id || model.user?.role == "owner")) || (record.status == "draft" && model.user?.role == "owner") {
                 DisclosureGroup(record.status == "awaiting_preparer" ? "Assign a preparing officer (optional)" : "Change preparing officer") { assignmentPicker }
             }
         }

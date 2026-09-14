@@ -167,6 +167,7 @@ enum BiometricCredentialStore {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
+    @Published var treasuryAlerts: [TreasuryAlert] = []
     @Published var user: User?
     @Published var signInSession: SignInSession?
     @Published var showSignInNotice = false
@@ -435,6 +436,16 @@ final class AppModel: ObservableObject {
         } catch { show(error) }
     }
 
+    func refreshTreasuryAlerts() async {
+        guard let user, user.can("treasury.prepare") else { treasuryAlerts = []; return }
+        let currentToken = token
+        do {
+            let response: TreasuryAlertsPayload = try await request("/api/treasury/alerts")
+            guard token == currentToken, self.user?.id == user.id else { return }
+            treasuryAlerts = response.alerts
+        } catch { /* Preserve waiting alerts if connectivity is temporarily unavailable. */ }
+    }
+
     func refresh(silent: Bool = false) async {
         let currentToken = token
         if currentToken != nil {
@@ -448,6 +459,7 @@ final class AppModel: ObservableObject {
             }
         }
         await refreshMinutesReviewAlerts()
+        await refreshTreasuryAlerts()
         guard user?.can("documents.status") == true else {
             documents = []
             return
@@ -500,10 +512,14 @@ final class AppModel: ObservableObject {
                     }
                     self.isLive = true
                     await self.refreshMinutesReviewAlerts()
+                    await self.refreshTreasuryAlerts()
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
                         if line == "event: minutes_review_changed" || line == "event: minutes_completion_changed" {
                             await self.refreshMinutesReviewAlerts()
+                        }
+                        if line == "event: treasury_changed" {
+                            await self.refreshTreasuryAlerts()
                         }
                         if line == "event: queue_changed" || line == "event: profile_changed" {
                             await self.refresh(silent: true)
@@ -1048,6 +1064,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(false, forKey: "biometric-login-enabled")
         user = nil
         minutesReviewAlerts = []
+        treasuryAlerts = []
         documents = []
         officers = []
         pendingInvitations = []

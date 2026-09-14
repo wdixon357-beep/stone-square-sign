@@ -449,3 +449,11 @@ struct MinutesReviewAlert: Decodable, Identifiable {
     var kind: String? = nil
 }
 struct MinutesReviewAlertsPayload: Decodable { let alerts: [MinutesReviewAlert] }
+struct TreasuryAlert: Decodable, Identifiable {
+    let id: String
+    let title: String
+    let message: String
+    let uploadedBy: String
+    let createdAt: String
+}
+struct TreasuryAlertsPayload: Decodable { let alerts: [TreasuryAlert] }

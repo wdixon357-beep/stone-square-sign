@@ -506,6 +506,7 @@ const broadcast = (type, data = {}) => {
   const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of realtimeClients) {
     if (client.role === 'member' && !['connected','treasury_changed'].includes(type)) continue;
+    if (type === 'treasury_changed' && client.role !== 'owner' && !client.permissions?.includes('treasury.prepare')) continue;
     if (type === 'minutes_review_changed' && client.role !== 'owner') continue;
     if (type === 'minutes_completion_changed' && client.role !== 'owner' && !client.permissions?.includes('minutes.prepare')) continue;
     if (client.role === 'warden' && !WARDEN_EVENTS.has(type)) continue;

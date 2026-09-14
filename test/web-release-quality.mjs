@@ -8,6 +8,10 @@ const styles = read('../public/styles.css');
 const reportAssistant = read('../public/report-assistant.js');
 const server = read('../server.js');
 const nativeMinutes = read('../macos/Sources/StoneSquareSign/MeetingMinutes.swift');
+const treasury = read('../public/treasury.js');
+const treasuryRoutes = read('../treasury-routes.js');
+const nativeAPI = read('../macos/Sources/StoneSquareSign/APIClient.swift');
+const nativeViews = read('../macos/Sources/StoneSquareSign/Views.swift');
 
 assert.match(app, /credentials:\s*'same-origin'/, 'dashboard API requests must carry the secure web session cookie');
 assert.match(app, /'X-Stone-Square-Client':\s*'web'/, 'dashboard must identify the web client');
@@ -35,9 +39,19 @@ assert.match(app, /Signed and ready for McDuffie or Reese/, 'the website must na
 assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either Secretary must be allowed to record distribution');
 assert.match(nativeMinutes, /Signed and ready for McDuffie or Reese/, 'the Mac app must use the same minutes status wording');
 assert.ok(app.indexOf('openMinutesEditor(record.id)') < app.indexOf('completion-alert-seen'), 'reviewed minutes must open before their alert is acknowledged');
+assert.match(html, /id="treasuryAlerts"[^>]+aria-live="polite"/, 'waiting banking records must have a persistent accessible alert region');
+assert.match(app, /\/api\/treasury\/alerts/, 'the website must refresh waiting banking-record alerts');
+assert.match(app, /event: treasury_changed/, 'the website must refresh a banking-record alert immediately after a live change');
+assert.match(treasuryRoutes, /status='awaiting_preparer' AND preparer_user_id IS NULL/, 'alerts must include only unclaimed banking records');
+assert.match(treasuryRoutes, /WHERE id=\? AND revision=\?/, 'claiming must use an atomic revision check');
+assert.match(treasury, /this\.record\.preparerUserId===this\.user\(\)\.id/, 'the website must allow only the assigned preparer to edit an active report');
+assert.match(server, /type === 'treasury_changed'[\s\S]*treasury\.prepare/, 'banking workflow events must be limited to authorized preparers');
+assert.match(nativeAPI, /func refreshTreasuryAlerts\(\)/, 'the Mac app must refresh waiting banking-record alerts');
+assert.match(nativeAPI, /event: treasury_changed/, 'the Mac app must refresh alerts after a live banking workflow event');
+assert.match(nativeViews, /treasuryAlertButtons/, 'the Mac app must display its waiting banking-record alerts');
 assert.match(app, /beforeunload/, 'unfinished long-form work must be protected on reload');
 assert.match(app, /sessionStorage/, 'non-sensitive drafts must recover within the current tab');
-assert.doesNotMatch(read('../public/treasury.js'), /sessionStorage|localStorage/, 'banking data must not be retained in browser storage');
+assert.doesNotMatch(treasury, /sessionStorage|localStorage/, 'banking data must not be retained in browser storage');
 
 const modalTags = html.match(/<section[^>]+class="modal[^>]*>/g) || [];
 assert.ok(modalTags.length >= 8, 'expected dashboard modals were not found');

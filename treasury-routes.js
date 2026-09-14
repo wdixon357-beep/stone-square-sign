@@ -12,7 +12,9 @@ const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*102
 const serial = row => ({ preparerUserId:row.preparer_user_id, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft:JSON.parse(row.draft_json), submittedDraft:row.submitted_json?JSON.parse(row.submitted_json):null, calculation:calculateTreasury(JSON.parse(row.draft_json)), preparerAttestedAt:row.preparer_attested_at });
 const fetchRecord = id => dbGet('SELECT * FROM treasury_reports WHERE id = ? AND deleted_at IS NULL',[id]);
 const canPrepare = user => hasPermission(user,'treasury.prepare');
-const editable = (row,user) => canPrepare(user)&&row.status==='draft'&&(row.preparer_user_id===user.id||user.role==='owner');
+// A report has exactly one active editor. The administrator can take over through the
+// assignment route, which immediately removes the previous preparer's write access.
+const editable = (row,user) => canPrepare(user)&&row.status==='draft'&&row.preparer_user_id===user.id;
 const finalized = row => ['ready_for_distribution','distributed'].includes(row.status)&&Boolean(row.preparer_attested_at&&row.submitted_json);
 const signedSnapshot = row => dbGet("SELECT draft_json,signature_bytes FROM treasury_attestations WHERE report_id=? AND phase='preparer' ORDER BY created_at DESC,id DESC LIMIT 1",[row.id]);
 const finalSql = "status IN ('ready_for_distribution','distributed') AND preparer_attested_at IS NOT NULL AND submitted_json IS NOT NULL AND EXISTS (SELECT 1 FROM treasury_attestations a WHERE a.report_id=treasury_reports.id AND a.phase='preparer')";
@@ -81,6 +83,19 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   app.get('/api/treasury/preparers',requirePrepare,route(async(_req,res)=>{
     const users=await dbAll("SELECT id,name,role,permissions_json FROM users WHERE access_revoked_at IS NULL AND email NOT LIKE '%.local' ORDER BY name");res.json({preparers:users.filter(canPrepare).map(({id,name,role})=>({id,name,role}))});
   }));
+  app.get('/api/treasury/alerts',requirePrepare,route(async(_req,res)=>{
+    const rows=await dbAll("SELECT id,uploader_name,created_at,draft_json FROM treasury_reports WHERE deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL ORDER BY created_at ASC");
+    res.json({alerts:rows.map(row=>{
+      const draft=JSON.parse(row.draft_json),period=draft.periodEnd||draft.periodStart||'';
+      return {
+        id:row.id,
+        title:'Banking information is awaiting report preparation',
+        message:`Uploaded by ${row.uploader_name||'an authorized officer'}${period?` for the period ending ${period}`:''}. Claim the records to begin the report.`,
+        uploadedBy:row.uploader_name||'',
+        createdAt:row.created_at,
+      };
+    })});
+  }));
   app.get('/api/treasury',route(async(req,res)=>{
     const ownUploads=!canPrepare(req.user)&&hasPermission(req.user,'treasury.upload');
     const filter=canPrepare(req.user)?'':` AND ((${finalSql})${ownUploads?" OR (created_by_user_id=? AND status IN ('awaiting_preparer','draft'))":''})`;
@@ -107,26 +122,35 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       for(const f of req.files||[])await dbRun('INSERT INTO treasury_sources (id,report_id,name,mime,bytes) VALUES (?,?,?,?,?)',[crypto.randomUUID(),id,f.originalname.slice(0,150),f.mimetype,f.buffer]);
       await audit(req,id,'created');
     });
+    broadcast('treasury_changed',{reason:deferAssignment?'banking_information_waiting':'report_started',reportId:id});
     res.status(201).json({report:await visibleReport(await fetchRecord(id),req.user)});
   }));
   app.post('/api/treasury/:id/assign',requirePrepare,route(async(req,res)=>{
     const row=await record(req);revision(req,row);
     if(!['awaiting_preparer','draft'].includes(row.status))throw error(409,'A signed report cannot be reassigned.');
-    const claimingAvailable=row.status==='awaiting_preparer'&&row.preparer_user_id===null&&req.treasuryAccess==='prepare'&&Number(req.body.preparerUserId)===req.user.id;
+    const requestedPreparerId=Number(req.body.preparerUserId);
+    if(row.status==='draft'&&row.preparer_user_id&&row.preparer_user_id!==requestedPreparerId&&req.user.role!=='owner'){
+      throw error(409,`This report has already been claimed by ${row.preparer_name}. Only that preparing officer can edit it.`);
+    }
+    const claimingAvailable=row.status==='awaiting_preparer'&&row.preparer_user_id===null&&req.treasuryAccess==='prepare'&&requestedPreparerId===req.user.id;
     if(!claimingAvailable&&req.user.role!=='owner'&&row.created_by_user_id!==req.user.id&&row.preparer_user_id!==req.user.id)throw error(403,'You can start an available report yourself. Reassignment requires the uploader, assigned preparer or administrator.');
-    const preparer=await dbGet("SELECT id,name,role,permissions_json FROM users WHERE id=? AND access_revoked_at IS NULL AND email NOT LIKE '%.local'",[Number(req.body.preparerUserId)]);
+    const preparer=await dbGet("SELECT id,name,role,permissions_json FROM users WHERE id=? AND access_revoked_at IS NULL AND email NOT LIKE '%.local'",[requestedPreparerId]);
     if(!preparer||!canPrepare(preparer))throw error(400,'Choose an active officer with treasurer report preparation access.');
     const draft=JSON.parse(row.draft_json);draft.sourceReviewed=false;
     await withTransaction(async()=>{
       const result=await dbRun("UPDATE treasury_reports SET preparer_user_id=?,preparer_name=?,preparer_role=?,status='draft',draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",[preparer.id,preparer.name,preparer.role,JSON.stringify(draft),new Date().toISOString(),row.id,row.revision]);
-      if(!result.changes)throw error(409,'This report changed. Reopen it before assigning.');
+      if(!result.changes){
+        const current=await fetchRecord(row.id);
+        if(current?.status==='draft'&&current.preparer_user_id)throw error(409,`This report has already been claimed by ${current.preparer_name}. Only that preparing officer can edit it.`);
+        throw error(409,'This report changed. Reopen it before assigning.');
+      }
       await audit(req,row.id,'assigned',{previousPreparerUserId:row.preparer_user_id,preparerUserId:preparer.id});
-    });broadcast('treasury_changed');res.json({report:serial(await fetchRecord(row.id))});
+    });broadcast('treasury_changed',{reason:'report_claimed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id))});
   }));
   // Return an unsaved replacement. Existing corrections and signatures stay intact.
   app.post('/api/treasury/:id/organize',requirePrepare,rateLimit({key:'treasury-generate',maximum:12,windowMs:3600000}),route(async(req,res)=>{
     const row=await record(req);revision(req,row);
-    if(!editable(row,req.user))throw error(403,'Only the assigned preparer or Worshipful Master can organize an unsigned draft.');
+    if(!editable(row,req.user))throw error(403,'Only the assigned preparing officer can organize this unsigned draft. The Worshipful Master can take over the report first.');
     if(!row.source_text.trim())throw error(400,'This manually entered report has no uploaded source to organize. Continue editing its report fields.');
     const previous=JSON.parse(row.draft_json);
     const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence/i.test(note)),generateStructured:generationFor(req.user.id)});
@@ -145,7 +169,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);res.setHeader('X-Content-Type-Options','nosniff');res.type('application/octet-stream').send(bytes(file.bytes));
   }));
   app.put('/api/treasury/:id',requirePrepare,route(async(req,res)=>{
-    const row=await record(req);if(!editable(row,req.user))throw error(403,'This report is read-only. Only its preparer or the Worshipful Master can edit a draft.');revision(req,row);
+    const row=await record(req);if(!editable(row,req.user))throw error(403,'This report is read-only. Only its assigned preparing officer can edit it. The Worshipful Master can take over the report first.');revision(req,row);
     const draft=normalizeTreasury(req.body.draft);
     const result=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?',[JSON.stringify(draft),new Date().toISOString(),row.id,row.revision]);
     if(!result.changes)throw error(409,'This report changed. Reopen it before saving.');await audit(req,row.id,'edited');res.json({report:serial(await fetchRecord(row.id))});
@@ -184,6 +208,6 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   }));
   app.delete('/api/treasury/:id',requirePrepare,route(async(req,res)=>{
     const row=await record(req);if(!['awaiting_preparer','draft'].includes(row.status)||row.preparer_attested_at)throw error(409,'Signed reports cannot be deleted.');if(req.user.role!=='owner'&&row.created_by_user_id!==req.user.id&&row.preparer_user_id!==req.user.id)throw error(403,'Only the preparer or Worshipful Master can delete this draft.');
-    const result=await dbRun("UPDATE treasury_reports SET deleted_at=?,revision=revision+1 WHERE id=? AND revision=? AND status IN ('draft','awaiting_preparer')",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'deleted');res.json({ok:true});
+    const result=await dbRun("UPDATE treasury_reports SET deleted_at=?,revision=revision+1 WHERE id=? AND revision=? AND status IN ('draft','awaiting_preparer')",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'deleted');broadcast('treasury_changed',{reason:'report_deleted',reportId:row.id});res.json({ok:true});
   }));
 }

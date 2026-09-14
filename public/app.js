@@ -377,6 +377,7 @@ const enterWorkspace = async (user, session) => {
   hide($('authCard'));
   show($('appCard'));
   await refreshMinutesReviewAlerts();
+  await refreshTreasuryAlerts();
   const [documents] = await Promise.all([
     renderDocuments(),
     user.role === 'owner' ? renderOfficers() : Promise.resolve(),
@@ -761,6 +762,38 @@ const refreshMinutesReviewAlerts = async () => {
   } catch { /* Keep existing alerts visible until the next successful refresh. */ }
 };
 setInterval(() => { if (state.user?.role === 'owner' || can('minutes.prepare')) refreshMinutesReviewAlerts(); }, 20000);
+
+const refreshTreasuryAlerts = async () => {
+  const container = $('treasuryAlerts');
+  const card = $('treasuryMenuCard');
+  if (!can('treasury.prepare')) {
+    container.replaceChildren(); hide(container); card.classList.remove('awaiting');
+    return;
+  }
+  const userId = state.user.id;
+  try {
+    const { alerts } = await apiFetch('/api/treasury/alerts');
+    if (state.user?.id !== userId) return;
+    container.replaceChildren(...alerts.map(alert => {
+      const button = document.createElement('button');
+      button.className = 'secondary';
+      button.textContent = `${alert.title}. ${alert.message}`;
+      button.addEventListener('click', async () => {
+        showWorkspaceSection('treasury', { skipLoad: true });
+        await treasuryWorkspace.list();
+        const record = treasuryWorkspace.records?.find(item => item.id === alert.id);
+        if (record?.status === 'awaiting_preparer' && !record.preparerUserId) treasuryWorkspace.open(record);
+        else treasuryWorkspace.message('This banking information has already been claimed. The report list is current.');
+      });
+      return button;
+    }));
+    container.classList.toggle('hidden', !alerts.length);
+    card.classList.toggle('awaiting', alerts.length > 0);
+    if (alerts.length) $('treasuryMenuDescription').textContent = `${alerts.length} banking record${alerts.length === 1 ? '' : 's'} awaiting a preparer`;
+    else $('treasuryMenuDescription').textContent = can('treasury.upload') ? 'Upload records, prepare and review reports' : 'Prepare reports and review assigned banking records';
+  } catch { /* Keep an existing alert visible until the next successful refresh. */ }
+};
+setInterval(() => { if (can('treasury.prepare')) refreshTreasuryAlerts(); }, 20000);
 
 const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch, state.user?.role));
 const renderMinutes = async () => {
@@ -1663,6 +1696,7 @@ const startRealtime = async () => {
       if (!response.ok || !response.body) throw new Error('Live connection unavailable.');
       setLiveState(true);
       await refreshMinutesReviewAlerts();
+      await refreshTreasuryAlerts();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -1674,6 +1708,7 @@ const startRealtime = async () => {
         buffer = events.pop() || '';
         events.forEach((event) => {
           if (event.includes('event: minutes_review_changed') || event.includes('event: minutes_completion_changed')) refreshMinutesReviewAlerts();
+          if (event.includes('event: treasury_changed')) refreshTreasuryAlerts();
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();
           }
