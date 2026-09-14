@@ -10,4 +10,6 @@ for (const [name, source] of [['GitHub workflow', workflow], ['local deployment 
   }
 }
 assert.match(workflow, /check-production\.mjs .*--track-main/);
+assert.doesNotMatch(localDeploy, /BASE_URL="\$\{APP_BASE_URL:/, 'local deployment must not watch a development localhost');
+assert.match(localDeploy, /PRODUCTION_BASE_URL:-https:\/\/stone-square-sign\.onrender\.com/);
 console.log('PASS: GitHub and local deployment accept Render asynchronous 202 responses and retain production drift verification.');

@@ -21,7 +21,9 @@ if [ -z "${RENDER_DEPLOY_HOOK:-}" ]; then
   exit 1
 fi
 
-BASE_URL="${APP_BASE_URL:-https://stone-square-sign.onrender.com}"
+# APP_BASE_URL belongs to local server development and may point to localhost.
+# Use an explicit production override or the approved hosted service here.
+BASE_URL="${PRODUCTION_BASE_URL:-https://stone-square-sign.onrender.com}"
 WANT_HASH=$(shasum public/app.js | cut -c1-12)
 WANT_VERSION=$(node -p "require('./package.json').version")
 echo "deploying server version $WANT_VERSION, client build $WANT_HASH"
