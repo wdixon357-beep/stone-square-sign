@@ -6,6 +6,8 @@ const app = read('../public/app.js');
 const html = read('../public/index.html');
 const styles = read('../public/styles.css');
 const reportAssistant = read('../public/report-assistant.js');
+const server = read('../server.js');
+const nativeMinutes = read('../macos/Sources/StoneSquareSign/MeetingMinutes.swift');
 
 assert.match(app, /credentials:\s*'same-origin'/, 'dashboard API requests must carry the secure web session cookie');
 assert.match(app, /'X-Stone-Square-Client':\s*'web'/, 'dashboard must identify the web client');
@@ -29,6 +31,9 @@ assert.match(app, /\/api\/auth\/sessions\/revoke-others/, 'My Settings must supp
 assert.match(app, /notificationWarnings/, 'notification delivery warnings must remain visible after successful writes');
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'the preparing officer must receive a reviewed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening reviewed minutes must acknowledge only that preparing officer alert');
+assert.match(app, /Signed and ready for McDuffie or Reese/, 'the website must name both Secretaries on an authorized minutes draft');
+assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either Secretary must be allowed to record distribution');
+assert.match(nativeMinutes, /Signed and ready for McDuffie or Reese/, 'the Mac app must use the same minutes status wording');
 assert.ok(app.indexOf('openMinutesEditor(record.id)') < app.indexOf('completion-alert-seen'), 'reviewed minutes must open before their alert is acknowledged');
 assert.match(app, /beforeunload/, 'unfinished long-form work must be protected on reload');
 assert.match(app, /sessionStorage/, 'non-sensitive drafts must recover within the current tab');

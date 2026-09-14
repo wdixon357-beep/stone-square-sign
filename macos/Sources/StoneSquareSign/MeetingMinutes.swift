@@ -3,6 +3,14 @@ import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
 
+private func minutesStatusLabel(_ status: String) -> String {
+    switch status {
+    case "ready_for_distribution": "Signed and ready for McDuffie or Reese"
+    case "distributed": "Distributed by the Secretary or Assistant Secretary"
+    default: status.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
 struct MinutesSection: Codable, Equatable { var heading: String; var body: String }
 struct MinutesAttendance: Codable, Equatable { var name: String; var title: String; var status: String }
 struct MinutesFinance: Codable, Equatable {
@@ -228,7 +236,7 @@ struct MeetingMinutesView: View {
     private func names(_ key: WritableKeyPath<MinutesDraft, [String]>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key].joined(separator: "\n") ?? "" }, set: { workspace.draft?[keyPath: key] = $0.components(separatedBy: "\n").filter { !$0.isEmpty } })
     }
-    private var status: String { (workspace.selected?.status ?? "draft").replacingOccurrences(of: "_", with: " ").capitalized }
+    private var status: String { minutesStatusLabel(workspace.selected?.status ?? "draft") }
     var body: some View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Meeting Minutes", subtitle: workspace.selected == nil ? "Prepare and manage the Lodge meeting record" : status, symbol: "text.document.fill") {
@@ -303,7 +311,7 @@ struct MeetingMinutesView: View {
                             Text("Prepared by \(record.createdBy)").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(record.status.replacingOccurrences(of: "_", with: " ").capitalized).font(.caption).foregroundStyle(.secondary)
+                        Text(minutesStatusLabel(record.status)).font(.caption).foregroundStyle(.secondary)
                         Button("Review") { workspace.open(record) }
                         if record.status == "draft" && (model.user?.role == "owner" || record.createdByUserId == model.user?.id) {
                             Button("Delete", role: .destructive) { deleting = record }
@@ -431,11 +439,11 @@ struct MeetingMinutesView: View {
                 if model.user?.role == "owner" && record.status == "awaiting_master_attestation" {
                     Button(actionLabel("master-attest")) { pendingAction = "master-attest" }.disabled(workspace.dirty)
                 }
-                if ["owner", "secretary"].contains(model.user?.role ?? "") && record.status == "ready_for_distribution" {
+                if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && record.status == "ready_for_distribution" {
                     Button(actionLabel("mark-distributed")) { pendingAction = "mark-distributed" }
                 }
                 if model.user?.role == "owner" && !["draft", "approved_by_lodge"].contains(record.status) { Button(actionLabel("reopen")) { pendingAction = "reopen" } }
-                if ["owner", "secretary"].contains(model.user?.role ?? "") && ["ready_for_distribution", "distributed"].contains(record.status) {
+                if ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && ["ready_for_distribution", "distributed"].contains(record.status) {
                     TextField("Lodge approval date (YYYY-MM-DD)", text: $approvalDate)
                     TextField("Corrections adopted, if any", text: $approvalNote)
                     Button(actionLabel("lodge-approval")) { pendingAction = "lodge-approval" }.disabled(approvalDate.isEmpty)

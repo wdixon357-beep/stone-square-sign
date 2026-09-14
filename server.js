@@ -408,8 +408,8 @@ const requireMinutesAccess = (req, res, next) => {
 };
 
 const requireSecretaryOrOwner = (req, res, next) => {
-  if (!new Set(['owner', 'secretary']).has(req.user.role) || !hasPermission(req.user,'minutes.prepare')) {
-    return res.status(403).json({ error: 'The Secretary records distribution after the Worshipful Master authorizes it.' });
+  if (!new Set(['owner', 'secretary', 'assistant_secretary']).has(req.user.role) || !hasPermission(req.user,'minutes.prepare')) {
+    return res.status(403).json({ error: 'The Secretary or Assistant Secretary records distribution after the Worshipful Master authorizes it.' });
   }
   next();
 };
@@ -2101,7 +2101,7 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     );
     broadcast('minutes_review_changed');
     broadcast('minutes_completion_changed');
-    const recipientCandidates = await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND (role = 'secretary' OR id = ?)", [row.created_by_user_id]);
+    const recipientCandidates = await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND (role IN ('secretary', 'assistant_secretary') OR id = ?)", [row.created_by_user_id]);
     const recipients = [...new Map(recipientCandidates
       .filter(candidate => hasPermission(candidate, 'minutes.prepare'))
       .map(candidate => [normalizeEmail(candidate.email), candidate]))
@@ -2114,7 +2114,7 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
         const sent = await sendEmail({
           to: recipient.email,
           subject: `Meeting minutes reviewed and signed: ${row.meeting_date || 'date needs review'}`,
-          text: `The Worshipful Master reviewed and signed the meeting minutes. ${changes.length ? `Corrections were recorded in: ${changedSections}. Open the record to compare the submitted and reviewed text.` : 'No corrections were made to the submitted draft.'} The signed draft is ready for the Secretary to distribute from the Stone Square Dashboard.\n\n${requestBaseUrl(req)}/?section=minutes`,
+          text: `The Worshipful Master reviewed and signed the meeting minutes. ${changes.length ? `Corrections were recorded in: ${changedSections}. Open the record to compare the submitted and reviewed text.` : 'No corrections were made to the submitted draft.'} The signed draft is ready for McDuffie or Reese to distribute from the Stone Square Dashboard.\n\n${requestBaseUrl(req)}/?section=minutes`,
         });
         if (!sent) notificationWarnings.push(`The reviewed record is available in the Dashboard, but the email notice to ${recipient.email} could not be sent.`);
       } catch (error) { console.warn('Minutes review completion notice failed:', error.message); notificationWarnings.push(`The reviewed record is available in the Dashboard, but the email notice to ${recipient.email} could not be sent.`); }

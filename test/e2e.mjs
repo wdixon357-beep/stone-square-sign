@@ -585,15 +585,12 @@ try {
       && /Adrian Reese[\s\S]*Assistant Secretary[\s\S]*X/.test(draftText)
       && !/LODGE INCOME/.test(draftText) && !/Community Partner/.test(draftText)
       && /Adrian Reese/.test(draftText) && /Worshipful Master/.test(draftText));
-  const assistantDistributed = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: asstToken });
-  check('the Assistant Secretary cannot record McDuffie\'s correspondence duty',
-    assistantDistributed.status === 403, String(assistantDistributed.status));
-  const distributedMinutes = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: secToken });
-  check('the Secretary can mark the authorized draft as distributed',
+  const distributedMinutes = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: asstToken });
+  check('the Assistant Secretary can mark the authorized draft as distributed',
     distributedMinutes.status === 200 && distributedMinutes.payload.minutes.status === 'distributed'
-      && distributedMinutes.payload.minutes.distributedBy === 'William M. McDuffie');
+      && distributedMinutes.payload.minutes.distributedBy === 'Adrian Reese');
   const approvedMinutes = await api('POST', `/api/minutes/${minutesId}/lodge-approval`, {
-    token: secToken, body: { approvalDate: '2026-09-17', approvalNote: 'Approved as corrected.' },
+    token: asstToken, body: { approvalDate: '2026-09-17', approvalNote: 'Approved as corrected.' },
   });
   check('formal Lodge approval is recorded separately from distribution authorization',
     approvedMinutes.status === 200 && approvedMinutes.payload.minutes.status === 'approved_by_lodge'
@@ -637,9 +634,12 @@ try {
   check('the Master can disable the Secretary minutes workspace before review completes', disabledSecretaryMinutes.status === 200);
   const completionMailBeforeDisabledReview = deliveredMail.length;
   const secretaryReviewed = await api('POST', `/api/minutes/${secretaryMinutesId}/master-attest`, { token: wmToken });
-  check('disabled Minutes access prevents the completion email and distribution action',
+  const disabledReviewNotices = deliveredMail.slice(completionMailBeforeDisabledReview);
+  check('disabled Secretary access blocks McDuffie while the Assistant Secretary still receives the completion notice',
     secretaryReviewed.status === 200
-      && deliveredMail.length === completionMailBeforeDisabledReview
+      && disabledReviewNotices.length === 1
+      && disabledReviewNotices.some((message) => /adrianreese22@example\.org/i.test(message))
+      && !disabledReviewNotices.some((message) => /mcduff8995@example\.org/i.test(message))
       && (await api('POST', `/api/minutes/${secretaryMinutesId}/mark-distributed`, { token: secToken })).status === 403);
   const restoredSecretaryMinutes = await api('PUT', '/api/admin/access', {
     token: wmToken, body: { key: secretaryAccess.key, permissions: secretaryAccess.permissions },
@@ -651,6 +651,16 @@ try {
       && secretaryCompletion.payload.alerts.some(a => a.id === secretaryMinutesId
         && a.kind === 'preparer_completion' && a.message.includes('WM Dixon-Saunders reviewed and signed')));
   await api('POST', `/api/minutes/${secretaryMinutesId}/completion-alert-seen`, { token: secToken });
+  const secretaryDistributed = await api('POST', `/api/minutes/${secretaryMinutesId}/mark-distributed`, { token: secToken });
+  check('McDuffie can distribute the authorized draft after Minutes access is restored',
+    secretaryDistributed.status === 200
+      && secretaryDistributed.payload.minutes.status === 'distributed'
+      && secretaryDistributed.payload.minutes.distributedBy === 'William M. McDuffie');
+  const secretaryApproved = await api('POST', `/api/minutes/${secretaryMinutesId}/lodge-approval`, {
+    token: secToken, body: { approvalDate: '2026-09-17', approvalNote: '' },
+  });
+  check('McDuffie can record the Lodge approval after Minutes access is restored',
+    secretaryApproved.status === 200 && secretaryApproved.payload.minutes.status === 'approved_by_lodge');
 
   const ownSource = new FormData();
   ownSource.append('transcriptText', 'Meeting date: 2026-09-03. The Lodge opened at 7:30 PM. The committee reported. The Lodge closed at 9:00 PM.');

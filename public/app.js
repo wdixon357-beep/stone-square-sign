@@ -669,8 +669,8 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
 const MINUTES_STATUS = {
   draft: 'Working draft',
   awaiting_master_attestation: 'Waiting for the Worshipful Master',
-  ready_for_distribution: 'Signed and ready for McDuffie',
-  distributed: 'Distributed by the Secretary',
+  ready_for_distribution: 'Signed and ready for McDuffie or Reese',
+  distributed: 'Distributed by the Secretary or Assistant Secretary',
   approved_by_lodge: 'Approved by the Lodge',
 };
 
@@ -963,11 +963,11 @@ const updateMinutesEditorControls = (item) => {
     || !can('minutes.prepare') || item.createdByUserId !== state.user.id);
   $('authorizeMinutes').classList.toggle('hidden', role !== 'owner' || item.status !== 'awaiting_master_attestation');
   $('markMinutesDistributed').classList.toggle('hidden', item.status !== 'ready_for_distribution'
-    || !['owner', 'secretary'].includes(role));
+    || !['owner', 'secretary', 'assistant_secretary'].includes(role));
   $('reopenMinutes').classList.toggle('hidden', role !== 'owner'
     || ['draft', 'approved_by_lodge'].includes(item.status));
   $('minutesApprovalPanel').classList.toggle('hidden',
-    !['owner', 'secretary'].includes(role) || !['ready_for_distribution', 'distributed'].includes(item.status));
+    !['owner', 'secretary', 'assistant_secretary'].includes(role) || !['ready_for_distribution', 'distributed'].includes(item.status));
   $('downloadMinutes').textContent = item.status === 'approved_by_lodge' ? 'Download official Word record' : 'Download saved Word draft';
   $('minutesEditorForm').querySelectorAll('input, textarea, select').forEach((field) => {
     if (!['minutesApprovalDate', 'minutesApprovalNote'].includes(field.id)) field.disabled = !editable;
@@ -1603,7 +1603,7 @@ $('authorizeMinutes').addEventListener('click', async () => {
   } catch (error) { setMessage($('minutesEditorMessage'), error.message, true); }
 });
 $('markMinutesDistributed').addEventListener('click', () => minutesAction(
-  'mark-distributed', null, 'The record now shows that the Secretary distributed the draft.',
+  'mark-distributed', null, 'The record now shows which Secretary distributed the draft.',
 ));
 $('reopenMinutes').addEventListener('click', () => minutesAction(
   'reopen', null, 'The minutes are open for corrections. Prior distribution authorization has been cleared.',
