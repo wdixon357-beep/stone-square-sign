@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { PDFDocument } from 'pdf-lib';
 import { organizeTreasury, calculateTreasury, normalizeTreasury, money } from '../treasury.js';
+import { buildTreasuryPdf } from '../treasury-pdf.js';
 const notes=`Period: August 2026
 Bank: Example Credit Union
 Checking
@@ -9,7 +11,7 @@ Book balance: $1,125.00
 Deposits in transit: $0.00
 Outstanding checks: $0.00
 Bank hold: $0.00
-08/03/2026 Deposit Zeffy $200.00
+08/03/2026 Deposit Zeffy: $200.00
 08/04/2026 Payment Utilities $50.00
 08/05/2026 Transfer to savings $25.00
 Savings
@@ -21,17 +23,27 @@ Outstanding checks: $0.00
 Bank hold: $5.00
 08/05/2026 Transfer from checking $25.00
 Fenced funds
-Education Fund $100.00
+Education Fund - Savings: $100.00 - Scholarship awards only.
 Upcoming bills
-Insurance $40.00
+Insurance - Due September 15, 2026: $40.00
 Remarks: A receipt needs to be retained.`;
 const d=organizeTreasury(notes);
 assert.equal(d.periodStart,'2026-08-01');assert.equal(d.periodEnd,'2026-08-31');
 assert.equal(d.accounts.length,2);assert.equal(d.transactions.length,4);assert.equal(d.funds.length,1);assert.equal(d.obligations.length,1);
 assert.equal(d.accounts[0].statementBalance,'1125.00');assert.equal(d.transactions[2].kind,'transfer_out');assert.equal(d.transactions[3].kind,'transfer_in');
+assert.equal(d.transactions[0].description,'Deposit Zeffy');
+assert.equal(d.funds[0].name,'Education Fund');assert.equal(d.funds[0].account,'savings');assert.equal(d.funds[0].restriction,'Scholarship awards only.');
+assert.equal(d.obligations[0].name,'Insurance');assert.equal(d.obligations[0].dueDate,'2026-09-15');
 assert.equal(calculateTreasury(d).ready,false);
 Object.assign(d,{sourceReviewed:true,fundsReviewed:true,obligationsReviewed:true});d.accounts.forEach(a=>a.activityComplete=true);
 let calc=calculateTreasury(d);assert.deepEqual(calc.issues,[]);assert.equal(calc.accounts[0].receipts,20000);assert.equal(calc.accounts[0].disbursements,5000);assert.equal(calc.cash,125000);assert.equal(calc.unrestricted,114500);assert.equal(calc.afterObligations,110500);
+const layoutDraft=structuredClone(d);
+layoutDraft.transactions.push(...['Receipt details reviewed','Payment details reviewed','Transfer details reviewed'].map((description,i)=>({date:`2026-08-${String(20+i).padStart(2,'0')}`,account:'checking',kind:'receipt',description,amount:'0.00',reference:'',category:''})));
+layoutDraft.funds.push({name:'Building Fund',account:'checking',amount:'0.00',restriction:'Building expenses only.'});
+layoutDraft.obligations.push({name:'Printing invoice',dueDate:'2026-09-10',amount:'0.00',note:''});
+layoutDraft.remarks='Fictional figures created only to test the report layout.\nSynthetic test record. No real account or Lodge funds.';
+const layoutPdf=await PDFDocument.load(await buildTreasuryPdf({draft:layoutDraft,preparedBy:'Fictional Test Preparer',preparerRole:'owner'}));
+assert.equal(layoutPdf.getPageCount(),2,'a standard two-account report should keep the attestation on page 2');
 const bad=structuredClone(d);bad.accounts[0].bookBalance='1100.00';assert.match(calculateTreasury(bad).issues.join(' '),/differ by \$25.00/);
 bad.accounts[0].statementBalance=null;assert.equal(calculateTreasury(bad).cash,null);assert.equal(calculateTreasury(bad).ready,false);
 bad.transactions.push({...bad.transactions[0],date:'2026-09-01'});assert.match(calculateTreasury(bad).issues.join(' '),/outside the report period/);

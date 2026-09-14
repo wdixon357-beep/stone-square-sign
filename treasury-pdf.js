@@ -25,6 +25,7 @@ export async function buildTreasuryPdf({ draft, status = 'draft', preparedBy = '
     page.drawText("TREASURER'S REPORT",{x:56,y:709,size:10,font:bold,color:gold});
     page.drawImage(seal,{x:511,y:697,width:59,height:59});
     const footer=['ready_for_distribution','distributed'].includes(status) ? 'SIGNED TREASURER REPORT' : 'DRAFT FOR PREPARER REVIEW';
+    if(/FICTIONAL DEMONSTRATION/i.test(draft.remarks||''))page.drawText('FICTIONAL DEMONSTRATION - NOT A LODGE RECORD',{x:42,y:46,size:8,font:bold,color:rgb(.72,.12,.09)});
     page.drawText(footer,{x:42,y:34,size:8,font:bold,color:gray});
     page.drawText(`Confidential Lodge Financial Record | Page ${pdf.getPageCount()}`,{x:42,y:22,size:8,font:regular,color:gray});
   }
@@ -60,13 +61,15 @@ export async function buildTreasuryPdf({ draft, status = 'draft', preparedBy = '
   for(const o of draft.obligations)paragraph(`${o.name}: ${currency(money(o.amount))}.${o.dueDate?' Due '+date(o.dueDate)+'.':''}${o.note?' '+o.note:''}`,true);
   if(draft.remarks){heading("Treasurer's Remarks");for(const line of draft.remarks.split('\n').filter(Boolean))paragraph(line,true);}
   if(calc.issues.length){heading('Items Requiring Review');for(const issue of calc.issues)paragraph(issue,true);}
-  room(170);heading('Preparing Officer Attestation');
+  // The compact attestation block fits in 150 points. Using its exact footprint avoids
+  // pushing it onto an otherwise empty final page in a typical two-page report.
+  room(150);heading('Preparing Officer Attestation');
   for(const [x,label,name,role,signature] of [[42,'PREPARING OFFICER',preparedBy,TREASURY_OFFICES[preparerRole]||'',preparerSignature]]){
     page.drawText(label,{x,y,size:9,font:bold,color:navy});
-    if(signature){const img=await pdf.embedPng(signature);const scale=Math.min(218/img.width,44/img.height);page.drawImage(img,{x:x+8,y:y-57,width:img.width*scale,height:img.height*scale});}
-    page.drawLine({start:{x,y:y-63},end:{x:x+245,y:y-63},thickness:.7,color:gray});
-    for(const [i,l]of wrap(name||'Attestation pending',245,10).entries())page.drawText(l,{x,y:y-80-i*13,size:10,font:bold,color:ink});
-    if(name&&role)page.drawText(role,{x,y:y-111,size:9,font:regular,color:gray});
+    if(signature){const img=await pdf.embedPng(signature);const scale=Math.min(218/img.width,34/img.height);page.drawImage(img,{x:x+8,y:y-42,width:img.width*scale,height:img.height*scale});}
+    page.drawLine({start:{x,y:y-46},end:{x:x+245,y:y-46},thickness:.7,color:gray});
+    for(const [i,l]of wrap(name||'Attestation pending',245,10).entries())page.drawText(l,{x,y:y-62-i*12,size:10,font:bold,color:ink});
+    if(name&&role)page.drawText(role,{x,y:y-78,size:9,font:regular,color:gray});
   }
   return Buffer.from(await pdf.save());
 }

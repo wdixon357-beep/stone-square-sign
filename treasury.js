@@ -113,10 +113,16 @@ export function organizeTreasury(source, options = {}) {
     if (/^(?:remarks|notes)\s*:/.test(line.toLowerCase())) { section = 'remarks'; draft.remarks += `${draft.remarks ? '\n' : ''}${line.replace(/^[^:]+:\s*/, '')}`; continue; }
     if (section === 'remarks') { draft.remarks += `\n${line}`; continue; }
     if (section === 'funds' && last !== undefined && !/^total/i.test(line)) {
-      const name=line.slice(0, amounts.at(-1).index).replace(/^(?:fenced money|fenced funds|restricted funds)\s*:\s*/i,'').replace(/[:.\s-]+$/,'').trim();
-      if(name)draft.funds.push({ name, account: named || account || 'savings', amount: dollars(last), restriction: '' }); continue;
+      const amountToken=amounts.at(-1),before=line.slice(0,amountToken.index),after=line.slice(amountToken.index+amountToken.raw.length);
+      const name=before.replace(/^(?:fenced money|fenced funds|restricted funds)\s*:\s*/i,'').replace(/\s*[-:]\s*(?:checking|savings)(?: account)?\s*:?[\s-]*$/i,'').replace(/[:.\s-]+$/,'').trim();
+      const restriction=after.replace(/^\s*[-:.,]\s*/,'').trim();
+      if(name)draft.funds.push({ name, account: named || account || 'savings', amount: dollars(last), restriction }); continue;
     }
-    if (section === 'obligations' && last !== undefined && !/^total/i.test(line)) { draft.obligations.push({ name: line.slice(0,amounts.at(-1).index).replace(/[:\s-]+$/,''), amount:dollars(last), dueDate: dates[0] || '', note:'' }); continue; }
+    if (section === 'obligations' && last !== undefined && !/^total/i.test(line)) {
+      let name=line.slice(0,amounts.at(-1).index).replace(/[:\s-]+$/,'');
+      if(dates[0])name=name.replace(/\s*[-,:]?\s*due\s+(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|(?:Jan\w*|Feb\w*|Mar\w*|Apr\w*|May|Jun\w*|Jul\w*|Aug\w*|Sep\w*|Oct\w*|Nov\w*|Dec\w*)\s+\d{1,2},?\s+20\d{2})\s*$/i,'').replace(/[:\s-]+$/,'');
+      draft.obligations.push({ name, amount:dollars(last), dueDate: dates[0] || '', note:'' }); continue;
+    }
     const a = draft.accounts.find(a => a.id === account);
     const fields = [
       ['openingBalance', /^(?:checking\s+|savings\s+)?(?:beginning|opening|previous|starting)(?: bank)? balance(?!.*\bplus\b)|\bstarted (?:with|at)/i],
@@ -145,7 +151,7 @@ export function organizeTreasury(source, options = {}) {
       const reference = line.match(/(?:check|chk|draft)\s*#?\s*(\d{2,8})/i)?.[1] || '';
       const category = /new castle count|county grant/i.test(line) ? 'County grant, restriction needs review' : /zeffy/i.test(line) ? 'Zeffy' : /cash\s*app/i.test(line) ? 'Cash App' : /dividend|interest/i.test(line) ? 'Interest / dividend' : '';
       let description=(line.slice(0,value.index)+line.slice(value.index+value.raw.length)).trim();
-      description=description.replace(/^(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:Jan\w*|Feb\w*|Mar\w*|Apr\w*|May|Jun\w*|Jul\w*|Aug\w*|Sep\w*|Oct\w*|Nov\w*|Dec\w*)\s+\d{1,2},?\s+20\d{2})\s*/i,'').replace(/\s+/g,' ').trim();
+      description=description.replace(/^(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:Jan\w*|Feb\w*|Mar\w*|Apr\w*|May|Jun\w*|Jul\w*|Aug\w*|Sep\w*|Oct\w*|Nov\w*|Dec\w*)\s+\d{1,2},?\s+20\d{2})\s*/i,'').replace(/\s+/g,' ').replace(/[:;\s]+$/,'').trim();
       const transaction = { date, account, kind, description, amount:dollars(Math.abs(value.cents)), reference, category };
       // Duplicate source rows remain visible. Never silently remove a possible real payment.
       const key = JSON.stringify(transaction); if (seen.has(key)) draft.extractionNotes.push('Repeated activity was found. Review for duplicate source pages or repeated payments.'); seen.add(key);
