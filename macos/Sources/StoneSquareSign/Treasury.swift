@@ -9,7 +9,7 @@ struct TreasuryAccount: Codable, Equatable, Identifiable {
     var receipts: String?; var disbursements: String?; var transfersIn: String?; var transfersOut: String?
     var depositsInTransit: String?; var outstandingChecks: String?; var bankHold: String?
 }
-struct TreasuryTransaction: Codable, Equatable { var date = ""; var account = ""; var kind = "review"; var description = ""; var amount: String?; var reference = ""; var category = "" }
+struct TreasuryTransaction: Codable, Equatable { var date = ""; var postedDateConfirmed: Bool?; var account = ""; var kind = "review"; var description = ""; var amount: String?; var reference = ""; var category = "" }
 struct TreasuryFund: Codable, Equatable { var name = ""; var account = ""; var amount: String?; var restriction = "" }
 struct TreasuryObligation: Codable, Equatable { var name = ""; var dueDate = ""; var amount: String?; var note = "" }
 struct TreasuryDraft: Codable, Equatable {
@@ -348,7 +348,7 @@ struct TreasuryView: View {
         Picker("Preparing officer",selection:$workspace.selectedPreparer) { Text("Choose an officer").tag(0);ForEach(workspace.preparers) { person in Text(person.name + (person.id == model.user?.id ? " (I will prepare it)" : "")).tag(person.id) } }
         Button("Continue with selected officer") { confirmingAssignment = true }.buttonStyle(.borderedProminent).disabled(workspace.selectedPreparer == 0)
     } }
-    var metadata: some View { GroupBox("Report details") { VStack(alignment:.leading) { Text("Only bank-posted activity after \(workspace.draft?.previousMeetingDate ?? "the previous stated meeting") through \(workspace.draft?.periodEnd.isEmpty == false ? workspace.draft?.periodEnd ?? "" : "the upcoming stated meeting") is included.").font(.caption).foregroundStyle(.secondary);TextField("First included date (YYYY-MM-DD)",text:text(\.periodStart)).disabled(true);TextField("Upcoming meeting date (YYYY-MM-DD)",text:text(\.periodEnd)).disabled(true);TextField("Date actually presented (YYYY-MM-DD)",text:text(\.presentedOn));TextField("Bank or credit union",text:text(\.bankName)) }.padding(10) } }
+    var metadata: some View { GroupBox("Report details") { VStack(alignment:.leading) { Text("Only bank-posted activity from \(workspace.draft?.periodStart.isEmpty == false ? workspace.draft?.periodStart ?? "" : "the first included date") through \(workspace.draft?.periodEnd.isEmpty == false ? workspace.draft?.periodEnd ?? "" : "the report preparation date") is included. PDFs, screenshots, pasted activity and typed notes are all limited to these dates.").font(.caption).foregroundStyle(.secondary);TextField("First included date (YYYY-MM-DD)",text:text(\.periodStart)).disabled(true);TextField("Report prepared through (YYYY-MM-DD)",text:text(\.periodEnd)).disabled(true);TextField("Date actually presented (YYYY-MM-DD)",text:text(\.presentedOn));TextField("Bank or credit union",text:text(\.bankName)) }.padding(10) } }
     var importReview: some View { DisclosureGroup("Source and import review") { Text(workspace.draft?.sourceNames.joined(separator:", ") ?? "");Text(workspace.draft?.extractionNotes.joined(separator:"\n") ?? "");Text("Review these lines that did not map to a financial field:").font(.caption);Text(workspace.draft?.unmappedLines.joined(separator:"\n") ?? "").font(.caption).textSelection(.enabled) } }
     func accountAmount(_ index:Int,_ key:WritableKeyPath<TreasuryAccount,String?>) -> Binding<String> { Binding(get:{workspace.draft?.accounts[index][keyPath:key] ?? ""},set:{workspace.draft?.accounts[index][keyPath:key]=$0}) }
     var accounts: some View {
@@ -373,9 +373,9 @@ struct TreasuryView: View {
     var activity: some View {
         GroupBox("Receipts, payments and transfers") { VStack(alignment:.leading,spacing:14) {
             ForEach((workspace.draft?.transactions ?? []).indices,id:\.self) { i in VStack(alignment:.leading) {
-                TextField("Date (YYYY-MM-DD)",text:tx(i,\.date));accountPicker(tx(i,\.account))
+                TextField("Bank-posted date (YYYY-MM-DD)",text:tx(i,\.date));accountPicker(tx(i,\.account))
                 Picker("Entry type",selection:tx(i,\.kind)) { Text("Needs review").tag("review");Text("Receipt").tag("receipt");Text("Payment").tag("payment");Text("Transfer in").tag("transfer_in");Text("Transfer out").tag("transfer_out") }
-                TextField("Amount",text:Binding(get:{workspace.draft?.transactions[i].amount ?? ""},set:{workspace.draft?.transactions[i].amount=$0}));TextField("Description",text:tx(i,\.description));TextField("Check / reference",text:tx(i,\.reference));TextField("Category",text:tx(i,\.category));Button("Remove entry",role:.destructive) { workspace.draft?.transactions.remove(at:i) };Divider()
+                TextField("Amount",text:Binding(get:{workspace.draft?.transactions[i].amount ?? ""},set:{workspace.draft?.transactions[i].amount=$0}));TextField("Description",text:tx(i,\.description));TextField("Check / reference",text:tx(i,\.reference));TextField("Category",text:tx(i,\.category));Toggle("Bank-posted date confirmed",isOn:Binding(get:{workspace.draft?.transactions[i].postedDateConfirmed == true},set:{workspace.draft?.transactions[i].postedDateConfirmed=$0}));Button("Remove entry",role:.destructive) { workspace.draft?.transactions.remove(at:i) };Divider()
             } }
             Button("Add activity") { workspace.draft?.transactions.append(TreasuryTransaction(account:workspace.draft?.accounts.first?.id ?? "")) }
         }.padding(10) }

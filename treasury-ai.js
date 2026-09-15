@@ -83,7 +83,7 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(organized, meetingCycle) : organized);
   }
   if (typeof generateStructured !== 'function') throw new TypeError('generateStructured must be a function');
-  const cycleInstruction = meetingCycle ? `\nThe application has fixed this report to posted activity after ${meetingCycle.previousMeeting} through ${meetingCycle.periodEnd}. Include transaction rows only when their bank-posted date is from ${meetingCycle.periodStart} through ${meetingCycle.periodEnd}, inclusive. Do not use a transaction date, check date, monthly statement period, or pending date to replace the bank-posted date. Leave periodStart, periodEnd and presentedOn null because the application controls the reporting cycle and the actual presentation date.` : '';
+  const cycleInstruction = meetingCycle ? `\nThe application has fixed this report to bank-posted activity from ${meetingCycle.periodStart} through ${meetingCycle.periodEnd}, inclusive. This ending date is the date the report was prepared. Do not include, total, summarize, infer, or use transactions outside that range. Do not use a transaction date, check date, monthly statement period, or pending date to replace the bank-posted date. Do not treat a full-statement total or balance as a reporting-window total unless the source explicitly identifies it at the fixed boundary. Leave periodStart, periodEnd and presentedOn null because the application controls the reporting window and the actual presentation date.` : '';
   const response = await generateStructured({
     purpose: 'treasury', schemaName: 'treasury_source_extraction', schema: TREASURY_AI_SCHEMA, instructions: instructions + cycleInstruction,
     input: JSON.stringify({ sourceText: source, sourceNames, sourceNotes, meetingCycle }),
@@ -230,9 +230,13 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     if (!patterns[field.value]?.test(quote)) { rejected += 1; return 'review'; }
     return accepted(field, field.value);
   };
+  const postedDateEvidence = field => {
+    const quote = field?.evidence || '';
+    return /\b(?:posted|posting date)\b/i.test(quote) && !/\b(?:pending|scheduled|authorization date|transaction date|check date)\b/i.test(quote);
+  };
   const draft = {
     periodStart: date(response.periodStart, 'periodStart'), periodEnd: date(response.periodEnd, 'periodEnd'), presentedOn: date(response.presentedOn), bankName: text(response.bankName), accounts,
-    transactions: response.transactions.map(row => ({ date: date(row.date), account: accountReference(row.account, row), kind: direction(row.kind), description: text(row.description), amount: amount(row.amount, true), reference: text(row.reference), category: text(row.category) })),
+    transactions: response.transactions.map(row => ({ date: date(row.date), postedDateConfirmed: postedDateEvidence(row.date), account: accountReference(row.account, row), kind: direction(row.kind), description: text(row.description), amount: amount(row.amount, true), reference: text(row.reference), category: text(row.category) })),
     funds: response.funds.map(row => ({ name: text(row.name), account: accountReference(row.account, row), amount: amount(row.amount), restriction: text(row.restriction) })),
     obligations: response.obligations.map(row => ({ name: text(row.name), dueDate: date(row.dueDate), amount: amount(row.amount), note: text(row.note) })),
     remarks: text(response.remarks), sourceReviewed: false, fundsReviewed: false, obligationsReviewed: false,

@@ -9,6 +9,7 @@ Bank: Example Credit Union
 Checking
 Opening balance: $1,000.00
 Closing balance: $1,150.00
+Posted transactions
 08/03 Deposit Zeffy $200.00
 08/04 Payment Utilities ($50.00)
 Savings
@@ -58,19 +59,27 @@ check('without a model callback the existing deterministic parser is used unchan
 const cycleFiltered = await generateTreasuryDraft(`${source}\n09/05/2026 Deposit Fall event $75.00`, {
   meetingCycle: { previousMeeting:'2026-09-03', periodStart:'2026-09-04', periodEnd:'2026-09-17' },
 });
-check('meeting-cycle generation keeps checking and savings while excluding statement activity and monthly totals outside the cycle', cycleFiltered.periodStart === '2026-09-04' && cycleFiltered.periodEnd === '2026-09-17' && cycleFiltered.transactions.every(row => row.date >= '2026-09-04' && row.date <= '2026-09-17') && cycleFiltered.accounts.every(account => account.openingBalance === null && account.statementBalance === null) && ['checking','savings'].every(id=>cycleFiltered.accounts.some(account=>account.id===id)));
+check('fixed-window generation keeps checking and savings while excluding statement activity and monthly totals outside the period', cycleFiltered.periodStart === '2026-09-04' && cycleFiltered.periodEnd === '2026-09-17' && cycleFiltered.transactions.every(row => row.date >= '2026-09-04' && row.date <= '2026-09-17') && cycleFiltered.accounts.every(account => account.openingBalance === null && account.statementBalance === null) && ['checking','savings'].every(id=>cycleFiltered.accounts.some(account=>account.id===id)));
+
+let fixedWindowRequest;
+await generateTreasuryDraft(source, {
+  meetingCycle: { previousMeeting:'2026-09-03', periodStart:'2026-09-04', periodEnd:'2026-09-15' },
+  generateStructured: async value => { fixedWindowRequest=value; return response(); },
+});
+check('structured processing cannot calculate from material outside the fixed preparation-date window', fixedWindowRequest.instructions.includes('Do not include, total, summarize, infer, or use transactions outside that range') && fixedWindowRequest.instructions.includes('2026-09-04 through 2026-09-15'));
 
 let request;
 const output = await generateTreasuryDraft(source, { sourceNames: ['synthetic.png'], sourceNotes: ['Synthetic screenshot was read with OCR. Check every amount.'], generateStructured: async value => { request = value; return response(); } });
 assert.equal(request.instructions, TREASURY_REPORT_RULES);
 check('callback receives treasury routing and exact source text', request.purpose === 'treasury' && request.schemaName === 'treasury_source_extraction' && JSON.parse(request.input).sourceText === source);
 check('supported source figures keep existing normalized dollar strings', output.accounts[0].openingBalance === '1000.00' && output.accounts[0].statementBalance === '1150.00' && output.transactions[0].amount === '200.00');
+check('structured processing confirms only a source-supported bank-posted date', output.transactions[0].postedDateConfirmed === true);
 check('explicit reporting month and cited statement year are resolved deterministically', output.periodStart === '2026-08-01' && output.periodEnd === '2026-08-31' && output.transactions[0].date === '2026-08-03');
 check('missing balances remain unknown and officer confirmations remain unset', output.accounts[0].bankHold === null && output.accounts[0].bookBalance === null && !output.accounts[0].activityComplete && !output.sourceReviewed && !output.fundsReviewed && !output.obligationsReviewed);
 check('unmapped source content is retained for officer review', output.unmappedLines.join('\n').includes('Bank hold is unknown.') && output.unmappedLines.join('\n').includes('Keep the receipt with the report.'));
 check('original source names and OCR review notes survive extraction', output.sourceNames[0] === 'synthetic.png' && output.extractionNotes.includes('Synthetic screenshot was read with OCR. Check every amount.'));
 check('Terra provenance is identifiable when reorganizing original source', output.extractionNotes.some(note => note.startsWith('Terra (GPT-5.6)')));
-check('accepted fields retain exact source line references for review', output.extractionNotes.join('\n').includes('Source evidence: accounts[0].openingBalance → line 4.') && output.extractionNotes.join('\n').includes('Source evidence: transactions[0].date → lines 1 through 6.'));
+check('accepted fields retain exact source line references for review', output.extractionNotes.join('\n').includes('Source evidence: accounts[0].openingBalance → line 4.') && output.extractionNotes.join('\n').includes('Source evidence: transactions[0].date → lines 1 through 7.'));
 check('existing reconciliation still requires review and missing data', !calculateTreasury(output).ready && calculateTreasury(output).accounts[0].calculated === null);
 
 const invalid = response();
@@ -115,7 +124,7 @@ check('long source text is packed rather than truncated by the existing row limi
 const many = response();
 many.transactions = Array.from({length:500}, () => structuredClone(many.transactions[0]));
 const packed = await generateTreasuryDraft(source, {generateStructured: async () => many});
-check('references for the maximum activity rows survive normalizer limits', packed.extractionNotes.join('\n').includes('Source evidence: transactions[499].amount → line 6.') && packed.extractionNotes.length <= 1000 && packed.extractionNotes.every(note => note.length <= 1000));
+check('references for the maximum activity rows survive normalizer limits', packed.extractionNotes.join('\n').includes('Source evidence: transactions[499].amount → line 7.') && packed.extractionNotes.length <= 1000 && packed.extractionNotes.every(note => note.length <= 1000));
 
 const synthetic = JSON.parse(readFileSync(new URL('./fixtures/treasury-terra-synthetic.json', import.meta.url), 'utf8'));
 const replay = async (source = synthetic.source, response = structuredClone(synthetic.response)) => generateTreasuryDraft(source, { generateStructured: async () => response });

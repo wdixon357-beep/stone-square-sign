@@ -31,9 +31,9 @@ Opening/closing times, an individual Brother's missed instruction months, and co
 
 ## Treasury
 
-- Each report covers bank-posted activity beginning the day after the previous stated communication and ending on the upcoming stated communication date. Stated communications normally occur on the first and third Thursdays from September through June. The first September report carries forward activity after the final June meeting; no separate July or August cycle is created.
-- Uploaded PDFs, screenshots and typed transaction histories are filtered to that meeting-cycle window. An entry outside the window or without a supported posted date stays in the original banking records for review and is excluded from report activity. Pending activity is not treated as posted activity.
-- Monthly statement balances and totals are not relabeled as meeting-cycle balances when their dates do not match the cycle. The preparing officer must confirm the correct boundary balances before signing.
+- The first report after a meeting begins the following day and ends on the date the report is prepared. Once that report is finalized, the next report begins the following day and ends on its own preparation date. The resulting sequence cannot intentionally overlap or omit a day.
+- Uploaded PDFs, screenshots, OCR, copied and pasted transactions, and typed banking notes are filtered to that fixed reporting window. An entry outside the window or without a supported posted date stays in the original banking records for review and is excluded from report activity and calculations. Pending activity is not treated as posted activity.
+- Full-statement balances and totals are not relabeled as reporting-window balances when their dates do not match the fixed boundaries. The preparing officer must confirm the correct boundary balances before signing.
 - Checking and savings intake remain separate for pasted transactions, screenshots and statements. The service labels both source blocks and preserves each uploaded file's account so values cannot be moved between accounts during organization.
 
 - Accept PDF statements, screenshots and typed banking notes; retain the source for officer review. Saving information for later is separate from completing a report. Do not assume Marable or any particular person will prepare it.

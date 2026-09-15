@@ -1,5 +1,5 @@
 {
-  "source": "SYNTHETIC ACTIVATION TEST: fictional banking information, not a real Lodge report.\r\nReporting period: September 1, 2026 through September 30, 2026.\r\nChecking account. Opening balance: $1,000.00. Closing statement balance: $1,150.00.\r\nSeptember 4, 2026: deposit, member dues, $200.00, checking.\r\nSeptember 8, 2026: payment, office supplies, $50.00, checking.\r\nSavings account. Opening balance: $500.00. Closing statement balance: $500.00.\r\nNo other transactions were provided. Outstanding checks, pending deposits, fenced funds and unpaid bills are not documented and require review.",
+  "source": "SYNTHETIC ACTIVATION TEST: fictional banking information, not a real Lodge report.\r\nReporting period: September 1, 2026 through September 30, 2026.\r\nChecking account. Opening balance: $1,000.00. Closing statement balance: $1,150.00.\r\nPosted September 4, 2026: deposit, member dues, $200.00, checking.\r\nPosted September 8, 2026: payment, office supplies, $50.00, checking.\r\nSavings account. Opening balance: $500.00. Closing statement balance: $500.00.\r\nNo other transactions were provided. Outstanding checks, pending deposits, fenced funds and unpaid bills are not documented and require review.",
   "response": {
     "periodStart": {
       "value": "2026-09-01",
@@ -117,7 +117,7 @@
       {
         "date": {
           "value": "2026-09-04",
-          "evidence": "September 4, 2026"
+          "evidence": "Posted September 4, 2026"
         },
         "account": {
           "value": "checking",
@@ -147,7 +147,7 @@
       {
         "date": {
           "value": "2026-09-08",
-          "evidence": "September 8, 2026"
+          "evidence": "Posted September 8, 2026"
         },
         "account": {
           "value": "checking",

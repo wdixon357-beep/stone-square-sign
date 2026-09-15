@@ -6,7 +6,7 @@ import { hasPermission, resolvePermissions } from './access-control.js';
 import { generateTreasuryDraft } from './treasury-ai.js';
 import { readTreasurySources } from './treasury-source.js';
 import { buildTreasuryPdf } from './treasury-pdf.js';
-import { treasuryMeetingCycle, treasuryCycleEnding, applyTreasuryMeetingCycle } from './treasury-period.js';
+import { easternDate, treasuryReportingWindow, treasuryWindowForDraft, applyTreasuryMeetingCycle } from './treasury-period.js';
 const error = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 const bytes = v => v ? Buffer.from(v) : null;
 const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*1024*1024, files:5, fields:6, fieldSize:180000 }, fileFilter:(_req,file,done)=>/\.(pdf|png|jpe?g|txt)$/i.test(file.originalname)?done(null,true):done(error(400,'Choose a PDF, PNG, JPG or TXT file.')) });
@@ -46,6 +46,10 @@ const editable = (row,user) => canPrepare(user)&&row.status==='draft'&&row.prepa
 const finalized = row => ['ready_for_distribution','distributed'].includes(row.status)&&Boolean(row.preparer_attested_at&&row.submitted_json);
 const signedSnapshot = row => dbGet("SELECT draft_json,signature_bytes FROM treasury_attestations WHERE report_id=? AND phase='preparer' ORDER BY created_at DESC,id DESC LIMIT 1",[row.id]);
 const finalSql = "status IN ('ready_for_distribution','distributed') AND preparer_attested_at IS NOT NULL AND submitted_json IS NOT NULL AND EXISTS (SELECT 1 FROM treasury_attestations a WHERE a.report_id=treasury_reports.id AND a.phase='preparer')";
+async function currentTreasuryReportingWindow(reference=easternDate()) {
+  const rows=await dbAll("SELECT a.draft_json FROM treasury_attestations a JOIN treasury_reports r ON r.id=a.report_id WHERE a.phase='preparer' AND r.deleted_at IS NULL AND r.status IN ('ready_for_distribution','distributed')");
+  return treasuryReportingWindow(reference,rows.map(row=>JSON.parse(row.draft_json).periodEnd));
+}
 async function visibleReport(row,user) {
   if(canPrepare(user))return serial(row);
   const snapshot=finalized(row)?await signedSnapshot(row):null;
@@ -70,6 +74,23 @@ export async function initTreasurySchema() {
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_sources (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), name TEXT NOT NULL, mime TEXT NOT NULL, bytes BYTEA NOT NULL)`);
   await dbRun("ALTER TABLE treasury_sources ADD COLUMN IF NOT EXISTS account_label TEXT NOT NULL DEFAULT ''");
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_attestations (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), phase TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), draft_json TEXT NOT NULL, signature_bytes BYTEA NOT NULL, created_at TEXT NOT NULL)`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS treasury_period_lock (id INTEGER PRIMARY KEY, updated_at TEXT NOT NULL)`);
+  await dbRun("INSERT INTO treasury_period_lock (id,updated_at) VALUES (1,?) ON CONFLICT(id) DO NOTHING",[new Date().toISOString()]);
+  await dbRun(`CREATE TABLE IF NOT EXISTS treasury_migrations (key TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
+  // Correct drafts created under the former upcoming-meeting rule exactly once.
+  // A draft's corrected window remains frozen after this migration.
+  await withTransaction(async()=>{
+    const key='rolling_report_window_2026_09_15',applied=await dbGet('SELECT key FROM treasury_migrations WHERE key=? FOR UPDATE',[key]);
+    if(applied)return;
+    const today=easternDate(),currentWindow=await currentTreasuryReportingWindow(today),time=new Date().toISOString();
+    for(const row of await dbAll("SELECT id,draft_json FROM treasury_reports WHERE deleted_at IS NULL AND status IN ('draft','awaiting_preparer')")){
+      const saved=normalizeTreasury(JSON.parse(row.draft_json));
+      if(!saved.periodEnd||saved.periodEnd<=today)continue;
+      const revised=normalizeTreasury(applyTreasuryMeetingCycle(saved,currentWindow));
+      await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=?',[JSON.stringify(revised),time,row.id]);
+    }
+    await dbRun('INSERT INTO treasury_migrations (key,applied_at) VALUES (?,?)',[key,time]);
+  });
   // Preserve existing upload grants once; an explicit permissions selection always wins.
   for(const user of await dbAll('SELECT u.* FROM users u JOIN treasury_upload_access g ON g.user_id=u.id WHERE u.permissions_json IS NULL')){
     const permissions=[...new Set([...resolvePermissions(user),'treasury.view','treasury.upload'])];
@@ -82,6 +103,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   const route=(fn)=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
   const requirePrepare=(req,_res,next)=>canPrepare(req.user)?next():next(error(403,'Treasurer report preparation access is required.'));
   const requireUpload=(req,_res,next)=>hasPermission(req.user,'treasury.upload')?next():next(error(403,'Bank record upload access is required to provide statements, screenshots or banking notes.'));
+  const reportingWindow=()=>currentTreasuryReportingWindow();
   const record=async req=>{
     const row=await fetchRecord(req.params.id);
     const visible=row&&(canPrepare(req.user)||(hasPermission(req.user,'treasury.upload')&&row.created_by_user_id===req.user.id&&['awaiting_preparer','draft'].includes(row.status))||(hasPermission(req.user,'treasury.view')&&finalized(row)&&await signedSnapshot(row)));
@@ -132,7 +154,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     res.json({reports:await Promise.all(rows.map(row=>visibleReport(row,req.user)))});
   }));
   app.post('/api/treasury/drafts',requirePrepare,route(async(req,res)=>{
-    const id=crypto.randomUUID(),time=new Date().toISOString(),draft=normalizeTreasury(applyTreasuryMeetingCycle(normalizeTreasury(),treasuryMeetingCycle()));
+    const id=crypto.randomUUID(),time=new Date().toISOString(),draft=normalizeTreasury(applyTreasuryMeetingCycle(normalizeTreasury(),await reportingWindow()));
     await withTransaction(async()=>{
       await dbRun('INSERT INTO treasury_reports (id,draft_json,source_text,created_by_user_id,preparer_name,preparer_role,created_at,updated_at,preparer_user_id,uploader_name,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[id,JSON.stringify(draft),'',req.user.id,req.user.name,req.user.role,time,time,req.user.id,req.user.name,'draft']);
       await audit(req,id,'created',{manual:true});
@@ -145,7 +167,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(intent==='complete'&&req.treasuryAccess!=='prepare')throw error(403,'This account can save banking information, but report preparation access is required to complete a report.');
     const deferAssignment=intent==='save';
     const source=await accountSources(req);
-    const draft=await generateTreasuryDraft(source.text,{sourceNames:source.names,sourceNotes:source.notes,meetingCycle:treasuryMeetingCycle(),generateStructured:deferAssignment?undefined:generationFor(req.user.id)}),id=crypto.randomUUID(),time=new Date().toISOString();
+    const draft=await generateTreasuryDraft(source.text,{sourceNames:source.names,sourceNotes:source.notes,meetingCycle:await reportingWindow(),generateStructured:deferAssignment?undefined:generationFor(req.user.id)}),id=crypto.randomUUID(),time=new Date().toISOString();
     await withTransaction(async()=>{
       await dbRun('INSERT INTO treasury_reports (id,draft_json,source_text,created_by_user_id,preparer_name,preparer_role,created_at,updated_at,preparer_user_id,uploader_name,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[id,JSON.stringify(draft),source.text,req.user.id,deferAssignment?'':req.user.name,deferAssignment?'':req.user.role,time,time,deferAssignment?null:req.user.id,req.user.name,deferAssignment?'awaiting_preparer':'draft']);
       for(const {file:f,accountLabel} of source.files)await dbRun('INSERT INTO treasury_sources (id,report_id,name,mime,bytes,account_label) VALUES (?,?,?,?,?,?)',[crypto.randomUUID(),id,f.originalname.slice(0,150),f.mimetype,f.buffer,accountLabel]);
@@ -182,7 +204,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(!editable(row,req.user))throw error(403,'Only the assigned preparing officer can organize this unsigned draft. The Worshipful Master can take over the report first.');
     if(!row.source_text.trim())throw error(400,'This manually entered report has no uploaded source to organize. Continue editing its report fields.');
     const previous=JSON.parse(row.draft_json);
-    const meetingCycle=treasuryCycleEnding(previous.periodEnd)||treasuryMeetingCycle();
+    const meetingCycle=treasuryWindowForDraft(previous)||await reportingWindow();
     const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)/i.test(note)),meetingCycle,generateStructured:generationFor(req.user.id)});
     const current=await record(req);revision(req,current);
     if(!editable(current,req.user))throw error(409,'This report changed while its source was being organized. Reopen it before continuing.');
@@ -200,7 +222,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   }));
   app.put('/api/treasury/:id',requirePrepare,route(async(req,res)=>{
     const row=await record(req);if(!editable(row,req.user))throw error(403,'This report is read-only. Only its assigned preparing officer can edit it. The Worshipful Master can take over the report first.');revision(req,row);
-    const saved=JSON.parse(row.draft_json),meetingCycle=treasuryCycleEnding(saved.periodEnd)||treasuryMeetingCycle();
+    const saved=JSON.parse(row.draft_json),meetingCycle=treasuryWindowForDraft(saved)||await reportingWindow();
     const draft=normalizeTreasury(applyTreasuryMeetingCycle(normalizeTreasury(req.body.draft),meetingCycle));
     const result=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?',[JSON.stringify(draft),new Date().toISOString(),row.id,row.revision]);
     if(!result.changes)throw error(409,'This report changed. Reopen it before saving.');await audit(req,row.id,'edited');res.json({report:serial(await fetchRecord(row.id))});
@@ -212,18 +234,27 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     res.type('application/pdf').send(pdf);
   }));
   app.post('/api/treasury/:id/preview',requirePrepare,route(async(req,res)=>{
-    const row=await record(req),saved=JSON.parse(row.draft_json),meetingCycle=treasuryCycleEnding(saved.periodEnd)||treasuryMeetingCycle(),draft=editable(row,req.user)&&req.body.draft?normalizeTreasury(applyTreasuryMeetingCycle(normalizeTreasury(req.body.draft),meetingCycle)):saved;
+    const row=await record(req),saved=JSON.parse(row.draft_json),meetingCycle=treasuryWindowForDraft(saved)||await reportingWindow(),draft=editable(row,req.user)&&req.body.draft?normalizeTreasury(applyTreasuryMeetingCycle(normalizeTreasury(req.body.draft),meetingCycle)):saved;
     const snapshot=await signedSnapshot(row);
     const pdf=await buildTreasuryPdf({draft:finalized(row)&&snapshot?JSON.parse(snapshot.draft_json):draft,status:row.status,preparedBy:row.preparer_name,preparerRole:row.preparer_role,preparerSignature:bytes(snapshot?.signature_bytes)});
     res.type('application/pdf').send(pdf);
   }));
   app.post('/api/treasury/:id/preparer-attest',requirePrepare,route(async(req,res)=>{
-    const row=await record(req);revision(req,row);
-    if(row.preparer_user_id!==req.user.id||row.status!=='draft'||req.treasuryAccess!=='prepare')throw error(403,'Only the preparing officer can attest to an unsigned draft.');
-    const calculation=calculateTreasury(JSON.parse(row.draft_json));if(!calculation.ready)throw error(409,calculation.issues.join(' '));
+    const initial=await record(req);revision(req,initial);
+    if(initial.preparer_user_id!==req.user.id||initial.status!=='draft'||req.treasuryAccess!=='prepare')throw error(403,'Only the preparing officer can attest to an unsigned draft.');
     const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=?',[req.user.id]);if(!signature?.signature_bytes)throw error(409,'Save your signature profile before attesting.');
-    const time=new Date().toISOString();
+    let row;const time=new Date().toISOString();
     await withTransaction(async()=>{
+      await dbGet('SELECT id FROM treasury_period_lock WHERE id=1 FOR UPDATE');
+      row=await dbGet('SELECT * FROM treasury_reports WHERE id=? AND deleted_at IS NULL FOR UPDATE',[req.params.id]);
+      if(!row)throw error(404,'Treasurer report not found.');revision(req,row);
+      if(row.preparer_user_id!==req.user.id||row.status!=='draft'||req.treasuryAccess!=='prepare')throw error(403,'Only the preparing officer can attest to an unsigned draft.');
+      const draft=normalizeTreasury(JSON.parse(row.draft_json)),calculation=calculateTreasury(draft);if(!calculation.ready)throw error(409,calculation.issues.join(' '));
+      const snapshots=await dbAll("SELECT a.report_id,a.draft_json FROM treasury_attestations a JOIN treasury_reports r ON r.id=a.report_id WHERE a.phase='preparer' AND a.report_id<>? AND r.deleted_at IS NULL AND r.status IN ('ready_for_distribution','distributed')",[row.id]);
+      const signed=snapshots.map(item=>normalizeTreasury(JSON.parse(item.draft_json))).filter(item=>item.periodStart&&item.periodEnd);
+      if(signed.some(item=>item.periodStart<=draft.periodEnd&&item.periodEnd>=draft.periodStart))throw error(409,'A finalized Treasurer Report already covers some or all of these dates. Start the next report on the day after the last finalized report.');
+      const expected=treasuryReportingWindow(draft.periodEnd,signed.map(item=>item.periodEnd));
+      if(draft.periodStart!==expected.periodStart)throw error(409,`This report must begin on ${expected.periodStart}, the day after the last completed reporting period. Reopen the report before signing.`);
       const changed=await dbRun("UPDATE treasury_reports SET status='ready_for_distribution',submitted_json=draft_json,preparer_attested_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",[time,time,row.id,row.revision]);
       if(!changed.changes)throw error(409,'This report changed. Reopen it before signing.');
       await dbRun('INSERT INTO treasury_attestations (id,report_id,phase,user_id,draft_json,signature_bytes,created_at) VALUES (?,?,?,?,?,?,?)',[crypto.randomUUID(),row.id,'preparer',req.user.id,row.draft_json,bytes(signature.signature_bytes),time]);await audit(req,row.id,'preparer_attested');

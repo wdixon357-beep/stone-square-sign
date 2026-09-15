@@ -21,7 +21,7 @@ export function normalizeTreasury(input = {}) {
   if (new Set(accounts.map(a => a.id)).size !== accounts.length) throw Object.assign(new Error('Each account must have a unique identifier.'), { statusCode: 400 });
   const rows = (key, max = 500) => (Array.isArray(input[key]) ? input[key] : []).slice(0, max);
   return { version: 1, previousMeetingDate: validDate(input.previousMeetingDate), periodStart: validDate(input.periodStart), periodEnd: validDate(input.periodEnd), presentedOn: validDate(input.presentedOn), bankName: text(input.bankName, 120), accounts,
-    transactions: rows('transactions').map(t => ({ date: validDate(t.date), account: text(t.account, 40), kind: ['receipt', 'payment', 'transfer_in', 'transfer_out'].includes(t.kind) ? t.kind : 'review', description: text(t.description, 500), amount: amount(t.amount), reference: text(t.reference, 80), category: text(t.category, 80) })),
+    transactions: rows('transactions').map(t => ({ date: validDate(t.date), postedDateConfirmed: t.postedDateConfirmed === true, account: text(t.account, 40), kind: ['receipt', 'payment', 'transfer_in', 'transfer_out'].includes(t.kind) ? t.kind : 'review', description: text(t.description, 500), amount: amount(t.amount), reference: text(t.reference, 80), category: text(t.category, 80) })),
     funds: rows('funds', 50).map(f => ({ name: text(f.name, 120), account: text(f.account, 40), amount: amount(f.amount), restriction: text(f.restriction, 300) })),
     obligations: rows('obligations', 100).map(o => ({ name: text(o.name, 150), dueDate: validDate(o.dueDate), amount: amount(o.amount), note: text(o.note, 400) })),
     fundsReviewed: input.fundsReviewed === true, obligationsReviewed: input.obligationsReviewed === true, sourceReviewed: input.sourceReviewed === true,
@@ -38,13 +38,15 @@ export function calculateTreasury(input) {
   if (!draft.obligationsReviewed) issues.push('Confirm unpaid bills and upcoming obligations.');
   for (const [i, t] of draft.transactions.entries()) {
     if (!accountIds.has(t.account) || t.kind === 'review' || money(t.amount) === null || money(t.amount) < 0) issues.push(`Review the account, direction and amount on activity row ${i + 1}.`);
-    if (t.date && ((draft.periodStart && t.date < draft.periodStart) || (draft.periodEnd && t.date > draft.periodEnd))) issues.push(`Activity row ${i + 1} is outside the report period and its meeting-cycle window.`);
+    if (!t.date) issues.push(`Confirm the bank-posted date on activity row ${i + 1}.`);
+    if (!t.postedDateConfirmed) issues.push(`Confirm that activity row ${i + 1} uses the bank-posted date.`);
+    if (t.date && ((draft.periodStart && t.date < draft.periodStart) || (draft.periodEnd && t.date > draft.periodEnd))) issues.push(`Activity row ${i + 1} is outside the fixed reporting period.`);
   }
   for (const [i, f] of draft.funds.entries()) if (!accountIds.has(f.account) || money(f.amount) === null || money(f.amount) < 0) issues.push(`Review fenced fund ${i + 1}.`);
   for (const [i, o] of draft.obligations.entries()) if (!o.name || money(o.amount) === null || money(o.amount) < 0) issues.push(`Review obligation ${i + 1}.`);
   const accounts = draft.accounts.map(a => {
     for (const field of accountFields.filter(k => !['openingBalance','statementBalance','bookBalance'].includes(k))) if (money(a[field]) !== null && money(a[field]) < 0) issues.push(`${a.name}: ${field.replace(/([A-Z])/g, ' $1').toLowerCase()} must not be negative. Record the direction separately.`);
-    const entries = draft.transactions.filter(t => t.account === a.id);
+    const entries = draft.transactions.filter(t => t.account === a.id && t.postedDateConfirmed && t.date && (!draft.periodStart || t.date >= draft.periodStart) && (!draft.periodEnd || t.date <= draft.periodEnd));
     const flow = (field, kind) => {
       const rows = entries.filter(t => t.kind === kind), total = sum(rows.map(t => money(t.amount))), stated = money(a[field]);
       if (a.activityComplete && stated !== null && total !== stated) issues.push(`${a.name}: ${field.replace(/([A-Z])/g, ' $1').toLowerCase()} total does not match the listed activity.`);
@@ -86,7 +88,7 @@ const moneyTokens = line => [...line.matchAll(/(?:\(?-?\$\s*\d[\d,]*(?:\.\d{2})?
 export function organizeTreasury(source, options = {}) {
   const draft = normalizeTreasury({ sourceNames: options.sourceNames, extractionNotes: options.extractionNotes });
   const lines = String(source).replace(/\r/g, '').split(/\n|;\s*/).map(l => l.trim()).filter(Boolean);
-  let account = '', section = '', year = '', pending = '';
+  let account = '', section = '', year = '', pending = '', postedSection = false;
   const seen = new Set();
   const inferAccount = line => /\bchecking\b|share\s*0070\b/i.test(line) ? 'checking' : /\bsavings\b|prime share|share\s*0001\b/i.test(line) ? 'savings' : '';
   for (const raw of lines) {
@@ -105,11 +107,13 @@ export function organizeTreasury(source, options = {}) {
     if (/dexsta federal credit union/i.test(line)) draft.bankName = 'DEXSTA Federal Credit Union';
     const amounts = moneyTokens(line), last = amounts.at(-1)?.cents;
     if (named && !/transfer(?:red)?\s+(?:to|from)|transfer in|transfer out/i.test(line)) account = named;
-    if (/^(?:checking|savings|prime share savings)(?:\s+account)?(?:\s+number\s*:.*|\s*:?(?:\s+\d{4})?)$/i.test(line)) { account = named; section = ''; continue; }
+    if (/^(?:checking|savings|prime share savings)(?:\s+account)?(?:\s+number\s*:.*|\s*:?(?:\s+\d{4})?)$/i.test(line)) { account = named; section = ''; postedSection = false; continue; }
     if (/^Account Name:/i.test(line)) { section='';continue; }
     if (/^(?:fenced money|fenced funds|restricted funds)/i.test(line)) { section = 'funds'; if (last === undefined) continue; }
     if (/^(?:outstanding obligations|upcoming bills|unpaid bills|bills due)/i.test(line)) { section = 'obligations'; if (last === undefined || /^(?:outstanding obligations|unpaid bills)\s*\$?\s*0(?:\.00)?$/i.test(line)) continue; }
-    if (/^(?:monthly summary|account reconciliation|position at|financial position|account activity|checking account activity|savings account activity)/i.test(line)) { section = /activity/i.test(line)?'activity':'summary';continue; }
+    if (/^(?:posted transactions?|posted activity|posting date activity)/i.test(line)) { section = 'activity'; postedSection = true; continue; }
+    if (/^(?:pending transactions?|pending activity|scheduled transactions?|scheduled activity)/i.test(line)) { section = 'pending'; postedSection = false; continue; }
+    if (/^(?:monthly summary|account reconciliation|position at|financial position|account activity|checking account activity|savings account activity)/i.test(line)) { section = /activity/i.test(line)?'activity':'summary';postedSection = /posted/i.test(line);continue; }
     if (/^(?:remarks|notes)\s*:/.test(line.toLowerCase())) { section = 'remarks'; draft.remarks += `${draft.remarks ? '\n' : ''}${line.replace(/^[^:]+:\s*/, '')}`; continue; }
     if (section === 'remarks') { draft.remarks += `\n${line}`; continue; }
     if (section === 'funds' && last !== undefined && !/^total/i.test(line)) {
@@ -144,7 +148,9 @@ export function organizeTreasury(source, options = {}) {
     pending = '';
     if (/^(?:receipts|income|deposits|credits)\s*:?(?:\s*\/.*)?$/i.test(line)) { section = 'receipt'; continue; }
     if (/^(?:payments|expenses|disbursements|withdrawals|debits)\s*:?(?:\s*\/.*)?$/i.test(line)) { section = 'payment'; continue; }
+    if (a && amounts.length && section === 'pending') { draft.unmappedLines.push(raw); continue; }
     if (a && amounts.length && section !== 'summary' && !/^(?:total|balance|account number|dividend.*year.to.date|annual percentage)/i.test(line)) {
+      if (/\b(?:pending|scheduled|authorization date|transaction date|check date)\b/i.test(line) && !/\bposted\b/i.test(line)) { draft.unmappedLines.push(raw); continue; }
       const date = parseDate(line, year), amountIndex = amounts.length > 1 && date ? amounts.length - 2 : amounts.length - 1;
       const value = amounts[amountIndex];
       let kind = /transfer/i.test(line) ? (/\bfrom\b|transfer in/i.test(line) ? 'transfer_in' : /\bto\b|transfer out/i.test(line) ? 'transfer_out' : 'review') : /\bdeposit|\breceipt|\bdividend|\binterest earned|\bincome|\bcredit\b/i.test(line) ? 'receipt' : /\bwithdrawal|\bdraft\s*\d|\bpaid|\bpayment|\bexpense|\bdebit\b|\bfee\b/i.test(line) || value.cents < 0 ? 'payment' : ['receipt','payment'].includes(section) ? section : 'review';
@@ -152,7 +158,7 @@ export function organizeTreasury(source, options = {}) {
       const category = /new castle count|county grant/i.test(line) ? 'County grant, restriction needs review' : /zeffy/i.test(line) ? 'Zeffy' : /cash\s*app/i.test(line) ? 'Cash App' : /dividend|interest/i.test(line) ? 'Interest / dividend' : '';
       let description=(line.slice(0,value.index)+line.slice(value.index+value.raw.length)).trim();
       description=description.replace(/^(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:Jan\w*|Feb\w*|Mar\w*|Apr\w*|May|Jun\w*|Jul\w*|Aug\w*|Sep\w*|Oct\w*|Nov\w*|Dec\w*)\s+\d{1,2},?\s+20\d{2})\s*/i,'').replace(/\s+/g,' ').replace(/[:;\s]+$/,'').trim();
-      const transaction = { date, account, kind, description, amount:dollars(Math.abs(value.cents)), reference, category };
+      const transaction = { date, postedDateConfirmed: postedSection || /\b(?:posted|posting date)\b/i.test(line), account, kind, description, amount:dollars(Math.abs(value.cents)), reference, category };
       // Duplicate source rows remain visible. Never silently remove a possible real payment.
       const key = JSON.stringify(transaction); if (seen.has(key)) draft.extractionNotes.push('Repeated activity was found. Review for duplicate source pages or repeated payments.'); seen.add(key);
       draft.transactions.push(transaction); continue;

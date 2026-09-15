@@ -34,7 +34,14 @@ try{
  check('Viewer cannot request an unsigned PDF',(await api(`/api/treasury/${r.id}/pdf`,viewer.token)).status===404);
  check('Stale save rejected',(await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:completeTreasuryFixture,revision:1})).status===409);
  check('Cannot distribute an unsigned draft',(await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision})).status===403);
- response=await api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision});check('Preparing officer signature finalizes the report',response.status===200&&response.data.report.status==='ready_for_distribution');r=response.data.report;
+ let competing=(await api('/api/treasury/drafts',treasurer.token,'POST')).data.report;
+ competing=(await api(`/api/treasury/${competing.id}`,treasurer.token,'PUT',{revision:competing.revision,draft:cycleFixture})).data.report;
+ const competingSignatures=await Promise.all([
+   api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision}),
+   api(`/api/treasury/${competing.id}/preparer-attest`,treasurer.token,'POST',{revision:competing.revision}),
+ ]);
+ check('Concurrent overlapping reports cannot both be finalized',competingSignatures.filter(item=>item.status===200).length===1&&competingSignatures.filter(item=>item.status===409).length===1);
+ response=competingSignatures.find(item=>item.status===200);check('Preparing officer signature finalizes the report',response.data.report.status==='ready_for_distribution');r=response.data.report;
  check('Email failure is visible without losing the report',response.data.notificationWarnings.length>0);
  check('WM attestation endpoint is removed',(await api(`/api/treasury/${r.id}/master-attest`,owner.token,'POST',{revision:r.revision})).status===404);
  check('Signed snapshot belongs to the preparer',r.preparerAttestedAt&&JSON.stringify(r.submittedDraft)===JSON.stringify(r.draft));
@@ -81,11 +88,10 @@ try{
  check('Uploader cannot sign for the assigned preparer',(await api(`/api/treasury/${shared.id}/preparer-attest`,secretary.token,'POST',{revision:shared.revision})).status===403);
  shared=(await api(`/api/treasury/${shared.id}`,assistant.token,'PUT',{revision:shared.revision,draft:cycleFixture})).data.report;
  await api('/api/profile/signature',assistant.token,'PUT',{signatureData:'data:image/png;base64,'+(await readFile(new URL('./signature.b64',import.meta.url),'utf8')).trim(),signatureType:'drawn'});
- const finalized=await api(`/api/treasury/${shared.id}/preparer-attest`,assistant.token,'POST',{revision:shared.revision});shared=finalized.data.report;
- check('Assigned preparer signs and finalizes without bank login',finalized.status===200&&shared.status==='ready_for_distribution');
- const signedPdf=await api(`/api/treasury/${shared.id}/preview`,assistant.token,'POST',{});const signedParser=new PDFParse({data:signedPdf.data});const signedText=(await signedParser.getText()).text;await signedParser.destroy();
- check('PDF names the actual preparer and office',signedText.includes('Test treasury_preparer')&&signedText.includes('Treasury Report Preparer')&&!signedText.includes('Test secretary'));
- check('Final report cannot be reassigned',(await api(`/api/treasury/${shared.id}/assign`,owner.token,'POST',{revision:shared.revision,preparerUserId:treasurer.user.id})).status===409);
+ const finalized=await api(`/api/treasury/${shared.id}/preparer-attest`,assistant.token,'POST',{revision:shared.revision});
+ check('A second report cannot finalize over dates already covered by a signed report',finalized.status===409&&/already covers/.test(finalized.data.error));
+ const overlapReassignment=await api(`/api/treasury/${shared.id}/assign`,owner.token,'POST',{revision:shared.revision,preparerUserId:treasurer.user.id});
+ check('The Worshipful Master can reassign the still-unsigned overlapping draft',overlapReassignment.status===200);
  const ownUpload=new FormData();ownUpload.set('sourceText',notes);
  const uploadOnly=(await api('/api/treasury/generate',member.token,'POST',ownUpload)).data.report;
  check('Upload-only account must select a preparer',uploadOnly.status==='awaiting_preparer');

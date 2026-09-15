@@ -26,7 +26,7 @@ const draft = {
   periodStart: '2026-08-01', periodEnd: '2026-08-31', presentedOn: '2026-09-03', bankName: 'Lodge Bank',
   sourceNames: ['August statement.pdf'], extractionNotes: [], unmappedLines: [],
   accounts: [{ id: 'checking', name: 'Checking', openingBalance: 1200, statementBalance: 1380, bookBalance: 1380, receipts: 300, disbursements: 120, transfersIn: 0, transfersOut: 0, depositsInTransit: 0, outstandingChecks: 0, bankHold: 0, activityComplete: true }],
-  transactions: [{ date: '2026-08-12', account: 'checking', kind: 'receipt', amount: 300, description: 'Fundraiser receipts', reference: '', category: 'Fundraiser' }],
+  transactions: [{ date: '2026-08-12', postedDateConfirmed: true, account: 'checking', kind: 'receipt', amount: 300, description: 'Fundraiser receipts', reference: '', category: 'Fundraiser' }],
   funds: [], obligations: [], remarks: 'Accounts reconciled.', fundsReviewed: true, obligationsReviewed: true, sourceReviewed: true,
 };
 
