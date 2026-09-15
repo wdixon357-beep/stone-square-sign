@@ -36,12 +36,27 @@ struct FinalReportBrowserView: View {
                 Button("Refresh") { Task { await refresh() } }.disabled(loading)
                 Button("Save PDF") { if let pdf { saveDocument(pdf, name: "\(kind.title).pdf", type: .pdf) } }.disabled(pdf == nil)
             }
+            if kind == .minutes, let newest = records.first {
+                HStack(spacing: 16) {
+                    Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(SignTheme.gold)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
+                        Text("The \(newest.label) minutes are signed and filed below.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("View signed minutes") { selectedID = "current:\(newest.id)" }.buttonStyle(.borderedProminent)
+                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(SignTheme.gold.opacity(0.7), lineWidth: 1))
+                .padding(.horizontal, 18).padding(.top, 14)
+            }
             HSplitView {
                 List(selection: $selectedID) {
-                    Section("Finalized in Dashboard") { ForEach(records) { record in
+                    Section(kind == .minutes ? "Signed meeting minutes" : "Finalized in Dashboard") { ForEach(records) { record in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(record.label).font(.headline)
-                            Text(record.createdBy).font(.caption).foregroundStyle(.secondary)
+                            Text(kind == .minutes ? "Signed Lodge record · Prepared by \(record.createdBy)" : record.createdBy).font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag("current:\(record.id)")
                     } }
                     Section("Historical Lodge archive") { ForEach(archives) { record in

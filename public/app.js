@@ -888,7 +888,34 @@ const renderMinutes = async () => {
       list.append(empty);
       return true;
     }
-    state.minutes.forEach((item) => {
+    const finalizedStatuses = new Set(['ready_for_distribution', 'distributed', 'approved_by_lodge']);
+    const activeMinutes = state.minutes.filter(item => !finalizedStatuses.has(item.status));
+    const finalizedMinutes = state.minutes.filter(item => finalizedStatuses.has(item.status));
+    if (finalizedMinutes.length) {
+      const newest = finalizedMinutes[0];
+      const notice = document.createElement('section');
+      notice.className = 'minutes-available-notice';
+      const noticeCopy = document.createElement('div');
+      const noticeTitle = document.createElement('strong');
+      noticeTitle.textContent = 'Signed meeting minutes are available';
+      const noticeDetail = document.createElement('p');
+      noticeDetail.textContent = `The minutes of ${minutesDateLabel(newest)} are signed and filed below in Historical meeting minutes.`;
+      noticeCopy.append(noticeTitle, noticeDetail);
+      const noticeOpen = document.createElement('button');
+      noticeOpen.type = 'button'; noticeOpen.className = 'primary small'; noticeOpen.textContent = 'View signed minutes';
+      noticeOpen.addEventListener('click', async () => {
+        try { showPdfBlob(await apiFetch(`/api/minutes/${newest.id}/pdf`), `Minutes of ${minutesDateLabel(newest)}`); }
+        catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
+      });
+      notice.append(noticeCopy, noticeOpen); list.append(notice);
+    }
+    if (activeMinutes.length) {
+      const heading = document.createElement('h2');
+      heading.className = 'archive-heading';
+      heading.textContent = 'Active drafts and reviews';
+      list.append(heading);
+    }
+    const appendCurrentMinutes = (item, historical = false) => {
       const row = document.createElement('article');
       row.className = 'minutes-row';
       const icon = document.createElement('div');
@@ -898,7 +925,9 @@ const renderMinutes = async () => {
       const heading = document.createElement('h3');
       heading.textContent = `Minutes of ${minutesDateLabel(item)}`;
       const detail = document.createElement('p');
-      detail.textContent = `Prepared by ${item.createdBy}. Last saved by ${item.updatedBy}, ${formatDate(item.updatedAt)}.`;
+      detail.textContent = historical
+        ? `Signed Lodge record. Prepared by ${item.createdBy}.`
+        : `Prepared by ${item.createdBy}. Last saved by ${item.updatedBy}, ${formatDate(item.updatedAt)}.`;
       main.append(heading, detail);
       const status = document.createElement('span');
       status.className = `status ${item.status === 'approved_by_lodge' ? 'completed' : ''}`;
@@ -929,12 +958,14 @@ const renderMinutes = async () => {
       }
       row.append(icon, main, status, actions);
       list.append(row);
-    });
-    if (archive.length) {
+    };
+    activeMinutes.forEach(item => appendCurrentMinutes(item));
+    if (finalizedMinutes.length || archive.length) {
       const heading = document.createElement('h2');
       heading.className = 'archive-heading';
       heading.textContent = 'Historical meeting minutes';
       list.append(heading);
+      finalizedMinutes.forEach(item => appendCurrentMinutes(item, true));
       archive.forEach((item) => {
         const row = document.createElement('article'); row.className = 'minutes-row';
         const icon = document.createElement('div'); icon.className = 'doc-icon'; icon.textContent = 'MIN';
@@ -1203,7 +1234,21 @@ const minutesAction = async (path, body, message) => {
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
     });
-    await refreshOpenMinutes([message, ...(result.notificationWarnings || [])].join(' '));
+    const finalMessage = [message, ...(result.notificationWarnings || [])].join(' ');
+    if (path === 'master-attest') {
+      hide($('minutesEditorModal'));
+      clearTimeout(minutesPreviewTimer); ++minutesPreviewRevision; state.editingMinutesId = null;
+      state.minutesEditorDirty = false;
+      if (state.minutesPreviewUrl) URL.revokeObjectURL(state.minutesPreviewUrl);
+      state.minutesPreviewUrl = '';
+      minutesPdfViewer?.clear();
+      $('minutesPreviewDownload').removeAttribute('href');
+      hide($('minutesPreviewDownload'));
+      await renderMinutes();
+      setMessage($('minutesMessage'), finalMessage);
+    } else {
+      await refreshOpenMinutes(finalMessage);
+    }
   } catch (error) {
     setMessage($('minutesEditorMessage'), error.message, true);
   }
@@ -1734,7 +1779,7 @@ $('submitMinutesReview').addEventListener('click', async () => {
 $('authorizeMinutes').addEventListener('click', async () => {
   try {
     await saveMinutesCorrections();
-    await minutesAction('master-attest', null, 'You reviewed and signed the minutes. The signed PDF is now available to every officer. McDuffie or Reese can still record distribution to the Craft.');
+    await minutesAction('master-attest', null, 'You reviewed and signed the minutes. They are now filed under Historical meeting minutes and highlighted for every officer. McDuffie or Reese can still record distribution to the Craft.');
   } catch (error) { setMessage($('minutesEditorMessage'), error.message, true); }
 });
 $('markMinutesDistributed').addEventListener('click', () => minutesAction(

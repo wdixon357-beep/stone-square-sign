@@ -179,6 +179,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-generator { display: grid; gap: 12px; }
 .minutes-generator textarea { min-height: 140px; resize: vertical; }
 .minutes-list { display: grid; }
+.minutes-available-notice { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 0 0 20px; padding: 18px 20px; border: 1px solid #d8aa4d; border-left: 5px solid var(--gold); border-radius: 12px; background: linear-gradient(135deg, #fff9e8, #fffdf7); box-shadow: 0 10px 26px rgba(118,80,12,.12); }
+.minutes-available-notice strong { display: block; color: var(--navy); font-size: 15px; }
+.minutes-available-notice p { margin: 5px 0 0; color: #675328; font-size: 12px; line-height: 1.55; }
+.minutes-available-notice button { flex: 0 0 auto; }
 .minutes-row { display: grid; grid-template-columns: 46px minmax(220px, 1fr) auto auto; align-items: center; gap: 15px; padding: 17px 0; border-top: 1px solid var(--line); }
 .minutes-row .doc-icon { width: 42px; }
 .minutes-row h3 { margin: 0 0 5px; color: var(--navy); font-size: 14px; }
@@ -321,6 +325,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
   .minutes-officer-attendance, .minutes-finance-grid { grid-template-columns: 1fr; }
   .minutes-officer-row { grid-template-columns: 1fr; }
   .minutes-row { grid-template-columns: 42px minmax(0, 1fr); }
+  .minutes-available-notice { align-items: stretch; flex-direction: column; }
+  .minutes-available-notice button { width: 100%; }
   .minutes-row .status, .minutes-row-actions { grid-column: 2; justify-self: start; }
   .minutes-editor-actions { flex-direction: column; }
   .minutes-editor-actions button { width: 100%; }

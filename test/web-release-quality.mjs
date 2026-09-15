@@ -36,6 +36,9 @@ assert.match(app, /notificationWarnings/, 'notification delivery warnings must r
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'the preparing officer must receive a reviewed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening reviewed minutes must acknowledge only that preparing officer alert');
 assert.match(app, /Signed and available to all officers/, 'the website must state when signed minutes are available to officers');
+assert.match(app, /Signed meeting minutes are available/, 'the website must highlight signed minutes for officers');
+assert.match(app, /Historical meeting minutes[\s\S]*finalizedMinutes\.forEach/, 'the website must file signed current minutes under Historical meeting minutes');
+assert.match(app, /path === 'master-attest'[\s\S]*hide\(\$\('minutesEditorModal'\)\)[\s\S]*renderMinutes/, 'the website must leave review and return to the historical list after the Master signs');
 assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either Secretary must be allowed to record distribution');
 assert.match(nativeMinutes, /Signed and available to all officers/, 'the Mac app must use the same minutes status wording');
 assert.match(app, /event: minutes_records_changed/, 'the website must refresh an open minutes archive after publication');

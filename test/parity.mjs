@@ -132,6 +132,11 @@ check('both clients show secured historical minutes and treasurer archives insid
   && read('public/treasury.js').includes('/api/archives/treasury')
   && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('/api/archives/\\(kind.rawValue)')
   && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Close report'));
+check('both clients file signed minutes under history and highlight their availability',
+  read('public/app.js').includes("const activeMinutes = state.minutes.filter(item => !finalizedStatuses.has(item.status))")
+  && read('public/app.js').includes('Signed meeting minutes are available')
+  && read('macos/Sources/StoneSquareSign/MeetingMinutes.swift').includes('Signed minutes are filed under Historical minutes.')
+  && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Signed meeting minutes are available'));
 check('treasurer archive previews return to the list without opening a browser tab',
   read('public/treasury.js').includes('data-treasury="back"')
   && !read('public/treasury.js').includes('target="_blank"'));

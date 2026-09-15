@@ -168,7 +168,14 @@ final class MinutesWorkspace: ObservableObject {
         do {
             let data = try await request("/api/minutes/\(record.id)/\(action)", method: "POST", body: JSONEncoder().encode(body))
             let payload = try JSONDecoder().decode(MinutesPayload.self, from: data)
-            await refresh(); open(payload.minutes); message = (["Record updated."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
+            await refresh()
+            if action == "master-attest" {
+                close()
+                message = (["You reviewed and signed the minutes. They are now filed under Historical minutes and available to every officer."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
+            } else {
+                open(payload.minutes)
+                message = (["Record updated."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
+            }
             messageIsWarning = payload.notificationWarnings?.isEmpty == false
         } catch { message = error.localizedDescription; messageIsWarning = false }
     }
@@ -322,9 +329,10 @@ struct MeetingMinutesView: View {
                         }
                     }.padding(14)
                 }
-                Text("Drafts and approved minutes").font(.title3.weight(.semibold))
-                if workspace.records.isEmpty { ContentUnavailableView("No minutes yet", systemImage: "doc.text", description: Text("Add meeting notes above to begin.")) }
-                ForEach(workspace.records) { record in
+                let activeRecords = workspace.records.filter { !["ready_for_distribution", "distributed", "approved_by_lodge"].contains($0.status) }
+                Text("Active drafts and reviews").font(.title3.weight(.semibold))
+                if activeRecords.isEmpty { ContentUnavailableView("No active minutes", systemImage: "doc.text", description: Text("Signed minutes are filed under Historical minutes.")) }
+                ForEach(activeRecords) { record in
                     HStack(spacing: 14) {
                         Image(systemName: "doc.text").font(.title2).foregroundStyle(SignTheme.navy)
                         VStack(alignment: .leading, spacing: 5) {
