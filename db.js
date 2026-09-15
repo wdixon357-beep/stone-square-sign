@@ -301,6 +301,28 @@ export const initSchema = async (exec = run) => {
   )`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_historical_reports_kind_date
     ON historical_reports(kind, record_date DESC, title)`);
+  /* Signed officer reports are retained in the Dashboard for the Worshipful Master.
+   * The generator may be embedded in the website or native on the Mac, so the
+   * external receipt is the idempotency key and the final PDF is the record. */
+  await exec(`CREATE TABLE IF NOT EXISTS officer_reports (
+    id TEXT PRIMARY KEY,
+    external_id TEXT UNIQUE NOT NULL,
+    client_id TEXT,
+    report_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    pdf_bytes BYTEA NOT NULL,
+    prepared_by_user_id INTEGER REFERENCES users(id),
+    prepared_by_name TEXT NOT NULL,
+    prepared_by_office TEXT NOT NULL,
+    prepared_by_email TEXT,
+    emailed BOOLEAN NOT NULL DEFAULT FALSE,
+    source_label TEXT NOT NULL DEFAULT 'Lodge Report Generator',
+    submitted_at TEXT NOT NULL,
+    received_at TEXT NOT NULL
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_officer_reports_submitted
+    ON officer_reports(submitted_at DESC, title)`);
   /* Agendas are private working documents created only by the Lodge owner. */
   await exec(`CREATE TABLE IF NOT EXISTS agendas (
     id TEXT PRIMARY KEY,

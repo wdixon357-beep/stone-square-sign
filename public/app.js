@@ -38,6 +38,8 @@ const state = {
   minutesRecordsRefreshPending: false,
   reportHandoffExpiresAt: 0,
   reportHandoff: null,
+  receivedReports: [],
+  receivedReportObjectUrl: '',
   proposalDirty: false,
   dispensationDirty: false,
   minutesSourceDirty: false,
@@ -297,6 +299,13 @@ const formatClockTime = (value) => {
     .format(new Date(2000, 0, 1, hour, minute));
 };
 
+const formatDateTime = value => {
+  const date = new Date(value);
+  return Number.isFinite(date.valueOf()) ? new Intl.DateTimeFormat('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(date) : String(value || 'Date not recorded');
+};
+
 const easternGreeting = () => {
   const hour = Number(new Intl.DateTimeFormat('en-US', {
     hour: '2-digit', hourCycle: 'h23', timeZone: 'America/New_York',
@@ -374,7 +383,7 @@ const enterWorkspace = async (user, session) => {
   if (!agendaWorkspace && user.role === 'owner') { const { AgendaWorkspace } = await import('/agenda.js'); agendaWorkspace = new AgendaWorkspace({ api: apiFetch, user: () => state.user }); }
   const { maySeeTreasury, maySeeMinutes } = applyWorkspacePermissions(user);
   restoreWebDrafts();
-  showWorkspaceSection(requestedWorkspaceSection === 'agenda' && user.role === 'owner' ? 'agenda' : requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
+  showWorkspaceSection(requestedWorkspaceSection === 'agenda' && user.role === 'owner' ? 'agenda' : requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'receivedReports' && user.role === 'owner' ? 'receivedReports' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
   hide($('authCard'));
   show($('appCard'));
   await refreshMinutesReviewAlerts();
@@ -526,10 +535,26 @@ const renewReportHandoff = connection => {
   return connection.refreshPromise;
 };
 
+const saveReceivedReport = async report => {
+  try {
+    await apiFetch('/api/officer-reports', { method: 'POST', body: JSON.stringify(report) });
+    if (state.user?.role === 'owner') {
+      setMessage($('receivedReportsMessage'), 'The submitted report was added to Received Reports.');
+      if (state.activeSection === 'receivedReports') await renderReceivedReports();
+    }
+  } catch (error) {
+    if (state.user?.role === 'owner') setMessage($('receivedReportsMessage'), error.message || 'The submitted report could not be added to Received Reports.', true);
+  }
+};
+
 window.addEventListener('message', event => {
   const connection = state.reportHandoff;
-  if (!connection || event.origin !== REPORT_GENERATOR_ORIGIN || event.source !== connection.target
-      || event.data?.kind !== 'stone-square-report-ready') return;
+  if (!connection || event.origin !== REPORT_GENERATOR_ORIGIN || event.source !== connection.target) return;
+  if (event.data?.kind === 'stone-square-report-submitted') {
+    void saveReceivedReport(event.data.report);
+    return;
+  }
+  if (event.data?.kind !== 'stone-square-report-ready') return;
   if (connection.stagedAssertion && connection.expiresAt > Date.now()) {
     const assertion = connection.stagedAssertion;
     connection.stagedAssertion = '';
@@ -574,6 +599,45 @@ const loadReportGenerator = async ({ separate = false } = {}) => {
   }
 };
 
+const closeReceivedReport = () => {
+  if (state.receivedReportObjectUrl) URL.revokeObjectURL(state.receivedReportObjectUrl);
+  state.receivedReportObjectUrl = '';
+  $('receivedReportFrame').removeAttribute('src');
+  $('receivedReportPreview').classList.add('hidden');
+};
+
+const openReceivedReport = async report => {
+  try {
+    const pdf = await apiFetch(`/api/officer-reports/${encodeURIComponent(report.id)}/pdf`);
+    closeReceivedReport();
+    state.receivedReportObjectUrl = URL.createObjectURL(pdf);
+    $('receivedReportPreviewTitle').textContent = report.title;
+    $('receivedReportFrame').src = state.receivedReportObjectUrl;
+    $('receivedReportPreview').classList.remove('hidden');
+  } catch (error) { setMessage($('receivedReportsMessage'), error.message || 'The report could not be opened.', true); }
+};
+
+const renderReceivedReports = async () => {
+  if (state.user?.role !== 'owner') return;
+  const list = $('receivedReportsList');
+  list.replaceChildren();
+  setMessage($('receivedReportsMessage'), 'Loading received reports…');
+  try {
+    const payload = await apiFetch('/api/officer-reports');
+    state.receivedReports = payload.reports || [];
+    if (!state.receivedReports.length) {
+      const empty = document.createElement('p'); empty.className = 'helper'; empty.textContent = 'No submitted reports have been received yet.'; list.append(empty);
+    } else state.receivedReports.forEach(report => {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'received-report-row';
+      const heading = document.createElement('strong'); heading.textContent = report.title;
+      const details = document.createElement('span'); details.textContent = `${report.preparedBy} · ${report.office} · ${formatDateTime(report.submittedAt)}`;
+      const type = document.createElement('small'); type.textContent = `${report.type.charAt(0).toUpperCase()}${report.type.slice(1)} report`;
+      button.append(heading, details, type); button.addEventListener('click', () => void openReceivedReport(report)); list.append(button);
+    });
+    setMessage($('receivedReportsMessage'), `${state.receivedReports.length} received report${state.receivedReports.length === 1 ? '' : 's'}.`);
+  } catch (error) { setMessage($('receivedReportsMessage'), error.message || 'Received reports could not be loaded.', true); }
+};
+
 const CANDIDATE_TRACKER_ORIGIN = 'https://tracker.stonesquare22pha.org';
 const secureCandidateTrackerUrl = value => {
   const url = new URL(value);
@@ -616,7 +680,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (section === 'calendar' && !skipLoad) buildingCalendarWorkspace?.calendar();
   $('settingsSection').classList.toggle('hidden', section !== 'settings');
   $('settingsNav').classList.toggle('active', section === 'settings');
-  if(['activity','builder','proposalReview','agenda'].includes(section)&&state.user?.role!=='owner')section='home';
+  if(['activity','builder','proposalReview','agenda','receivedReports'].includes(section)&&state.user?.role!=='owner')section='home';
   state.activeSection = section;
   activityTracker?.visit(section);
   $('activitySection').classList.toggle('hidden',section!=='activity');
@@ -632,6 +696,10 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('reportsSection').classList.toggle('hidden', !reports);
   $('reportsNav').classList.toggle('active', reports);
   if (reports && !skipLoad) void loadReportGenerator();
+  const receivedReports = section === 'receivedReports';
+  $('receivedReportsSection').classList.toggle('hidden', !receivedReports);
+  $('receivedReportsNav').classList.toggle('active', receivedReports);
+  if (receivedReports && !skipLoad) void renderReceivedReports();
   const home = section === 'home';
   const builder = section === 'builder';
   const queue = section === 'queue';
@@ -1480,6 +1548,10 @@ $('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'
 $('treasuryMenuCard').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
 $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
+$('receivedReportsNav').addEventListener('click', () => showWorkspaceSection('receivedReports'));
+$('receivedReportsMenuCard').addEventListener('click', () => showWorkspaceSection('receivedReports'));
+$('receivedReportsRefresh').addEventListener('click', () => void renderReceivedReports());
+$('receivedReportPreviewClose').addEventListener('click', closeReceivedReport);
 $('agendaNav').addEventListener('click', () => showWorkspaceSection('agenda'));
 $('agendaMenuCard').addEventListener('click', () => showWorkspaceSection('agenda'));
 $('candidateMenuCard').addEventListener('click', () => { void openCandidateTracker(); });

@@ -123,6 +123,7 @@
             <button id="activityNav" class="nav-item owner-only" type="button"><span>ACT</span> Officer Activity</button>
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
+            <button id="receivedReportsNav" class="nav-item owner-only hidden" type="button"><span>IN</span> Received Reports</button>
             <button id="minutesNav" class="nav-item minutes-only" type="button"><span>MIN</span> Meeting Minutes</button>
             <button id="agendaNav" class="nav-item owner-only" type="button"><span>AG</span> Agenda Creator</button>
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
@@ -157,6 +158,7 @@
               <button id="buildingMenuCard" class="document-menu-card building-only" type="button"><i>BLD</i><span><strong>Building Requests</strong><small>View building requests and their status</small></span><b>›</b></button>
               <button id="calendarMenuCard" class="document-menu-card calendar-only" type="button"><i>CAL</i><span><strong>Lodge Calendar</strong><small>Building use and Lodge events</small></span><b>›</b></button>
               <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
+              <button id="receivedReportsMenuCard" class="document-menu-card owner-only hidden" type="button"><i>IN</i><span><strong>Received Reports</strong><small>Review reports submitted to you</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
               <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small id="minutesMenuDescription">Read finalized meeting minutes</small></span><b>›</b></button>
@@ -176,6 +178,17 @@
             <div class="content-head"><div><p class="eyebrow">REPORTS FOR THE CRAFT</p><h1>Report Generator</h1><p>Preview your report before reviewing, signing and sending it.</p></div><button id="reportSeparateTab" class="secondary" type="button">Open in a separate tab</button></div>
             <p id="reportGeneratorMessage" class="message" role="status"></p>
             <iframe id="reportGeneratorFrame" title="Report Generator" referrerpolicy="no-referrer"></iframe>
+          </section>
+          <section id="receivedReportsSection" class="owner-only hidden">
+            <div class="content-head"><div><p class="eyebrow">WORSHIPFUL MASTER ONLY</p><h1>Received Reports</h1><p>Reports submitted through the Lodge Report Generator.</p></div><button id="receivedReportsRefresh" class="secondary" type="button">Refresh</button></div>
+            <p id="receivedReportsMessage" class="message" role="status"></p>
+            <div class="received-reports-layout">
+              <div id="receivedReportsList" class="received-reports-list" aria-label="Received reports"></div>
+              <section id="receivedReportPreview" class="received-report-preview hidden" aria-label="Report preview">
+                <div class="panel-title"><h2 id="receivedReportPreviewTitle">Report preview</h2><button id="receivedReportPreviewClose" class="secondary" type="button">Close</button></div>
+                <iframe id="receivedReportFrame" title="Received report PDF"></iframe>
+              </section>
+            </div>
           </section>
           <section id="agendaSection" class="hidden"></section>
           <section id="queueSection">

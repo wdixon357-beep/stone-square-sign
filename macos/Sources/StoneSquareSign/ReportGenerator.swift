@@ -26,6 +26,7 @@ private struct ReportHandoffResponse: Decodable {
     let assertion: String
     let expiresAt: Int
 }
+private struct OfficerReportSaveResponse: Decodable { let ok: Bool; let id: String; let duplicate: Bool }
 
 // Native controls consume the same published schema and report endpoint as the web.
 // The Sign session and stored Lodge signatures are never passed to this service.
@@ -218,10 +219,27 @@ final class ReportBrowserModel: ObservableObject {
                 guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let encoded = raw["pdf"] as? String, let bytes = Data(base64Encoded: encoded), PDFDocument(data: bytes) != nil else { throw ClientError.invalidResponse }
                 pdf = bytes
+                var archiveSaved = true
+                do {
+                    guard let appModel else { throw ClientError.invalidServer }
+                    let enteredTitle = fields["title"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let archive = try JSONSerialization.data(withJSONObject: [
+                        "externalId": raw["id"] as? String ?? clientId,
+                        "clientId": clientId,
+                        "type": type,
+                        "title": enteredTitle.isEmpty ? (types[type]?["name"] as? String ?? "Lodge Report") : enteredTitle,
+                        "filename": raw["filename"] as? String ?? "Lodge_Report.pdf",
+                        "pdf": encoded,
+                        "emailed": raw["mailed"] as? Bool == true,
+                        "preparedByOffice": office
+                    ])
+                    let _: OfficerReportSaveResponse = try await appModel.request("/api/officer-reports", method: "POST", body: archive)
+                } catch { archiveSaved = false }
                 message = raw["mailed"] as? Bool == true ? "Signed report emailed to \(recipient)."
                     : raw["delivery"] as? String == "pending" ? "Signed report prepared. Email delivery is still being checked. Use Send final report again to check the same delivery."
                     : "Signed report prepared, but email delivery failed. Use Send final report again to retry."
-                messageIsWarning = raw["mailed"] as? Bool != true
+                if !archiveSaved { message += " The Dashboard copy could not be saved. Send the final report again to retry the archive." }
+                messageIsWarning = raw["mailed"] as? Bool != true || !archiveSaved
             } else {
                 guard PDFDocument(data: data) != nil else { throw ClientError.invalidResponse }
                 pdf = data; message = "Preview ready. No email has been sent."

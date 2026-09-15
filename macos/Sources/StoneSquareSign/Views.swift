@@ -222,6 +222,7 @@ struct WorkspaceView: View {
                 if model.user?.canOpen(.building) == true { Label("Building Requests", systemImage: "building.2").tag(AppSection.building) }
                 if model.user?.canOpen(.lodgeCalendar) == true { Label("Lodge Calendar", systemImage: "calendar").tag(AppSection.lodgeCalendar) }
                 if model.user?.can("reports.create") == true { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
+                if model.user?.role == "owner" { Label("Received Reports", systemImage: "tray.full.fill").tag(AppSection.receivedReports) }
                 if model.user?.canReadMinutes == true {
                     Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes)
                 }
@@ -364,6 +365,7 @@ struct WorkspaceView: View {
                 openDispensations: { selection = .documents },
                 openCandidateTracker: { selection = .candidateTracker },
                 openReports: { selection = .reportGenerator },
+                openReceivedReports: { selection = .receivedReports },
                 openMinutes: { selection = .minutes },
                 openAgenda: { selection = .agenda },
                 openTreasury: { selection = .treasury },
@@ -374,6 +376,8 @@ struct WorkspaceView: View {
         case .lodgeCalendar: LodgeCalendarView()
         case .reportGenerator:
             ReportGeneratorView(browser: reportBrowser)
+        case .receivedReports:
+            if model.user?.role == "owner" { ReceivedReportsView() }
         case .minutes:
             if model.user?.can("minutes.prepare") == true { MeetingMinutesView(workspace: minutesWorkspace) }
             else { FinalReportBrowserView(kind: .minutes) }
@@ -1021,6 +1025,7 @@ struct LandingDashboardView: View {
     let openDispensations: () -> Void
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
+    let openReceivedReports: () -> Void
     let openMinutes: () -> Void
     let openAgenda: () -> Void
     let openTreasury: () -> Void
@@ -1051,6 +1056,7 @@ struct LandingDashboardView: View {
                     if model.user?.canOpen(.building) == true { homeRow("Building Requests", model.user?.can("building.view") == true ? "Submit building requests and view recorded decisions" : "Submit a request to use the Lodge building", "building.2", action: openBuilding) }
                     if model.user?.canOpen(.lodgeCalendar) == true { homeRow("Lodge Calendar", "View scheduled events", "calendar", action: openCalendar) }
                     if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports) }
+                    if model.user?.role == "owner" { homeRow("Received Reports", "Review reports submitted to you", "tray.full.fill", action: openReceivedReports) }
                     if model.user?.can("documents.status") == true {
                         homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) awaiting action" : "Open the document queue", "doc.text.fill", action: openDispensations)
                     }

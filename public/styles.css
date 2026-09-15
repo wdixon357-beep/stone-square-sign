@@ -679,3 +679,13 @@ summary { min-height: 44px; display: flex; align-items: center; }
   .calendar-toolbar button { flex: 1 1 calc(50% - 5px); }
   .calendar-toolbar h2 { text-align: center; }
 }
+/* Worshipful Master report archive */
+.received-reports-layout{display:grid;grid-template-columns:minmax(280px,380px) minmax(0,1fr);gap:18px;align-items:start}
+.received-reports-list{display:grid;gap:10px}
+.received-report-row{display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:100%;padding:16px;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:12px;color:inherit}
+.received-report-row:hover,.received-report-row:focus-visible{border-color:var(--gold);box-shadow:0 7px 20px rgba(0,0,0,.08)}
+.received-report-row span,.received-report-row small{color:var(--muted)}
+.received-report-preview{min-width:0;padding:16px;background:var(--paper);border:1px solid var(--line);border-radius:12px}
+.received-report-preview .panel-title{margin-bottom:12px}
+#receivedReportFrame{width:100%;height:min(72vh,850px);border:1px solid var(--line);border-radius:8px;background:#fff}
+@media(max-width:900px){.received-reports-layout{grid-template-columns:1fr}#receivedReportFrame{height:68vh}}

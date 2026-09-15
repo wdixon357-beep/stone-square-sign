@@ -30,6 +30,7 @@ import { closingReviewIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
+import { mountOfficerReportRoutes } from './officer-report-routes.js';
 
 dotenv.config();
 
@@ -3492,6 +3493,7 @@ mountAccessRoutes(app,{requireAuth,requireOwner});
 mountBuildingCalendar(app,{requireAuth});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
+mountOfficerReportRoutes(app, { requireAuth, requireOwner });
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 

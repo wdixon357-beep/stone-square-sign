@@ -5,6 +5,7 @@ final class ReportFixture: URLProtocol {
     static var pdf = Data()
     static var deliveries = 0
     static var handoffs = 0
+    static var archives = 0
     static var portalBodies: [[String: Any]] = []
     static var mailed = true
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -17,6 +18,17 @@ final class ReportFixture: URLProtocol {
             let expiry = Int(Date().addingTimeInterval(300).timeIntervalSince1970)
             let data = try! JSONSerialization.data(withJSONObject: ["url": "https://request.stonesquare22pha.org/report", "assertion": "synthetic-report-assertion", "expiresAt": expiry])
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        if request.url?.path == "/api/officer-reports" {
+            precondition(request.url?.host == "sign-fixture.invalid")
+            precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-token")
+            Self.archives += 1
+            let data = Data(#"{"ok":true,"id":"officer-report-test","duplicate":false}"#.utf8)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
@@ -40,7 +52,7 @@ final class ReportFixture: URLProtocol {
         }
         let sending = request.url!.query?.contains("copy=1") == true
         if sending { Self.deliveries += 1 }
-        let data = sending ? try! JSONSerialization.data(withJSONObject: ["pdf": Self.pdf.base64EncodedString(), "mailed": Self.mailed]) : Self.pdf
+        let data = sending ? try! JSONSerialization.data(withJSONObject: ["id": "RPT-NATIVE-TEST", "filename": "Native_Report.pdf", "pdf": Self.pdf.base64EncodedString(), "mailed": Self.mailed]) : Self.pdf
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": sending ? "application/json" : "application/pdf"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -201,6 +213,7 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         await model.prepare(send: true)
         precondition(ReportFixture.deliveries == 1 && model.message.contains("Signed report emailed"))
         precondition(ReportFixture.handoffs == 1)
+        precondition(ReportFixture.archives == 1)
         precondition(ReportFixture.portalBodies.count == 3)
         for body in ReportFixture.portalBodies {
             precondition(body["name"] == nil && body["email"] == nil && body["office"] == nil && body["isOfficer"] == nil && body["signatureName"] == nil)
@@ -210,7 +223,7 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         print("PASS: reviewed current report reaches only the isolated delivery fixture")
         ReportFixture.mailed = false
         await model.prepare(send: true)
-        precondition(ReportFixture.deliveries == 2 && model.messageIsWarning && model.message.contains("delivery failed"))
+        precondition(ReportFixture.deliveries == 2 && ReportFixture.archives == 2 && model.messageIsWarning && model.message.contains("delivery failed"))
         ReportFixture.mailed = true
         print("PASS: a prepared report with failed email delivery displays a distinct warning state")
         model.startOver()
