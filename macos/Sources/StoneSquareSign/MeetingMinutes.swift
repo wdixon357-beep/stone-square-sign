@@ -309,6 +309,20 @@ struct MeetingMinutesView: View {
     private var recordList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                if let newest = workspace.records.first(where: { ["ready_for_distribution", "distributed", "approved_by_lodge"].contains($0.status) }) {
+                    HStack(spacing: 16) {
+                        Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(SignTheme.gold)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
+                            Text("The \(newest.draft.meetingDate ?? "latest") minutes are signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("View signed minutes") { showingHistory = true }.buttonStyle(.borderedProminent)
+                    }
+                    .padding(16)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(SignTheme.gold.opacity(0.7), lineWidth: 1))
+                }
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("New draft").font(.headline)
