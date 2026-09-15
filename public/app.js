@@ -823,10 +823,13 @@ const setMinutesMeetingType = (value) => {
 const refreshMinutesReviewAlerts = async () => {
   const container = $('minutesReviewAlerts');
   const isMaster = state.user?.role === 'owner';
-  if (!isMaster && !can('minutes.prepare')) { container.replaceChildren(); hide(container); return; }
+  if (!can('minutes.view')) { container.replaceChildren(); hide(container); return; }
   const userId = state.user.id;
   try {
-    const { alerts } = await apiFetch(isMaster ? '/api/minutes/review-alerts' : '/api/minutes/completion-alerts');
+    const payloads = isMaster
+      ? await Promise.all([apiFetch('/api/minutes/review-alerts'), apiFetch('/api/minutes/completion-alerts')])
+      : [await apiFetch('/api/minutes/completion-alerts')];
+    const alerts = payloads.flatMap(payload => payload.alerts || []);
     if (state.user?.id !== userId) return;
     container.replaceChildren(...alerts.map((alert) => {
       const button = document.createElement('button');
@@ -856,7 +859,7 @@ const refreshMinutesReviewAlerts = async () => {
     container.classList.toggle('hidden', !alerts.length);
   } catch { /* Keep existing alerts visible until the next successful refresh. */ }
 };
-setInterval(() => { if (state.user?.role === 'owner' || can('minutes.prepare')) refreshMinutesReviewAlerts(); }, 20000);
+setInterval(() => { if (can('minutes.view')) refreshMinutesReviewAlerts(); }, 20000);
 
 const refreshTreasuryAlerts = async () => {
   const container = $('treasuryAlerts');
@@ -927,7 +930,7 @@ const renderMinutes = async () => {
         && newest.status === 'ready_for_distribution';
       noticeTitle.textContent = mayDistribute
         ? 'WM review complete, ready to send to the Craft'
-        : 'Signed meeting minutes are available';
+        : 'Meeting minutes are available to view';
       const noticeDetail = document.createElement('p');
       noticeDetail.textContent = `The minutes of ${minutesDateLabel(newest)} are signed and filed below in Historical meeting minutes.${mayDistribute ? ' Use the controls beside the record to share the PDF and record distribution.' : ''}`;
       noticeCopy.append(noticeTitle, noticeDetail);

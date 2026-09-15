@@ -14,10 +14,13 @@ export const minutesReviewAlert = (row) => {
     kind: 'master_review', url: '/?section=minutes' };
 };
 
-export const minutesCompletionAlert = row => {
+export const minutesCompletionAlert = (row, { mayDistribute = false } = {}) => {
   const label = meetingDateLabel(row);
-  return { id: row.id, title: `Meeting minutes reviewed and signed: ${label}`,
+  return { id: row.id,
+    title: mayDistribute ? 'WM review complete, ready to send to the Craft' : 'Meeting minutes are available to view',
     submittedBy: row.master_attested_by_name || 'WM Dixon-Saunders', submittedAt: row.master_attested_at,
-    message: `WM review complete, ready to send to the Craft. The signed record is filed under Historical meeting minutes.`,
+    message: mayDistribute
+      ? `The ${label} signed record is filed under Historical meeting minutes. Open it to view or share the PDF.`
+      : `The signed minutes for ${label} are filed under Historical meeting minutes. Open them to view the PDF.`,
     kind: 'preparer_completion', url: '/?section=minutes' };
 };

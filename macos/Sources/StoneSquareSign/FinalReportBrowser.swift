@@ -55,7 +55,7 @@ struct FinalReportBrowserView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && newest.status == "ready_for_distribution"
                              ? "WM review complete, ready to send to the Craft"
-                             : "Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
+                             : "Meeting minutes are available to view").font(.headline).foregroundStyle(SignTheme.navy)
                         Text("The \(newest.label) minutes are signed and filed below.").font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()

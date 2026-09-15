@@ -134,9 +134,9 @@ check('both clients show secured historical minutes and treasurer archives insid
   && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Close report'));
 check('both clients file signed minutes under history and highlight their availability',
   read('public/app.js').includes("const activeMinutes = state.minutes.filter(item => !finalizedStatuses.has(item.status))")
-  && read('public/app.js').includes('Signed meeting minutes are available')
+  && read('public/app.js').includes('Meeting minutes are available to view')
   && read('macos/Sources/StoneSquareSign/MeetingMinutes.swift').includes('Signed minutes are filed under Historical minutes.')
-  && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Signed meeting minutes are available'));
+  && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Meeting minutes are available to view'));
 check('both clients place Secretary distribution controls beside historical signed minutes',
   read('public/app.js').includes('WM review complete, ready to send to the Craft')
   && read('public/app.js').includes('Share signed PDF')

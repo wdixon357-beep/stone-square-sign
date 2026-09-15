@@ -33,10 +33,12 @@ assert.doesNotMatch(app, /[?&]assertion=/, 'the assertion must not be placed in 
 assert.match(app, /\/api\/auth\/sessions/, 'My Settings must load signed-in devices');
 assert.match(app, /\/api\/auth\/sessions\/revoke-others/, 'My Settings must support ending other sessions');
 assert.match(app, /notificationWarnings/, 'notification delivery warnings must remain visible after successful writes');
-assert.match(app, /\/api\/minutes\/completion-alerts/, 'the preparing officer must receive a reviewed-minutes alert');
-assert.match(app, /completion-alert-seen/, 'opening reviewed minutes must acknowledge only that preparing officer alert');
+assert.match(app, /\/api\/minutes\/completion-alerts/, 'every officer with minutes access must receive a signed-minutes alert');
+assert.match(app, /completion-alert-seen/, 'opening signed minutes must acknowledge only that officer alert');
+assert.match(html, /id="minutesReviewAlerts"[^>]+workflow-alerts/, 'minutes alerts must be prominent at the top of the Dashboard');
 assert.match(app, /Signed and available to all officers/, 'the website must state when signed minutes are available to officers');
-assert.match(app, /WM review complete, ready to send to the Craft/, 'the website must highlight signed minutes for the Secretary offices');
+assert.match(app, /WM review complete, ready to send to the Craft/, 'the website must highlight signed minutes for the Master and Secretary offices');
+assert.match(app, /Meeting minutes are available to view/, 'the website must alert every other officer that signed minutes can be viewed');
 assert.match(app, /Share signed PDF/, 'the website must use the officer device share options for the signed PDF');
 assert.match(app, /Mark as sent to the Craft/, 'the website must let an authorized Secretary record completed distribution');
 assert.match(app, /Historical meeting minutes[\s\S]*finalizedMinutes\.forEach/, 'the website must file signed current minutes under Historical meeting minutes');

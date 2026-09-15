@@ -198,6 +198,7 @@ final class AppModel: ObservableObject {
     @Published var message = "" { didSet { messageIsWarning = false } }
     @Published var isError = false
     @Published var requestedSection: AppSection?
+    @Published var requestedMinutesRecordID: String?
     #if DEBUG
     @Published var serverAddress: String {
         didSet { UserDefaults.standard.set(serverAddress, forKey: "server-address") }
@@ -419,13 +420,18 @@ final class AppModel: ObservableObject {
     }
 
     func refreshMinutesReviewAlerts() async {
-        guard let user, user.role == "owner" || user.can("minutes.prepare") else { minutesReviewAlerts = []; return }
+        guard let user, user.can("minutes.view") else { minutesReviewAlerts = []; return }
         let currentToken = token
         do {
-            let path = user.role == "owner" ? "/api/minutes/review-alerts" : "/api/minutes/completion-alerts"
-            let response: MinutesReviewAlertsPayload = try await request(path)
+            var alerts: [MinutesReviewAlert] = []
+            if user.role == "owner" {
+                let review: MinutesReviewAlertsPayload = try await request("/api/minutes/review-alerts")
+                alerts.append(contentsOf: review.alerts)
+            }
+            let completion: MinutesReviewAlertsPayload = try await request("/api/minutes/completion-alerts")
+            alerts.append(contentsOf: completion.alerts)
             guard token == currentToken, self.user?.id == user.id else { return }
-            minutesReviewAlerts = response.alerts
+            minutesReviewAlerts = alerts
         } catch { /* Preserve pending alerts if connectivity is temporarily unavailable. */ }
     }
 
@@ -1068,6 +1074,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(false, forKey: "biometric-login-enabled")
         user = nil
         minutesReviewAlerts = []
+        requestedMinutesRecordID = nil
         treasuryAlerts = []
         documents = []
         officers = []

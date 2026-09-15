@@ -448,13 +448,13 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'meeting_minutes', 'master_signature_bytes', 'BYTEA');
   await addColumn(exec, 'meeting_minutes', 'master_changes_json', 'TEXT');
 
-  /* Ensure minutes which the Master signed before per-officer alerts were added
-   * are visible to both Secretary offices until each officer acknowledges them. */
+  /* Seed signed-minutes notices for every active Dashboard account. The API still
+   * enforces minutes.view before returning a notice or the signed record. */
   await exec(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
     SELECT m.id, u.id, COALESCE(m.master_attested_at, m.updated_at)
     FROM meeting_minutes m CROSS JOIN users u
-    WHERE m.status = 'ready_for_distribution' AND m.master_attested_at IS NOT NULL
-      AND u.role IN ('secretary', 'assistant_secretary') AND u.access_revoked_at IS NULL
+    WHERE m.status IN ('ready_for_distribution', 'distributed', 'approved_by_lodge')
+      AND m.master_attested_at IS NOT NULL AND u.access_revoked_at IS NULL
     ON CONFLICT (minutes_id, user_id) DO NOTHING`);
 
   await exec('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');

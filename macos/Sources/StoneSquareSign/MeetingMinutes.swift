@@ -246,6 +246,12 @@ struct MeetingMinutesView: View {
     private func names(_ key: WritableKeyPath<MinutesDraft, [String]>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key].joined(separator: "\n") ?? "" }, set: { workspace.draft?[keyPath: key] = $0.components(separatedBy: "\n").filter { !$0.isEmpty } })
     }
+    private func openRequestedSignedMinutes() {
+        guard let id = model.requestedMinutesRecordID,
+              let record = workspace.records.first(where: { $0.id == id && ["ready_for_distribution", "distributed", "approved_by_lodge"].contains($0.status) }) else { return }
+        readonlyRecord = record
+        model.requestedMinutesRecordID = nil
+    }
     private var status: String { minutesStatusLabel(workspace.selected?.status ?? "draft") }
     var body: some View {
         VStack(spacing: 0) {
@@ -271,7 +277,12 @@ struct MeetingMinutesView: View {
         .opacity(appeared ? 1 : 0)
         .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.24)) { appeared = true } }
         .disabled(workspace.busy)
-        .task { workspace.configure(model); await workspace.refresh() }
+        .task {
+            workspace.configure(model)
+            await workspace.refresh()
+            openRequestedSignedMinutes()
+        }
+        .onChange(of: model.requestedMinutesRecordID) { _, _ in openRequestedSignedMinutes() }
         .onChange(of: model.minutesRecordsRevision) { _, _ in
             if workspace.dirty { deferredRecordsRefresh = true }
             else { Task { await workspace.refresh() } }
@@ -315,7 +326,7 @@ struct MeetingMinutesView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && newest.status == "ready_for_distribution"
                                  ? "WM review complete, ready to send to the Craft"
-                                 : "Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
+                                 : "Meeting minutes are available to view").font(.headline).foregroundStyle(SignTheme.navy)
                             Text("The \(newest.draft.meetingDate ?? "latest") minutes are signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
                         }
                         Spacer()

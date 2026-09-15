@@ -423,6 +423,10 @@ const requireMinutesPreparer = (req, res, next) => {
   next();
 };
 
+const requireMinutesView = (req, res, next) => hasPermission(req.user, 'minutes.view')
+  ? next()
+  : res.status(403).json({ error: 'Meeting minutes access is not enabled.' });
+
 /* Only the two Wardens named in WARDEN_EMAILS may hold the role, checked on every request
  * rather than only at invite time, so removing an address revokes access immediately. */
 const requireWarden = (req, res, next) => {
@@ -1870,28 +1874,30 @@ app.get('/api/minutes/review-alerts', requireAuth, requireOwner, async (_req, re
   } catch (error) { next(error); }
 });
 
-app.get('/api/minutes/completion-alerts', requireAuth, requireMinutesPreparer, async (req, res, next) => {
+app.get('/api/minutes/completion-alerts', requireAuth, requireMinutesView, async (req, res, next) => {
   try {
-    if (['secretary', 'assistant_secretary'].includes(req.user.role)) {
-      await dbRun(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
-        SELECT id, ?, COALESCE(master_attested_at, updated_at) FROM meeting_minutes
-        WHERE status = 'ready_for_distribution' AND master_attested_at IS NOT NULL
-        ON CONFLICT (minutes_id, user_id) DO NOTHING`, [req.user.id]);
-    }
-    const rows = await dbAll(`SELECT m.id, m.meeting_date, m.master_attested_at,
+    await dbRun(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
+      SELECT id, ?, COALESCE(master_attested_at, updated_at) FROM meeting_minutes
+      WHERE status IN ('ready_for_distribution', 'distributed', 'approved_by_lodge')
+        AND master_attested_at IS NOT NULL
+      ON CONFLICT (minutes_id, user_id) DO NOTHING`, [req.user.id]);
+    const rows = await dbAll(`SELECT m.id, m.meeting_date, m.master_attested_at, m.status,
         master.name AS master_attested_by_name
       FROM minutes_distribution_alerts alert
       JOIN meeting_minutes m ON m.id = alert.minutes_id
       LEFT JOIN users master ON master.id = m.master_attested_by_user_id
       WHERE alert.user_id = ? AND alert.seen_at IS NULL AND m.master_attested_at IS NOT NULL
-        AND m.status = 'ready_for_distribution'
+        AND m.status IN ('ready_for_distribution', 'distributed', 'approved_by_lodge')
       ORDER BY alert.created_at DESC`, [req.user.id]);
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ alerts: rows.map(minutesCompletionAlert) });
+    const distributionRole = ['owner', 'secretary', 'assistant_secretary'].includes(req.user.role);
+    res.json({ alerts: rows.map(row => minutesCompletionAlert(row, {
+      mayDistribute: distributionRole && row.status === 'ready_for_distribution',
+    })) });
   } catch (error) { next(error); }
 });
 
-app.post('/api/minutes/:id/completion-alert-seen', requireAuth, requireMinutesPreparer, async (req, res, next) => {
+app.post('/api/minutes/:id/completion-alert-seen', requireAuth, requireMinutesView, async (req, res, next) => {
   try {
     const time = nowIso();
     const seen = await dbRun(`UPDATE minutes_distribution_alerts SET seen_at = ?
@@ -1904,7 +1910,6 @@ app.post('/api/minutes/:id/completion-alert-seen', requireAuth, requireMinutesPr
 const finalMinutes = row => ['ready_for_distribution','distributed','approved_by_lodge'].includes(row.status)
   && Boolean(row.master_attested_at) && Boolean(row.has_master_attestation);
 const canOpenWorkingMinutes = (user, row) => user.role === 'owner' || row.created_by_user_id === user.id;
-const requireMinutesView = (req,res,next) => hasPermission(req.user,'minutes.view') ? next() : res.status(403).json({error:'Meeting minutes access is not enabled.'});
 app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) => {
   try {
     const rows = await dbAll(
@@ -2127,7 +2132,9 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
       .filter(candidate => hasPermission(candidate, 'minutes.prepare'))
       .map(candidate => [normalizeEmail(candidate.email), candidate]))
       .values()];
-    for (const recipient of recipients.filter(candidate => ['secretary', 'assistant_secretary'].includes(candidate.role))) {
+    const activeUsers = await dbAll('SELECT * FROM users WHERE access_revoked_at IS NULL');
+    const alertUsers = activeUsers.filter(candidate => hasPermission(candidate, 'minutes.view'));
+    for (const recipient of alertUsers) {
       await dbRun(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
         VALUES (?, ?, ?) ON CONFLICT (minutes_id, user_id) DO UPDATE SET created_at = EXCLUDED.created_at, seen_at = NULL`,
       [row.id, recipient.id, time]);

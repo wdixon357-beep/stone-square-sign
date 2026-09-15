@@ -297,6 +297,7 @@ struct WorkspaceView: View {
                     selection = .minutes
                     Task {
                         if alert.kind == "preparer_completion" {
+                            model.requestedMinutesRecordID = alert.id
                             await model.markMinutesAlertSeen(alert)
                         } else {
                             minutesWorkspace.configure(model)
