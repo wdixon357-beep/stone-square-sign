@@ -358,7 +358,15 @@ struct MeetingMinutesView: View {
                 }
                 let activeRecords = workspace.records.filter { !["ready_for_distribution", "distributed", "approved_by_lodge"].contains($0.status) }
                 Text("Active drafts and reviews").font(.title3.weight(.semibold))
-                if activeRecords.isEmpty { ContentUnavailableView("No active minutes", systemImage: "doc.text", description: Text("Signed minutes are filed under Historical minutes.")) }
+                if activeRecords.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "doc.text").font(.system(size: 38)).foregroundStyle(.tertiary)
+                        Text("No active minutes").font(.title3.weight(.semibold))
+                        Text("Signed minutes are filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 26)
+                }
                 ForEach(activeRecords) { record in
                     HStack(spacing: 14) {
                         Image(systemName: "doc.text").font(.title2).foregroundStyle(SignTheme.navy)

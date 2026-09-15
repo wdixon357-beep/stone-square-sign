@@ -288,10 +288,18 @@ struct WorkspaceView: View {
             .background(.bar)
             .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
         } detail: {
-            VStack(spacing: 0) {
-                WorkspaceNotices()
-                workspaceContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            GeometryReader { available in
+                VStack(spacing: 0) {
+                    WorkspaceNotices()
+                    workspaceContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(
+                    width: available.size.width,
+                    height: available.size.height,
+                    alignment: .topLeading
+                )
+                .clipped()
             }
         }
         .task { activityPresence.start(model);await model.refresh() }

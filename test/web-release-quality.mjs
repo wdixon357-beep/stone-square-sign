@@ -42,6 +42,7 @@ assert.match(app, /Meeting minutes are available to view/, 'the website must ale
 assert.match(app, /const minutesDocumentTitle = \(item\) => `Meeting Minutes, \$\{minutesDateLabel\(item\)\}`/, 'current minutes titles must use one readable date format');
 assert.match(styles, /button \{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/, 'web button labels must wrap instead of being shortened or clipped');
 assert.match(nativeViews, /ViewThatFits\(in: \.horizontal\)[\s\S]*fixedSize\(horizontal: true, vertical: false\)/, 'Mac workspace actions must reflow without shortening button labels');
+assert.match(nativeViews, /GeometryReader \{ available in[\s\S]*width: available\.size\.width[\s\S]*height: available\.size\.height[\s\S]*alignment: \.topLeading[\s\S]*\.clipped\(\)/, 'Mac workspace must remain bounded below the title bar when a page has tall content');
 assert.doesNotMatch(nativeViews, /Label\(alert\.title[\s\S]{0,140}lineLimit/, 'Mac alert titles must remain fully visible');
 assert.match(app, /Share signed PDF/, 'the website must use the officer device share options for the signed PDF');
 assert.match(app, /Mark as sent to the Craft/, 'the website must let an authorized Secretary record completed distribution');
