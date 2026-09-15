@@ -38,8 +38,10 @@ struct NativeWorkspaceHeader<Actions: View>: View {
                         Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                VStack(alignment: .leading, spacing: 8) { actions }
-                    .fixedSize(horizontal: true, vertical: false)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) { actions }
+                        .fixedSize(horizontal: true, vertical: false)
+                }
               }
             }.padding(22)
             Divider()
