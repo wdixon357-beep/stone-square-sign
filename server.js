@@ -1872,14 +1872,20 @@ app.get('/api/minutes/review-alerts', requireAuth, requireOwner, async (_req, re
 
 app.get('/api/minutes/completion-alerts', requireAuth, requireMinutesPreparer, async (req, res, next) => {
   try {
+    if (['secretary', 'assistant_secretary'].includes(req.user.role)) {
+      await dbRun(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
+        SELECT id, ?, COALESCE(master_attested_at, updated_at) FROM meeting_minutes
+        WHERE status = 'ready_for_distribution' AND master_attested_at IS NOT NULL
+        ON CONFLICT (minutes_id, user_id) DO NOTHING`, [req.user.id]);
+    }
     const rows = await dbAll(`SELECT m.id, m.meeting_date, m.master_attested_at,
         master.name AS master_attested_by_name
-      FROM meeting_minutes m
+      FROM minutes_distribution_alerts alert
+      JOIN meeting_minutes m ON m.id = alert.minutes_id
       LEFT JOIN users master ON master.id = m.master_attested_by_user_id
-      WHERE m.created_by_user_id = ? AND m.master_attested_at IS NOT NULL
-        AND m.preparer_review_seen_at IS NULL
-        AND m.created_by_user_id <> m.master_attested_by_user_id
-      ORDER BY m.master_attested_at DESC`, [req.user.id]);
+      WHERE alert.user_id = ? AND alert.seen_at IS NULL AND m.master_attested_at IS NOT NULL
+        AND m.status = 'ready_for_distribution'
+      ORDER BY alert.created_at DESC`, [req.user.id]);
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ alerts: rows.map(minutesCompletionAlert) });
   } catch (error) { next(error); }
@@ -1888,9 +1894,8 @@ app.get('/api/minutes/completion-alerts', requireAuth, requireMinutesPreparer, a
 app.post('/api/minutes/:id/completion-alert-seen', requireAuth, requireMinutesPreparer, async (req, res, next) => {
   try {
     const time = nowIso();
-    const seen = await dbRun(`UPDATE meeting_minutes SET preparer_review_seen_at = ?
-      WHERE id = ? AND created_by_user_id = ? AND master_attested_at IS NOT NULL
-        AND preparer_review_seen_at IS NULL`, [time, req.params.id, req.user.id]);
+    const seen = await dbRun(`UPDATE minutes_distribution_alerts SET seen_at = ?
+      WHERE minutes_id = ? AND user_id = ? AND seen_at IS NULL`, [time, req.params.id, req.user.id]);
     if (!seen.changes) return res.status(404).json({ error: 'That reviewed minutes alert is no longer pending.' });
     res.json({ ok: true });
   } catch (error) { next(error); }
@@ -2117,14 +2122,19 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
        VALUES (?, 'minutes_master_attested', ?, ?, ?, ?)`,
       [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id, publishedToOfficers: true }), time],
     );
-    broadcast('minutes_review_changed');
-    broadcast('minutes_completion_changed');
-    broadcast('minutes_records_changed', { minutesId: row.id, reason: 'published' });
     const recipientCandidates = await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND (role IN ('secretary', 'assistant_secretary') OR id = ?)", [row.created_by_user_id]);
     const recipients = [...new Map(recipientCandidates
       .filter(candidate => hasPermission(candidate, 'minutes.prepare'))
       .map(candidate => [normalizeEmail(candidate.email), candidate]))
       .values()];
+    for (const recipient of recipients.filter(candidate => ['secretary', 'assistant_secretary'].includes(candidate.role))) {
+      await dbRun(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
+        VALUES (?, ?, ?) ON CONFLICT (minutes_id, user_id) DO UPDATE SET created_at = EXCLUDED.created_at, seen_at = NULL`,
+      [row.id, recipient.id, time]);
+    }
+    broadcast('minutes_review_changed');
+    broadcast('minutes_completion_changed');
+    broadcast('minutes_records_changed', { minutesId: row.id, reason: 'published' });
     const changes = row.master_changes_json ? JSON.parse(row.master_changes_json) : [];
     const changedSections = changes.map(change => change.field).join(', ');
     const notificationWarnings = [];

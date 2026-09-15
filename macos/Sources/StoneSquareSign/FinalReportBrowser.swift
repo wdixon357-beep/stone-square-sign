@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import PDFKit
 
@@ -27,6 +28,14 @@ struct FinalReportBrowserView: View {
     @StateObject private var transport = MinutesWorkspace()
     var initialSelection: String? = nil
     var onClose: (() -> Void)? = nil
+    private var selectedCurrentRecord: Record? {
+        guard let selectedID, selectedID.hasPrefix("current:") else { return nil }
+        return records.first { "current:\($0.id)" == selectedID }
+    }
+    private var mayRecordDistribution: Bool {
+        kind == .minutes && selectedCurrentRecord?.status == "ready_for_distribution"
+            && ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "")
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,13 +43,19 @@ struct FinalReportBrowserView: View {
                 if selectedID != nil { Button("Close report") { selectedID = nil; pdf = nil } }
                 if let onClose { Button("Done") { onClose() } }
                 Button("Refresh") { Task { await refresh() } }.disabled(loading)
-                Button("Save PDF") { if let pdf { saveDocument(pdf, name: "\(kind.title).pdf", type: .pdf) } }.disabled(pdf == nil)
+                Button(kind == .minutes ? "Save PDF for email" : "Save PDF") { if let pdf { saveDocument(pdf, name: "\(kind.title).pdf", type: .pdf) } }.disabled(pdf == nil)
+                if kind == .minutes {
+                    Button("Share signed PDF") { if let pdf { shareMinutesPDF(pdf, name: selectedCurrentRecord?.label ?? "Meeting Minutes") } }.disabled(pdf == nil)
+                }
+                if mayRecordDistribution { Button("Mark as sent to the Craft") { Task { await markDistributed() } }.disabled(loading) }
             }
             if kind == .minutes, let newest = records.first {
                 HStack(spacing: 16) {
                     Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(SignTheme.gold)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
+                        Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && newest.status == "ready_for_distribution"
+                             ? "WM review complete, ready to send to the Craft"
+                             : "Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
                         Text("The \(newest.label) minutes are signed and filed below.").font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -101,5 +116,33 @@ struct FinalReportBrowserView: View {
             guard PDFDocument(data: bytes) != nil else { throw ClientError.invalidResponse }
             pdf = bytes; message = ""
         } catch { if selectedID == id { message = error.localizedDescription } }
+    }
+    private func markDistributed() async {
+        guard let record = selectedCurrentRecord else { return }
+        let confirmation = NSAlert()
+        confirmation.messageText = "Mark these minutes as sent to the Craft?"
+        confirmation.informativeText = "Use this only after the signed PDF has actually been distributed."
+        confirmation.addButton(withTitle: "Mark as sent")
+        confirmation.addButton(withTitle: "Cancel")
+        guard confirmation.runModal() == .alertFirstButtonReturn else { return }
+        loading = true; defer { loading = false }
+        do {
+            _ = try await transport.request("/api/minutes/\(record.id)/mark-distributed", method: "POST", body: Data("{}".utf8))
+            await refresh()
+            message = "Distribution to the Craft has been recorded."
+        } catch { message = error.localizedDescription }
+    }
+}
+
+@MainActor
+private func shareMinutesPDF(_ data: Data, name: String) {
+    let safeName = name.replacingOccurrences(of: "/", with: "-")
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName).pdf")
+    do {
+        try data.write(to: url, options: .atomic)
+        guard let view = NSApp.keyWindow?.contentView else { throw ClientError.invalidResponse }
+        NSSharingServicePicker(items: [url]).show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+    } catch {
+        let alert = NSAlert(); alert.messageText = "The signed PDF could not be shared."; alert.informativeText = error.localizedDescription; alert.runModal()
     }
 }

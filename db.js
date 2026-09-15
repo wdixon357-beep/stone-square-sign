@@ -278,6 +278,15 @@ export const initSchema = async (exec = run) => {
     signature_bytes BYTEA NOT NULL,
     created_at TEXT NOT NULL
   )`);
+  await exec(`CREATE TABLE IF NOT EXISTS minutes_distribution_alerts (
+    minutes_id TEXT NOT NULL REFERENCES meeting_minutes(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    seen_at TEXT,
+    PRIMARY KEY (minutes_id, user_id)
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_minutes_distribution_alerts_user
+    ON minutes_distribution_alerts(user_id, seen_at, created_at DESC)`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_meeting_minutes_date
     ON meeting_minutes(meeting_date, created_at)`);
   /* Read only records imported from the Lodge's historical archive. These are
@@ -438,6 +447,15 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'meeting_minutes', 'preparer_signature_bytes', 'BYTEA');
   await addColumn(exec, 'meeting_minutes', 'master_signature_bytes', 'BYTEA');
   await addColumn(exec, 'meeting_minutes', 'master_changes_json', 'TEXT');
+
+  /* Ensure minutes which the Master signed before per-officer alerts were added
+   * are visible to both Secretary offices until each officer acknowledges them. */
+  await exec(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
+    SELECT m.id, u.id, COALESCE(m.master_attested_at, m.updated_at)
+    FROM meeting_minutes m CROSS JOIN users u
+    WHERE m.status = 'ready_for_distribution' AND m.master_attested_at IS NOT NULL
+      AND u.role IN ('secretary', 'assistant_secretary') AND u.access_revoked_at IS NULL
+    ON CONFLICT (minutes_id, user_id) DO NOTHING`);
 
   await exec('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
   await exec('CREATE INDEX IF NOT EXISTS idx_signers_document ON document_signers(document_id)');

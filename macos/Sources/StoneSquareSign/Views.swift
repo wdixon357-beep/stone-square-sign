@@ -296,9 +296,11 @@ struct WorkspaceView: View {
                 Button {
                     selection = .minutes
                     Task {
-                        minutesWorkspace.configure(model)
-                        if await minutesWorkspace.openReviewedRecord(id: alert.id) {
+                        if alert.kind == "preparer_completion" {
                             await model.markMinutesAlertSeen(alert)
+                        } else {
+                            minutesWorkspace.configure(model)
+                            _ = await minutesWorkspace.openReviewedRecord(id: alert.id)
                         }
                     }
                 } label: {

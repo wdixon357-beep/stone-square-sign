@@ -36,7 +36,9 @@ assert.match(app, /notificationWarnings/, 'notification delivery warnings must r
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'the preparing officer must receive a reviewed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening reviewed minutes must acknowledge only that preparing officer alert');
 assert.match(app, /Signed and available to all officers/, 'the website must state when signed minutes are available to officers');
-assert.match(app, /Signed meeting minutes are available/, 'the website must highlight signed minutes for officers');
+assert.match(app, /WM review complete, ready to send to the Craft/, 'the website must highlight signed minutes for the Secretary offices');
+assert.match(app, /Share signed PDF/, 'the website must use the officer device share options for the signed PDF');
+assert.match(app, /Mark as sent to the Craft/, 'the website must let an authorized Secretary record completed distribution');
 assert.match(app, /Historical meeting minutes[\s\S]*finalizedMinutes\.forEach/, 'the website must file signed current minutes under Historical meeting minutes');
 assert.match(app, /path === 'master-attest'[\s\S]*hide\(\$\('minutesEditorModal'\)\)[\s\S]*renderMinutes/, 'the website must leave review and return to the historical list after the Master signs');
 assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either Secretary must be allowed to record distribution');
@@ -45,7 +47,7 @@ assert.match(app, /event: minutes_records_changed/, 'the website must refresh an
 assert.match(nativeAPI, /event: minutes_records_changed/, 'the Mac app must refresh an open minutes archive after publication');
 assert.match(nativeMinutes, /mayReview \? "Review" : "View PDF"/, 'the Mac app must open another preparer signed minutes as a finalized PDF');
 assert.match(server, /publishedMinutesSnapshot[\s\S]*buildMinutesDocx/, 'finalized Word copies must use captured attestation snapshots');
-assert.ok(app.indexOf('openMinutesEditor(record.id)') < app.indexOf('completion-alert-seen'), 'reviewed minutes must open before their alert is acknowledged');
+assert.match(app, /preparer_completion'[\s\S]*showPdfBlob\(await apiFetch[\s\S]*completion-alert-seen/, 'a completed-review alert must open the signed PDF before acknowledgment');
 assert.match(html, /id="treasuryAlerts"[^>]+aria-live="polite"/, 'waiting banking records must have a persistent accessible alert region');
 assert.match(app, /\/api\/treasury\/alerts/, 'the website must refresh waiting banking-record alerts');
 assert.match(app, /event: treasury_changed/, 'the website must refresh a banking-record alert immediately after a live change');

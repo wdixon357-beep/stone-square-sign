@@ -137,6 +137,12 @@ check('both clients file signed minutes under history and highlight their availa
   && read('public/app.js').includes('Signed meeting minutes are available')
   && read('macos/Sources/StoneSquareSign/MeetingMinutes.swift').includes('Signed minutes are filed under Historical minutes.')
   && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Signed meeting minutes are available'));
+check('both clients place Secretary distribution controls beside historical signed minutes',
+  read('public/app.js').includes('WM review complete, ready to send to the Craft')
+  && read('public/app.js').includes('Share signed PDF')
+  && read('public/app.js').includes('Mark as sent to the Craft')
+  && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Share signed PDF')
+  && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Mark as sent to the Craft'));
 check('treasurer archive previews return to the list without opening a browser tab',
   read('public/treasury.js').includes('data-treasury="back"')
   && !read('public/treasury.js').includes('target="_blank"'));

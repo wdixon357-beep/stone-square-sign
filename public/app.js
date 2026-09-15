@@ -790,6 +790,29 @@ const collectMinutesDraft = () => ({
 
 const minutesDateLabel = (item) => item.meetingDate ? eventDayLabel(item.meetingDate) : 'Meeting date needs review';
 
+const shareSignedMinutes = async (item) => {
+  const blob = await apiFetch(`/api/minutes/${item.id}/pdf`);
+  const name = `Stone_Square_22_Meeting_Minutes_${item.meetingDate || 'undated'}.pdf`;
+  const file = new File([blob], name, { type: 'application/pdf' });
+  if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+    try {
+      await navigator.share({
+        title: `Stone Square Lodge No. 22 meeting minutes: ${minutesDateLabel(item)}`,
+        text: 'WM review complete. Attached are the signed meeting minutes for distribution to the Craft.',
+        files: [file],
+      });
+      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a'); link.href = url; link.download = name;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setMessage($('minutesReadMessage'), 'The signed PDF was downloaded. Attach it using your email service.');
+};
+
 const setMinutesMeetingType = (value) => {
   const stated = !value || value === 'Stated Communication' || value === 'Regular Stated Communication';
   $('minutesMeetingType').value = stated ? 'Stated Communication' : 'other';
@@ -818,10 +841,13 @@ const refreshMinutesReviewAlerts = async () => {
           setMessage($('minutesMessage'), 'The reviewed minutes could not be opened. The alert will remain until the record loads successfully.', true);
           return;
         }
-        openMinutesEditor(record.id);
         if (alert.kind === 'preparer_completion') {
+          try { showPdfBlob(await apiFetch(`/api/minutes/${record.id}/pdf`), `Minutes of ${minutesDateLabel(record)}`); }
+          catch (error) { setMessage($('minutesMessage'), error.message, true); return; }
           try { await apiFetch(`/api/minutes/${alert.id}/completion-alert-seen`, { method: 'POST' }); }
           catch { /* The record is open. Keep the alert visible so acknowledgment can be retried. */ }
+        } else {
+          openMinutesEditor(record.id);
         }
         await refreshMinutesReviewAlerts();
       });
@@ -897,9 +923,13 @@ const renderMinutes = async () => {
       notice.className = 'minutes-available-notice';
       const noticeCopy = document.createElement('div');
       const noticeTitle = document.createElement('strong');
-      noticeTitle.textContent = 'Signed meeting minutes are available';
+      const mayDistribute = ['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role)
+        && newest.status === 'ready_for_distribution';
+      noticeTitle.textContent = mayDistribute
+        ? 'WM review complete, ready to send to the Craft'
+        : 'Signed meeting minutes are available';
       const noticeDetail = document.createElement('p');
-      noticeDetail.textContent = `The minutes of ${minutesDateLabel(newest)} are signed and filed below in Historical meeting minutes.`;
+      noticeDetail.textContent = `The minutes of ${minutesDateLabel(newest)} are signed and filed below in Historical meeting minutes.${mayDistribute ? ' Use the controls beside the record to share the PDF and record distribution.' : ''}`;
       noticeCopy.append(noticeTitle, noticeDetail);
       const noticeOpen = document.createElement('button');
       noticeOpen.type = 'button'; noticeOpen.className = 'primary small'; noticeOpen.textContent = 'View signed minutes';
@@ -937,7 +967,7 @@ const renderMinutes = async () => {
       const open = document.createElement('button');
       open.className = 'secondary small';
       open.type = 'button';
-      const mayReview = can('minutes.prepare') && (state.user?.role === 'owner' || item.createdByUserId === state.user?.id);
+      const mayReview = !historical && can('minutes.prepare') && (state.user?.role === 'owner' || item.createdByUserId === state.user?.id);
       open.textContent = mayReview ? 'Review' : 'View PDF';
       open.addEventListener('click', async () => {
         if (mayReview) return openMinutesEditor(item.id);
@@ -945,6 +975,28 @@ const renderMinutes = async () => {
         catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
       });
       actions.append(open);
+      if (historical && item.status === 'ready_for_distribution' && ['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role)) {
+        const share = document.createElement('button');
+        share.className = 'secondary small'; share.type = 'button'; share.textContent = 'Share signed PDF';
+        share.addEventListener('click', async () => {
+          share.disabled = true;
+          try { await shareSignedMinutes(item); }
+          catch (error) { setMessage($('minutesReadMessage'), error.message, true); }
+          finally { share.disabled = false; }
+        });
+        const distributed = document.createElement('button');
+        distributed.className = 'secondary small'; distributed.type = 'button'; distributed.textContent = 'Mark as sent to the Craft';
+        distributed.addEventListener('click', async () => {
+          if (!confirm(`Confirm that the minutes of ${minutesDateLabel(item)} were sent to the Craft?`)) return;
+          distributed.disabled = true;
+          try {
+            await apiFetch(`/api/minutes/${item.id}/mark-distributed`, { method: 'POST' });
+            await renderMinutes(); await refreshMinutesReviewAlerts();
+            setMessage($('minutesMessage'), 'Distribution to the Craft has been recorded.');
+          } catch (error) { setMessage($('minutesReadMessage'), error.message, true); distributed.disabled = false; }
+        });
+        actions.append(share, distributed);
+      }
       if (can('minutes.prepare') && item.status === 'draft' && (state.user.role === 'owner' || item.createdByUserId === state.user.id)) {
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary small danger-text'; remove.textContent = 'Delete';

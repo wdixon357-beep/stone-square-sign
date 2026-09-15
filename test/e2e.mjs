@@ -601,14 +601,16 @@ try {
   check('the review alert clears after the Master completes review', !clearedAlerts.payload.alerts.some(a => a.id === minutesId));
   const preparerCompletionAlerts = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });
   const otherSecretaryCompletionAlerts = await api('GET', '/api/minutes/completion-alerts', { token: secToken });
-  check('Adrian receives a persistent alert after the Master reviews and signs', preparerCompletionAlerts.status === 200
+  check('both Secretary offices receive their own persistent alert after the Master reviews and signs', preparerCompletionAlerts.status === 200
     && preparerCompletionAlerts.payload.alerts.some(a => a.id === minutesId
       && a.kind === 'preparer_completion'
       && a.title.includes('Thursday, September 3, 2026')
-      && a.message.includes('WM Dixon-Saunders reviewed and signed'))
-    && !otherSecretaryCompletionAlerts.payload.alerts.some(a => a.id === minutesId));
-  const wrongOfficerDismissal = await api('POST', `/api/minutes/${minutesId}/completion-alert-seen`, { token: secToken });
-  check('another officer cannot clear the preparer alert', wrongOfficerDismissal.status === 404);
+      && a.message.includes('WM review complete, ready to send to the Craft'))
+    && otherSecretaryCompletionAlerts.payload.alerts.some(a => a.id === minutesId));
+  const otherOfficerAcknowledgment = await api('POST', `/api/minutes/${minutesId}/completion-alert-seen`, { token: secToken });
+  const AdrianAlertAfterOtherAcknowledgment = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });
+  check('one Secretary acknowledging the alert does not clear it for the other', otherOfficerAcknowledgment.status === 200
+    && AdrianAlertAfterOtherAcknowledgment.payload.alerts.some(a => a.id === minutesId));
   const seenCompletion = await api('POST', `/api/minutes/${minutesId}/completion-alert-seen`, { token: asstToken });
   const clearedCompletion = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });
   check('opening the reviewed record clears Adrian\'s alert', seenCompletion.status === 200
@@ -687,7 +689,7 @@ try {
   check('McDuffie receives the same reviewed and signed alert when he prepares the minutes',
     secretaryResubmission.status === 200 && secretaryReviewed.status === 200
       && secretaryCompletion.payload.alerts.some(a => a.id === secretaryMinutesId
-        && a.kind === 'preparer_completion' && a.message.includes('WM Dixon-Saunders reviewed and signed')));
+        && a.kind === 'preparer_completion' && a.message.includes('WM review complete, ready to send to the Craft')));
   await api('POST', `/api/minutes/${secretaryMinutesId}/completion-alert-seen`, { token: secToken });
   const secretaryDistributed = await api('POST', `/api/minutes/${secretaryMinutesId}/mark-distributed`, { token: secToken });
   check('McDuffie can distribute the authorized draft after Minutes access is restored',

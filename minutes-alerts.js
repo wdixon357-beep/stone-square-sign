@@ -18,6 +18,6 @@ export const minutesCompletionAlert = row => {
   const label = meetingDateLabel(row);
   return { id: row.id, title: `Meeting minutes reviewed and signed: ${label}`,
     submittedBy: row.master_attested_by_name || 'WM Dixon-Saunders', submittedAt: row.master_attested_at,
-    message: `WM Dixon-Saunders reviewed and signed the minutes you prepared. The signed record is now available to every officer in the Dashboard.`,
+    message: `WM review complete, ready to send to the Craft. The signed record is filed under Historical meeting minutes.`,
     kind: 'preparer_completion', url: '/?section=minutes' };
 };

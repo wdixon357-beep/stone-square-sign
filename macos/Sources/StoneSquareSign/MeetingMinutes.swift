@@ -313,7 +313,9 @@ struct MeetingMinutesView: View {
                     HStack(spacing: 16) {
                         Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(SignTheme.gold)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
+                            Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && newest.status == "ready_for_distribution"
+                                 ? "WM review complete, ready to send to the Craft"
+                                 : "Signed meeting minutes are available").font(.headline).foregroundStyle(SignTheme.navy)
                             Text("The \(newest.draft.meetingDate ?? "latest") minutes are signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
                         }
                         Spacer()
