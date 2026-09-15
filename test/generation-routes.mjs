@@ -145,7 +145,7 @@ try {
   check('Generation status requires sign-in', (await api('/api/generation/status')).status === 401);
   const status = await api('/api/generation/status', owner.token);
   check('Owner can inspect generation status without a key leak', status.status === 200 && !JSON.stringify(status.data).includes('test-only-secret'));
-  check('Only the owner receives the model and shared monthly allowance', status.data.model === 'gpt-5.6-terra' && status.data.monthlyLimitDollars === 5 && ['committedDollars','reservedDollars','remainingDollars'].every(key => typeof status.data[key] === 'number'));
+  check('Only the owner receives administrator generation details, model and shared monthly allowance', status.data.administratorDetails === true && status.data.model === 'gpt-5.6-terra' && status.data.monthlyLimitDollars === 5 && ['committedDollars','reservedDollars','remainingDollars'].every(key => typeof status.data[key] === 'number'));
   check('Generation status is never cached', /no-store/.test(status.headers.get('cache-control')));
   for (const [role, account] of [['preparer', preparer], ['member', uploadOnly], ['warden', warden], ['secretary', secretary]]) {
     const publicStatus = await api('/api/generation/status', account.token);

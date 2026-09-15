@@ -1,6 +1,6 @@
 export function generationStatusText(status, role) {
   if (!status || typeof status.configured !== 'boolean') return 'Generation status unavailable. Refresh before creating a draft.';
-  if (role !== 'owner') return status.configured
+  if (role !== 'owner' || status.administratorDetails !== true) return status.configured
     ? 'Report assistance is available. Review suggested entries before saving or signing.'
     : 'Report assistance is temporarily unavailable. You can continue entering your report.';
   let text = status.configured

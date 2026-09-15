@@ -234,7 +234,7 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
   };
 
   const status = async ({ includeBudget = false } = {}) => {
-    const result = { configured: Boolean(key), model: MODEL, monthlyLimitDollars: 5,
+    const result = { configured: Boolean(key), administratorDetails: true, model: MODEL, monthlyLimitDollars: 5,
       committedDollars: null, reservedDollars: null, remainingDollars: null };
     if (!includeBudget) return { configured: Boolean(key) };
     await initSchema();

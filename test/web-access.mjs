@@ -42,7 +42,7 @@ assert.match(html, /id="proposalReviewNav" class="nav-item owner-only"/);
 assert.match(html, /id="candidateMenuCard" class="document-menu-card candidate-only" type="button"/);
 assert.match(app, /api\/tracker\/handoff/);
 assert.doesNotMatch(html, /href="https:\/\/tracker\.stonesquare22pha\.org/);
-const sensitive = { configured: true, remainingDollars: 4.15, model: 'gpt-5.6-terra', cost: 0.85 };
+const sensitive = { configured: true, administratorDetails: true, remainingDollars: 4.15, model: 'gpt-5.6-terra', cost: 0.85 };
 for (const role of [undefined, 'warden', 'member', 'secretary', 'assistant_secretary', 'viewer', 'treasurer', 'assistant_treasurer', 'treasury_preparer']) {
   for (const payload of [sensitive, { configured: false }, null]) {
     assert.doesNotMatch(generationStatusText(payload, role), /Terra|OpenAI|gpt-|\$|allowance|model|cost/i);
@@ -52,6 +52,7 @@ for (const role of [undefined, 'warden', 'member', 'secretary', 'assistant_secre
 }
 assert.match(generationStatusText(sensitive, 'owner'), /Terra/);
 assert.match(generationStatusText(sensitive, 'owner'), /\$4.15/);
+assert.doesNotMatch(generationStatusText({ ...sensitive, administratorDetails: false }, 'owner'), /Terra|OpenAI|gpt-|\$|allowance|model|cost/i);
 assert.doesNotMatch(read('../public/report-assistant.html'), /Terra|OpenAI|gpt-|allowance/i);
 assert.doesNotMatch(read('../public/treasury.js'), /does not use Terra/);
 console.log('PASS: warden read surfaces and signature profile, private administrative controls, proposal labels, owner-only generation details across all roles.');

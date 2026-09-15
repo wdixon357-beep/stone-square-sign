@@ -3,24 +3,27 @@ import SwiftUI
 
 struct GenerationStatus: Decodable, Equatable {
     let configured: Bool
+    let administratorDetails: Bool?
     let model: String?
     let monthlyLimitDollars: Double?
     let committedDollars: Double?
     let reservedDollars: Double?
     let remainingDollars: Double?
 
-    var explanation: String {
+    private var administratorExplanation: String {
         configured
             ? "Terra enabled. Creating or reorganizing a draft sends the source text to OpenAI for your review."
             : "Local organizer active. Terra setup is pending."
     }
 
     func explanation(forOwner: Bool) -> String {
-        forOwner ? explanation : "Review the organized draft against your source before using it."
+        forOwner && administratorDetails == true
+            ? administratorExplanation
+            : "Review the organized draft against your source before using it."
     }
 
     func allowance(forOwner: Bool) -> String? {
-        guard forOwner, let remainingDollars, let monthlyLimitDollars else { return nil }
+        guard forOwner, administratorDetails == true, let remainingDollars, let monthlyLimitDollars else { return nil }
         let format = NumberFormatter()
         format.numberStyle = .currency
         format.locale = Locale(identifier: "en_US")

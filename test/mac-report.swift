@@ -108,7 +108,7 @@ final class GenerationFixture: URLProtocol {
             Self.requests.append((request.httpMethod ?? "GET", request.url!.path, body))
             Self.beforeReply?(request)
             let payload = request.url!.path == "/api/generation/status"
-                ? Data(#"{"configured":true,"model":"gpt-5.6-terra","monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8)
+                ? Data(#"{"configured":true,"administratorDetails":true,"model":"gpt-5.6-terra","monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8)
                 : Self.response
             let response = HTTPURLResponse(url: request.url!, statusCode: Self.statusCode, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -321,11 +321,11 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         let organizing = MinutesWorkspace(session: generationSession)
         organizing.baseURL = URL(string: "https://generation-fixture.invalid"); organizing.token = "synthetic-token"
         let status = await GenerationStatus.load(using: organizing)
-        precondition(status?.explanation.hasPrefix("Terra enabled.") == true && status?.allowance(forOwner: true)?.contains("$4.75 remaining of $5.00") == true)
+        precondition(status?.explanation(forOwner: true).hasPrefix("Terra enabled.") == true && status?.allowance(forOwner: true)?.contains("$4.75 remaining of $5.00") == true)
         precondition(status?.allowance(forOwner: false) == nil)
         print("PASS: native generation status discloses enabled processing and shows allowance only to the owner")
-        let localStatus = try JSONDecoder().decode(GenerationStatus.self, from: Data(#"{"configured":false,"monthlyLimitDollars":5}"#.utf8))
-        precondition(localStatus.explanation == "Local organizer active. Terra setup is pending." && localStatus.allowance(forOwner: true) == nil)
+        let localStatus = try JSONDecoder().decode(GenerationStatus.self, from: Data(#"{"configured":false,"administratorDetails":true,"monthlyLimitDollars":5}"#.utf8))
+        precondition(localStatus.explanation(forOwner: true) == "Local organizer active. Terra setup is pending." && localStatus.allowance(forOwner: true) == nil)
         let unavailableStatus = await GenerationStatus.load(using: minutes)
         precondition(unavailableStatus == nil)
         print("PASS: unconfigured and unavailable generation states remain distinct without inventing an allowance")
