@@ -67,9 +67,22 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch}){
  app.get('/api/building/requests',requireAuth,permit('building.view'),async(req,res,next)=>{try{const payload=await remote('/api/reservation?list&dashboard=1',req);if(!Array.isArray(payload.requests)||payload.store===false)throw fail(503,'Building request storage is temporarily unavailable.');res.setHeader('Cache-Control','no-store');res.json({requests:payload.requests,canDecide:hasPermission(req.user,'building.decide')&&(req.user.role==='owner'||req.user.role==='warden')});}catch(e){next(e)}});
  app.post('/api/building/requests/:id/decision',requireAuth,permit('building.decide'),async(req,res,next)=>{try{
   if(req.user.role!=='owner'&&req.user.role!=='warden')throw fail(403,'Building decisions are assigned to the Worshipful Master and Xavier White.');
-  const {decision,note,revision}=req.body||{};if(!['approved','denied'].includes(decision)||typeof revision!=='string'||!revision)throw fail(400,'Review the current request before choosing a decision.');
-  const payload=await remote('/api/reservation?dashboard=1&decide='+encodeURIComponent(req.params.id),req,{decision,note:String(note||'').slice(0,3000),revision});
+  const {decision,note,revision,authorization}=req.body||{};if(!['approved','denied'].includes(decision)||typeof revision!=='string'||!revision)throw fail(400,'Review the current request before choosing a decision.');
+  let signatureData=null;
+  if(decision==='approved'){
+   const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=?',[req.user.id]);
+   if(!signature?.signature_bytes)throw fail(409,'Save your signature profile before approving this agreement.');
+   signatureData='data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64');
+  }
+  const payload=await remote('/api/reservation?dashboard=1&decide='+encodeURIComponent(req.params.id),req,{decision,note:String(note||'').slice(0,3000),revision,authorization,signatureData});
   await audit(req,'building_request_decided',{id:req.params.id,decision});res.json(payload);
+ }catch(e){next(e)}});
+ app.post('/api/building/requests/:id/attest',requireAuth,async(req,res,next)=>{try{
+  if(req.user.role!=='secretary')throw fail(403,'This attestation is assigned to the Secretary.');
+  const {revision}=req.body||{};if(typeof revision!=='string'||!revision)throw fail(400,'Review the current agreement before attesting.');
+  const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=?',[req.user.id]);if(!signature?.signature_bytes)throw fail(409,'Save your signature profile before attesting.');
+  const payload=await remote('/api/reservation?dashboard=1&attest='+encodeURIComponent(req.params.id),req,{revision,signatureData:'data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64')});
+  await audit(req,'building_agreement_attested',{id:req.params.id});res.json(payload);
  }catch(e){next(e)}});
  app.get('/api/lodge-calendar',requireAuth,permit('calendar.view'),async(req,res,next)=>{try{
   const from=String(req.query.from||''),to=String(req.query.to||'');if(!validDate(from)||!validDate(to)||to<from||(Date.parse(to)-Date.parse(from))/86400000>370)throw fail(400,'Choose a calendar range of no more than one year.');

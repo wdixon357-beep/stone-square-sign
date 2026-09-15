@@ -20,10 +20,18 @@ struct BuildingRequest: Decodable, Identifiable {
     let description: String; let status: String; let note: String?
     let decidedAt: String?; let decidedBy: String?; let revision: BuildingRevision
     let requesterNotified: Bool
-    var statusLabel: String { ["pending": "Pending", "approved": "Approved", "denied": "Declined"][status] ?? status.capitalized }
+    let ownerOnly: Bool?; let agreementStatus: String?; let agreementText: String?; let coordinator: BuildingCoordinator?
+    var statusLabel: String {
+        if agreementStatus == "awaiting_secretary_attestation" { return "Awaiting Secretary attestation" }
+        if agreementStatus == "fully_executed" { return "Agreement complete" }
+        return ["pending": "Pending", "approved": "Approved", "denied": "Declined"][status] ?? status.capitalized
+    }
 }
+struct BuildingCoordinator: Decodable { let name: String; let title: String?; let email: String }
 struct BuildingRequestsResponse: Decodable { let requests: [BuildingRequest]; let canDecide: Bool }
-private struct BuildingDecisionBody: Encodable { let decision: String; let note: String; let revision: BuildingRevision }
+struct BuildingAuthorization: Encodable { let date: String; let record: String; let fee: String; let insurance: String; let deposit: String; let conditions: String }
+private struct BuildingDecisionBody: Encodable { let decision: String; let note: String; let revision: BuildingRevision; let authorization: BuildingAuthorization? }
+private struct BuildingAttestationBody: Encodable { let revision: BuildingRevision }
 private struct BuildingDecisionResponse: Decodable { let request: BuildingRequest }
 
 @MainActor final class BuildingRequestsWorkspace: ObservableObject {
@@ -41,12 +49,12 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
             return true
         } catch { message = error.localizedDescription; return false }
     }
-    func decide(_ request: BuildingRequest, decision: String, note: String, using model: AppModel) async -> Bool {
+    func decide(_ request: BuildingRequest, decision: String, note: String, authorization: BuildingAuthorization? = nil, using model: AppModel) async -> Bool {
         guard !busy, canDecide, model.user?.can("building.decide") == true, request.status == "pending",
               ["approved", "denied"].contains(decision), note.count <= 3000, requests.first(where: { $0.id == request.id })?.revision == request.revision else { return false }
         busy = true; defer { busy = false }
         do {
-            let body = try JSONEncoder().encode(BuildingDecisionBody(decision: decision, note: note, revision: request.revision))
+            let body = try JSONEncoder().encode(BuildingDecisionBody(decision: decision, note: note, revision: request.revision, authorization: authorization))
             let result: BuildingDecisionResponse = try await model.request("/api/building/requests/\(routeID(request.id))/decision", method: "POST", body: body)
             if let index = requests.firstIndex(where: { $0.id == result.request.id }) { requests[index] = result.request }
             message = result.request.requesterNotified ? "Decision recorded and requester notified." : "Decision recorded. The requester notification has not been confirmed."
@@ -56,6 +64,20 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
             let refreshed = await load(using: model)
             message = refreshed ? "This request changed. Review the latest details before deciding again." : "This request changed. Refresh it before deciding again."
             return false
+        } catch { message = error.localizedDescription; return false }
+    }
+    func attest(_ request: BuildingRequest, using model: AppModel) async -> Bool {
+        guard !busy, model.user?.role == "secretary", request.status == "approved", request.agreementStatus == "awaiting_secretary_attestation",
+              requests.first(where: { $0.id == request.id })?.revision == request.revision else { return false }
+        busy = true; defer { busy = false }
+        do {
+            let body = try JSONEncoder().encode(BuildingAttestationBody(revision: request.revision))
+            let result: BuildingDecisionResponse = try await model.request("/api/building/requests/\(routeID(request.id))/attest", method: "POST", body: body)
+            if let index = requests.firstIndex(where: { $0.id == result.request.id }) { requests[index] = result.request }
+            message = "Secretary attestation recorded. The organization was notified and payment access is available."
+            return true
+        } catch ClientError.conflict {
+            _ = await load(using: model); message = "This agreement changed. Review the current agreement before attesting again."; return false
         } catch { message = error.localizedDescription; return false }
     }
 }
@@ -69,6 +91,13 @@ struct BuildingRequestsView: View {
     @State private var filter = "all"
     @State private var note = ""
     @State private var decision: String?
+    @State private var authorizationDate = Date()
+    @State private var authorizationRecord = ""
+    @State private var approvedFee = ""
+    @State private var insuranceDecision = ""
+    @State private var depositDecision = ""
+    @State private var authorizationConditions = ""
+    @State private var attestationPending = false
     private var selected: BuildingRequest? { workspace.requests.first { $0.id == selectedID } }
     private var visible: [BuildingRequest] { workspace.requests.filter { filter == "all" || $0.status == filter } }
     var body: some View {
@@ -95,7 +124,13 @@ struct BuildingRequestsView: View {
                             LabeledContent("Time", value: [LodgeCalendarDates.displayTime(request.start), LodgeCalendarDates.displayTime(request.end)].filter { !$0.isEmpty }.joined(separator: " to "))
                             LabeledContent("Requested spaces", value: request.spaces.joined(separator: ", "))
                             LabeledContent("Contact", value: [request.contactName, request.contact].filter { !$0.isEmpty }.joined(separator: " · "))
+                            if let coordinator = request.coordinator { LabeledContent("Request coordinator", value: "\(coordinator.name) · \(coordinator.email)") }
                             Text(request.description).textSelection(.enabled)
+                        }
+                        if let agreement = request.agreementText, !agreement.isEmpty {
+                            Section("Building Use Agreement") {
+                                DisclosureGroup("View full agreement") { Text(agreement).textSelection(.enabled).font(.system(.body, design: .serif)).padding(.vertical, 8) }
+                            }
                         }
                         if let existing = request.note, !existing.isEmpty { Section("Recorded note") { Text(existing).textSelection(.enabled) } }
                         if let person = request.decidedBy, !person.isEmpty { LabeledContent("Decision recorded by", value: person) }
@@ -103,7 +138,26 @@ struct BuildingRequestsView: View {
                             Section("Decision") {
                                 TextField("Note to the requester", text: $note, axis: .vertical).lineLimit(3...8)
                                 if note.count > 3000 { Text("Keep the note within 3,000 characters.").font(.caption) }
-                                HStack { Button("Approve") { decision = "approved" }.buttonStyle(.borderedProminent); Button("Decline") { decision = "denied" } }.disabled(note.count > 3000)
+                                if request.ownerOnly == true {
+                                    DatePicker("Authorization date", selection: $authorizationDate, displayedComponents: .date)
+                                    TextField("Minutes or resolution reference", text: $authorizationRecord)
+                                    TextField("Approved fee", text: $approvedFee)
+                                    Picker("Insurance", selection: $insuranceDecision) { Text("Choose").tag(""); Text("Required").tag("required"); Text("Waived").tag("waived") }
+                                    Picker("Security deposit", selection: $depositDecision) { Text("Choose").tag(""); Text("Required").tag("required"); Text("Waived").tag("waived") }
+                                    TextField("Conditions", text: $authorizationConditions, axis: .vertical).lineLimit(2...6)
+                                    Text("Approval applies your saved signature. Secretary attestation is required before payment access is released.").font(.caption).foregroundStyle(.secondary)
+                                }
+                                HStack {
+                                    Button("Approve") { decision = "approved" }.buttonStyle(.borderedProminent)
+                                        .disabled(note.count > 3000 || (request.ownerOnly == true && (authorizationRecord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || approvedFee.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || insuranceDecision.isEmpty || depositDecision.isEmpty)))
+                                    Button("Decline") { decision = "denied" }.disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || note.count > 3000)
+                                }
+                            }
+                        }
+                        if request.agreementStatus == "awaiting_secretary_attestation", model.user?.role == "secretary" {
+                            Section("Secretary attestation") {
+                                Text("Review the complete approved agreement before applying your saved Secretary signature.")
+                                Button("Attest agreement") { attestationPending = true }.buttonStyle(.borderedProminent)
                             }
                         }
                     }.formStyle(.grouped)
@@ -120,15 +174,22 @@ struct BuildingRequestsView: View {
         }
         .task { await workspace.load(using: model) }
         .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
-        .onChange(of: selectedID) { _, _ in note = "" }
+        .onChange(of: selectedID) { _, _ in note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; depositDecision = ""; authorizationConditions = "" }
         .updateDraftGuard(active: !note.isEmpty || workspace.busy || newRequest.hasUnsubmittedChanges || newRequest.busy, reason: "Finish your building request draft before updating.")
         .alert(decision == "approved" ? "Approve this building request?" : "Decline this building request?", isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } })) {
             Button("Confirm decision") {
-                if let request = selected, let decision { Task { if await workspace.decide(request, decision: decision, note: note, using: model) { note = "" } } }
+                if let request = selected, let decision {
+                    let authorization = request.ownerOnly == true && decision == "approved" ? BuildingAuthorization(date: LodgeCalendarDates.key(authorizationDate), record: authorizationRecord, fee: approvedFee, insurance: insuranceDecision, deposit: depositDecision, conditions: authorizationConditions) : nil
+                    Task { if await workspace.decide(request, decision: decision, note: note, authorization: authorization, using: model) { note = "" } }
+                }
                 decision = nil
             }
             Button("Cancel", role: .cancel) { decision = nil }
         } message: { Text("This records your decision and sends the existing portal's decision notification to the requester.") }
+        .alert("Attest this Building Use Agreement?", isPresented: $attestationPending) {
+            Button("Attest") { if let request = selected { Task { _ = await workspace.attest(request, using: model) } } }
+            Button("Cancel", role: .cancel) { }
+        } message: { Text("Your saved Secretary signature will be applied. The organization will then receive its decision and payment access.") }
     }
 }
 
