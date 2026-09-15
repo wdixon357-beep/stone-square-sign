@@ -194,7 +194,10 @@ export const buildMinutesDocx = async ({
 };
 
 export const minutesFileName = (draft, status) => {
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(draft.meetingDate || '')) ? draft.meetingDate : 'undated';
+  const rawDate = String(draft.meetingDate || '');
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+    ? new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${rawDate}T12:00:00Z`))
+    : 'Date needs review';
   const prefix = status === 'approved_by_lodge' ? 'APPROVED' : 'DRAFT';
-  return `${prefix}_Stone_Square_22_Minutes_${date}.docx`;
+  return `${prefix} Meeting Minutes, ${date}.docx`;
 };

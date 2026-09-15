@@ -2280,7 +2280,8 @@ app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next
   }
   const bytes=await buildMinutesPdf(await minutesArtifactContext(row,draft,captured));
   if(finalMinutes(row))await addAudit({userId:req.user.id,action:'minutes_signed_pdf_viewed',ip:req.ip,userAgent:req.get('user-agent')||'',details:{minutesId:row.id}});
-  res.setHeader('Cache-Control','private, no-store');res.type('application/pdf').send(bytes);
+  const pdfName = minutesFileName(draft, row.status).replace(/\.docx$/i, '.pdf');
+  res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Disposition', `inline; filename="${pdfName}"`);res.type('application/pdf').send(bytes);
 }catch(e){next(e)}});
 
 app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,

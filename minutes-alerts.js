@@ -2,7 +2,7 @@ const meetingDateLabel = row => {
   const raw = String(row.meeting_date || '');
   const date = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T12:00:00Z`) : null;
   return date && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === raw
-    ? new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(date)
+    ? new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(date)
     : 'meeting date not yet confirmed';
 };
 
@@ -20,7 +20,7 @@ export const minutesCompletionAlert = (row, { mayDistribute = false } = {}) => {
     title: mayDistribute ? 'WM review complete, ready to send to the Craft' : 'Meeting minutes are available to view',
     submittedBy: row.master_attested_by_name || 'WM Dixon-Saunders', submittedAt: row.master_attested_at,
     message: mayDistribute
-      ? `The ${label} signed record is filed under Historical meeting minutes. Open it to view or share the PDF.`
-      : `The signed minutes for ${label} are filed under Historical meeting minutes. Open them to view the PDF.`,
+      ? `Meeting Minutes, ${label} is filed under Historical meeting minutes. Open it to view or share the PDF.`
+      : `Meeting Minutes, ${label} is filed under Historical meeting minutes. Open it to view the PDF.`,
     kind: 'preparer_completion', url: '/?section=minutes' };
 };

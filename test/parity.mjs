@@ -137,6 +137,9 @@ check('both clients file signed minutes under history and highlight their availa
   && read('public/app.js').includes('Meeting minutes are available to view')
   && read('macos/Sources/StoneSquareSign/MeetingMinutes.swift').includes('Signed minutes are filed under Historical minutes.')
   && read('macos/Sources/StoneSquareSign/FinalReportBrowser.swift').includes('Meeting minutes are available to view'));
+check('both clients use the complete Meeting Minutes, Month Day, Year title',
+  read('public/app.js').includes('Meeting Minutes, ${minutesDateLabel(item)}')
+  && read('macos/Sources/StoneSquareSign/MinutesDates.swift').includes('Meeting Minutes, \\(monthDayYear(raw))'));
 check('both clients place Secretary distribution controls beside historical signed minutes',
   read('public/app.js').includes('WM review complete, ready to send to the Craft')
   && read('public/app.js').includes('Share signed PDF')

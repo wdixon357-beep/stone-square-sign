@@ -292,6 +292,13 @@ const eventDayLabel = (value) => {
     .format(new Date(y, m - 1, d));
 };
 
+const monthDayYearLabel = (value) => {
+  const [y, m, d] = String(value || '').split('-').map(Number);
+  if (!y || !m || !d) return value || 'Date needs review';
+  return new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    .format(new Date(y, m - 1, d));
+};
+
 const formatClockTime = (value) => {
   const [hour, minute] = String(value || '').split(':').map(Number);
   if (!Number.isInteger(hour) || !Number.isInteger(minute)) return value || '';
@@ -788,16 +795,17 @@ const collectMinutesDraft = () => ({
   actionItems: currentMinutes()?.draft.actionItems || [],
 });
 
-const minutesDateLabel = (item) => item.meetingDate ? eventDayLabel(item.meetingDate) : 'Meeting date needs review';
+const minutesDateLabel = (item) => item.meetingDate ? monthDayYearLabel(item.meetingDate) : 'Date needs review';
+const minutesDocumentTitle = (item) => `Meeting Minutes, ${minutesDateLabel(item)}`;
 
 const shareSignedMinutes = async (item) => {
   const blob = await apiFetch(`/api/minutes/${item.id}/pdf`);
-  const name = `Stone_Square_22_Meeting_Minutes_${item.meetingDate || 'undated'}.pdf`;
+  const name = `${minutesDocumentTitle(item)}.pdf`;
   const file = new File([blob], name, { type: 'application/pdf' });
   if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
     try {
       await navigator.share({
-        title: `Stone Square Lodge No. 22 meeting minutes: ${minutesDateLabel(item)}`,
+        title: minutesDocumentTitle(item),
         text: 'WM review complete. Attached are the signed meeting minutes for distribution to the Craft.',
         files: [file],
       });
@@ -845,7 +853,7 @@ const refreshMinutesReviewAlerts = async () => {
           return;
         }
         if (alert.kind === 'preparer_completion') {
-          try { showPdfBlob(await apiFetch(`/api/minutes/${record.id}/pdf`), `Minutes of ${minutesDateLabel(record)}`); }
+          try { showPdfBlob(await apiFetch(`/api/minutes/${record.id}/pdf`), minutesDocumentTitle(record)); }
           catch (error) { setMessage($('minutesMessage'), error.message, true); return; }
           try { await apiFetch(`/api/minutes/${alert.id}/completion-alert-seen`, { method: 'POST' }); }
           catch { /* The record is open. Keep the alert visible so acknowledgment can be retried. */ }
@@ -932,12 +940,12 @@ const renderMinutes = async () => {
         ? 'WM review complete, ready to send to the Craft'
         : 'Meeting minutes are available to view';
       const noticeDetail = document.createElement('p');
-      noticeDetail.textContent = `The minutes of ${minutesDateLabel(newest)} are signed and filed below in Historical meeting minutes.${mayDistribute ? ' Use the controls beside the record to share the PDF and record distribution.' : ''}`;
+      noticeDetail.textContent = `${minutesDocumentTitle(newest)} is signed and filed below in Historical meeting minutes.${mayDistribute ? ' Use the controls beside the record to share the PDF and record distribution.' : ''}`;
       noticeCopy.append(noticeTitle, noticeDetail);
       const noticeOpen = document.createElement('button');
       noticeOpen.type = 'button'; noticeOpen.className = 'primary small'; noticeOpen.textContent = 'View signed minutes';
       noticeOpen.addEventListener('click', async () => {
-        try { showPdfBlob(await apiFetch(`/api/minutes/${newest.id}/pdf`), `Minutes of ${minutesDateLabel(newest)}`); }
+        try { showPdfBlob(await apiFetch(`/api/minutes/${newest.id}/pdf`), minutesDocumentTitle(newest)); }
         catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
       });
       notice.append(noticeCopy, noticeOpen); list.append(notice);
@@ -956,7 +964,7 @@ const renderMinutes = async () => {
       icon.textContent = 'MIN';
       const main = document.createElement('div');
       const heading = document.createElement('h3');
-      heading.textContent = `Minutes of ${minutesDateLabel(item)}`;
+      heading.textContent = minutesDocumentTitle(item);
       const detail = document.createElement('p');
       detail.textContent = historical
         ? `Signed Lodge record. Prepared by ${item.createdBy}.`
@@ -974,7 +982,7 @@ const renderMinutes = async () => {
       open.textContent = mayReview ? 'Review' : 'View PDF';
       open.addEventListener('click', async () => {
         if (mayReview) return openMinutesEditor(item.id);
-        try { showPdfBlob(await apiFetch(`/api/minutes/${item.id}/pdf`), `Minutes of ${minutesDateLabel(item)}`); }
+        try { showPdfBlob(await apiFetch(`/api/minutes/${item.id}/pdf`), minutesDocumentTitle(item)); }
         catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
       });
       actions.append(open);
@@ -990,7 +998,7 @@ const renderMinutes = async () => {
         const distributed = document.createElement('button');
         distributed.className = 'secondary small'; distributed.type = 'button'; distributed.textContent = 'Mark as sent to the Craft';
         distributed.addEventListener('click', async () => {
-          if (!confirm(`Confirm that the minutes of ${minutesDateLabel(item)} were sent to the Craft?`)) return;
+          if (!confirm(`Confirm that ${minutesDocumentTitle(item)} was sent to the Craft?`)) return;
           distributed.disabled = true;
           try {
             await apiFetch(`/api/minutes/${item.id}/mark-distributed`, { method: 'POST' });
@@ -1861,7 +1869,7 @@ $('downloadMinutes').addEventListener('click', async () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${item?.status === 'approved_by_lodge' ? 'APPROVED' : 'DRAFT'}_Stone_Square_22_Minutes_${item?.meetingDate || 'undated'}.docx`;
+    link.download = `${item?.status === 'approved_by_lodge' ? 'APPROVED' : 'DRAFT'} ${minutesDocumentTitle(item)}.docx`;
     document.body.append(link);
     link.click();
     link.remove();

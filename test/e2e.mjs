@@ -537,7 +537,7 @@ try {
       && Boolean(submittedMinutes.payload.minutes.preparerAttestedAt));
   const reviewAlerts = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('the Master has a persistent dated alert for Adrian submission', reviewAlerts.status === 200
-    && reviewAlerts.payload.alerts.some(a => a.id === minutesId && a.title.includes('Thursday, September 3, 2026') && a.submittedBy === 'Adrian Reese'));
+    && reviewAlerts.payload.alerts.some(a => a.id === minutesId && a.title.includes('September 3, 2026') && a.submittedBy === 'Adrian Reese'));
   const privateAlerts = await api('GET', '/api/minutes/review-alerts', { token: viewerToken });
   const secretaryAlerts = await api('GET', '/api/minutes/review-alerts', { token: secToken });
   check('review alerts are private to the Master', privateAlerts.status === 403 && secretaryAlerts.status === 403);
@@ -547,7 +547,7 @@ try {
     && !earlyPreparerAlert.payload.alerts.some(a => a.id === minutesId)
     && privateCompletionAlerts.status === 200 && !privateCompletionAlerts.payload.alerts.some(a => a.id === minutesId));
   check('the immediate review email names the meeting date and preparer', deliveredMail.slice(mailBeforeMinutes)
-    .some(m => m.replace(/\r?\n\s+/g, ' ').includes('Meeting minutes awaiting your review: Thursday, September 3, 2026') && m.includes('Adrian Reese')));
+    .some(m => m.replace(/\r?\n\s+/g, ' ').includes('Meeting minutes awaiting your review: September 3, 2026') && m.includes('Adrian Reese')));
   const mailBeforeDuplicate = deliveredMail.length;
   const duplicateSubmit = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
   check('repeat submission does not send duplicate alerts', duplicateSubmit.status === 409 && deliveredMail.length === mailBeforeDuplicate);
@@ -615,7 +615,7 @@ try {
   check('every other officer receives a prominent signed-minutes viewing alert', officerCompletionAlerts.status === 200
     && officerCompletionAlerts.payload.alerts.some(a => a.id === minutesId
       && a.title === 'Meeting minutes are available to view'
-      && a.message.includes('Thursday, September 3, 2026')));
+      && a.message.includes('Meeting Minutes, September 3, 2026')));
   const otherOfficerAcknowledgment = await api('POST', `/api/minutes/${minutesId}/completion-alert-seen`, { token: secToken });
   const AdrianAlertAfterOtherAcknowledgment = await api('GET', '/api/minutes/completion-alerts', { token: asstToken });
   check('one Secretary acknowledging the alert does not clear it for the other', otherOfficerAcknowledgment.status === 200
@@ -672,7 +672,7 @@ try {
   const secretarySubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
   const secretaryPending = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('McDuffie submission creates the same dated alert and immediate email', secretarySubmission.status === 200
-    && secretaryPending.payload.alerts.some(a => a.id === secretaryMinutesId && a.submittedBy === 'William M. McDuffie' && a.title.includes('Thursday, September 3, 2026'))
+    && secretaryPending.payload.alerts.some(a => a.id === secretaryMinutesId && a.submittedBy === 'William M. McDuffie' && a.title.includes('September 3, 2026'))
     && deliveredMail.length === beforeSecretaryNotice + 1);
   await api('POST', `/api/minutes/${secretaryMinutesId}/reopen`, { token: wmToken });
   const afterReopen = await api('GET', '/api/minutes/review-alerts', { token: wmToken });

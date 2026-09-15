@@ -36,6 +36,9 @@ struct FinalReportBrowserView: View {
         kind == .minutes && selectedCurrentRecord?.status == "ready_for_distribution"
             && ["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "")
     }
+    private func displayLabel(_ record: Record) -> String {
+        kind == .minutes ? MinutesDateText.minutesTitle(record.draft.meetingDate) : record.label
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,9 +46,9 @@ struct FinalReportBrowserView: View {
                 if selectedID != nil { Button("Close report") { selectedID = nil; pdf = nil } }
                 if let onClose { Button("Done") { onClose() } }
                 Button("Refresh") { Task { await refresh() } }.disabled(loading)
-                Button(kind == .minutes ? "Save PDF for email" : "Save PDF") { if let pdf { saveDocument(pdf, name: "\(kind.title).pdf", type: .pdf) } }.disabled(pdf == nil)
+                Button(kind == .minutes ? "Save PDF for email" : "Save PDF") { if let pdf { saveDocument(pdf, name: "\(selectedCurrentRecord.map(displayLabel) ?? kind.title).pdf", type: .pdf) } }.disabled(pdf == nil)
                 if kind == .minutes {
-                    Button("Share signed PDF") { if let pdf { shareMinutesPDF(pdf, name: selectedCurrentRecord?.label ?? "Meeting Minutes") } }.disabled(pdf == nil)
+                    Button("Share signed PDF") { if let pdf { shareMinutesPDF(pdf, name: selectedCurrentRecord.map(displayLabel) ?? "Meeting Minutes") } }.disabled(pdf == nil)
                 }
                 if mayRecordDistribution { Button("Mark as sent to the Craft") { Task { await markDistributed() } }.disabled(loading) }
             }
@@ -56,7 +59,7 @@ struct FinalReportBrowserView: View {
                         Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && newest.status == "ready_for_distribution"
                              ? "WM review complete, ready to send to the Craft"
                              : "Meeting minutes are available to view").font(.headline).foregroundStyle(SignTheme.navy)
-                        Text("The \(newest.label) minutes are signed and filed below.").font(.callout).foregroundStyle(.secondary)
+                        Text("\(displayLabel(newest)) is signed and filed below.").font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button("View signed minutes") { selectedID = "current:\(newest.id)" }.buttonStyle(.borderedProminent)
@@ -70,13 +73,13 @@ struct FinalReportBrowserView: View {
                 List(selection: $selectedID) {
                     Section(kind == .minutes ? "Signed meeting minutes" : "Finalized in Dashboard") { ForEach(records) { record in
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(record.label).font(.headline)
+                            Text(displayLabel(record)).font(.headline).fixedSize(horizontal: false, vertical: true)
                             Text(kind == .minutes ? "Signed Lodge record · Prepared by \(record.createdBy)" : record.createdBy).font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag("current:\(record.id)")
                     } }
                     Section("Historical Lodge archive") { ForEach(archives) { record in
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(record.title).font(.headline)
+                            Text(record.title).font(.headline).fixedSize(horizontal: false, vertical: true)
                             Text("Historical Lodge archive").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag("archive:\(record.id)")
                     } }

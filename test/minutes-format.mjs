@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
 import { normalizeMinutesDraft } from '../minutes.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
-import { buildMinutesDocx } from '../minutes-document.js';
+import { buildMinutesDocx, minutesFileName } from '../minutes-document.js';
 import { PDFDocument, PDFName } from 'pdf-lib';
 import { PDFParse } from 'pdf-parse';
 import { execFileSync } from 'node:child_process';
@@ -35,6 +35,8 @@ for (const value of ['', 'To be scheduled', 'September 3', '2026-02-30', '2026-0
 }
 assert.equal(normalizeMinutesDraft({meetingDate:'Thursday, September 3, 2026'}).meetingDate, '2026-09-03');
 assert.equal(formatMinutesDate('2028-02-29'), 'Tuesday, February 29, 2028');
+assert.equal(minutesFileName({ meetingDate: '2026-09-03' }, 'ready_for_distribution'), 'DRAFT Meeting Minutes, September 3, 2026.docx');
+assert.equal(minutesFileName({ meetingDate: '2026-09-03' }, 'approved_by_lodge'), 'APPROVED Meeting Minutes, September 3, 2026.docx');
 
 const text = 'Grown Folks Friday, September 25. The chapter will assist.\nMOTION PASSED: Fish and two sides. Moved Bro. Stone, seconded PM Reed.\nRevenue split discussed; no decision.';
 const bullets = bulletItems(text);

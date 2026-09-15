@@ -39,6 +39,10 @@ assert.match(html, /id="minutesReviewAlerts"[^>]+workflow-alerts/, 'minutes aler
 assert.match(app, /Signed and available to all officers/, 'the website must state when signed minutes are available to officers');
 assert.match(app, /WM review complete, ready to send to the Craft/, 'the website must highlight signed minutes for the Master and Secretary offices');
 assert.match(app, /Meeting minutes are available to view/, 'the website must alert every other officer that signed minutes can be viewed');
+assert.match(app, /const minutesDocumentTitle = \(item\) => `Meeting Minutes, \$\{minutesDateLabel\(item\)\}`/, 'current minutes titles must use one readable date format');
+assert.match(styles, /button \{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/, 'web button labels must wrap instead of being shortened or clipped');
+assert.match(nativeViews, /ViewThatFits\(in: \.horizontal\)[\s\S]*fixedSize\(horizontal: true, vertical: false\)/, 'Mac workspace actions must reflow without shortening button labels');
+assert.doesNotMatch(nativeViews, /Label\(alert\.title[\s\S]{0,140}lineLimit/, 'Mac alert titles must remain fully visible');
 assert.match(app, /Share signed PDF/, 'the website must use the officer device share options for the signed PDF');
 assert.match(app, /Mark as sent to the Craft/, 'the website must let an authorized Secretary record completed distribution');
 assert.match(app, /Historical meeting minutes[\s\S]*finalizedMinutes\.forEach/, 'the website must file signed current minutes under Historical meeting minutes');

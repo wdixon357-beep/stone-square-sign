@@ -69,6 +69,16 @@ enum MinutesDateText {
         return text.replacingCharacters(in: match.range, with: format(match.date, pattern: "EEEE, MMMM d, yyyy"))
     }
 
+    static func monthDayYear(_ raw: String?) -> String {
+        let text = raw ?? ""
+        guard let match = match(text) else { return text.isEmpty ? "Date needs review" : text }
+        return format(match.date, pattern: "MMMM d, yyyy")
+    }
+
+    static func minutesTitle(_ raw: String?) -> String {
+        "Meeting Minutes, \(monthDayYear(raw))"
+    }
+
     static func replacingDate(in raw: String, with date: Date, preservingDetails: Bool) -> String {
         guard preservingDetails else { return format(date, pattern: "yyyy-MM-dd") }
         let formatted = format(date, pattern: "EEEE, MMMM d, yyyy")

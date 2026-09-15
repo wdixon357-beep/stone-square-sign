@@ -327,7 +327,7 @@ struct MeetingMinutesView: View {
                             Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && newest.status == "ready_for_distribution"
                                  ? "WM review complete, ready to send to the Craft"
                                  : "Meeting minutes are available to view").font(.headline).foregroundStyle(SignTheme.navy)
-                            Text("The \(newest.draft.meetingDate ?? "latest") minutes are signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
+                            Text("\(MinutesDateText.minutesTitle(newest.draft.meetingDate)) is signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button("View signed minutes") { showingHistory = true }.buttonStyle(.borderedProminent)
@@ -363,7 +363,7 @@ struct MeetingMinutesView: View {
                     HStack(spacing: 14) {
                         Image(systemName: "doc.text").font(.title2).foregroundStyle(SignTheme.navy)
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(record.draft.meetingDate ?? "Meeting date needs review").font(.headline)
+                            Text(MinutesDateText.minutesTitle(record.draft.meetingDate)).font(.headline)
                             Text("Prepared by \(record.createdBy)").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()

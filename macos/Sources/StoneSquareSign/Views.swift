@@ -20,10 +20,27 @@ struct NativeWorkspaceHeader<Actions: View>: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 14) {
+            ViewThatFits(in: .horizontal) {
+              HStack(spacing: 14) {
                 Image(systemName: symbol).font(.title2).foregroundStyle(SignTheme.gold)
-                VStack(alignment: .leading, spacing: 4) { Text(title).font(.title2.weight(.semibold)); Text(subtitle).font(.callout).foregroundStyle(.secondary) }
-                Spacer(); actions
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                HStack(spacing: 8) { actions }.fixedSize(horizontal: true, vertical: false)
+              }
+              VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    Image(systemName: symbol).font(.title2).foregroundStyle(SignTheme.gold)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                        Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 8) { actions }
+                    .fixedSize(horizontal: true, vertical: false)
+              }
             }.padding(22)
             Divider()
         }
@@ -211,11 +228,11 @@ struct WorkspaceView: View {
                     ScrollView {
                         minutesReviewAlertButtons
                     }
-                    .frame(height: model.minutesReviewAlerts.count == 1 ? 88 : 160)
+                    .frame(height: model.minutesReviewAlerts.count == 1 ? 118 : 220)
                 }
                 if !model.treasuryAlerts.isEmpty {
                     ScrollView { treasuryAlertButtons }
-                        .frame(height: model.treasuryAlerts.count == 1 ? 88 : 160)
+                    .frame(height: model.treasuryAlerts.count == 1 ? 118 : 220)
                 }
                 List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
@@ -308,14 +325,14 @@ struct WorkspaceView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Label(alert.title, systemImage: "bell.badge.fill")
                             .font(.callout.weight(.semibold))
-                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(alert.message ?? "Submitted by \(alert.submittedBy)").font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 6)
-                    .frame(height: 80, alignment: .topLeading)
+                    .frame(minHeight: 100, alignment: .topLeading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -343,12 +360,12 @@ struct WorkspaceView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Label(alert.title, systemImage: "bell.badge.fill")
-                            .font(.callout.weight(.semibold)).lineLimit(2)
-                        Text(alert.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            .font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                        Text(alert.message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 6)
-                    .frame(height: 80, alignment: .topLeading)
+                    .frame(minHeight: 100, alignment: .topLeading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -419,8 +436,8 @@ struct WorkspaceNotices: View {
                         .foregroundStyle(.green)
                         .padding(.top, 2)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(session.title).font(.headline).lineLimit(2)
-                        Text(session.explanation).font(.callout).foregroundStyle(.secondary).lineLimit(3)
+                        Text(session.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                        Text(session.explanation).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     Button("Got it") { model.dismissSignInNotice() }
@@ -642,7 +659,7 @@ struct NativeCandidateTrackerView: View {
     private func trackerDetail(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title).font(.caption2.weight(.bold)).tracking(0.9).foregroundStyle(.secondary)
-            Text(value).font(.caption.weight(.semibold)).lineLimit(2)
+            Text(value).font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
         }
     }
 
