@@ -21,7 +21,8 @@ const sourceRoots = {
   mailGrandSecretary: '/Users/williamdixon-saunders/Library/Mail/V10/418531F6-B10F-4AE9-9DE5-030F22489C23',
   mailImport: '/Users/williamdixon-saunders/Library/Mail/V10/F0ADE092-14F3-4630-A564-931197AFA646',
   datedArchive: '/Users/williamdixon-saunders/Library/Mobile Documents/com~apple~CloudDocs/_To Review/Dated Docs Archive 2015-2024',
-  financialDesktop: '/Users/williamdixon-saunders/Library/CloudStorage/GoogleDrive-dixonsaunders.ads@gmail.com/My Drive/Financial/Mac Desktop'
+  financialDesktop: '/Users/williamdixon-saunders/Library/CloudStorage/GoogleDrive-dixonsaunders.ads@gmail.com/My Drive/Financial/Mac Desktop',
+  verifiedSentTreasury: '/Users/williamdixon-saunders/LodgeHQ/vault/stone/Treasurer & Finance/Verified Sent Reports',
 };
 const exactTreasuryMailFiles = [
   '366631/2/STONE SQUARE LODGE financial report 11192020.docx',
@@ -33,6 +34,11 @@ const exactTreasuryMailFiles = [
   '366564/2/STONE SQUARE LODGE financial report 04012021.docx',
   '366553/2/STONE SQUARE LODGE Updated Financial Report 04152021.docx',
   '366536/2/STONE SQUARE LODGE financial report 05202021.docx'
+];
+const exactTreasurySentFiles = [
+  ['Stone_Square_22_Treasurers_Report_June_2026.pdf','2026-06-30','Treasurer Report, June 2026'],
+  ['Stone_Square_22_Treasurers_Report_July_2026.pdf','2026-07-31','Treasurer Report, July 2026'],
+  ['Stone_Square_22_Treasurers_Report_August_2026.pdf','2026-08-31','Treasurer Report, August 2026'],
 ];
 const exactMinutesFiles = [
   ['datedArchive','2021/02_04_2021.docx'],
@@ -100,8 +106,13 @@ const minuteDecision = name => {
   if (['Stone Square Lodge Meeting Minutes October 6 2022.docx','Stone Square Lodge Meeting Minutes September 15 2022.docx'].includes(name)) return 'alternate filename copy';
   return /^Stone Square Lodge (?:Meeting|Occasional|Round ?Table|\(Zoom\))|^Stone_Square_22_Minutes_2026-06-18\.docx$/i.test(name) ? null : 'not identified as Stone Square Lodge meeting minutes';
 };
-const treasuryDecision = name => /^STONE SQUARE LODGE financial report|^Stone Square Lodge Financial Report|^2026-09-01_Treasurers_Report_Jun-Jul-Aug_2026_AS_SUBMITTED/i.test(name)
-  ? null : 'not identified as a Stone Square Lodge treasurer report';
+const treasuryDecision = name => {
+  if (/^2026-09-01_Treasurers_Report_Jun-Jul-Aug_2026_AS_SUBMITTED/i.test(name)) {
+    return 'superseded by the three verified monthly PDFs sent September 3, 2026';
+  }
+  return /^STONE SQUARE LODGE financial report|^Stone Square Lodge Financial Report/i.test(name)
+    ? null : 'not identified as a Stone Square Lodge treasurer report';
+};
 const considered=[];
 const addDirectory = async (sourceKey, relativeDir, kind, decision = () => null) => {
   const directory = path.join(sourceRoots[sourceKey], relativeDir);
@@ -110,6 +121,10 @@ const addDirectory = async (sourceKey, relativeDir, kind, decision = () => null)
 // Verified exact supplements take priority over fallback copies in the Brothers library.
 for (const [sourceKey,relativePath,sourceNote] of exactMinutesFiles) considered.push({sourceKey,kind:'minutes',relativePath,sourceNote,reason:null});
 for (const relativePath of exactTreasuryMailFiles) considered.push({sourceKey:'mailTreasury2020',kind:'treasury',relativePath,reason:null});
+for (const [relativePath,recordDate,title] of exactTreasurySentFiles) considered.push({
+  sourceKey:'verifiedSentTreasury',kind:'treasury',relativePath,recordDate,title,
+  sourceNote:'Verified sent email 374399; presented September 3, 2026',reason:null,
+});
 // The existing Brothers-facing library is the canonical historical collection, with audited exclusions.
 await addDirectory('brothersLibrary','Meeting Minutes','minutes',name => {
   if (!/\.pdf$/i.test(name)) return 'unsupported file type';
@@ -136,19 +151,19 @@ const selected=[];const exclusions=[];const duplicateGroups=[];const byHash=new 
 for(const item of considered){
   const descriptor=`${item.sourceKey}:${item.relativePath}`;
   if(item.reason){exclusions.push({sourceKey:item.sourceKey,relativePath:item.relativePath,reason:item.reason});continue;}
-  const file=sourcePath(item),original=await fs.readFile(file),originalSha256=hash(original),name=path.basename(file),recordDate=dateFromName(name);
+  const file=sourcePath(item),original=await fs.readFile(file),originalSha256=hash(original),name=path.basename(file),recordDate=item.recordDate || dateFromName(name);
   if (!recordDate) { exclusions.push({sourceKey:item.sourceKey,relativePath:item.relativePath,reason:'meeting date could not be verified'}); continue; }
   const month=Number(recordDate.slice(5,7));
-  if (month===7 || month===8) { exclusions.push({sourceKey:item.sourceKey,relativePath:item.relativePath,reason:'July and August are outside the Lodge meeting season'}); continue; }
+  if (item.kind === 'minutes' && (month===7 || month===8)) { exclusions.push({sourceKey:item.sourceKey,relativePath:item.relativePath,reason:'July and August are outside the Lodge meeting season'}); continue; }
   const hashKey=`${item.kind}:${originalSha256}`;
   if(byHash.has(hashKey)){const chosen=byHash.get(hashKey);duplicateGroups.push({kind:item.kind,originalSha256,chosen:`${chosen.sourceKey}:${chosen.relativePath}`,duplicate:descriptor});exclusions.push({sourceKey:item.sourceKey,relativePath:item.relativePath,reason:`byte-for-byte duplicate of ${chosen.sourceKey}:${chosen.relativePath}`});continue;}
   const recordKey=`${item.kind}:${recordDate}`;
   if(byRecord.has(recordKey)){const chosen=byRecord.get(recordKey);duplicateGroups.push({kind:item.kind,recordDate,chosen:`${chosen.sourceKey}:${chosen.relativePath}`,duplicate:descriptor});exclusions.push({sourceKey:item.sourceKey,relativePath:item.relativePath,reason:`alternate copy for ${recordDate}; using ${chosen.sourceKey}:${chosen.relativePath}`});continue;}
-  const record={sourceKey:item.sourceKey,kind:item.kind,relativePath:item.relativePath,recordDate,title:titleFor(item.kind,recordDate,name),originalSha256,...(item.sourceNote?{sourceNote:item.sourceNote}:{})};
+  const record={sourceKey:item.sourceKey,kind:item.kind,relativePath:item.relativePath,recordDate,title:item.title || titleFor(item.kind,recordDate,name),originalSha256,...(item.sourceNote?{sourceNote:item.sourceNote}:{})};
   byHash.set(hashKey,record);byRecord.set(recordKey,record);selected.push(record);
 }
 selected.sort((a,b)=>a.kind.localeCompare(b.kind)||a.recordDate.localeCompare(b.recordDate));
-const manifestBody={version:2,source:'Stone Square Brothers archive plus verified historical supplements',season:'September through June',selected,duplicateGroups,exclusions};
+const manifestBody={version:3,source:'Stone Square Brothers archive plus verified historical supplements',season:'Meeting minutes: September through June; treasurer reports may cover recess months',selected,duplicateGroups,exclusions};
 const manifest={...manifestBody,manifestSha256:hash(Buffer.from(JSON.stringify(manifestBody)))};
 
 if (!productionConfirmed) {
