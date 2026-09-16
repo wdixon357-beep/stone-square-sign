@@ -475,6 +475,10 @@ export const initSchema = async (exec = run) => {
   await exec(`UPDATE users u SET roster_id=r.id FROM roster r
     WHERE u.roster_id IS NULL AND EXISTS (SELECT 1 FROM unnest(r.emails) e WHERE lower(e)=lower(u.email))
       AND NOT EXISTS (SELECT 1 FROM users linked WHERE linked.roster_id=r.id AND linked.id<>u.id)`);
+  await exec(`UPDATE invitations i SET roster_id=r.id FROM roster r
+    WHERE i.roster_id IS NULL AND i.used_at IS NULL
+      AND EXISTS (SELECT 1 FROM unnest(r.emails) e WHERE lower(e)=lower(i.email))
+      AND NOT EXISTS (SELECT 1 FROM invitations linked WHERE linked.roster_id=r.id AND linked.id<>i.id AND linked.used_at IS NULL)`);
   await addColumn(exec, 'sessions', 'created_at', 'TEXT');
   await addColumn(exec, 'sessions', 'last_seen_at', 'TEXT');
   await addColumn(exec, 'sessions', 'client_label', 'TEXT');
