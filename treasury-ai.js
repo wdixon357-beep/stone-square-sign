@@ -1,5 +1,5 @@
 import { TREASURY_REPORT_RULES } from './report-rules.js';
-import { organizeTreasury, normalizeTreasury, money, dollars, validDate } from './treasury.js';
+import { organizeTreasury, normalizeTreasury, money, dollars, validDate, emptyAccount } from './treasury.js';
 import { applyTreasuryMeetingCycle } from './treasury-period.js';
 
 const amountFields = ['openingBalance', 'statementBalance', 'bookBalance', 'receipts', 'disbursements', 'transfersIn', 'transfersOut', 'depositsInTransit', 'outstandingChecks', 'bankHold'];
@@ -18,6 +18,29 @@ export const TREASURY_AI_SCHEMA = object({
 });
 
 const instructions = TREASURY_REPORT_RULES;
+
+export function applyCreditUnionDepositSummary(draft, source) {
+  if (!/Deposit Accounts\s+Balance Forward\s+Deposits\s+Withdrawals\s+Ending Balance/i.test(source)
+    || !/\bPRIME SHARE\b/i.test(source) || !/\b(?:NO-INTEREST\s+)?SHARE DRAFT\b/i.test(source)) return draft;
+  const rows = [];
+  for (const line of source.split('\n')) {
+    const account = /\b(?:NO-INTEREST\s+)?SHARE DRAFT\b/i.test(line) ? 'checking' : /\bPRIME SHARE\b/i.test(line) ? 'savings' : '';
+    if (!account) continue;
+    const amounts = [...line.matchAll(/\(?-?\$?\d[\d,]*\.\d{2}\)?/g)].map(match => dollars(money(match[0]))).filter(value => value !== null);
+    if (amounts.length < 4) continue;
+    const [openingBalance, receipts, disbursements, statementBalance] = amounts.slice(-4);
+    rows.push({ account, openingBalance, receipts, disbursements, statementBalance });
+  }
+  if (!rows.length) return draft;
+  for (const row of rows) {
+    let account = draft.accounts.find(item => item.id === row.account);
+    if (!account) { account = emptyAccount(row.account, row.account === 'checking' ? 'Checking' : 'Savings'); draft.accounts.push(account); }
+    Object.assign(account, row);
+    delete account.account;
+  }
+  draft.extractionNotes.push(`Credit union deposit summary: imported balance forward, deposits, withdrawals and ending balance for ${rows.map(row => row.account).join(' and ')}.`);
+  return draft;
+}
 
 const invalidResponse = () => Object.assign(new Error('The banking information could not be organized into the report. Please try again or prepare the report manually.'), { statusCode: 502, code: 'TREASURY_AI_RESPONSE_INVALID' });
 function checkShape(value, schema) {
@@ -80,6 +103,7 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   if (source.length > 180000) throw Object.assign(new Error('This source is too long. Use a single reporting period.'), { statusCode: 400 });
   if (!generateStructured) {
     const organized = organizeTreasury(source, { sourceNames, extractionNotes: sourceNotes });
+    applyCreditUnionDepositSummary(organized, source);
     return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(organized, meetingCycle) : organized);
   }
   if (typeof generateStructured !== 'function') throw new TypeError('generateStructured must be a function');
@@ -94,6 +118,14 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   const acceptedEvidence = new Set();
   const evidencePositions = new WeakMap();
   const sourceLines = source.split('\n');
+  let applicationAccount = '', sourceProductAccount = '';
+  const sourceAccountByLine = sourceLines.map(line => {
+    const assignment = (line.match(/^Application account assignment:\s*(Checking|Savings)\./i) || line.match(/^(Checking|Savings) account$/i))?.[1]?.toLowerCase();
+    if (assignment) { applicationAccount = assignment; sourceProductAccount = ''; }
+    if (/\b(?:no-interest\s+)?share draft\b/i.test(line)) sourceProductAccount = 'checking';
+    else if (/\bprime share\b/i.test(line)) sourceProductAccount = 'savings';
+    return sourceProductAccount || applicationAccount;
+  });
   const lineStarts = [0];
   for (let index = 0; index < source.length; index++) if (source[index] === '\n') lineStarts.push(index + 1);
   const lineAt = offset => {
@@ -160,10 +192,17 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   const ids = new Set();
   const names = new Map();
   const accountHeaders = response.accounts.map((account, index) => {
-    const id = /^[a-z][a-z0-9_-]{0,39}$/.test(account.id) ? account.id : `account${index + 1}`;
+    const assigned = new Set(amountFields.flatMap(field => {
+      const claim = account[field];
+      if (!claim?.value || !claim.evidence || !source.includes(claim.evidence)) return [];
+      return occurrences(claim.evidence).map(start => sourceAccountByLine[lineAt(start)]).filter(Boolean);
+    }));
+    const assignedId = assigned.size === 1 ? [...assigned][0] : '';
+    const id = assignedId || (/^[a-z][a-z0-9_-]{0,39}$/.test(account.id) ? account.id : `account${index + 1}`);
     if (ids.has(id)) throw invalidResponse();
     ids.add(id);
-    const name = text(account.name);
+    const extractedName = text(account.name);
+    const name = assignedId ? assignedId[0].toUpperCase() + assignedId.slice(1) : extractedName;
     names.set(id, name);
     return { id, name: name || `Account ${index + 1}`, activityComplete: false };
   });
@@ -184,12 +223,14 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
   };
   const ambiguousAccount = Symbol('ambiguous source accounts');
   let currentAccount = null;
-  const lineAccounts = sourceLines.map(line => {
+  const lineAccounts = sourceLines.map((line, lineIndex) => {
+    const sourceAssigned = sourceAccountByLine[lineIndex];
     const mentioned = mentionedAccounts(line);
     const heading = compact(line).replace(/^(?:bank\s+)?account(?:\s+name)?\s*:\s*/, '');
     const leading = new Set([...aliases].filter(([, candidates]) => candidates.some(alias => new RegExp(`^${escape(alias)}(?=$|[\\s.:,;(])`, 'i').test(heading))).map(([id]) => id));
-    if (leading.size) currentAccount = mentioned.size === 1 && leading.has([...mentioned][0]) ? [...mentioned][0] : ambiguousAccount;
-    return mentioned.size === 1 ? [...mentioned][0] : mentioned.size > 1 ? ambiguousAccount : currentAccount;
+    if (sourceAssigned) currentAccount = sourceAssigned;
+    else if (leading.size) currentAccount = mentioned.size === 1 && leading.has([...mentioned][0]) ? [...mentioned][0] : ambiguousAccount;
+    return sourceAssigned || (mentioned.size === 1 ? [...mentioned][0] : mentioned.size > 1 ? ambiguousAccount : currentAccount);
   });
   const accounts = accountHeaders.map((account, index) => ({ ...account,
     ...Object.fromEntries(amountFields.map(field => [field, amount(response.accounts[index][field], !['openingBalance', 'statementBalance', 'bookBalance'].includes(field), account.id)])) }));
@@ -285,5 +326,6 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     note += `${note ? '\n' : ''}${reference}`;
   }
   if (note) draft.extractionNotes.push(note);
+  applyCreditUnionDepositSummary(draft, source);
   return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(draft, meetingCycle, { validatedWindowFields:[...validatedWindowFields] }) : draft);
 }

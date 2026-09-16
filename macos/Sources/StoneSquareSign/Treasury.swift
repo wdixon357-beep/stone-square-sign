@@ -292,7 +292,7 @@ struct TreasuryView: View {
                     Text("Save banking information for a report").tag("save")
                     if model.user?.can("treasury.prepare") == true {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
-                Text("Terra reads and prefills the report now. Save it for another authorized preparer, or open the prefilled report and complete it yourself.").font(.caption)
+                Text("The uploaded banking information is organized into a prefilled report. Save it for another authorized preparer, or open the prefilled report and complete it yourself.").font(.caption)
                 Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.checkingSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.savingsSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.checkingFiles.isEmpty && workspace.savingsFiles.isEmpty)
             }.padding(12) } }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
@@ -353,9 +353,9 @@ struct TreasuryView: View {
         if let record=workspace.selected {
             Text("Uploaded by \(record.uploadedBy)").font(.caption)
             if record.status == "awaiting_preparer" {
-                Text("Banking information saved").font(.headline)
-                Text("Claiming these records will organize the uploaded information into the report and prevent another officer from working on the same report.").font(.callout)
-                if model.user?.can("treasury.prepare") == true { Button("Claim and organize this report") { workspace.selectedPreparer = model.user?.id ?? 0; confirmingAssignment = true }.buttonStyle(.borderedProminent) }
+                Text("Prefilled report ready").font(.headline)
+                Text("The uploaded banking information has been organized into this report. Claim it to confirm or correct the values and finish the report. The claim prevents another officer from working on the same report.").font(.callout)
+                if model.user?.can("treasury.prepare") == true { Button("Claim this prefilled report") { workspace.selectedPreparer = model.user?.id ?? 0; confirmingAssignment = true }.buttonStyle(.borderedProminent) }
             } else {Text("Preparing officer: \(record.createdBy)").font(.headline)}
             if (record.status == "awaiting_preparer" && (record.createdByUserId == model.user?.id || model.user?.role == "owner")) || (record.status == "draft" && model.user?.role == "owner") {
                 DisclosureGroup(record.status == "awaiting_preparer" ? "Assign a preparing officer (optional)" : "Change preparing officer") { assignmentPicker }

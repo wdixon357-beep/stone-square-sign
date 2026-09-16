@@ -68,6 +68,20 @@ const fixedWindowOutput = await generateTreasuryDraft(source, {
 });
 check('structured processing prefills source balances without treating off-window figures as source matched', fixedWindowRequest.instructions.includes('Do not include, total, summarize, infer, or use transactions outside that range') && fixedWindowRequest.instructions.includes('2026-09-04 through 2026-09-15') && fixedWindowRequest.instructions.includes('Extract every identifiable account balance and total') && fixedWindowOutput.accounts[0].openingBalance === '1000.00' && fixedWindowOutput.accounts[0].statementBalance === '1150.00' && fixedWindowOutput.fieldReviews['accounts.0.openingBalance'] === 'unresolved' && fixedWindowOutput.fieldReviews['accounts.0.statementBalance'] === 'unresolved');
 
+const assignedSource=`Application account assignment: Checking.\nChecking account\nUnlabeled account summary\nClosing balance: $432.10`;
+const assignedResponse=response();
+assignedResponse.periodStart=cite(null,'');assignedResponse.periodEnd=cite(null,'');assignedResponse.bankName=cite(null,'');assignedResponse.transactions=[];
+assignedResponse.accounts[0].id='savings';assignedResponse.accounts[0].name=cite('Unlabeled account summary','Unlabeled account summary');assignedResponse.accounts[0].openingBalance=cite(null,'');assignedResponse.accounts[0].statementBalance=cite('432.10','Closing balance: $432.10');
+const assignedOutput=await generateTreasuryDraft(assignedSource,{generateStructured:async()=>assignedResponse});
+check('the uploader account selection controls when the source contains no explicit product heading',assignedOutput.accounts.find(account=>account.id==='checking')?.statementBalance==='432.10'&&!assignedOutput.accounts.some(account=>account.id==='savings'&&account.statementBalance==='432.10'));
+
+const dexstaSource=`Application account assignment: Checking.\nChecking account\nDEXSTA Federal Credit Union\nDeposit Accounts Balance Forward Deposits Withdrawals Ending Balance\n100 - PRIME SHARE $101.00 $11.00 $1.00 $111.00\n200 - NO-INTEREST SHARE DRAFT $202.00 $22.00 $2.00 $222.00`;
+const dexstaResponse=response();dexstaResponse.periodStart=cite(null,'');dexstaResponse.periodEnd=cite(null,'');dexstaResponse.bankName=cite('DEXSTA Federal Credit Union','DEXSTA Federal Credit Union');dexstaResponse.transactions=[];
+const prime=empty(TREASURY_AI_SCHEMA.properties.accounts.items);prime.id='checking';prime.name=cite('PRIME SHARE','100 - PRIME SHARE ending balance $111.00');prime.statementBalance=cite('111.00','100 - PRIME SHARE ending balance $111.00');
+const draftAccount=empty(TREASURY_AI_SCHEMA.properties.accounts.items);draftAccount.id='savings';draftAccount.name=cite('NO-INTEREST SHARE DRAFT','200 - NO-INTEREST SHARE DRAFT ending balance $222.00');draftAccount.statementBalance=cite('222.00','200 - NO-INTEREST SHARE DRAFT ending balance $222.00');dexstaResponse.accounts=[prime,draftAccount];
+const dexstaOutput=await generateTreasuryDraft(dexstaSource,{generateStructured:async()=>dexstaResponse});
+check('DEXSTA product headings override the upload box and the verified deposit summary imports all four columns',dexstaOutput.accounts.find(account=>account.id==='savings')?.openingBalance==='101.00'&&dexstaOutput.accounts.find(account=>account.id==='savings')?.receipts==='11.00'&&dexstaOutput.accounts.find(account=>account.id==='savings')?.disbursements==='1.00'&&dexstaOutput.accounts.find(account=>account.id==='savings')?.statementBalance==='111.00'&&dexstaOutput.accounts.find(account=>account.id==='checking')?.openingBalance==='202.00'&&dexstaOutput.accounts.find(account=>account.id==='checking')?.receipts==='22.00'&&dexstaOutput.accounts.find(account=>account.id==='checking')?.disbursements==='2.00'&&dexstaOutput.accounts.find(account=>account.id==='checking')?.statementBalance==='222.00');
+
 const broadBoundarySource = `Checking\nAugust opening balance: $1,000.00\nUnrelated report note dated 2026-09-15`;
 const broadBoundaryResponse = response();
 broadBoundaryResponse.periodStart = cite(null, ''); broadBoundaryResponse.periodEnd = cite(null, ''); broadBoundaryResponse.transactions = [];

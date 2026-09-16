@@ -75,6 +75,10 @@ assert.match(treasury, /Officer confirmed/, 'web treasurer fields must identify 
 assert.match(treasury, /Officer correction recorded/, 'web treasurer fields must identify officer corrections');
 assert.match(treasury, /Confirm this value/, 'web treasurer fields must offer one-click confirmation for a prefilled value');
 assert.match(treasury, /Confirm all prefilled values/, 'web treasurer reports must offer one-click confirmation for all prefilled values');
+assert.match(treasury, /Claim this prefilled report/, 'the website must state that upload-time organization is already complete');
+assert.doesNotMatch(treasury, /Claim and organize this report/, 'the website must not claim that organization waits until assignment');
+assert.match(nativeTreasury, /Claim this prefilled report/, 'the Mac app must state that upload-time organization is already complete');
+assert.doesNotMatch(nativeTreasury, /Claim and organize this report/, 'the Mac app must not claim that organization waits until assignment');
 assert.match(treasury, /data-treasury="review-field"/, 'web treasurer fields must provide a correction control');
 assert.match(treasury, /clearCollectionReviews\(button\.dataset\.collection\).*splice/, 'removing an imported row must clear index-based review badges before rows move');
 assert.match(treasury, /clearCollectionReviews\(kind\).*draft\[kind\]\.push/, 'adding an imported row must rebuild that collection review state safely');

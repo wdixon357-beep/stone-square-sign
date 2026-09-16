@@ -29,7 +29,7 @@ async function accountSources(req) {
     const source=await readTreasurySources(legacy,req.body.sourceText);
     groups.push({label:'Additional banking information',source,files:legacy});
   }
-  const text=groups.map(({label,source})=>`${label} account\n${source.text}`).join('\n\n');
+  const text=groups.map(({label,source})=>`Application account assignment: ${label}.\n${label} account\n${source.text}`).join('\n\n');
   return {
     text,
     names:groups.flatMap(({label,source})=>source.names.map(name=>`${label}: ${name}`)),
@@ -141,7 +141,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       return {
         id:row.id,
         title:'Banking information is awaiting report preparation',
-        message:`Uploaded by ${row.uploader_name||'an authorized officer'}${period?` for the period ending ${period}`:''}. Claim the records to begin the report.`,
+        message:`Uploaded by ${row.uploader_name||'an authorized officer'}${period?` for the period ending ${period}`:''}. Claim the prefilled report to confirm or correct the values.`,
         uploadedBy:row.uploader_name||'',
         createdAt:row.created_at,
       };
