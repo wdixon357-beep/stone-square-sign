@@ -192,6 +192,8 @@ final class AppModel: ObservableObject {
     @Published var dues: DuesLedger?
     @Published var duesLoading = false
     @Published var duesError: String?
+    @Published var myDues: MyDuesResponse?
+    @Published var myDuesError: String?
     @Published var biometricLoginEnabled: Bool
     @Published var biometricLoginAvailable: Bool
     @Published var messageIsWarning = false
@@ -311,6 +313,13 @@ final class AppModel: ObservableObject {
         } catch {
             duesError = error.localizedDescription
         }
+    }
+
+    @MainActor
+    func loadMyDues() async {
+        myDuesError = nil
+        do { myDues = try await request("/api/dues/me") }
+        catch { myDuesError = error.localizedDescription }
     }
 
     func restoreSession() async {

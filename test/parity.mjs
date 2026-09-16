@@ -29,9 +29,12 @@ const PAIRS = {
   agendaNav: 'agenda',
   treasuryNav: 'treasury',
   activityNav: 'activity',
+  memberAccessNav: 'memberAccess',
   queueNav: 'documents',
   builderNav: 'createDispensation',
   duesNav: 'dues',
+  myDuesNav: 'myDues',
+  suggestionsNav: 'suggestions',
   approvalsNav: 'approvals',
   proposalReviewNav: 'proposalReview',
   profileButton: 'profile',
@@ -117,8 +120,9 @@ check('the Mac app defaults to the hosted service, not localhost',
   /let defaultServerAddress = "https:\/\//.test(client) && !/\?\? "http:\/\/localhost/.test(client));
 check('the Mac app consumes the same live event stream as the web page',
   client.includes('/api/events') && read('public/app.js').includes('/api/events'));
-check('both clients gate dues on the server-supplied dues.view permission',
-  models.includes('can("dues.view")') && read('public/app.js').includes("can('dues.view', user)")
+check('both clients separate the full dues ledger from each Brother personal dues screen',
+  models.includes('can("dues.ledger")') && models.includes('can("dues.self")')
+  && read('public/app.js').includes("can('dues.ledger', user)") && read('public/app.js').includes("can('dues.self', user)")
   && models.includes('if let permissions { return permissions.contains(capability) }')
   && read('public/app.js').includes('user?.permissions?.includes(permission)'));
 check('both clients separate minutes preparation from final record viewing',

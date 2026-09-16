@@ -78,6 +78,7 @@ const hasReturning = (sql) => /\breturning\b/i.test(sql);
  * uses a caller-supplied text id and `profile_signatures` is keyed on user_id. */
 const IDENTITY_TABLES = new Set([
   'users', 'sessions', 'reset_codes', 'document_signers', 'invitations', 'audit_events',
+  'dues_adjustments', 'suggestions',
 ]);
 const insertTarget = (sql) => (sql.match(/^\s*insert\s+into\s+"?([a-z_]+)"?/i)?.[1] || '').toLowerCase();
 
@@ -399,6 +400,40 @@ export const initSchema = async (exec = run) => {
     UNIQUE (first_name, last_name)
   )`);
 
+  await exec(`CREATE TABLE IF NOT EXISTS dues_adjustments (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    roster_id INTEGER NOT NULL REFERENCES roster(id),
+    dues_year TEXT NOT NULL,
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('payment','credit','refund','chargeback','correction','reversal')),
+    amount_cents INTEGER NOT NULL CHECK (amount_cents <> 0),
+    effective_date TEXT NOT NULL,
+    payment_method TEXT,
+    source_reference TEXT,
+    note TEXT,
+    entered_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    reverses_adjustment_id INTEGER REFERENCES dues_adjustments(id),
+    created_at TEXT NOT NULL
+  )`);
+  await exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dues_adjustment_reversal
+    ON dues_adjustments(reverses_adjustment_id) WHERE reverses_adjustment_id IS NOT NULL`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_dues_adjustments_roster_year
+    ON dues_adjustments(roster_id, dues_year, effective_date)`);
+  await exec(`CREATE TABLE IF NOT EXISTS suggestions (
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    reference_code TEXT UNIQUE NOT NULL,
+    submitted_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    category TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Received' CHECK (status IN ('Received','Under Review','Responded','Closed')),
+    owner_response TEXT,
+    reviewed_by_user_id INTEGER REFERENCES users(id),
+    submitted_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_suggestions_submitter
+    ON suggestions(submitted_by_user_id, submitted_at)`);
+
   // carried forward so an existing database picks these up too
   await addColumn(exec, 'document_signers', 'signed_ip', 'TEXT');
   await addColumn(exec, 'document_signers', 'signed_user_agent', 'TEXT');
@@ -434,7 +469,12 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'reset_codes', 'channel', "TEXT NOT NULL DEFAULT 'email'");
   await addColumn(exec, 'users', 'access_revoked_at', 'TEXT');
   await addColumn(exec, 'users', 'permissions_json', 'TEXT');
+  await addColumn(exec, 'users', 'roster_id', 'INTEGER REFERENCES roster(id)');
   await addColumn(exec, 'invitations', 'permissions_json', 'TEXT');
+  await addColumn(exec, 'invitations', 'roster_id', 'INTEGER REFERENCES roster(id)');
+  await exec(`UPDATE users u SET roster_id=r.id FROM roster r
+    WHERE u.roster_id IS NULL AND EXISTS (SELECT 1 FROM unnest(r.emails) e WHERE lower(e)=lower(u.email))
+      AND NOT EXISTS (SELECT 1 FROM users linked WHERE linked.roster_id=r.id AND linked.id<>u.id)`);
   await addColumn(exec, 'sessions', 'created_at', 'TEXT');
   await addColumn(exec, 'sessions', 'last_seen_at', 'TEXT');
   await addColumn(exec, 'sessions', 'client_label', 'TEXT');
@@ -458,6 +498,8 @@ export const initSchema = async (exec = run) => {
     ON CONFLICT (minutes_id, user_id) DO NOTHING`);
 
   await exec('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
+  await exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_roster_id ON users(roster_id) WHERE roster_id IS NOT NULL');
+  await exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_active_invitation_roster_id ON invitations(roster_id) WHERE roster_id IS NOT NULL AND used_at IS NULL');
   await exec('CREATE INDEX IF NOT EXISTS idx_signers_document ON document_signers(document_id)');
   await exec('CREATE INDEX IF NOT EXISTS idx_audit_document ON audit_events(document_id)');
   await exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_office

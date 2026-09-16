@@ -412,7 +412,7 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         precondition(restrictedSecretary.canReadMinutes && !restrictedSecretary.can("minutes.prepare") && !restrictedSecretary.canSign)
         precondition(!restrictedSecretary.canReadApprovals)
         precondition(restrictedSecretary.canOpen(.settings) && !restrictedSecretary.canOpen(.access) && !restrictedSecretary.canOpen(.documents))
-        let manualPreparer = try decoder.decode(User.self, from: Data(#"{"id":45,"email":"qa@example.invalid","name":"QA Preparer","role":"treasury_preparer","hasSignature":true,"permissions":["treasury.prepare","dues.view","signature.manage","settings.manage"]}"#.utf8))
+        let manualPreparer = try decoder.decode(User.self, from: Data(#"{"id":45,"email":"qa@example.invalid","name":"QA Preparer","role":"treasury_preparer","hasSignature":true,"permissions":["treasury.prepare","dues.self","signature.manage","settings.manage"]}"#.utf8))
         precondition(manualPreparer.canUseTreasury && !manualPreparer.can("treasury.upload") && !manualPreparer.canOpen(.reportGenerator) && !manualPreparer.canOpen(.minutes))
         let admin = try decoder.decode(User.self, from: Data(#"{"id":46,"email":"qa@example.invalid","name":"QA Owner","role":"owner","hasSignature":true,"permissions":[]}"#.utf8))
         precondition(admin.canOpen(.access) && admin.can("treasury.upload") && admin.can("documents.sign"))

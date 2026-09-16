@@ -19,7 +19,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import {
   connect, initSchema, dbRun, dbGet, dbAll, withTransaction, isUniqueViolation,
 } from './db.js';
-import { buildDuesLedger, duesConfigured, DUES_ROLES } from './dues.js';
+import { buildDuesLedger, duesConfigured } from './dues.js';
 import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
@@ -31,6 +31,7 @@ import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treas
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
 import { mountOfficerReportRoutes } from './officer-report-routes.js';
+import { mountMemberFeatures } from './member-features.js';
 
 dotenv.config();
 
@@ -1348,7 +1349,7 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
         activatedUserId = inserted.lastID;
       }
       if (invitation) {
-        await dbRun('UPDATE users SET permissions_json=? WHERE id=?',[invitation.permissions_json || null,activatedUserId]);
+        await dbRun('UPDATE users SET permissions_json=?, roster_id=? WHERE id=?',[invitation.permissions_json || null,invitation.roster_id || null,activatedUserId]);
         const used = await dbRun(
           'UPDATE invitations SET used_at = ? WHERE id = ? AND used_at IS NULL',
           [nowIso(), invitation.id],
@@ -1828,7 +1829,7 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
 /* Dues. Restricted to the Worshipful Master, the Secretaries and the Wardens. The ledger names who is behind on his dues, so viewers are refused
  * outright rather than shown an empty page. */
 const requireDuesAccess = (req, res, next) => {
-  if (!hasPermission(req.user,'dues.view')) {
+  if (!hasPermission(req.user,'dues.ledger')) {
     return res.status(403).json({ error: 'Dues access is restricted to authorized Lodge officers.' });
   }
   next();
@@ -3512,6 +3513,7 @@ mountBuildingCalendar(app,{requireAuth});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
 mountOfficerReportRoutes(app, { requireAuth, requireOwner });
+mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: requestBaseUrl, generateToken, hashSecret });
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 

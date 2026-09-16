@@ -5,7 +5,7 @@ import { generationStatusText, showGenerationStatus } from '../public/generation
 const read = p => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 const app = read('../public/app.js'), html = read('../public/index.html');
 const gates = app.slice(app.indexOf("document.querySelectorAll('.owner-only')"), app.indexOf("  return { maySeeTreasury, maySeeMinutes }"));
-function visibility(role, permissions = role === 'warden' ? ['proposals.create','documents.status','dues.view','minutes.view','treasury.view','signature.manage','settings.manage','reports.create','candidates.view'] : role === 'secretary' ? ['minutes.prepare','dues.view'] : []) {
+function visibility(role, permissions = role === 'warden' ? ['proposals.create','documents.status','dues.self','dues.ledger','suggestions.create','minutes.view','treasury.view','signature.manage','settings.manage','reports.create','candidates.view'] : role === 'secretary' ? ['minutes.prepare','dues.self','dues.ledger','dues.manage','suggestions.create'] : []) {
   const results = {}, line = {};
   vm.runInNewContext(gates, { user: { role, permissions }, can: (key, user) => role === 'owner' || permissions.includes(key), $: id => ({ classList: { toggle: (_, hidden) => { results[id] = !hidden; } } }), document: {
     querySelectorAll: selector => [{ classList: { toggle: (_, hidden) => { results[selector] = !hidden; } } }],
@@ -15,7 +15,7 @@ function visibility(role, permissions = role === 'warden' ? ['proposals.create',
   return results;
 }
 const warden = visibility('warden');
-for (const selector of ['.warden-only', '.signer-only', '.dues-only', '.minutes-only', '.candidate-only']) assert.equal(warden[selector], true, selector);
+for (const selector of ['.warden-only', '.signer-only', '.dues-ledger-only', '.dues-self-only', '.suggestions-only', '.minutes-only', '.candidate-only']) assert.equal(warden[selector], true, selector);
 for (const selector of ['.owner-only', '.preparer-only']) assert.equal(warden[selector], false, selector);
 assert.equal(warden.approvalsNav, false);
 assert.equal(visibility('owner').approvalsNav, true);
@@ -29,7 +29,7 @@ assert.equal(visibility('owner')['.warden-only'], false);
 assert.equal(visibility('owner').landingCopy, 'Choose the area you want to open.');
 assert.match(html, /id="accessNav" class="nav-item owner-only"/);
 assert.match(app, /\$\('officerPanel'\)\.focus\(\{ preventScroll: true \}\)/);
-assert.equal(visibility('viewer')['.dues-only'], false);
+assert.equal(visibility('viewer')['.dues-ledger-only'], false);
 assert.equal(visibility('secretary')['.minutes-only'], true);
 assert.match(app, /!can\('signature.manage', user\)/);
 assert.match(app, /if \(!can\('minutes.prepare'\)\) return/);

@@ -40,6 +40,8 @@ const api = async (request, response, url) => {
     { id: 'other', label: 'Stone Square Sign on Mac', createdAt: '2026-08-20T12:00:00Z', lastSeenAt: '2026-09-12T23:10:00Z', expiresAt: '2026-11-18T12:00:00Z', current: false },
   ] });
   if (url.pathname === '/api/minutes/review-alerts') return json(response, { alerts: [] });
+  if (url.pathname === '/api/minutes/completion-alerts') return json(response, { alerts: [] });
+  if (url.pathname === '/api/treasury/alerts') return json(response, { alerts: [] });
   if (url.pathname === '/api/documents') return json(response, { documents: [{ id: 1, title: 'Community Event Dispensation', original_name: 'dispensation.pdf', status: 'completed', needsSignature: false, template_kind: 'dispensation_v1', created_at: '2026-09-10T19:00:00Z', submitted_at: '2026-09-11T13:00:00Z', signers: [{ signer_name: 'William McDuffie', signed_at: '2026-09-10T20:00:00Z', signer_role: 'secretary' }] }] });
   if (url.pathname === '/api/officers') return json(response, { officers: [{ id: 2, name: 'William McDuffie', email: 'secretary@example.invalid', role: 'secretary' }, { id: 3, name: 'Adrian Reese', email: 'assistant@example.invalid', role: 'assistant_secretary' }], pending: [] });
   if (url.pathname === '/api/submission-profiles') return json(response, { profiles: [{ role: 'worshipful_master', name: user.name, address: 'Lodge profile address' }] });
@@ -49,6 +51,10 @@ const api = async (request, response, url) => {
   if (url.pathname === '/api/approvals') return json(response, { approvals: [{ id: 1, title: 'Community Event Dispensation', original_name: 'dispensation.pdf', approval_status: 'approved', approval_source: 'email', approved_by: 'District Deputy', approved_on: '2026-09-11T13:00:00Z', has_endorsed_copy: false }] });
   if (url.pathname === '/api/proposals') return json(response, { proposals: [{ id: 31, title: 'Community outreach event', requestDetails: 'Request permission for Lodge participation.', proposerName: 'Jamal Davis', proposerUserId: 4, eventDate: '2026-10-10', eventTime: '1:00 PM to 4:00 PM', locationName: 'Community Center', streetAddress: '100 Main Street', cityState: 'Middletown, DE', status: 'pending', proposerNote: '' }] });
   if (url.pathname === '/api/dues') return json(response, { duesYear: 2026, rateCents: 25000, totals: { collectedCents: 50000, outstandingCents: 25000, paidCount: 2, unpaidCount: 1 }, staleCampaign: null, rows: [{ name: 'Brother One', status: 'paid', paidCents: 25000, assessedCents: 25000, remainingCents: 0, creditCents: 0, lastPaymentISO: '2026-01-15', payments: [{ matchedVia: 'email' }] }, { name: 'Brother Two', status: 'unpaid', paidCents: 0, assessedCents: 25000, remainingCents: 25000, creditCents: 0, payments: [] }], unmatched: [] });
+  if (url.pathname === '/api/dues/me') return json(response, { duesYear: 2026, rateCents: 17500, row: { name: user.name, status: 'partial', paidCents: 7500, assessedCents: 17500, remainingCents: 10000, creditCents: 0, lastPaymentISO: '2026-09-08', payments: [{ date: '2026-09-08', amountCents: 7500, source: 'Zeffy', description: 'Annual dues payment' }] }, paymentLinks: { full: 'https://www.zeffy.com/en-US/ticketing/2026-2027-annual-dues-payment', custom: 'https://www.zeffy.com/en-US/donation-form/custom-lodge-dues-payment-stone-square-lodge-22-2026--2027' } });
+  if (url.pathname === '/api/suggestions/me') return json(response, { suggestions: [{ reference: 'SS-1001', subject: 'Fellowship activity', status: 'Under Review', createdAt: '2026-09-14T18:00:00Z', ownerResponse: '' }] });
+  if (url.pathname === '/api/admin/suggestions') return json(response, { suggestions: [{ id: 1, reference: 'SS-1001', submitterName: 'Brother One', category: 'Lodge activity', subject: 'Fellowship activity', body: 'Consider a quarterly fellowship activity.', status: 'Under Review', ownerResponse: '', createdAt: '2026-09-14T18:00:00Z' }] });
+  if (url.pathname === '/api/admin/member-access') return json(response, { members: [{ id: 1, prefix: 'Bro.', first_name: 'Brother', last_name: 'One', emails: ['brother.one@example.invalid'], user_id: 10, account_email: 'brother.one@example.invalid' }, { id: 2, prefix: 'Bro.', first_name: 'Brother', last_name: 'Two', emails: ['brother.two@example.invalid'], user_id: null, invitation_id: null }] });
   if (url.pathname === '/api/building/requests') return json(response, { canDecide: true, requests: [{ id: 'SSL-100', organization: 'Stone Square Lodge No. 22', date: '2026-10-10', start: '13:00', end: '16:00', spaces: ['Lodge building'], description: 'Community outreach planning', contactName: 'Jamal Davis', contact: 'jamal@example.invalid', status: 'pending', revision: 1, note: '' }] });
   if (url.pathname === '/api/lodge-calendar') return json(response, { warnings: [], events: [{ id: 'event-1', title: 'Stated Communication', startDate: new Date().toISOString().slice(0, 8) + '15', endDate: new Date().toISOString().slice(0, 8) + '15', startTime: '19:30', endTime: '22:00', allDay: false, category: 'lodge', status: 'scheduled', location: 'Stone Square Lodge No. 22', description: 'Monthly stated communication.', source: 'Lodge calendar', editable: true, revision: 1 }] });
   if (url.pathname === '/api/treasury') return json(response, { reports: [{ id: 'treasury-1', draft, status: 'draft', preparerUserId: 999, createdByUserId: 999, createdBy: user.name, uploadedBy: 'William McDuffie', revision: 1 }] });
@@ -63,12 +69,24 @@ const api = async (request, response, url) => {
 http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
   if (url.pathname.startsWith('/api/')) return api(request, response, url);
+  if (url.pathname.startsWith('/pdfjs/')) {
+    const pdfRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../node_modules/pdfjs-dist');
+    const pdfFile = path.resolve(pdfRoot, url.pathname.slice('/pdfjs/'.length));
+    if (!pdfFile.startsWith(pdfRoot + path.sep)) { response.writeHead(404); response.end(); return; }
+    try { response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' }); response.end(await fs.readFile(pdfFile)); }
+    catch { response.writeHead(404); response.end('Not found'); }
+    return;
+  }
   const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   const file = path.resolve(root, relative);
   if (!file.startsWith(root + path.sep) && file !== path.join(root, 'index.html')) return response.end();
   try {
     let contents = await fs.readFile(file);
-    if (relative === 'index.html') contents = Buffer.from(contents.toString().replaceAll('__APP_VERSION__', '1.19.0'));
+    if (relative === 'index.html') {
+      const visualSection = String(url.searchParams.get('visual') || '').replace(/[^A-Za-z]/g, '');
+      const visualScript = visualSection ? `<script>addEventListener('load',()=>setTimeout(()=>document.getElementById(${JSON.stringify(`${visualSection}Nav`)})?.click(),250));</script>` : '';
+      contents = Buffer.from(contents.toString().replaceAll('__APP_VERSION__', '1.19.0').replace('</body>', `${visualScript}</body>`));
+    }
     const ext = path.extname(file);
     response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png' })[ext] || 'application/octet-stream', 'cache-control': 'no-store' });
     response.end(contents);

@@ -3,7 +3,7 @@ export const CAPABILITIES = [
  ['building.request','Request use of the Lodge building'],['building.view','View building requests'],['building.decide','Approve or decline building requests'],['calendar.view','View Lodge Calendar'],['calendar.manage','Manage Lodge Calendar events'],
  ['reports.create','Prepare reports'],['minutes.view','View finished meeting minutes'],['minutes.prepare','Prepare and edit meeting minutes'],
  ['treasury.view','View finished treasurer reports'],['treasury.prepare','Prepare and edit treasurer reports'],['treasury.upload','Provide bank records and screenshots'],
- ['dues.view','View dues'],['documents.status','View dispensation statuses'],['documents.sign','Sign assigned dispensations'],['candidates.view','View Candidate Tracker'],['candidates.edit','Edit Candidate Tracker records'],
+ ['dues.self','View own dues'],['dues.ledger','View full dues ledger'],['dues.manage','Record non-Zeffy dues activity'],['suggestions.create','Send confidential suggestions'],['documents.status','View dispensation statuses'],['documents.sign','Sign assigned dispensations'],['candidates.view','View Candidate Tracker'],['candidates.edit','Edit Candidate Tracker records'],
  ['proposals.create','Submit and track personal dispensation proposals'],['signature.manage','Manage own signature'],['settings.manage','Own service settings']
 ].map(([id,label])=>({id,label}));
 const personal=['building.request','signature.manage','settings.manage'];
@@ -14,8 +14,12 @@ export function permissionsForStorage(values,role){
  return UNIVERSAL_RECORD_ROLES.has(role)?normalized.filter(value=>!['minutes.view','treasury.view'].includes(value)):normalized;
 }
 export function normalizePermissions(values,role){
- if(!Array.isArray(values)||values.some(v=>!CAPABILITIES.some(c=>c.id===v)))throw Object.assign(new Error('Choose valid officer permissions.'),{statusCode:400});
- const p=new Set(values);for(const prefix of ['minutes','treasury'])if(p.has(prefix+'.prepare'))p.add(prefix+'.view');
+ if(!Array.isArray(values))throw Object.assign(new Error('Choose valid officer permissions.'),{statusCode:400});
+ const legacyDues=values.includes('dues.view');
+ const migrated=values.filter(v=>v!=='dues.view');
+ if(legacyDues){migrated.push('dues.self');if(['secretary','assistant_secretary','warden'].includes(role))migrated.push('dues.ledger');if(['secretary','assistant_secretary'].includes(role))migrated.push('dues.manage');}
+ if(migrated.some(v=>!CAPABILITIES.some(c=>c.id===v)))throw Object.assign(new Error('Choose valid officer permissions.'),{statusCode:400});
+ const p=new Set(migrated);for(const prefix of ['minutes','treasury'])if(p.has(prefix+'.prepare'))p.add(prefix+'.view');
  if(p.has('building.decide'))p.add('building.view');if(p.has('calendar.manage'))p.add('calendar.view');
  if(p.has('treasury.upload'))p.add('treasury.view');if(p.has('documents.sign'))p.add('documents.status');
  if(p.has('candidates.edit'))p.add('candidates.view');
@@ -27,11 +31,12 @@ export function resolvePermissions(user){
  if(Array.isArray(user?.permissions))return normalizePermissions(user.permissions,user.role);
  if(user?.permissions_json!==null&&user?.permissions_json!==undefined){try{return normalizePermissions(JSON.parse(user.permissions_json),user.role);}catch{return [];}}
  switch(user?.role){
- case 'secretary': return [...reader,'building.view','minutes.prepare','treasury.prepare','treasury.upload','dues.view','documents.status','documents.sign','candidates.view'];
- case 'assistant_secretary': return [...reader,'building.view','minutes.prepare','treasury.prepare','dues.view','documents.status','documents.sign','candidates.view'];
- case 'treasurer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','treasury.upload','dues.view',...personal];
- case 'assistant_treasurer':case 'treasury_preparer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','dues.view',...personal];
- case 'warden':return [...reader,'building.view','dues.view','documents.status','candidates.view','proposals.create'];
+ case 'secretary': return [...reader,'building.view','minutes.prepare','treasury.prepare','treasury.upload','dues.self','dues.ledger','dues.manage','suggestions.create','documents.status','documents.sign','candidates.view'];
+ case 'assistant_secretary': return [...reader,'building.view','minutes.prepare','treasury.prepare','dues.self','dues.ledger','dues.manage','suggestions.create','documents.status','documents.sign','candidates.view'];
+ case 'treasurer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','treasury.upload','dues.self','suggestions.create',...personal];
+ case 'assistant_treasurer':case 'treasury_preparer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','dues.self','suggestions.create',...personal];
+ case 'warden':return [...reader,'building.view','dues.self','dues.ledger','suggestions.create','documents.status','candidates.view','proposals.create'];
+ case 'member':return ['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage'];
  case 'officer':return reader;
  case 'signer':return ['reports.create','documents.status','documents.sign',...personal];
  case 'viewer':return ['documents.status','candidates.view','settings.manage'];

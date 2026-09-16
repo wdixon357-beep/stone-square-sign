@@ -62,9 +62,12 @@ try{
  const assistant=await officer('treasury_preparer'),member=await officer('member');
  check('Report preparer receives universal finalized minutes access',(await api('/api/minutes',assistant.token)).status===200);
  check('Report preparer cannot access dispensations',(await api('/api/documents',assistant.token)).status===403);
- check('Basic member has no treasury permission',(await api('/api/treasury',member.token)).status===403);
+ const memberTreasury=await api('/api/treasury',member.token);
+ check('Every Brother can open the finalized Treasurer Reports archive',memberTreasury.status===200&&memberTreasury.data.reports.some(report=>report.id===finished.id));
+ check('A Brother receives no unfinished treasury records',memberTreasury.data.reports.every(report=>report.preparerAttestedAt));
  check('Basic member has no document access',(await api('/api/documents',member.token)).status===403);
- check('Basic member has only its own signature access',(await api('/api/auth/me',member.token)).data.user.permissions.includes('signature.manage'));
+ const memberPermissions=(await api('/api/auth/me',member.token)).data.user.permissions;
+ check('Basic member can manage only his own service settings',memberPermissions.includes('settings.manage')&&!memberPermissions.includes('signature.manage'));
  check('Only owner grants upload permission',(await api(`/api/treasury/access/${member.user.id}`,secretary.token,'PUT',{enabled:true})).status===403);
  check('Owner can grant upload-only access',(await api(`/api/treasury/access/${member.user.id}`,owner.token,'PUT',{enabled:true})).status===200);
  check('Upload capability survives sign-in refresh',(await api('/api/auth/me',member.token)).data.user.treasuryAccess==='upload');

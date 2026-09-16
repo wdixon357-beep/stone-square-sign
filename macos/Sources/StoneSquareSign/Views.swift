@@ -253,14 +253,17 @@ struct WorkspaceView: View {
                         Label("Create Dispensation", systemImage: "doc.badge.plus").tag(AppSection.createDispensation)
                         Label("Warden Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                         Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
+                        Label("Member Access", systemImage: "person.3.fill").tag(AppSection.memberAccess)
                         Label("Officer Activity",systemImage:"clock.arrow.circlepath").tag(AppSection.activity)
                     }
                     if model.user?.canReadApprovals == true { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
                     if model.user?.role == "owner" {
                     }
                     if model.user?.canReadDues == true {
-                        Label("Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.dues)
+                        Label("Dues Ledger", systemImage: "list.bullet.rectangle.portrait.fill").tag(AppSection.dues)
                     }
+                    if model.user?.can("dues.self") == true { Label("My Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.myDues) }
+                    if model.user?.can("suggestions.create") == true { Label("Suggestion Box", systemImage: "text.bubble.fill").tag(AppSection.suggestions) }
                     if model.user?.showsPersonalProposals == true {
                         Label("My Dispensation Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                     }
@@ -419,8 +422,11 @@ struct WorkspaceView: View {
             NativeCandidateTrackerView()
         case .createDispensation: DispensationBuilderView()
         case .access: OfficerAccessView()
+        case .memberAccess: if model.user?.role == "owner" { MemberAccessView() }
         case .activity: if model.user?.role == "owner" {OfficerActivityView()}
         case .dues: DuesView()
+        case .myDues: MyDuesView()
+        case .suggestions: SuggestionBoxView()
         case .approvals: ApprovalsView()
         case .proposalReview:
             if model.user?.role == "owner" { ProposalReviewView() }
@@ -2030,6 +2036,7 @@ func signatureDataURL(image: NSImage) -> String? {
 
 struct DuesView: View {
     @EnvironmentObject var model: AppModel
+    @State private var showingAdjustment = false
 
     private func tint(_ status: String) -> Color {
         switch status {
@@ -2043,6 +2050,7 @@ struct DuesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 NativeWorkspaceHeader(title: "Dues", subtitle: "Payments, balances and reconciliation", symbol: "dollarsign.circle") {
+                    if model.user?.can("dues.manage") == true { Button("Record activity", systemImage: "plus") { showingAdjustment = true } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadDues() } }.disabled(model.duesLoading)
                 }.padding(.horizontal, -22)
                 if let ledger = model.dues { Text("\(ledger.duesYear) dues, \(lodgeMoney(ledger.rateCents)) each, reconciled against both Zeffy campaigns.").font(.callout).foregroundStyle(.secondary) }
@@ -2125,6 +2133,7 @@ struct DuesView: View {
                 await model.loadDues()
             }
         }
+        .sheet(isPresented: $showingAdjustment) { DuesAdjustmentView(rows: model.dues?.rows ?? []) { await model.loadDues() } }
     }
 
     private func detail(for row: DuesRow) -> String {
@@ -2342,4 +2351,119 @@ struct ProposalReviewView: View {
             busyID = nil
         }
     }
+}
+
+// MARK: - Personal dues and confidential suggestions
+
+struct MyDuesView: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                NativeWorkspaceHeader(title: "My Dues", subtitle: "Your private balance and payment options", symbol: "dollarsign.circle") {
+                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadMyDues() } }
+                }.padding(.horizontal, -22)
+                if let error = model.myDuesError { Text(error).foregroundStyle(.red).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Color.red.opacity(0.08)).clipShape(RoundedRectangle(cornerRadius: 8)) }
+                if let record = model.myDues {
+                    Text(record.duesYear).font(.headline)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { tile("Assessment", lodgeMoney(record.row.assessedCents)); tile("Received", lodgeMoney(record.row.paidCents)); tile("Balance", record.row.creditCents > 0 ? "\(lodgeMoney(record.row.creditCents)) credit" : lodgeMoney(record.row.remainingCents)); tile("Status", status(record.row.status)) }
+                        VStack(spacing: 12) { tile("Assessment", lodgeMoney(record.row.assessedCents)); tile("Received", lodgeMoney(record.row.paidCents)); tile("Balance", record.row.creditCents > 0 ? "\(lodgeMoney(record.row.creditCents)) credit" : lodgeMoney(record.row.remainingCents)); tile("Status", status(record.row.status)) }
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack { paymentLinks(record) }
+                        VStack(alignment: .leading) { paymentLinks(record) }
+                    }
+                    Text("PAYMENT HISTORY").font(.caption2).tracking(1.3).foregroundStyle(.secondary).padding(.top, 8)
+                    if record.row.payments.isEmpty { Text("No payments have been recorded for this dues year.").foregroundStyle(.secondary) }
+                    ForEach(Array(record.row.payments.enumerated()), id: \.offset) { _, payment in
+                        HStack { VStack(alignment: .leading) { Text(payment.campaign == "annual" ? "Full dues payment" : payment.campaign == "custom" ? "Custom dues payment" : "Lodge entry").fontWeight(.semibold); Text("\(payment.dateISO) · \(lodgeMoney(payment.amountCents))").font(.caption).foregroundStyle(.secondary) }; Spacer() }.padding(12).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                } else if model.myDuesError == nil { ProgressView("Reading your private dues record…").frame(maxWidth: .infinity) }
+            }.padding(28)
+        }.task { await model.loadMyDues() }
+    }
+    @ViewBuilder private func paymentLinks(_ record: MyDuesResponse) -> some View {
+        if let full=URL(string: record.paymentLinks.full) { Link("Pay full dues", destination: full).buttonStyle(.borderedProminent) }
+        if let custom=URL(string: record.paymentLinks.custom) { Link("Pay a custom amount", destination: custom).buttonStyle(.bordered) }
+    }
+    private func status(_ value:String)->String { value == "paid" ? "Paid in full" : value == "partial" ? "Partially paid" : "Payment due" }
+    private func tile(_ label:String,_ value:String)->some View { VStack(alignment:.leading,spacing:4){Text(label.uppercased()).font(.caption2).foregroundStyle(.secondary);Text(value).font(.title3.weight(.semibold)).fixedSize(horizontal:false,vertical:true)}.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:10)) }
+}
+
+private struct SuggestionDraft: Encodable { let category:String; let subject:String; let body:String }
+
+struct SuggestionBoxView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var category="General Lodge suggestion"
+    @State private var subject=""
+    @State private var bodyText=""
+    @State private var receipts:[SuggestionReceipt]=[]
+    @State private var ownerSuggestions:[OwnerSuggestion]=[]
+    @State private var message=""
+    @State private var working=false
+    private let categories=["General Lodge suggestion","Event or program","Member experience","Building or property","Community service"]
+    var body: some View {
+        ScrollView { VStack(alignment:.leading,spacing:18){
+            NativeWorkspaceHeader(title:"Suggestion Box",subtitle:"Confidential to WM Dixon-Saunders",symbol:"text.bubble.fill").padding(.horizontal,-22)
+            Text("Your suggestion and its assessment are visible only to WM Dixon-Saunders.").foregroundStyle(.secondary)
+            GroupBox { VStack(alignment:.leading,spacing:12){ Picker("Category",selection:$category){ForEach(categories,id:\.self){Text($0)}};TextField("Subject",text:$subject);TextEditor(text:$bodyText).frame(minHeight:140).overlay(RoundedRectangle(cornerRadius:6).stroke(Color.secondary.opacity(0.25)));HStack{Text(message).font(.caption).foregroundStyle(message.hasPrefix("Received") ? .green : .secondary);Spacer();Button("Send confidential suggestion"){Task{await submit()}}.buttonStyle(.borderedProminent).disabled(working||subject.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty||bodyText.trimmingCharacters(in:.whitespacesAndNewlines).count<10)}}.padding(8) }
+            Text("YOUR RECEIPTS").font(.caption2).tracking(1.3).foregroundStyle(.secondary)
+            if receipts.isEmpty { Text("No suggestions submitted yet.").foregroundStyle(.secondary) }
+            ForEach(receipts){item in VStack(alignment:.leading,spacing:5){HStack{Text(item.subject).fontWeight(.semibold);Spacer();Text(item.status).font(.caption.weight(.semibold)).foregroundStyle(SignTheme.gold)};Text("\(item.referenceCode) · \(item.category)").font(.caption).foregroundStyle(.secondary);if let response=item.ownerResponse,!response.isEmpty{Text(response).padding(.top,4)}}.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:10)) }
+            if model.user?.role == "owner" { Text("WORSHIPFUL MASTER ONLY").font(.caption2).tracking(1.3).foregroundStyle(.secondary).padding(.top,12);ForEach(ownerSuggestions){item in OwnerSuggestionCard(item:item){await load()} } }
+        }.padding(28)}.task{await load()}
+    }
+    @MainActor private func load() async { do{let result:SuggestionsResponse=try await model.request("/api/suggestions/me");receipts=result.suggestions;if model.user?.role=="owner"{let all:OwnerSuggestionsResponse=try await model.request("/api/admin/suggestions");ownerSuggestions=all.suggestions}}catch{message=error.localizedDescription} }
+    @MainActor private func submit() async { working=true;defer{working=false};do{let data=try JSONEncoder().encode(SuggestionDraft(category:category,subject:subject,body:bodyText));let result:SuggestionSubmitResponse=try await model.request("/api/suggestions",method:"POST",body:data);message="\(result.message) Reference \(result.reference).";subject="";bodyText="";await load()}catch{message=error.localizedDescription} }
+}
+
+private struct SuggestionAssessmentDraft: Encodable { let status:String; let response:String }
+struct OwnerSuggestionCard: View {
+    @EnvironmentObject var model:AppModel
+    let item:OwnerSuggestion
+    let saved:() async -> Void
+    @State private var status:String
+    @State private var response:String
+    @State private var working=false
+    init(item:OwnerSuggestion,saved:@escaping() async->Void){self.item=item;self.saved=saved;_status=State(initialValue:item.status);_response=State(initialValue:item.ownerResponse ?? "")}
+    var body:some View{VStack(alignment:.leading,spacing:8){HStack{Text(item.subject).fontWeight(.semibold);Spacer();Text(item.submittedBy).foregroundStyle(.secondary)};Text(item.body);HStack{Picker("Status",selection:$status){ForEach(["Received","Under Review","Responded","Closed"],id:\.self){Text($0)}}.labelsHidden();TextField("Private response",text:$response);Button("Save assessment"){Task{await save()}}.disabled(working)}}.padding(14).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:10))}
+    @MainActor private func save()async{working=true;defer{working=false};do{let data=try JSONEncoder().encode(SuggestionAssessmentDraft(status:status,response:response));let _:MessageResponse=try await model.request("/api/admin/suggestions/\(item.id)",method:"PATCH",body:data);await saved()}catch{}}
+}
+
+private struct DuesAdjustmentDraft: Encodable {
+    let rosterId:Int; let transactionType:String; let amount:String; let effectiveDate:String; let paymentMethod:String; let sourceReference:String; let note:String
+}
+
+struct DuesAdjustmentView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let rows:[DuesRow]
+    let saved:() async -> Void
+    @State private var rosterId:Int?
+    @State private var type="payment"
+    @State private var amount=""
+    @State private var date=Date()
+    @State private var method="Cash"
+    @State private var reference=""
+    @State private var note=""
+    @State private var message=""
+    @State private var working=false
+    var body: some View { VStack(alignment:.leading,spacing:16){
+        HStack{VStack(alignment:.leading){Text("Record non-Zeffy dues activity").font(.title2.weight(.semibold));Text("The original entry remains in the audit record.").foregroundStyle(.secondary)};Spacer();Button("Cancel"){dismiss()}}
+        Form { Picker("Brother",selection:$rosterId){Text("Choose a Brother").tag(Int?.none);ForEach(rows.sorted{$0.name<$1.name}){row in if let id=row.rosterId{Text(row.name).tag(Int?.some(id))}}};Picker("Type",selection:$type){ForEach(["payment","credit","refund","chargeback","correction"],id:\.self){Text($0.capitalized)}};TextField("Amount",text:$amount);DatePicker("Date",selection:$date,displayedComponents:.date);Picker("Method",selection:$method){ForEach(["Cash","Check","Money order","Bank transfer","Other"],id:\.self){Text($0)}};TextField("Reference",text:$reference);TextField("Note",text:$note,axis:.vertical).lineLimit(2...5) }
+        Text(message).font(.caption).foregroundStyle(.red)
+        HStack{Spacer();Button("Record activity"){Task{await save()}}.buttonStyle(.borderedProminent).disabled(working||rosterId==nil||Double(amount)==nil)}
+    }.padding(24).frame(minWidth:560,minHeight:520) }
+    @MainActor private func save() async { guard let rosterId else{return};working=true;defer{working=false};let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.dateFormat="yyyy-MM-dd";do{let data=try JSONEncoder().encode(DuesAdjustmentDraft(rosterId:rosterId,transactionType:type,amount:amount,effectiveDate:formatter.string(from:date),paymentMethod:method,sourceReference:reference,note:note));let _:MessageResponse=try await model.request("/api/dues/adjustments",method:"POST",body:data);await saved();dismiss()}catch{message=error.localizedDescription}}
+}
+
+private struct MemberInviteDraft:Encodable{let email:String;let sendEmail:Bool}
+struct MemberAccessView:View{
+    @EnvironmentObject var model:AppModel
+    @State private var members:[MemberAccessRecord]=[]
+    @State private var message=""
+    var body:some View{ScrollView{VStack(alignment:.leading,spacing:16){NativeWorkspaceHeader(title:"Member Access",subtitle:"Roster-linked Brother accounts",symbol:"person.3.fill"){Button("Refresh",systemImage:"arrow.clockwise"){Task{await load()}}}.padding(.horizontal,-22);Text(message).font(.caption).foregroundStyle(.secondary);ForEach(members){member in HStack{VStack(alignment:.leading,spacing:3){Text(member.displayName).fontWeight(.semibold);Text(member.userId != nil ? "Active account · \(member.accountEmail ?? "")" : member.invitationId != nil ? "Invitation pending · \(member.invitationEmail ?? "")" : member.emails.isEmpty ? "Email review needed" : member.emails.joined(separator:", ")).font(.caption).foregroundStyle(.secondary)};Spacer();if member.userId==nil && member.invitationId==nil && !member.emails.isEmpty{Button("Create invitation"){Task{await invite(member)}}}}.padding(14).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:10))}}.padding(28)}.task{await load()}}
+    @MainActor private func load()async{do{let result:MemberAccessResponse=try await model.request("/api/admin/member-access");members=result.members;message="\(members.count) roster records checked. Invitations are not emailed until you distribute them."}catch{message=error.localizedDescription}}
+    @MainActor private func invite(_ member:MemberAccessRecord)async{guard let email=member.emails.first else{return};do{let data=try JSONEncoder().encode(MemberInviteDraft(email:email,sendEmail:false));let result:InviteResponse=try await model.request("/api/admin/member-access/\(member.id)/invite",method:"POST",body:data);NSPasteboard.general.clearContents();NSPasteboard.general.setString(result.inviteUrl,forType:.string);message="Invitation created for \(member.displayName). The private link was copied.";await load()}catch{message=error.localizedDescription}}
 }

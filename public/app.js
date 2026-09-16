@@ -363,11 +363,15 @@ const applyWorkspacePermissions = user => {
    * The server refuses him regardless; this avoids dangling a locked door. */
   document.querySelectorAll('.candidate-only').forEach(element => element.classList.toggle('hidden', !can('candidates.view', user)));
   $('approvalsNav').classList.toggle('hidden', !can('documents.status', user) || !['owner','secretary','assistant_secretary','signer','viewer'].includes(user.role));
-  const maySeeDues = can('dues.view', user);
+  const maySeeDues = can('dues.ledger', user);
+  const maySeeOwnDues = can('dues.self', user);
   const maySeeMinutes = can('minutes.view', user) || can('minutes.prepare', user);
-  document.querySelectorAll('.dues-only').forEach((element) => {
+  document.querySelectorAll('.dues-ledger-only').forEach((element) => {
     element.classList.toggle('hidden', !maySeeDues);
   });
+  document.querySelectorAll('.dues-self-only').forEach(element => element.classList.toggle('hidden', !maySeeOwnDues));
+  document.querySelectorAll('.dues-manage-only').forEach(element => element.classList.toggle('hidden', !can('dues.manage', user)));
+  document.querySelectorAll('.suggestions-only').forEach(element => element.classList.toggle('hidden', !can('suggestions.create', user)));
   document.querySelectorAll('.minutes-only').forEach((element) => {
     element.classList.toggle('hidden', !maySeeMinutes);
   });
@@ -677,7 +681,7 @@ const openCandidateTracker = async () => {
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (state.activeSection && section !== state.activeSection && hasUnsavedWorkspace(state.activeSection)
       && !window.confirm('Leave this unfinished work? It will stay in this browser tab so you can return to it.')) return false;
-  const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.view'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
+  const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.ledger'], myDues: ['dues.self'], suggestions: ['suggestions.create'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
   if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
   $('buildingSection').classList.toggle('hidden', section !== 'building');
   $('calendarSection').classList.toggle('hidden', section !== 'calendar');
@@ -687,12 +691,15 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (section === 'calendar' && !skipLoad) buildingCalendarWorkspace?.calendar();
   $('settingsSection').classList.toggle('hidden', section !== 'settings');
   $('settingsNav').classList.toggle('active', section === 'settings');
-  if(['activity','builder','proposalReview','agenda','receivedReports'].includes(section)&&state.user?.role!=='owner')section='home';
+  if(['activity','memberAccess','builder','proposalReview','agenda','receivedReports'].includes(section)&&state.user?.role!=='owner')section='home';
   state.activeSection = section;
   activityTracker?.visit(section);
   $('activitySection').classList.toggle('hidden',section!=='activity');
   $('activityNav').classList.toggle('active',section==='activity');
   if(section==='activity'&&!skipLoad)activityWorkspace?.load();
+  $('memberAccessSection').classList.toggle('hidden',section!=='memberAccess');
+  $('memberAccessNav').classList.toggle('active',section==='memberAccess');
+  if(section==='memberAccess'&&!skipLoad)renderMemberAccess();
   $('agendaSection').classList.toggle('hidden', section !== 'agenda');
   $('agendaNav').classList.toggle('active', section === 'agenda');
   if (section === 'agenda' && !skipLoad) agendaWorkspace?.list();
@@ -711,6 +718,8 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   const builder = section === 'builder';
   const queue = section === 'queue';
   const dues = section === 'dues';
+  const myDues = section === 'myDues';
+  const suggestions = section === 'suggestions';
   const approvals = section === 'approvals' && can('documents.status') && ['owner','secretary','assistant_secretary','signer','viewer'].includes(state.user?.role);
   const minutes = section === 'minutes';
   const proposals = section === 'proposals';
@@ -719,6 +728,8 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('queueSection').classList.toggle('hidden', !queue);
   $('builderSection').classList.toggle('hidden', !builder);
   $('duesSection').classList.toggle('hidden', !dues);
+  $('myDuesSection').classList.toggle('hidden', !myDues);
+  $('suggestionsSection').classList.toggle('hidden', !suggestions);
   $('approvalsSection').classList.toggle('hidden', !approvals);
   $('minutesSection').classList.toggle('hidden', !minutes);
   $('proposalsSection').classList.toggle('hidden', !proposals);
@@ -727,11 +738,15 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('queueNav').classList.toggle('active', queue);
   $('builderNav').classList.toggle('active', builder);
   $('duesNav').classList.toggle('active', dues);
+  $('myDuesNav').classList.toggle('active', myDues);
+  $('suggestionsNav').classList.toggle('active', suggestions);
   $('approvalsNav').classList.toggle('active', approvals);
   $('minutesNav').classList.toggle('active', minutes);
   $('proposalsNav').classList.toggle('active', proposals);
   $('proposalReviewNav').classList.toggle('active', proposalReview);
   if (dues && !skipLoad) renderDues();
+  if (myDues && !skipLoad) renderMyDues();
+  if (suggestions && !skipLoad) renderSuggestions();
   if (approvals && !skipLoad) renderApprovals();
   if (minutes && !skipLoad) renderMinutes();
   if ((proposals || proposalReview) && !skipLoad) renderProposals();
@@ -1652,6 +1667,9 @@ $('accessNav').addEventListener('click', () => {
 });
 $('activityNav').addEventListener('click',()=>showWorkspaceSection('activity'));
 $('activityMenuCard').addEventListener('click',()=>showWorkspaceSection('activity'));
+$('memberAccessNav').addEventListener('click',()=>showWorkspaceSection('memberAccess'));
+$('memberAccessMenuCard').addEventListener('click',()=>showWorkspaceSection('memberAccess'));
+$('memberAccessRefresh').addEventListener('click',()=>renderMemberAccess());
 $('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('treasuryMenuCard').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
@@ -1689,6 +1707,12 @@ $('proposeMenuCard')?.addEventListener('click', () => showWorkspaceSection('prop
 $('duesNav').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesMenuCard').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesRefresh').addEventListener('click', () => renderDues(true));
+$('myDuesNav').addEventListener('click', () => showWorkspaceSection('myDues'));
+$('myDuesMenuCard').addEventListener('click', () => showWorkspaceSection('myDues'));
+$('myDuesRefresh').addEventListener('click', () => renderMyDues());
+$('suggestionsNav').addEventListener('click', () => showWorkspaceSection('suggestions'));
+$('suggestionsMenuCard').addEventListener('click', () => showWorkspaceSection('suggestions'));
+$('suggestionsRefresh').addEventListener('click', () => renderSuggestions());
 
 $('proposalForm').addEventListener('input', () => {
   state.proposalDirty = true;
@@ -2942,6 +2966,13 @@ const renderDues = async (force = false) => {
 
     const rows = $('duesRows');
     rows.replaceChildren();
+    const brotherSelect = $('duesAdjustmentBrother');
+    if (brotherSelect && can('dues.manage')) {
+      const selected = brotherSelect.value;
+      brotherSelect.replaceChildren(new Option('Choose a Brother', ''));
+      [...led.rows].sort((a,b)=>a.name.localeCompare(b.name)).forEach(row => brotherSelect.add(new Option(row.name, String(row.rosterId))));
+      brotherSelect.value = selected;
+    }
     for (const r of led.rows) {
       const el = document.createElement('div');
       el.className = `item dues-row dues-${r.status}`;
@@ -2979,3 +3010,72 @@ const renderDues = async (force = false) => {
     state.duesLoading = false;
   }
 };
+
+const renderMyDues = async () => {
+  setMessage($('myDuesMessage'), 'Reading your private dues record…');
+  $('myDuesCard').classList.add('hidden');
+  try {
+    const payload = await apiFetch('/api/dues/me'); const row = payload.row;
+    $('myDuesAssessed').textContent = money(row.assessedCents);
+    $('myDuesPaid').textContent = money(row.paidCents);
+    $('myDuesBalance').textContent = row.creditCents ? `${money(row.creditCents)} credit` : money(row.remainingCents);
+    $('myDuesStatus').textContent = row.status === 'paid' ? 'Paid in full' : row.status === 'partial' ? 'Partially paid' : 'Payment due';
+    $('myDuesFullPay').href = payload.paymentLinks.full;
+    $('myDuesCustomPay').href = payload.paymentLinks.custom;
+    const list = $('myDuesPayments'); list.replaceChildren();
+    if (!row.payments.length) {
+      const empty=document.createElement('p');empty.className='helper';empty.textContent='No payments have been recorded for this dues year.';list.append(empty);
+    } else for (const payment of row.payments) {
+      const item=document.createElement('div');item.className='item';
+      const label=payment.campaign==='manual'?(payment.transactionType||'Lodge entry'):(payment.campaign==='annual'?'Full dues payment':'Custom dues payment');
+      item.innerHTML=`<div class="grow"><div class="name">${escapeMarkup(label)}</div><small>${escapeMarkup(payment.dateISO)} · ${escapeMarkup(money(payment.amountCents))}</small></div>`;list.append(item);
+    }
+    $('myDuesCard').classList.remove('hidden'); setMessage($('myDuesMessage'), `${payload.duesYear} record updated just now.`);
+  } catch(error) { setMessage($('myDuesMessage'), error.message, true); }
+};
+
+const suggestionRow = item => {
+  const row=document.createElement('article');row.className='item suggestion-row';
+  row.innerHTML=`<div class="grow"><div class="name">${escapeMarkup(item.subject)}</div><small>${escapeMarkup(item.referenceCode||item.reference_code||'')} · ${escapeMarkup(item.category)} · ${escapeMarkup(item.status)}</small>${item.ownerResponse||item.owner_response?`<p>${escapeMarkup(item.ownerResponse||item.owner_response)}</p>`:''}</div>`;
+  return row;
+};
+
+const renderSuggestions = async () => {
+  try {
+    const mine=await apiFetch('/api/suggestions/me'); const mineList=$('mySuggestionsList');mineList.replaceChildren();
+    if(!mine.suggestions.length){const p=document.createElement('p');p.className='helper';p.textContent='No suggestions submitted yet.';mineList.append(p);} else mine.suggestions.forEach(item=>mineList.append(suggestionRow(item)));
+    if(state.user?.role==='owner'){
+      const all=await apiFetch('/api/admin/suggestions');const list=$('ownerSuggestionsList');list.replaceChildren();
+      all.suggestions.forEach(item=>{const row=suggestionRow(item);const body=document.createElement('p');body.textContent=item.body;row.querySelector('.grow').append(body);const controls=document.createElement('div');controls.className='suggestion-controls';const select=document.createElement('select');['Received','Under Review','Responded','Closed'].forEach(value=>select.add(new Option(value,value)));select.value=item.status;const response=document.createElement('textarea');response.rows=2;response.placeholder='Private response to the Brother';response.value=item.owner_response||'';const save=document.createElement('button');save.type='button';save.className='secondary small';save.textContent='Save assessment';save.onclick=async()=>{save.disabled=true;try{await apiFetch(`/api/admin/suggestions/${item.id}`,{method:'PATCH',body:JSON.stringify({status:select.value,response:response.value})});await renderSuggestions();}catch(error){setMessage($('suggestionMessage'),error.message,true);save.disabled=false;}};controls.append(select,response,save);row.append(controls);list.append(row);});
+    }
+  } catch(error) { setMessage($('suggestionMessage'), error.message, true); }
+};
+
+const renderMemberAccess = async () => {
+  setMessage($('memberAccessMessage'),'Checking roster links and account status…');
+  try{
+    const payload=await apiFetch('/api/admin/member-access');const list=$('memberAccessList');list.replaceChildren();
+    for(const member of payload.members){
+      const row=document.createElement('article');row.className='item member-access-row';
+      const name=`${member.prefix||'Bro.'} ${member.firstName||member.first_name} ${member.lastName||member.last_name}`;
+      const emails=member.emails||[];const account=member.userId||member.user_id;const pending=member.invitationId||member.invitation_id;
+      const copy=document.createElement('div');copy.className='grow';copy.innerHTML=`<div class="name">${escapeMarkup(name)}</div><small>${account?`Active account · ${escapeMarkup(member.accountEmail||member.account_email)}`:pending?`Invitation pending · ${escapeMarkup(member.invitationEmail||member.invitation_email)}`:emails.length?escapeMarkup(emails.join(', ')):'Email review needed'}</small>`;row.append(copy);
+      if(!account&&!pending&&emails.length){const select=document.createElement('select');emails.forEach(email=>select.add(new Option(email,email)));const invite=document.createElement('button');invite.type='button';invite.className='secondary small';invite.textContent='Create invitation';invite.onclick=async()=>{invite.disabled=true;try{const result=await apiFetch(`/api/admin/member-access/${member.id}/invite`,{method:'POST',body:JSON.stringify({email:select.value,sendEmail:false})});await navigator.clipboard?.writeText(result.inviteUrl);setMessage($('memberAccessMessage'),`Invitation created for ${name}. The private link was copied when your browser allowed it.`);await renderMemberAccess();}catch(error){setMessage($('memberAccessMessage'),error.message,true);invite.disabled=false;}};row.append(select,invite);}
+      list.append(row);
+    }
+    setMessage($('memberAccessMessage'),`${payload.members.length} roster records checked. Invitations are created without sending email until you choose to distribute them.`);
+  }catch(error){setMessage($('memberAccessMessage'),error.message,true);}
+};
+
+$('duesAdjustmentDate').value = new Date().toISOString().slice(0,10);
+$('duesAdjustmentForm').addEventListener('submit', async event => {
+  event.preventDefault(); const button=event.submitter;button.disabled=true;
+  try { await apiFetch('/api/dues/adjustments',{method:'POST',body:JSON.stringify({rosterId:Number($('duesAdjustmentBrother').value),transactionType:$('duesAdjustmentType').value,amount:$('duesAdjustmentAmount').value,effectiveDate:$('duesAdjustmentDate').value,paymentMethod:$('duesAdjustmentMethod').value,sourceReference:$('duesAdjustmentReference').value,note:$('duesAdjustmentNote').value})});event.currentTarget.reset();$('duesAdjustmentDate').value=new Date().toISOString().slice(0,10);state.duesLoaded=false;await renderDues(true);setMessage($('duesAdjustmentMessage'),'The activity was recorded and the balance was recalculated.'); }
+  catch(error){setMessage($('duesAdjustmentMessage'),error.message,true);}finally{button.disabled=false;}
+});
+
+$('suggestionForm').addEventListener('submit', async event => {
+  event.preventDefault();const button=event.submitter;button.disabled=true;
+  try{const result=await apiFetch('/api/suggestions',{method:'POST',body:JSON.stringify({category:$('suggestionCategory').value,subject:$('suggestionSubject').value,body:$('suggestionBody').value})});event.currentTarget.reset();setMessage($('suggestionMessage'),`${result.message} Reference ${result.reference}.`);await renderSuggestions();}
+  catch(error){setMessage($('suggestionMessage'),error.message,true);}finally{button.disabled=false;}
+});

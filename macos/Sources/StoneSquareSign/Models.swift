@@ -30,12 +30,12 @@ struct User: Codable, Identifiable, Equatable {
         // Compatibility with older sessions; a server-supplied list always takes precedence.
         var defaults = ["reports.create", "minutes.view", "treasury.view", "signature.manage", "settings.manage"]
         switch role {
-        case "secretary": defaults += ["minutes.prepare", "treasury.prepare", "treasury.upload", "dues.view", "documents.status", "documents.sign", "candidates.view"]
-        case "assistant_secretary": defaults += ["minutes.prepare", "treasury.prepare", "dues.view", "documents.status", "documents.sign", "candidates.view"]
-        case "treasurer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "treasury.upload", "dues.view", "signature.manage", "settings.manage"]
-        case "assistant_treasurer", "treasury_preparer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "dues.view", "signature.manage", "settings.manage"]
-        case "warden": defaults += ["dues.view", "documents.status", "candidates.view", "proposals.create"]
-        case "member": defaults = []
+        case "secretary": defaults += ["minutes.prepare", "treasury.prepare", "treasury.upload", "dues.self", "dues.ledger", "dues.manage", "suggestions.create", "documents.status", "documents.sign", "candidates.view"]
+        case "assistant_secretary": defaults += ["minutes.prepare", "treasury.prepare", "dues.self", "dues.ledger", "dues.manage", "suggestions.create", "documents.status", "documents.sign", "candidates.view"]
+        case "treasurer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "treasury.upload", "dues.self", "suggestions.create", "signature.manage", "settings.manage"]
+        case "assistant_treasurer", "treasury_preparer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "dues.self", "suggestions.create", "signature.manage", "settings.manage"]
+        case "warden": defaults += ["dues.self", "dues.ledger", "suggestions.create", "documents.status", "candidates.view", "proposals.create"]
+        case "member": defaults = ["reports.create", "minutes.view", "treasury.view", "dues.self", "suggestions.create", "settings.manage"]
         case "officer": break
         default: break
         }
@@ -46,7 +46,7 @@ struct User: Codable, Identifiable, Equatable {
     var canSign: Bool { can("signature.manage") }
     var canUseTreasury: Bool { can("treasury.view") || can("treasury.prepare") || can("treasury.upload") }
     var canReadMinutes: Bool { can("minutes.view") || can("minutes.prepare") }
-    var canReadDues: Bool { can("dues.view") }
+    var canReadDues: Bool { can("dues.ledger") }
     var canReadApprovals: Bool { ["owner", "secretary", "assistant_secretary", "viewer"].contains(role) && can("documents.status") }
     var canProposeDispensation: Bool { can("proposals.create") }
     var showsPersonalProposals: Bool { role != "owner" && canProposeDispensation }
@@ -60,6 +60,8 @@ struct User: Codable, Identifiable, Equatable {
         case .agenda: return role == "owner"
         case .treasury: return canUseTreasury
         case .dues: return canReadDues
+        case .myDues: return can("dues.self")
+        case .suggestions: return can("suggestions.create")
         case .documents: return can("documents.status")
         case .approvals: return canReadApprovals
         case .candidateTracker: return can("candidates.view")
@@ -68,7 +70,7 @@ struct User: Codable, Identifiable, Equatable {
         case .lodgeCalendar: return can("calendar.view") || can("calendar.manage")
         case .profile: return canSign
         case .settings: return can("settings.manage")
-        case .activity, .access, .createDispensation: return role == "owner"
+        case .activity, .access, .memberAccess, .createDispensation: return role == "owner"
         }
     }
 
@@ -239,7 +241,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, dues, profile, settings }
+enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, memberAccess, dues, myDues, suggestions, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,
@@ -255,6 +257,7 @@ struct DuesPayment: Codable, Hashable {
 
 struct DuesRow: Codable, Identifiable, Hashable {
     var id: String { name }
+    let rosterId: Int?
     let name: String
     let title: String?
     let assessedCents: Int
@@ -293,6 +296,40 @@ struct DuesLedger: Codable {
     let staleCampaign: DuesStaleCampaign?
     let totals: DuesTotals
 }
+
+struct DuesPaymentLinks: Codable { let full: String; let custom: String }
+struct MyDuesResponse: Codable { let duesYear: String; let rateCents: Int; let row: DuesRow; let paymentLinks: DuesPaymentLinks; let updatedAt: String }
+struct SuggestionReceipt: Codable, Identifiable {
+    var id: String { referenceCode }
+    let referenceCode: String
+    let category: String
+    let subject: String
+    let status: String
+    let ownerResponse: String?
+    let submittedAt: String
+    let updatedAt: String
+}
+struct SuggestionsResponse: Codable { let suggestions: [SuggestionReceipt] }
+struct SuggestionSubmitResponse: Codable { let reference: String; let status: String; let message: String }
+struct OwnerSuggestion: Codable, Identifiable {
+    let id: Int
+    let referenceCode: String
+    let category: String
+    let subject: String
+    let body: String
+    let status: String
+    let ownerResponse: String?
+    let submittedAt: String
+    let updatedAt: String
+    let submittedBy: String
+}
+struct OwnerSuggestionsResponse: Codable { let suggestions: [OwnerSuggestion] }
+struct MemberAccessRecord: Codable, Identifiable {
+    let id:Int; let firstName:String; let lastName:String; let title:String?; let prefix:String?; let emails:[String]
+    let userId:Int?; let accountEmail:String?; let accessRevokedAt:String?; let invitationId:Int?; let invitationEmail:String?; let expiresAt:String?
+    var displayName:String { "\(prefix ?? "Bro.") \(firstName) \(lastName)" }
+}
+struct MemberAccessResponse: Codable { let members:[MemberAccessRecord] }
 
 func lodgeMoney(_ cents: Int) -> String {
     let formatter = NumberFormatter()

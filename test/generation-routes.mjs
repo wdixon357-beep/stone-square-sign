@@ -218,9 +218,12 @@ try {
   check('Another preparer cannot read unfinished minutes or their provider notices', !secretaryMinutes);
   await control({mode:'success'});
   const reportInput={source:'Synthetic report notes',type:'officer',master:false,fields:{}};
-  const countBeforeReport=await providerCalls();
+  let countBeforeReport=await providerCalls();
   check('Report assistance requires sign-in', (await api('/api/reports/organize',null,'POST',reportInput)).status===401);
-  check('Unassigned members cannot spend the report allowance', (await api('/api/reports/organize',uploadOnly.token,'POST',reportInput)).status===403);
+  const memberReport = await api('/api/reports/organize',uploadOnly.token,'POST',reportInput);
+  check('Every Brother can organize a Lodge report through his assigned Report Generator', memberReport.status===200);
+  check('Member report assistance does not disclose provider or allowance details', !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(memberReport.data.warnings)));
+  countBeforeReport=await providerCalls();
   check('WM report organization requires owner role', (await api('/api/reports/organize',preparer.token,'POST',{...reportInput,master:true})).status===403);
   check('Invalid report fields are rejected before paid generation', (await api('/api/reports/organize',owner.token,'POST',{...reportInput,fields:{signatureName:'x'}})).status===400 && await providerCalls()===countBeforeReport);
   const organized=await api('/api/reports/organize',owner.token,'POST',reportInput);

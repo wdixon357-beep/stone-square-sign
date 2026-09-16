@@ -121,6 +121,7 @@
             <button id="buildingNav" class="nav-item building-only" type="button"><span>BLD</span> Building Requests</button>
             <button id="calendarNav" class="nav-item calendar-only" type="button"><span>CAL</span> Lodge Calendar</button>
             <button id="activityNav" class="nav-item owner-only" type="button"><span>ACT</span> Officer Activity</button>
+            <button id="memberAccessNav" class="nav-item owner-only" type="button"><span>MEM</span> Member Access</button>
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
             <button id="receivedReportsNav" class="nav-item owner-only hidden" type="button"><span>IN</span> Received Reports</button>
@@ -131,7 +132,9 @@
             <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
             <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> My Dispensation Proposals</button>
             <button id="proposalReviewNav" class="nav-item owner-only" type="button"><span>&#9998;</span> Warden Proposals</button>
-            <button id="duesNav" class="nav-item dues-only" type="button"><span>$</span> Dues</button>
+            <button id="duesNav" class="nav-item dues-ledger-only" type="button"><span>$</span> Dues Ledger</button>
+            <button id="myDuesNav" class="nav-item dues-self-only" type="button"><span>ME</span> My Dues</button>
+            <button id="suggestionsNav" class="nav-item suggestions-only" type="button"><span>SB</span> Suggestion Box</button>
             <button id="settingsNav" class="nav-item" type="button"><span>⚙</span> My Settings</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
           </nav>
@@ -160,10 +163,13 @@
               <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
               <button id="receivedReportsMenuCard" class="document-menu-card owner-only hidden" type="button"><i>IN</i><span><strong>Received Reports</strong><small>Review reports submitted to you</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
-              <button id="duesMenuCard" class="document-menu-card dues-only" type="button"><i>$</i><span><strong>Dues</strong><small id="duesMenuStatus">Who has paid, who has not</small></span><b>›</b></button>
+              <button id="duesMenuCard" class="document-menu-card dues-ledger-only" type="button"><i>$</i><span><strong>Dues Ledger</strong><small id="duesMenuStatus">Full Lodge dues record</small></span><b>›</b></button>
+              <button id="myDuesMenuCard" class="document-menu-card dues-self-only" type="button"><i>ME</i><span><strong>My Dues</strong><small>Your private balance and payment options</small></span><b>›</b></button>
+              <button id="suggestionsMenuCard" class="document-menu-card suggestions-only" type="button"><i>SB</i><span><strong>Suggestion Box</strong><small>Send a confidential suggestion to WM Dixon-Saunders</small></span><b>›</b></button>
               <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small id="minutesMenuDescription">Read finalized meeting minutes</small></span><b>›</b></button>
               <button id="agendaMenuCard" class="document-menu-card owner-only" type="button"><i>AG</i><span><strong>Agenda Creator</strong><small>Create and preview the Lodge meeting agenda</small></span><b>›</b></button>
               <button id="activityMenuCard" class="document-menu-card owner-only" type="button"><i>ACT</i><span><strong>Officer Activity</strong><small>Sign-ins, recorded actions and estimated active time</small></span><b>›</b></button>
+              <button id="memberAccessMenuCard" class="document-menu-card owner-only" type="button"><i>MEM</i><span><strong>Member Access</strong><small>Review roster email matches and create Brother accounts</small></span><b>›</b></button>
               <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small id="treasuryMenuDescription">Read finalized treasurer reports</small></span><b>›</b></button>
               <button id="candidateMenuCard" class="document-menu-card candidate-only" type="button"><i>CT</i><span><strong>Candidate Tracker</strong><small id="candidateMenuDescription">Open the Candidate Tracker</small></span><b>›</b></button>
             </div>
@@ -173,6 +179,10 @@
           <section id="buildingSection" class="hidden"></section>
           <section id="calendarSection" class="hidden"></section>
           <section id="activitySection" class="hidden"></section>
+          <section id="memberAccessSection" class="hidden">
+            <div class="content-head"><div><p class="eyebrow">WORSHIPFUL MASTER ONLY</p><h1>Member Access</h1><p>Each account is linked to one verified Lodge roster record.</p></div><button id="memberAccessRefresh" class="secondary" type="button">Refresh</button></div>
+            <p id="memberAccessMessage" class="message" role="status"></p><div id="memberAccessList" class="dues-rows"></div>
+          </section>
           <section id="treasurySection" class="hidden"></section>
           <section id="reportsSection" class="hidden">
             <div class="content-head"><div><p class="eyebrow">REPORTS FOR THE CRAFT</p><h1>Report Generator</h1><p>Preview your report before reviewing, signing and sending it.</p></div><button id="reportSeparateTab" class="secondary" type="button">Open in a separate tab</button></div>
@@ -270,7 +280,7 @@
             <div class="content-head">
               <div>
                 <p class="eyebrow">LODGE DUES RECORD</p>
-                <h1>Dues</h1>
+                <h1>Dues Ledger</h1>
                 <p id="duesYearLine">Reconciled live against the Lodge&rsquo;s Zeffy campaigns.</p>
               </div>
               <button id="duesRefresh" class="secondary" type="button">Refresh</button>
@@ -286,6 +296,20 @@
             <div id="duesStale" class="message hidden" role="status"></div>
             <div id="duesMessage" class="message" role="status"></div>
 
+            <section class="panel dues-manage-only">
+              <div class="panel-title"><div><p class="eyebrow">NON-ZEFFY ACTIVITY</p><h2>Record a payment or adjustment</h2></div></div>
+              <form id="duesAdjustmentForm" class="dues-adjustment-grid">
+                <label>Brother<select id="duesAdjustmentBrother" required><option value="">Choose a Brother</option></select></label>
+                <label>Type<select id="duesAdjustmentType" required><option value="payment">Payment</option><option value="credit">Credit</option><option value="refund">Refund</option><option value="chargeback">Chargeback</option><option value="correction">Correction</option></select></label>
+                <label>Amount<input id="duesAdjustmentAmount" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+                <label>Date<input id="duesAdjustmentDate" type="date" required></label>
+                <label>Method<select id="duesAdjustmentMethod" required><option>Cash</option><option>Check</option><option>Money order</option><option>Bank transfer</option><option>Other</option></select></label>
+                <label>Reference<input id="duesAdjustmentReference" maxlength="160" placeholder="Receipt, check number, or source"></label>
+                <label class="wide">Note<textarea id="duesAdjustmentNote" rows="2" maxlength="500"></textarea></label>
+                <div class="wide builder-actions"><p id="duesAdjustmentMessage" class="message" role="status"></p><button class="primary" type="submit">Record activity</button></div>
+              </form>
+            </section>
+
             <section class="records">
               <div class="records-head"><div><p class="eyebrow">BY BROTHER</p><h2>Needs attention first</h2></div></div>
               <div id="duesRows" class="dues-rows"></div>
@@ -296,6 +320,30 @@
               <p class="helper">These came through Zeffy but did not match anyone on the roster. Usually a nickname, a spouse&rsquo;s card, or a Brother missing from the roster.</p>
               <div id="duesUnmatched" class="dues-rows"></div>
             </section>
+          </section>
+
+          <section id="myDuesSection" class="hidden">
+            <div class="content-head"><div><p class="eyebrow">PRIVATE MEMBER RECORD</p><h1>My Dues</h1><p>Only you and authorized Lodge officers can view this record.</p></div><button id="myDuesRefresh" class="secondary" type="button">Refresh</button></div>
+            <p id="myDuesMessage" class="message" role="status"></p>
+            <section id="myDuesCard" class="panel hidden">
+              <div class="my-dues-summary"><div><span>Assessment</span><strong id="myDuesAssessed"></strong></div><div><span>Received</span><strong id="myDuesPaid"></strong></div><div><span>Balance</span><strong id="myDuesBalance"></strong></div><div><span>Status</span><strong id="myDuesStatus"></strong></div></div>
+              <div class="row-buttons payment-actions"><a id="myDuesFullPay" class="primary" target="_blank" rel="noopener">Pay full dues</a><a id="myDuesCustomPay" class="secondary" target="_blank" rel="noopener">Pay a custom amount</a></div>
+              <div id="myDuesPayments" class="dues-rows"></div>
+            </section>
+          </section>
+
+          <section id="suggestionsSection" class="hidden">
+            <div class="content-head"><div><p class="eyebrow">CONFIDENTIAL</p><h1>Suggestion Box</h1><p>Your suggestion and its assessment are visible only to WM Dixon-Saunders.</p></div><button id="suggestionsRefresh" class="secondary" type="button">Refresh</button></div>
+            <section class="panel">
+              <form id="suggestionForm">
+                <label>Category<select id="suggestionCategory"><option>General Lodge suggestion</option><option>Event or program</option><option>Member experience</option><option>Building or property</option><option>Community service</option></select></label>
+                <label>Subject<input id="suggestionSubject" maxlength="160" required></label>
+                <label>Suggestion<textarea id="suggestionBody" rows="6" maxlength="5000" required></textarea></label>
+                <div class="builder-actions"><p id="suggestionMessage" class="message" role="status"></p><button class="primary" type="submit">Send confidential suggestion</button></div>
+              </form>
+            </section>
+            <section class="records"><div class="records-head"><div><p class="eyebrow">YOUR RECEIPTS</p><h2>Submission status</h2></div></div><div id="mySuggestionsList" class="dues-rows"></div></section>
+            <section id="ownerSuggestionsPanel" class="records owner-only hidden"><div class="records-head"><div><p class="eyebrow">WORSHIPFUL MASTER ONLY</p><h2>All confidential suggestions</h2></div></div><div id="ownerSuggestionsList" class="dues-rows"></div></section>
           </section>
 
           <section id="approvalsSection" class="hidden">

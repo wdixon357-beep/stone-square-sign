@@ -41,7 +41,7 @@ try{
  const assistant=await accept(await invite(owner,'assistant_secretary'));check('Adrian role can prepare treasury but cannot upload',assistant.user.permissions.includes('treasury.prepare')&&!assistant.user.permissions.includes('treasury.upload'));
  check('Assistant secretary can start blank treasury report',(await api('/api/treasury/drafts',assistant.token,'POST',{})).status===201);
  check('Assistant secretary cannot upload bank source',(await api('/api/treasury/generate',assistant.token,'POST',{})).status===403);
- const treasurer=await accept(await invite(owner,'treasurer'));check('Treasurer has dues, upload, and universal minutes viewing',treasurer.user.permissions.includes('dues.view')&&treasurer.user.permissions.includes('treasury.upload')&&treasurer.user.permissions.includes('minutes.view'));
+ const treasurer=await accept(await invite(owner,'treasurer'));check('Treasurer has personal dues, upload, and universal minutes viewing without the full Lodge ledger',treasurer.user.permissions.includes('dues.self')&&!treasurer.user.permissions.includes('dues.ledger')&&treasurer.user.permissions.includes('treasury.upload')&&treasurer.user.permissions.includes('minutes.view'));
  const warden=await accept(await invite(owner,'warden'));check('Warden has own proposals and final reports',warden.user.permissions.includes('proposals.create')&&warden.user.permissions.includes('minutes.view')&&warden.user.permissions.includes('treasury.view'));
  const viewer=await accept(await invite(owner,'viewer'));
  const pdf=await PDFDocument.create();pdf.addPage();const docForm=new FormData();docForm.set('document',new Blob([await pdf.save()],{type:'application/pdf'}),'test.pdf');docForm.set('title','Unassigned synthetic document');
@@ -53,7 +53,7 @@ try{
  check('Revoked status permission also blocks approvals',(await api('/api/approvals',viewer.token)).status===403);
  const treasuryInvite=await invite(owner,'treasury_preparer');
  const treasuryPending=(await api('/api/admin/access',owner.token)).data.accounts.find(x=>x.email===treasuryInvite.email);
- const treasuryPermissions=['treasury.prepare','treasury.view','dues.view','reports.create','signature.manage','settings.manage'];
+ const treasuryPermissions=['treasury.prepare','treasury.view','dues.self','reports.create','signature.manage','settings.manage'];
  await api('/api/admin/access',owner.token,'PUT',{key:treasuryPending.key,permissions:treasuryPermissions});
  const expiryBefore=(await api('/api/officers',owner.token)).data.pending.find(x=>x.email===treasuryInvite.email).expires_at;
  check('Other officers cannot correct an invitation office',(await api('/api/officers/invitations/role',officer.token,'PUT',{email:treasuryInvite.email,role:'assistant_treasurer'})).status===403);

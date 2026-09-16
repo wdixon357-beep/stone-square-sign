@@ -21,6 +21,8 @@ const CAMPAIGN_CUSTOM = process.env.ZEFFY_CUSTOM_DUES_CAMPAIGN_ID || '';
 const CAMPAIGN_STALE = process.env.ZEFFY_STALE_CAMPAIGN_ID || '';
 const DUES_RATE_CENTS = Number(process.env.DUES_RATE_CENTS || 17500);
 const DUES_YEAR = process.env.DUES_YEAR || '2026-2027';
+const FULL_PAYMENT_URL = process.env.ZEFFY_DUES_FULL_PAYMENT_URL || 'https://www.zeffy.com/en-US/ticketing/2026-2027-annual-dues-payment';
+const CUSTOM_PAYMENT_URL = process.env.ZEFFY_DUES_CUSTOM_PAYMENT_URL || 'https://www.zeffy.com/en-US/donation-form/custom-lodge-dues-payment-stone-square-lodge-22-2026--2027';
 
 export const duesConfigured = () => Boolean(API_KEY && CAMPAIGN_ANNUAL);
 
@@ -61,7 +63,9 @@ const normalize = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
 const toISODate = (unixSeconds) => new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 
 export const loadRoster = () =>
-  dbAll('SELECT first_name, last_name, title, prefix, emails FROM roster ORDER BY last_name, first_name');
+  dbAll('SELECT id, first_name, last_name, title, prefix, emails FROM roster ORDER BY last_name, first_name');
+
+export const duesPaymentLinks = () => ({ full: FULL_PAYMENT_URL, custom: CUSTOM_PAYMENT_URL });
 
 const SELF_ANSWERS = ['myself', 'me', 'self', 'my own', 'my dues'];
 
@@ -101,16 +105,27 @@ export const resolveBrother = (payment, roster) => {
 export const buildDuesLedger = async () => {
   const roster = await loadRoster();
   const all = await fetchAllPayments();
+  const adjustments = await dbAll(`SELECT a.*, u.name AS entered_by_name
+    FROM dues_adjustments a JOIN users u ON u.id=a.entered_by_user_id
+    WHERE a.dues_year=? ORDER BY a.effective_date DESC, a.id DESC`, [DUES_YEAR]);
 
-  const dues = [
+  const duesRaw = [
     ...forCampaign(all, CAMPAIGN_ANNUAL).map((p) => ({ p, campaign: 'annual' })),
     ...forCampaign(all, CAMPAIGN_CUSTOM).map((p) => ({ p, campaign: 'custom' })),
   ];
+  const seenPaymentIds = new Set();
+  const dues = duesRaw.filter(({ p }) => {
+    const id = String(p.id || p.payment_id || '');
+    if (!id) return true;
+    if (seenPaymentIds.has(id)) return false;
+    seenPaymentIds.add(id); return true;
+  });
   const stale = forCampaign(all, CAMPAIGN_STALE);
 
   const rows = new Map();
   for (const r of roster) {
     rows.set(`${normalize(r.last_name)}|${normalize(r.first_name)}`, {
+      rosterId: r.id,
       name: `${r.prefix || 'Bro.'} ${r.first_name} ${r.last_name}`.trim(),
       title: r.title,
       assessedCents: DUES_RATE_CENTS,
@@ -139,12 +154,31 @@ export const buildDuesLedger = async () => {
     const row = rows.get(`${normalize(hit.entry.last_name)}|${normalize(hit.entry.first_name)}`);
     if (row) {
       row.payments.push({
+        externalId: String(p.id || p.payment_id || ''),
         dateISO: toISODate(p.created),
         amountCents: p.amount,
         campaign,
         matchedVia: hit.matchedVia,
       });
     }
+  }
+
+  for (const a of adjustments) {
+    const row = [...rows.values()].find((candidate) => candidate.rosterId === a.roster_id);
+    if (!row) continue;
+    row.payments.push({
+      adjustmentId: a.id,
+      dateISO: a.effective_date,
+      amountCents: a.amount_cents,
+      campaign: 'manual',
+      transactionType: a.transaction_type,
+      paymentMethod: a.payment_method || '',
+      sourceReference: a.source_reference || '',
+      note: a.note || '',
+      enteredBy: a.entered_by_name,
+      reversesAdjustmentId: a.reverses_adjustment_id,
+      matchedVia: 'manual Lodge entry',
+    });
   }
 
   const totals = {
@@ -177,6 +211,7 @@ export const buildDuesLedger = async () => {
   return {
     duesYear: DUES_YEAR,
     rateCents: DUES_RATE_CENTS,
+    paymentLinks: duesPaymentLinks(),
     rows: list,
     unmatched,
     /* Last year's custom campaign is still open and still taking money. Payments
