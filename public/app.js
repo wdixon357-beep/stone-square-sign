@@ -51,6 +51,7 @@ let activityWorkspace,activityTracker;
 const requestedWorkspaceSection = new URLSearchParams(window.location.search).get('section');
 
 const $ = (id) => document.getElementById(id);
+const resetWorkspaceScroll = () => document.querySelector('.content')?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
 const modalFocusOrigins = new WeakMap();
 const modalFocusSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const show = (element) => {
@@ -693,6 +694,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('settingsNav').classList.toggle('active', section === 'settings');
   if(['activity','memberAccess','builder','proposalReview','agenda','receivedReports'].includes(section)&&state.user?.role!=='owner')section='home';
   state.activeSection = section;
+  resetWorkspaceScroll();
   activityTracker?.visit(section);
   $('activitySection').classList.toggle('hidden',section!=='activity');
   $('activityNav').classList.toggle('active',section==='activity');

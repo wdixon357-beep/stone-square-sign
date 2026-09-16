@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
+const samplePdf = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sample-dispensation.pdf');
 const port = Number(process.env.WEB_RELEASE_FIXTURE_PORT || 3617);
 const user = {
   id: 999,
@@ -16,6 +17,10 @@ const user = {
 const json = (response, payload, status = 200) => {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   response.end(JSON.stringify(payload));
+};
+const pdf = async response => {
+  response.writeHead(200, { 'content-type': 'application/pdf', 'cache-control': 'no-store' });
+  response.end(await fs.readFile(samplePdf));
 };
 const body = request => new Promise(resolve => {
   const chunks = [];
@@ -47,7 +52,17 @@ const api = async (request, response, url) => {
   if (url.pathname === '/api/submission-profiles') return json(response, { profiles: [{ role: 'worshipful_master', name: user.name, address: 'Lodge profile address' }] });
   if (url.pathname === '/api/admin/access') return json(response, { capabilities: [{ id: 'reports.create', label: 'Create reports' }, { id: 'minutes.prepare', label: 'Prepare meeting minutes' }, { id: 'building.request', label: 'Submit building requests' }], accounts: [{ key: 'owner', ...user, pending: false, revoked: false }, { key: 'secretary', name: 'William McDuffie', email: 'secretary@example.invalid', role: 'secretary', permissions: ['reports.create','minutes.prepare'], pending: false, revoked: false }] });
   if (url.pathname === '/api/generation/status') return json(response, { configured: true, administratorDetails: true, remainingDollars: 20, model: 'gpt-5.6-terra' });
-  if (url.pathname === '/api/minutes') return json(response, { minutes: [{ id: 20, meetingDate: '2026-09-03', createdBy: 'Adrian Reese', updatedBy: 'Adrian Reese', updatedAt: '2026-09-12T20:00:00Z', createdByUserId: 3, status: 'ready_for_distribution', draft: { meetingDate: '2026-09-03', meetingType: 'Stated Communication', degree: 'Third Degree', openingTime: '7:36 PM', closingTime: '10:30 PM', presiding: 'WM Dixon-Saunders', quorum: 'Yes', nextMeeting: '2026-10-01', present: ['Brother One'], excused: ['Brother Two'], visitors: [], officerAttendance: [], sections: [{ heading: 'Sickness and Distress', body: 'The Lodge remembered the sick and distressed.' }], warnings: [], sensitiveReview: [], actionItems: [] } }] });
+  if (url.pathname === '/api/minutes') {
+    const minutesDraft = { meetingDate: '2026-09-03', meetingType: 'Stated Communication', degree: 'Third Degree', openingTime: '7:36 PM', closingTime: '10:30 PM', presiding: 'WM Dixon-Saunders', quorum: 'Yes', nextMeeting: '2026-10-01', present: ['Brother One'], excused: ['Brother Two'], visitors: [], officerAttendance: [], sections: [{ heading: 'Sickness and Distress', body: 'The Lodge remembered the sick and distressed.' }], warnings: [], sensitiveReview: [], actionItems: [], income: [], expenses: [] };
+    return json(response, { minutes: [
+      { id: 21, meetingDate: '2026-09-17', createdBy: user.name, updatedBy: user.name, updatedAt: '2026-09-16T20:00:00Z', createdByUserId: user.id, status: 'draft', draft: { ...minutesDraft, meetingDate: '2026-09-17', nextMeeting: '2026-10-01' } },
+      { id: 20, meetingDate: '2026-09-03', createdBy: 'Adrian Reese', updatedBy: 'Adrian Reese', updatedAt: '2026-09-12T20:00:00Z', createdByUserId: 3, status: 'ready_for_distribution', draft: minutesDraft },
+    ] });
+  }
+  if (url.pathname === '/api/archives/minutes') return json(response, { records: [] });
+  if (url.pathname === '/api/officer-reports') return json(response, { reports: [{ id: 'report-1', title: 'Nursing Facility Outreach Report', preparedBy: 'Jamal Davis', office: 'Senior Warden', submittedAt: '2026-09-10T20:00:00Z', type: 'activity' }] });
+  if (url.pathname === '/api/officer-reports/report-1/pdf') return pdf(response);
+  if (url.pathname === '/api/agendas') return json(response, { agendas: [{ id: 'agenda-1', revision: 1, updatedAt: '2026-09-15T20:00:00Z', draft: { meetingDate: '2026-09-17', meetingType: 'Stated Communication', startTime: '7:30 PM', dress: 'Masonic Dress', subtitle: '', officers: [{ office: 'Worshipful Master', name: 'William Dixon-Saunders' }], sections: [{ id: 'opening', heading: 'Opening', scheduledTime: '7:30 PM', body: 'Opening of the Lodge.' }] } }] });
   if (url.pathname === '/api/approvals') return json(response, { approvals: [{ id: 1, title: 'Community Event Dispensation', original_name: 'dispensation.pdf', approval_status: 'approved', approval_source: 'email', approved_by: 'District Deputy', approved_on: '2026-09-11T13:00:00Z', has_endorsed_copy: false }] });
   if (url.pathname === '/api/proposals') return json(response, { proposals: [{ id: 31, title: 'Community outreach event', requestDetails: 'Request permission for Lodge participation.', proposerName: 'Jamal Davis', proposerUserId: 4, eventDate: '2026-10-10', eventTime: '1:00 PM to 4:00 PM', locationName: 'Community Center', streetAddress: '100 Main Street', cityState: 'Middletown, DE', status: 'pending', proposerNote: '' }] });
   if (url.pathname === '/api/dues') return json(response, { duesYear: 2026, rateCents: 25000, totals: { collectedCents: 50000, outstandingCents: 25000, paidCount: 2, unpaidCount: 1 }, staleCampaign: null, rows: [{ name: 'Brother One', status: 'paid', paidCents: 25000, assessedCents: 25000, remainingCents: 0, creditCents: 0, lastPaymentISO: '2026-01-15', payments: [{ matchedVia: 'email' }] }, { name: 'Brother Two', status: 'unpaid', paidCents: 0, assessedCents: 25000, remainingCents: 25000, creditCents: 0, payments: [] }], unmatched: [] });
@@ -57,6 +72,10 @@ const api = async (request, response, url) => {
   if (url.pathname === '/api/admin/member-access') return json(response, { members: [{ id: 1, prefix: 'Bro.', first_name: 'Brother', last_name: 'One', emails: ['brother.one@example.invalid'], user_id: 10, account_email: 'brother.one@example.invalid' }, { id: 2, prefix: 'Bro.', first_name: 'Brother', last_name: 'Two', emails: ['brother.two@example.invalid'], user_id: null, invitation_id: null }] });
   if (url.pathname === '/api/building/requests') return json(response, { canDecide: true, requests: [{ id: 'SSL-100', organization: 'Stone Square Lodge No. 22', date: '2026-10-10', start: '13:00', end: '16:00', spaces: ['Lodge building'], description: 'Community outreach planning', contactName: 'Jamal Davis', contact: 'jamal@example.invalid', status: 'pending', revision: 1, note: '' }] });
   if (url.pathname === '/api/lodge-calendar') return json(response, { warnings: [], events: [{ id: 'event-1', title: 'Stated Communication', startDate: new Date().toISOString().slice(0, 8) + '15', endDate: new Date().toISOString().slice(0, 8) + '15', startTime: '19:30', endTime: '22:00', allDay: false, category: 'lodge', status: 'scheduled', location: 'Stone Square Lodge No. 22', description: 'Monthly stated communication.', source: 'Lodge calendar', editable: true, revision: 1 }] });
+  if (url.pathname === '/api/archives/treasury') return json(response, { records: [] });
+  if (url.pathname === '/api/treasury/preparers') return json(response, { preparers: [{ id: user.id, name: user.name }, { id: 2, name: 'William McDuffie' }, { id: 3, name: 'Adrian Reese' }] });
+  if (url.pathname === '/api/treasury/treasury-1/source') return json(response, { text: 'Checking and savings records supplied for visual review.', files: [] });
+  if (url.pathname === '/api/treasury/treasury-1/preview') return pdf(response);
   if (url.pathname === '/api/treasury') return json(response, { reports: [{ id: 'treasury-1', draft, status: 'draft', preparerUserId: 999, createdByUserId: 999, createdBy: user.name, uploadedBy: 'William McDuffie', revision: 1 }] });
   if (url.pathname === '/api/admin/activity') return json(response, { measuredFrom: '2026-09-01T12:00:00Z', eventNext: null, sessionNext: null, users: [{ id: 999, name: user.name, role: 'owner', revoked: false }, { id: 2, name: 'William McDuffie', role: 'secretary', revoked: false }], sessions: [{ actor: user.name, status: 'Active', client: 'Website', area: 'home', startedAt: '2026-09-13T13:00:00Z', lastSeenAt: '2026-09-13T14:30:00Z', measured: true, activeSeconds: 900 }], events: [{ actor: 'Adrian Reese', label: 'Prepared meeting minutes', detail: 'September stated communication', at: '2026-09-12T20:00:00Z' }] });
   if (url.pathname === '/api/reports/handoff') return json(response, { url: 'https://request.stonesquare22pha.org/report', assertion: 'visual-audit-only', expiresAt: Math.floor(Date.now() / 1000) + 300 });

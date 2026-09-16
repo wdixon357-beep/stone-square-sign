@@ -11,6 +11,7 @@ export class AgendaWorkspace {
     this.root.addEventListener('change', event => this.changed(event));
   }
   message(value, error = false) { const element = this.root.querySelector('#agendaMessage'); if (element) { element.textContent = value || ''; element.classList.toggle('error', error); } }
+  top() { this.root.closest?.('.content')?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' }); }
   savedLabel(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? 'Saved draft' : `Last saved ${date.toLocaleString()}`; }
   saveState(value) { const element = this.root.querySelector('#agendaSaveState'); if (element) element.textContent = value; }
   changed(event) {
@@ -47,6 +48,7 @@ export class AgendaWorkspace {
     finally { this.busy = false; if (button.isConnected) button.disabled = false; }
   }
   async list() {
+    this.top();
     clearTimeout(this.timer); this.sequence += 1; await this.preview?.clear(); this.preview = null; if (this.url) URL.revokeObjectURL(this.url);
     this.record = null; this.draft = null; this.dirty = false;
     this.root.innerHTML = `<div class="content-head"><div><p class="eyebrow">WORSHIPFUL MASTER</p><h1>Agenda Creator</h1><p>Start an agenda, save the draft, and return whenever you are ready to finish it.</p></div><button class="primary" data-agenda="new" type="button">Create agenda draft</button></div><p id="agendaMessage" class="message" role="status"></p><div id="agendaList" class="agenda-list"></div>`;
@@ -59,7 +61,7 @@ export class AgendaWorkspace {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return 'Meeting date needs review';
     return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`));
   }
-  open(record) { this.record = record; this.draft = clone(record.draft); this.dirty = false; this.renderEditor(); this.saveState(this.savedLabel(record.updatedAt)); this.schedule(); }
+  open(record) { this.top(); this.record = record; this.draft = clone(record.draft); this.dirty = false; this.renderEditor(); this.saveState(this.savedLabel(record.updatedAt)); this.schedule(); }
   section(section, index) {
     return `<article class="agenda-section-card"><div class="agenda-section-head"><strong>Section ${index + 1}</strong><div class="row-buttons"><button class="secondary compact" data-agenda="move-up" data-index="${index}" ${index === 0 ? 'disabled' : ''} aria-label="Move section ${index + 1} up">Up</button><button class="secondary compact" data-agenda="move-down" data-index="${index}" ${index === this.draft.sections.length - 1 ? 'disabled' : ''} aria-label="Move section ${index + 1} down">Down</button><button class="text-button danger-text" data-agenda="remove-section" data-index="${index}">Remove</button></div></div><div class="agenda-section-fields"><label>Heading<input data-field="section.${index}.heading" value="${esc(section.heading)}"></label><label>Target time<input data-field="section.${index}.scheduledTime" value="${esc(section.scheduledTime)}" placeholder="8:15 PM"></label></div><label>Agenda details<textarea data-field="section.${index}.body" rows="5" placeholder="Enter the details for this item. Put separate items on separate lines.">${esc(section.body)}</textarea></label></article>`;
   }

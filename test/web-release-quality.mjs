@@ -78,5 +78,11 @@ assert.match(styles, /:focus-visible/, 'keyboard focus must be visible');
 assert.match(styles, /prefers-reduced-motion:\s*reduce/, 'motion must respect the operating system preference');
 assert.match(styles, /@media \(max-width: 760px\)[\s\S]*overflow-x:\s*auto/, 'phone navigation must remain reachable without page overflow');
 assert.match(styles, /min-height:\s*44px/, 'touch controls must include a 44px target treatment');
+assert.match(styles, /\.content > section,[^}]+min-width:\s*0/, 'every web workspace section must be allowed to shrink inside the viewport');
+assert.match(styles, /\.sidebar-foot \.text-button \{[^}]*white-space:\s*nowrap/, 'tablet account controls must remain readable instead of collapsing into vertical letters');
+assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.sidebar nav \{[^}]*grid-column:\s*1 \/ -1[^}]*grid-row:\s*2/, 'tablet navigation must use its own full-width row instead of overlapping account controls');
+assert.match(styles, /\.panel-title > button,[^}]+flex:\s*0 0 auto/, 'panel action labels must keep their readable width on phones');
+assert.match(app, /resetWorkspaceScroll[\s\S]*scrollTo\?\.\(\{ top: 0, left: 0/, 'changing website workspaces must return the content pane to its top edge');
+assert.match(treasury, /top\(\).*scrollTo\?\./, 'opening a treasurer report must return the content pane to its top edge');
 
 console.log('PASS: secure cookie auth, short-lived postMessage handoff, device controls, draft safeguards, notification truth, modal accessibility, responsive navigation and reduced motion.');

@@ -8,6 +8,7 @@ export class TreasuryWorkspace {
     this.api=api;this.user=user;this.root=document.getElementById('treasurySection');this.sequence=0;this.bind();
   }
   can(permission){return this.user()?.role==='owner'||Boolean(this.user()?.permissions?.includes(permission));}
+  top(){this.root.closest?.('.content')?.scrollTo?.({top:0,left:0,behavior:'auto'});}
   bind(){
     this.root.addEventListener('click',event=>{const b=event.target.closest('[data-treasury]');if(b)this.run(b.dataset.treasury,b);});
     this.root.addEventListener('input',event=>{const path=event.target.dataset.path;if(!path||!this.draft)return;const parts=path.split('.');let obj=this.draft;for(const p of parts.slice(0,-1))obj=obj[p];obj[parts.at(-1)]=event.target.type==='checkbox'?event.target.checked:event.target.value;this.dirty=true;this.schedule();});
@@ -53,6 +54,7 @@ export class TreasuryWorkspace {
     }catch(error){this.message(error.message,true);}finally{this.busy=false;sourceControls.forEach(({element,disabled})=>{if(element.isConnected)element.disabled=disabled;});if(button.isConnected)button.disabled=false;}
   }
   async list(){
+    this.top();
     clearTimeout(this.timer);this.sequence++;await this.previewView?.clear();this.previewView=null;if(this.url)URL.revokeObjectURL(this.url);this.record=null;this.draft=null;this.dirty=false;
     const accountInput=(id,name)=>`<section class="treasury-group treasury-account-source"><h3>${name} account information</h3><label for="${id}Files">${name} statements or screenshots</label><input id="${id}Files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.txt"><label for="${id}SourceText">Or paste ${name.toLowerCase()} transactions and balances</label><textarea id="${id}SourceText" rows="7" placeholder="Example only&#10;Beginning balance: $1,000.00&#10;09/05/2026 Deposit: $200.00&#10;09/10/2026 Payment: $100.00&#10;Ending balance: $1,100.00"></textarea></section>`;
     this.root.innerHTML=`<div class="content-head"><div><p class="eyebrow">LODGE FINANCIAL RECORDS</p><h1>Treasurer Reports</h1><p>${this.can('treasury.prepare')?'Prepare and review treasurer reports.':this.can('treasury.upload')?'Provide banking records and read finalized treasurer reports.':'Read finalized treasurer reports.'}</p></div></div><p id="treasuryMessage" role="status"></p><div class="treasury-source panel"><h2>Add banking information</h2><p id="treasuryGenerationStatus" class="helper generation-status" role="status"></p><p class="helper">The report dates are set automatically. Add checking and savings separately so every transaction and balance stays with the correct account.</p>${accountInput('checking','Checking')}${accountInput('savings','Savings')}<p class="helper">PDF, PNG, JPG or TXT. Up to 5 files total, 12 MB each and 20 MB combined. Include bank-posted dates for transactions and add any outstanding checks, pending deposits, fenced funds and unpaid bills you know about.</p><fieldset class="treasury-intent"><legend>What would you like to do?</legend><label><input type="radio" name="treasuryIntent" value="save" checked><span><strong>Save banking information for a report</strong><small>Keep the records available for an authorized preparer to use later.</small></span></label>${this.can('treasury.prepare')?'<label><input type="radio" name="treasuryIntent" value="complete"><span><strong>I’m completing the report</strong><small>Use this information to open and complete my prefilled report.</small></span></label>':''}</fieldset><p class="helper">Save the information for later, or open the prefilled report and complete it yourself.</p><button data-treasury="generate" class="primary" type="button">Continue</button></div><div id="treasuryAccess"></div><div id="treasuryList" class="treasury-list"></div>`;
@@ -87,7 +89,7 @@ export class TreasuryWorkspace {
     this.previewView=new MinutesPreview(this.root.querySelector('#treasuryFinalPreview'));
     await this.previewView.show(new Uint8Array(await blob.arrayBuffer()));
   }
-  open(record){this.record=record;this.draft=structuredClone(record.draft);this.dirty=false;this.renderEditor();this.schedule();this.loadHandoff().catch(e=>this.message(e.message,true));}
+  open(record){this.top();this.record=record;this.draft=structuredClone(record.draft);this.dirty=false;this.renderEditor();this.schedule();this.loadHandoff().catch(e=>this.message(e.message,true));}
   async loadHandoff(){
     const id=this.record.id;const [source,{preparers}]=await Promise.all([this.api(`/api/treasury/${id}/source`),this.api('/api/treasury/preparers')]);
     if(this.record?.id!==id)return;this.sourceFiles=source.files;
