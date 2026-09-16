@@ -167,7 +167,8 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(intent==='complete'&&req.treasuryAccess!=='prepare')throw error(403,'This account can save banking information, but report preparation access is required to complete a report.');
     const deferAssignment=intent==='save';
     const source=await accountSources(req);
-    const draft=await generateTreasuryDraft(source.text,{sourceNames:source.names,sourceNotes:source.notes,meetingCycle:await reportingWindow(),generateStructured:deferAssignment?undefined:generationFor(req.user.id)}),id=crypto.randomUUID(),time=new Date().toISOString();
+    const draft=await generateTreasuryDraft(source.text,{sourceNames:source.names,sourceNotes:source.notes,meetingCycle:await reportingWindow(),generateStructured:generationFor(req.user.id)}),id=crypto.randomUUID(),time=new Date().toISOString();
+    draft.extractionNotes=[...(draft.extractionNotes||[]),'Application: uploaded banking information organized into this prefilled report.'];
     await withTransaction(async()=>{
       await dbRun('INSERT INTO treasury_reports (id,draft_json,source_text,created_by_user_id,preparer_name,preparer_role,created_at,updated_at,preparer_user_id,uploader_name,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[id,JSON.stringify(draft),source.text,req.user.id,deferAssignment?'':req.user.name,deferAssignment?'':req.user.role,time,time,deferAssignment?null:req.user.id,req.user.name,deferAssignment?'awaiting_preparer':'draft']);
       for(const {file:f,accountLabel} of source.files)await dbRun('INSERT INTO treasury_sources (id,report_id,name,mime,bytes,account_label) VALUES (?,?,?,?,?,?)',[crypto.randomUUID(),id,f.originalname.slice(0,150),f.mimetype,f.buffer,accountLabel]);
@@ -198,10 +199,11 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       await audit(req,row.id,'assigned',{previousPreparerUserId:row.preparer_user_id,preparerUserId:preparer.id});
     });
     let organizationWarning='';
-    if(row.status==='awaiting_preparer'&&row.source_text.trim()){
+    const alreadyOrganized=(draft.extractionNotes||[]).includes('Application: uploaded banking information organized into this prefilled report.');
+    if(row.status==='awaiting_preparer'&&row.source_text.trim()&&!alreadyOrganized){
       try{
         const meetingCycle=treasuryWindowForDraft(draft)||await reportingWindow();
-        const organized=await generateTreasuryDraft(row.source_text,{sourceNames:draft.sourceNames,sourceNotes:draft.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(preparer.id)});
+        const organized=await generateTreasuryDraft(row.source_text,{sourceNames:draft.sourceNames,sourceNotes:draft.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(preparer.id)});
         const current=await fetchRecord(row.id);
         if(current?.status==='draft'&&current.preparer_user_id===preparer.id&&current.revision===row.revision+1){
           const changed=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND preparer_user_id=?',[JSON.stringify(organized),new Date().toISOString(),row.id,current.revision,preparer.id]);
@@ -220,7 +222,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(!row.source_text.trim())throw error(400,'This manually entered report has no uploaded source to organize. Continue editing its report fields.');
     const previous=JSON.parse(row.draft_json);
     const meetingCycle=treasuryWindowForDraft(previous)||await reportingWindow();
-    const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(req.user.id)});
+    const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(req.user.id)});
     const current=await record(req);revision(req,current);
     if(!editable(current,req.user))throw error(409,'This report changed while its source was being organized. Reopen it before continuing.');
     await audit(req,row.id,'source_organized');

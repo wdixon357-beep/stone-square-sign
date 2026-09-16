@@ -14,7 +14,7 @@ export const currency = cents => cents === null || cents === undefined ? 'Needs 
 export const validDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v ? v : '';
 const amount = v => dollars(money(v));
 const accountFields = ['openingBalance', 'statementBalance', 'bookBalance', 'receipts', 'disbursements', 'transfersIn', 'transfersOut', 'depositsInTransit', 'outstandingChecks', 'bankHold'];
-export const TREASURY_FIELD_REVIEW_STATES = new Set(['matched', 'corrected', 'unresolved']);
+export const TREASURY_FIELD_REVIEW_STATES = new Set(['matched', 'confirmed', 'corrected', 'unresolved']);
 export const emptyAccount = (id = 'checking', name = 'Checking') => Object.fromEntries([['id', id], ['name', name], ['activityComplete', false], ...accountFields.map(k => [k, null])]);
 const present = value => value !== null && value !== undefined && String(value).trim() !== '' && value !== 'review';
 const reviewablePaths = draft => [
@@ -22,6 +22,12 @@ const reviewablePaths = draft => [
   ...draft.transactions.flatMap((_row, index) => ['date','account','kind','amount','description','reference'].map(field => `transactions.${index}.${field}`)),
   ...draft.funds.flatMap((_row, index) => ['name','account','amount','restriction'].map(field => `funds.${index}.${field}`)),
   ...draft.obligations.flatMap((_row, index) => ['name','amount','dueDate','note'].map(field => `obligations.${index}.${field}`)),
+];
+const financialReviewPaths = draft => [
+  ...draft.accounts.flatMap((_account, index) => accountFields.filter(field => field !== 'bankHold').map(field => `accounts.${index}.${field}`)),
+  ...draft.transactions.flatMap((_row, index) => ['date','account','kind','amount','description'].map(field => `transactions.${index}.${field}`)),
+  ...draft.funds.flatMap((_row, index) => ['name','account','amount'].map(field => `funds.${index}.${field}`)),
+  ...draft.obligations.flatMap((_row, index) => ['name','amount'].map(field => `obligations.${index}.${field}`)),
 ];
 const pathValue = (value, path) => path.split('.').reduce((object, key) => object?.[key], value);
 function validCorrection(draft, path) {
@@ -58,7 +64,8 @@ function normalizeFieldReviews(input, draft) {
     // A green source match is derived from server-verified evidence, never
     // from a client-supplied badge. An officer correction can remain green
     // only while the normalized value is still valid and present.
-    const state = !valueIsPresent ? 'unresolved' : saved[path] === 'corrected' && validCorrection(draft,path) ? 'corrected' : supported.has(path) ? 'matched' : 'unresolved';
+    const officerState = ['confirmed','corrected'].includes(saved[path]) && validCorrection(draft,path) ? saved[path] : '';
+    const state = !valueIsPresent ? 'unresolved' : officerState || (supported.has(path) ? 'matched' : 'unresolved');
     return [path, state];
   }));
 }
@@ -85,6 +92,8 @@ export function calculateTreasury(input) {
   if (!draft.sourceReviewed) issues.push('Review the imported text and confirm that the financial entries were captured correctly.');
   if (!draft.fundsReviewed) issues.push('Confirm the Fenced Money section, including any grants or designated funds.');
   if (!draft.obligationsReviewed) issues.push('Confirm the Outstanding Obligations section.');
+  const unconfirmedPrefills=financialReviewPaths(draft).filter(path=>present(pathValue(draft,path))&&draft.fieldReviews[path]==='unresolved');
+  if(unconfirmedPrefills.length)issues.push(`Confirm or correct ${unconfirmedPrefills.length} prefilled financial ${unconfirmedPrefills.length===1?'field':'fields'} before signing.`);
   for (const [i, t] of draft.transactions.entries()) {
     if (!accountIds.has(t.account) || t.kind === 'review' || money(t.amount) === null || money(t.amount) < 0) issues.push(`Review the account, direction and amount on activity row ${i + 1}.`);
     if (!t.date) issues.push(`Confirm the bank-posted date on activity row ${i + 1}.`);

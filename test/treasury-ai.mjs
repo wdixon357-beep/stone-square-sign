@@ -59,21 +59,21 @@ check('without a model callback the existing deterministic parser is used unchan
 const cycleFiltered = await generateTreasuryDraft(`${source}\n09/05/2026 Deposit Fall event $75.00`, {
   meetingCycle: { previousMeeting:'2026-09-03', periodStart:'2026-09-04', periodEnd:'2026-09-17' },
 });
-check('fixed-window generation keeps checking and savings while excluding statement activity and monthly totals outside the period', cycleFiltered.periodStart === '2026-09-04' && cycleFiltered.periodEnd === '2026-09-17' && cycleFiltered.transactions.every(row => row.date >= '2026-09-04' && row.date <= '2026-09-17') && cycleFiltered.accounts.every(account => account.openingBalance === null && account.statementBalance === null) && ['checking','savings'].every(id=>cycleFiltered.accounts.some(account=>account.id===id)));
+check('fixed-window generation keeps checking and savings, prefills source balances and excludes activity outside the period', cycleFiltered.periodStart === '2026-09-04' && cycleFiltered.periodEnd === '2026-09-17' && cycleFiltered.transactions.every(row => row.date >= '2026-09-04' && row.date <= '2026-09-17') && cycleFiltered.accounts[0].openingBalance === '1000.00' && cycleFiltered.accounts[0].statementBalance === '1150.00' && cycleFiltered.fieldReviews['accounts.0.openingBalance'] === 'unresolved' && ['checking','savings'].every(id=>cycleFiltered.accounts.some(account=>account.id===id)));
 
 let fixedWindowRequest;
 const fixedWindowOutput = await generateTreasuryDraft(source, {
   meetingCycle: { previousMeeting:'2026-09-03', periodStart:'2026-09-04', periodEnd:'2026-09-15' },
   generateStructured: async value => { fixedWindowRequest=value; return response(); },
 });
-check('structured processing cannot calculate from material outside the fixed preparation-date window', fixedWindowRequest.instructions.includes('Do not include, total, summarize, infer, or use transactions outside that range') && fixedWindowRequest.instructions.includes('2026-09-04 through 2026-09-15') && fixedWindowOutput.accounts[0].openingBalance === null && fixedWindowOutput.accounts[0].statementBalance === null && fixedWindowOutput.fieldReviews['accounts.0.openingBalance'] === 'unresolved' && fixedWindowOutput.fieldReviews['accounts.0.statementBalance'] === 'unresolved');
+check('structured processing prefills source balances without treating off-window figures as source matched', fixedWindowRequest.instructions.includes('Do not include, total, summarize, infer, or use transactions outside that range') && fixedWindowRequest.instructions.includes('2026-09-04 through 2026-09-15') && fixedWindowRequest.instructions.includes('Extract every identifiable account balance and total') && fixedWindowOutput.accounts[0].openingBalance === '1000.00' && fixedWindowOutput.accounts[0].statementBalance === '1150.00' && fixedWindowOutput.fieldReviews['accounts.0.openingBalance'] === 'unresolved' && fixedWindowOutput.fieldReviews['accounts.0.statementBalance'] === 'unresolved');
 
 const broadBoundarySource = `Checking\nAugust opening balance: $1,000.00\nUnrelated report note dated 2026-09-15`;
 const broadBoundaryResponse = response();
 broadBoundaryResponse.periodStart = cite(null, ''); broadBoundaryResponse.periodEnd = cite(null, ''); broadBoundaryResponse.transactions = [];
 broadBoundaryResponse.accounts[0].openingBalance = cite('1000.00', broadBoundarySource);
 const broadBoundaryOutput = await generateTreasuryDraft(broadBoundarySource, { meetingCycle:{previousMeeting:'2026-09-03',periodStart:'2026-09-04',periodEnd:'2026-09-15'}, generateStructured:async()=>broadBoundaryResponse });
-check('an unrelated boundary date elsewhere in a broad citation cannot validate an old balance', broadBoundaryOutput.accounts[0].openingBalance === null && broadBoundaryOutput.fieldReviews['accounts.0.openingBalance'] === 'unresolved');
+check('an unrelated boundary date cannot make a prefilled old balance source matched', broadBoundaryOutput.accounts[0].openingBalance === '1000.00' && broadBoundaryOutput.fieldReviews['accounts.0.openingBalance'] === 'unresolved');
 
 const boundarySource = `Checking\nOpening balance on 2026-09-04: $1,000.00\nStatement balance on 2026-09-15: $1,150.00\nReceipts from 2026-09-04 through 2026-09-15: $150.00`;
 const boundaryResponse = response();

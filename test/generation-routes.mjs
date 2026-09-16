@@ -131,6 +131,10 @@ try {
   let owner = await registerOwner();
   check('Missing key keeps minutes generation local', (await api('/api/minutes/generate', owner.token, 'POST', minutesForm())).status === 201);
   check('Missing key keeps treasury generation local', (await api('/api/treasury/generate', owner.token, 'POST', bankingForm('complete'))).status === 201);
+  let localSaved=(await api('/api/treasury/generate',owner.token,'POST',bankingForm('save'))).data.report;
+  check('Local upload stores a provider-neutral prefilled marker',localSaved.status==='awaiting_preparer'&&localSaved.draft.extractionNotes.includes('Application: uploaded banking information organized into this prefilled report.'));
+  localSaved=(await api(`/api/treasury/${localSaved.id}/assign`,owner.token,'POST',{revision:localSaved.revision,preparerUserId:owner.user.id})).data.report;
+  check('Local claim reuses the upload-time prefill without a provider or second organization',localSaved.status==='draft'&&localSaved.draft.extractionNotes.filter(note=>note==='Application: uploaded banking information organized into this prefilled report.').length===1);
   check('Local generation makes no provider call', await providerCalls() === 0);
   await stop();
 
@@ -154,16 +158,16 @@ try {
   assert.equal((await api(`/api/treasury/access/${uploadOnly.user.id}`, owner.token, 'PUT', {enabled: true})).status, 200);
   let result = await api('/api/treasury/generate', uploadOnly.token, 'POST', bankingForm('save'));
   assert.equal(result.status, 201); let report = result.data.report;
-  check('Upload-only saves original banking information without a model call', report.status === 'awaiting_preparer' && await providerCalls() === 0);
+  check('Upload-only banking information is organized into a prefilled report immediately', report.status === 'awaiting_preparer' && await providerCalls() === 1 && Object.keys(report.draft.fieldReviews).length > 0);
   check('Upload-only cannot choose report completion', (await api('/api/treasury/generate', uploadOnly.token, 'POST', bankingForm('complete'))).status === 403);
   result = await api(`/api/treasury/${report.id}/assign`, preparer.token, 'POST', {revision: report.revision, preparerUserId: preparer.user.id});
   assert.equal(result.status, 200); report = result.data.report;
-  check('Treasury preparer claim automatically organizes saved information without bank access', report.preparerUserId === preparer.user.id && await providerCalls() === 1 && Object.keys(report.draft.fieldReviews).length > 0);
+  check('Treasury preparer claim reuses the prefilled report without a duplicate model call', report.preparerUserId === preparer.user.id && await providerCalls() === 1 && Object.keys(report.draft.fieldReviews).length > 0);
   check('Upload-only cannot organize an assigned report', (await api(`/api/treasury/${report.id}/organize`, uploadOnly.token, 'POST', {revision: report.revision})).status === 403);
   check('Stale treasury revision is rejected before another paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: 1})).status === 409 && await providerCalls() === 1);
   check('Invalid treasury revision is rejected before another paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: String(report.revision)})).status === 409 && await providerCalls() === 1);
   result = await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: report.revision});
-  check('Assigned preparer can deliberately reorganize the shared source from the cached extraction', result.status === 200 && await providerCalls() === 1);
+  check('Assigned preparer can deliberately request a fresh reorganization of the shared source', result.status === 200 && await providerCalls() === 2);
   check('Preparer generation notices do not disclose provider details', !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(result.data.draft.extractionNotes)));
   check('Organization returns an unsaved replacement', (await api('/api/treasury', preparer.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
   const beforeEditing = await providerCalls();
@@ -187,6 +191,10 @@ try {
   const beforeSigning = await providerCalls();
   const signature = 'data:image/png;base64,' + (await readFile(new URL('./signature.b64', import.meta.url), 'utf8')).trim();
   assert.equal((await api('/api/profile/signature', preparer.token, 'PUT', {signatureData: signature, signatureType: 'drawn'})).status, 200);
+  const unresolvedFixture=fixtureForCycle(report);unresolvedFixture.fieldReviews['accounts.0.openingBalance']='unresolved';
+  result=await api(`/api/treasury/${report.id}`,preparer.token,'PUT',{revision:report.revision,draft:unresolvedFixture});assert.equal(result.status,200);report=result.data.report;
+  check('An unresolved prefilled financial value blocks signing',(await api(`/api/treasury/${report.id}/preparer-attest`,preparer.token,'POST',{revision:report.revision})).status===409);
+  result=await api(`/api/treasury/${report.id}`,preparer.token,'PUT',{revision:report.revision,draft:fixtureForCycle(report)});assert.equal(result.status,200);report=result.data.report;
   result = await api(`/api/treasury/${report.id}/preparer-attest`, preparer.token, 'POST', {revision: report.revision});
   assert.equal(result.status, 200); report = result.data.report;
   check('Treasury attestation makes no provider call', await providerCalls() === beforeSigning);

@@ -71,18 +71,21 @@ assert.match(app, /beforeunload/, 'unfinished long-form work must be protected o
 assert.match(app, /sessionStorage/, 'non-sensitive drafts must recover within the current tab');
 assert.doesNotMatch(treasury, /sessionStorage|localStorage/, 'banking data must not be retained in browser storage');
 assert.match(treasury, /Matched to uploaded source/, 'web treasurer fields must identify values matched to uploaded evidence');
+assert.match(treasury, /Officer confirmed/, 'web treasurer fields must identify officer-confirmed prefills');
 assert.match(treasury, /Officer correction recorded/, 'web treasurer fields must identify officer corrections');
-assert.match(treasury, /Needs correction/, 'web treasurer fields must replace vague review placeholders with a correction state');
+assert.match(treasury, /Confirm this value/, 'web treasurer fields must offer one-click confirmation for a prefilled value');
+assert.match(treasury, /Confirm all prefilled values/, 'web treasurer reports must offer one-click confirmation for all prefilled values');
 assert.match(treasury, /data-treasury="review-field"/, 'web treasurer fields must provide a correction control');
 assert.match(treasury, /clearCollectionReviews\(button\.dataset\.collection\).*splice/, 'removing an imported row must clear index-based review badges before rows move');
 assert.match(treasury, /clearCollectionReviews\(kind\).*draft\[kind\]\.push/, 'adding an imported row must rebuild that collection review state safely');
 assert.match(treasuryStyles, /\.treasury-field-review\.is-confirmed/, 'web treasurer matched values must have a visible confirmation treatment');
+assert.match(treasuryStyles, /\.treasury-field-review\.needs-confirmation/, 'web treasurer prefills awaiting officer confirmation must have a visible treatment');
 assert.match(treasuryStyles, /\.treasury-field-review\.needs-correction/, 'web treasurer unresolved values must have a visible correction treatment');
 for (const collection of ['transactions','funds','obligations']) {
   assert.match(nativeTreasury, new RegExp(`reviewedField\\([^\\n]+"${collection}\\.`), `Mac ${collection} fields must expose matched or correction controls`);
   assert.match(nativeTreasury, new RegExp(`clearCollectionReviews\\("${collection}"\\)`), `Mac ${collection} row changes must clear index-based review badges`);
 }
-assert.match(nativeViews + read('../macos/Sources/StoneSquareSign/Treasury.swift'), /Matched to uploaded source[\s\S]*Needs correction/, 'Mac treasurer fields must carry the same matched and correction states');
+assert.match(nativeViews + read('../macos/Sources/StoneSquareSign/Treasury.swift'), /Matched to uploaded source[\s\S]*Officer confirmed[\s\S]*Needs information/, 'Mac treasurer fields must carry the same matched, confirmation and missing-information states');
 
 const modalTags = html.match(/<section[^>]+class="modal[^>]*>/g) || [];
 assert.ok(modalTags.length >= 8, 'expected dashboard modals were not found');

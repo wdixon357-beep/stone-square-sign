@@ -66,15 +66,13 @@ export function applyTreasuryMeetingCycle(input, cycle, { excludeUncertain = tru
   draft.extractionNotes.push(`Reporting window fixed by the Lodge: posted activity from ${cycle.periodStart} through ${cycle.periodEnd}.`);
   if (excluded.length) draft.extractionNotes.push(`${excluded.length} source ${excluded.length === 1 ? 'entry was' : 'entries were'} kept in the original banking records but excluded from report activity because the posted date was outside the reporting window or unavailable.`);
   if (!sourceWindowMatches) {
-    const boundaryFields = ['openingBalance','statementBalance','bookBalance','receipts','disbursements','transfersIn','transfersOut','depositsInTransit','outstandingChecks','bankHold'];
     draft.accounts = (draft.accounts || []).map((account, index) => ({
       ...account,
       activityComplete:false,
-      ...Object.fromEntries(boundaryFields.map(field => [field, validated.has(`accounts.${index}.${field}`) ? account[field] : null])),
     }));
     draft.extractionNotes.push(validated.size
-      ? 'Only balances and totals with source evidence at the fixed reporting boundaries were retained. Confirm unresolved account fields before signing.'
-      : 'Full-statement balances and totals were not used as reporting-window balances. Confirm each account at the reporting boundaries before signing.');
+      ? 'Balances and totals found in the uploaded records were prefilled. Figures tied to the fixed reporting boundaries are source matched; confirm or correct the remaining figures before signing.'
+      : 'Balances and totals found in the uploaded records were prefilled for officer confirmation. Confirm or correct each figure before signing because the source dates did not exactly match the Lodge reporting window.');
   } else if (excluded.length) {
     draft.accounts = (draft.accounts || []).map(account => ({ ...account, activityComplete:false }));
     draft.extractionNotes.push('Figures retained in the report were individually matched to the fixed reporting window. Confirm that the included activity is complete before signing.');

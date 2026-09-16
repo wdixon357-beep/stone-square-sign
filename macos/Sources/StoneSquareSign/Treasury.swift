@@ -201,6 +201,7 @@ struct TreasuryView: View {
         guard editable, let draft = workspace.draft else { return false }
         return draft.sourceReviewed && draft.fundsReviewed && draft.obligationsReviewed
             && draft.accounts.allSatisfy(\.activityComplete)
+            && !(draft.fieldReviews ?? [:]).contains { path,state in state == "unresolved" && financialReviewRequired(path) && !reviewValue(path).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && reviewValue(path) != "review" }
             && workspace.pdf != nil && workspace.previewMessage == "Preview matches the current fields."
     }
     func text(_ path: WritableKeyPath<TreasuryDraft,String>) -> Binding<String> { Binding(get:{workspace.draft?[keyPath:path] ?? ""},set:{workspace.draft?[keyPath:path]=$0}) }
@@ -291,7 +292,7 @@ struct TreasuryView: View {
                     Text("Save banking information for a report").tag("save")
                     if model.user?.can("treasury.prepare") == true {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
-                Text(model.user?.role == "owner" ? "Save the information for later, or open the prefilled report and complete it yourself. Saving banking information for later does not use the generation allowance." : "Save the information for later, or open the prefilled report and complete it yourself.").font(.caption)
+                Text("Terra reads and prefills the report now. Save it for another authorized preparer, or open the prefilled report and complete it yourself.").font(.caption)
                 Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.checkingSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.savingsSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.checkingFiles.isEmpty && workspace.savingsFiles.isEmpty)
             }.padding(12) } }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
@@ -315,6 +316,8 @@ struct TreasuryView: View {
                                 if workspace.dirty { confirmReorganize = true }
                                 else { Task { await workspace.reorganize() } }
                             }
+                            Button("Confirm all prefilled values") { confirmPrefilledValues() }
+                            Text("Green values are matched, confirmed or corrected. Gold values were prefilled and await confirmation. Red fields need information.").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     if editorSection == 0 {
@@ -377,15 +380,48 @@ struct TreasuryView: View {
         } ?? []
     }
     func accountAmount(_ index:Int,_ key:WritableKeyPath<TreasuryAccount,String?>,_ field:String) -> Binding<String> { Binding(get:{workspace.draft?.accounts[index][keyPath:key] ?? ""},set:{value in workspace.draft?.accounts[index][keyPath:key]=value;workspace.draft?.fieldReviews?["accounts.\(index).\(field)"]=value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "unresolved" : "corrected"}) }
+    func reviewValue(_ path:String) -> String {
+        let parts=path.split(separator:".").map(String.init)
+        guard parts.count == 3, let index=Int(parts[1]), let draft=workspace.draft else { return "" }
+        switch parts[0] {
+        case "accounts" where draft.accounts.indices.contains(index):
+            let account=draft.accounts[index]
+            switch parts[2] { case "openingBalance":return account.openingBalance ?? "";case "statementBalance":return account.statementBalance ?? "";case "bookBalance":return account.bookBalance ?? "";case "receipts":return account.receipts ?? "";case "disbursements":return account.disbursements ?? "";case "transfersIn":return account.transfersIn ?? "";case "transfersOut":return account.transfersOut ?? "";case "depositsInTransit":return account.depositsInTransit ?? "";case "outstandingChecks":return account.outstandingChecks ?? "";default:return "" }
+        case "transactions" where draft.transactions.indices.contains(index):
+            let row=draft.transactions[index]
+            switch parts[2] { case "date":return row.date;case "account":return row.account;case "kind":return row.kind;case "amount":return row.amount ?? "";case "description":return row.description;case "reference":return row.reference;default:return "" }
+        case "funds" where draft.funds.indices.contains(index):
+            let row=draft.funds[index]
+            switch parts[2] { case "name":return row.name;case "account":return row.account;case "amount":return row.amount ?? "";case "restriction":return row.restriction;default:return "" }
+        case "obligations" where draft.obligations.indices.contains(index):
+            let row=draft.obligations[index]
+            switch parts[2] { case "name":return row.name;case "amount":return row.amount ?? "";case "dueDate":return row.dueDate;case "note":return row.note;default:return "" }
+        default:return ""
+        }
+    }
+    func financialReviewRequired(_ path:String) -> Bool {
+        let parts=path.split(separator:".").map(String.init);guard parts.count == 3 else{return false}
+        switch parts[0] {case "accounts":return parts[2] != "bankHold";case "transactions":return ["date","account","kind","amount","description"].contains(parts[2]);case "funds":return ["name","account","amount"].contains(parts[2]);case "obligations":return ["name","amount"].contains(parts[2]);default:return false}
+    }
+    func confirmPrefilledValues() {
+        guard var reviews=workspace.draft?.fieldReviews else { return }
+        var confirmed=0
+        for path in reviews.keys where reviews[path] == "unresolved" && !reviewValue(path).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && reviewValue(path) != "review" { reviews[path]="confirmed";confirmed += 1 }
+        workspace.draft?.fieldReviews=reviews;workspace.draft?.sourceReviewed=true;workspace.dirty=true
+        workspace.message=confirmed == 0 ? "The uploaded information was marked reviewed. Empty fields still need information." : "\(confirmed) prefilled \(confirmed == 1 ? "value was" : "values were") confirmed. Empty fields still need information."
+        workspace.preview()
+    }
     func reviewButton(_ path:String) -> some View {
-        let state=reviewState(path),good=state == "matched" || state == "corrected"
+        let state=reviewState(path),good=["matched","confirmed","corrected"].contains(state),hasValue = !reviewValue(path).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && reviewValue(path) != "review"
         return Button {
-            workspace.draft?.fieldReviews?[path] = "unresolved"
-            workspace.message = "Enter the correct information. The field will turn green when your correction is recorded."
+            if good { workspace.draft?.fieldReviews?[path] = "unresolved";workspace.message = "Check this value against the uploaded banking information, then confirm it or enter the correction." }
+            else if hasValue { workspace.draft?.fieldReviews?[path] = "confirmed";workspace.message = "Value confirmed against the uploaded banking information." }
+            else { workspace.message = "This information was not found in the upload. Enter the correct value." }
+            workspace.dirty=true;workspace.preview()
         } label: {
-            Label(state == "matched" ? "Matched to uploaded source" : state == "corrected" ? "Officer correction recorded" : "Needs correction", systemImage: good ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .labelStyle(.iconOnly).foregroundStyle(good ? Color.green : Color.red).font(.title3)
-        }.buttonStyle(.plain).help(good ? "Matched or corrected. Select if this value is incorrect." : "Needs correction. Enter the correct value in this field.")
+            Label(state == "matched" ? "Matched to uploaded source" : state == "confirmed" ? "Officer confirmed" : state == "corrected" ? "Officer correction recorded" : hasValue ? "Confirm this value" : "Needs information", systemImage: good ? "checkmark.circle.fill" : hasValue ? "questionmark.circle.fill" : "xmark.circle.fill")
+                .labelStyle(.iconOnly).foregroundStyle(good ? Color.green : hasValue ? Color.orange : Color.red).font(.title3)
+        }.buttonStyle(.plain).help(good ? "Matched, confirmed or corrected. Select if this value is incorrect." : hasValue ? "Select to confirm this prefilled value." : "Enter the missing information in this field.")
     }
     var accounts: some View {
         VStack(alignment:.leading,spacing:16) {
