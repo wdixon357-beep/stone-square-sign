@@ -18,8 +18,8 @@ export const TREASURY_FIELD_REVIEW_STATES = new Set(['matched', 'corrected', 'un
 export const emptyAccount = (id = 'checking', name = 'Checking') => Object.fromEntries([['id', id], ['name', name], ['activityComplete', false], ...accountFields.map(k => [k, null])]);
 const present = value => value !== null && value !== undefined && String(value).trim() !== '' && value !== 'review';
 const reviewablePaths = draft => [
-  ...draft.accounts.flatMap((_account, index) => accountFields.map(field => `accounts.${index}.${field}`)),
-  ...draft.transactions.flatMap((_row, index) => ['date','account','kind','amount','description','reference','category'].map(field => `transactions.${index}.${field}`)),
+  ...draft.accounts.flatMap((_account, index) => accountFields.filter(field => field !== 'bankHold').map(field => `accounts.${index}.${field}`)),
+  ...draft.transactions.flatMap((_row, index) => ['date','account','kind','amount','description','reference'].map(field => `transactions.${index}.${field}`)),
   ...draft.funds.flatMap((_row, index) => ['name','account','amount','restriction'].map(field => `funds.${index}.${field}`)),
   ...draft.obligations.flatMap((_row, index) => ['name','amount','dueDate','note'].map(field => `obligations.${index}.${field}`)),
 ];
@@ -83,8 +83,8 @@ export function calculateTreasury(input) {
   if (draft.periodStart && draft.periodEnd && draft.periodStart > draft.periodEnd) issues.push('The report ending date is before its beginning date.');
   if (!draft.accounts.length) issues.push('Include at least one bank account.');
   if (!draft.sourceReviewed) issues.push('Review the imported text and confirm that the financial entries were captured correctly.');
-  if (!draft.fundsReviewed) issues.push('Confirm the fenced and restricted funds, including any grants.');
-  if (!draft.obligationsReviewed) issues.push('Confirm unpaid bills and upcoming obligations.');
+  if (!draft.fundsReviewed) issues.push('Confirm the Fenced Money section, including any grants or designated funds.');
+  if (!draft.obligationsReviewed) issues.push('Confirm the Outstanding Obligations section.');
   for (const [i, t] of draft.transactions.entries()) {
     if (!accountIds.has(t.account) || t.kind === 'review' || money(t.amount) === null || money(t.amount) < 0) issues.push(`Review the account, direction and amount on activity row ${i + 1}.`);
     if (!t.date) issues.push(`Confirm the bank-posted date on activity row ${i + 1}.`);
@@ -107,8 +107,8 @@ export function calculateTreasury(input) {
     const calculated = complete ? opening + receipts - disbursements + transfersIn - transfersOut : null;
     const adjusted = [statement, transit, outstanding].every(n => n !== null) ? statement + transit - outstanding : null;
     const difference = adjusted !== null && book !== null ? adjusted - book : null;
-    if (!complete) issues.push(`${a.name}: complete the opening balance and receipt, payment and transfer totals, or confirm that all activity is listed.`);
-    if ([statement, book, transit, outstanding, hold].some(n => n === null)) issues.push(`${a.name}: confirm the statement balance, book balance, deposits in transit, outstanding checks and bank hold. Enter 0 only when none applies.`);
+    if (!complete) issues.push(`${a.name}: complete the opening balance and receipt, disbursement and transfer totals, or confirm that all activity is listed.`);
+    if ([statement, book, transit, outstanding].some(n => n === null)) issues.push(`${a.name}: confirm the statement balance, book balance, deposits in transit and outstanding checks. Enter 0 only when none applies.`);
     if (calculated !== null && statement !== null && calculated !== statement) issues.push(`${a.name}: beginning balance plus bank activity differs from the statement ending balance by ${currency(calculated - statement)}.`);
     if (difference !== null && difference !== 0) issues.push(`${a.name}: the adjusted bank balance and book balance differ by ${currency(difference)}.`);
     const fenced = draft.fundsReviewed ? sum(draft.funds.filter(f => f.account === a.id).map(f => money(f.amount))) : null;
@@ -119,7 +119,10 @@ export function calculateTreasury(input) {
   const cash = total('statement'), bookCash = total('book'), hold = total('hold'), fenced = draft.fundsReviewed ? sum(draft.funds.map(f => money(f.amount))) : null, obligations = draft.obligationsReviewed ? sum(draft.obligations.map(o => money(o.amount))) : null;
   const ti = total('transfersIn'), to = total('transfersOut');
   if (accounts.length > 1 && ti !== null && to !== null && ti !== to) issues.push('Transfers between the included accounts do not balance. Confirm both sides or identify an account outside this report.');
-  const unrestricted = [bookCash, hold, fenced].every(n => n !== null) ? bookCash - hold - fenced : null;
+  // The Lodge's September report defines unrestricted cash as total cash in bank
+  // less Fenced Money. Bank membership shares are retained for compatibility with
+  // older drafts, but they are not a category in the approved report format.
+  const unrestricted = [cash, fenced].every(n => n !== null) ? cash - fenced : null;
   const afterObligations = unrestricted !== null && obligations !== null ? unrestricted - obligations : null;
   return { accounts, cash, bookCash, hold, fenced, obligations, unrestricted, afterObligations, issues: [...new Set(issues)], ready: issues.length === 0 };
 }
@@ -204,7 +207,7 @@ export function organizeTreasury(source, options = {}) {
       const value = amounts[amountIndex];
       let kind = /transfer/i.test(line) ? (/\bfrom\b|transfer in/i.test(line) ? 'transfer_in' : /\bto\b|transfer out/i.test(line) ? 'transfer_out' : 'review') : /\bdeposit|\breceipt|\bdividend|\binterest earned|\bincome|\bcredit\b/i.test(line) ? 'receipt' : /\bwithdrawal|\bdraft\s*\d|\bpaid|\bpayment|\bexpense|\bdebit\b|\bfee\b/i.test(line) || value.cents < 0 ? 'payment' : ['receipt','payment'].includes(section) ? section : 'review';
       const reference = line.match(/(?:check|chk|draft)\s*#?\s*(\d{2,8})/i)?.[1] || '';
-      const category = /new castle count|county grant/i.test(line) ? 'County grant, restriction needs review' : /zeffy/i.test(line) ? 'Zeffy' : /cash\s*app/i.test(line) ? 'Cash App' : /dividend|interest/i.test(line) ? 'Interest / dividend' : '';
+      const category = /new castle count|county grant/i.test(line) ? 'Other Income' : /zeffy/i.test(line) ? 'Zeffy' : /cash\s*app/i.test(line) ? 'Other Income' : /dividend|interest/i.test(line) ? 'Other Income' : '';
       let description=(line.slice(0,value.index)+line.slice(value.index+value.raw.length)).trim();
       description=description.replace(/^(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:Jan\w*|Feb\w*|Mar\w*|Apr\w*|May|Jun\w*|Jul\w*|Aug\w*|Sep\w*|Oct\w*|Nov\w*|Dec\w*)\s+\d{1,2},?\s+20\d{2})\s*/i,'').replace(/\s+/g,' ').replace(/[:;\s]+$/,'').trim();
       const transaction = { date, postedDateConfirmed: postedSection || /\b(?:posted|posting date)\b/i.test(line), account, kind, description, amount:dollars(Math.abs(value.cents)), reference, category };

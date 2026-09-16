@@ -64,8 +64,8 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
         selectedPreparer=report.preparerUserId ?? 0; originalText="";sourceFiles=[]
         Task { await loadSources(report.id); await refreshGenerationStatus() }
         selected = report; var opened=report.draft;opened.fieldReviews = opened.fieldReviews ?? [:]
-        let accountFields=["openingBalance","statementBalance","bookBalance","receipts","disbursements","transfersIn","transfersOut","depositsInTransit","outstandingChecks","bankHold"]
-        let transactionFields=["date","account","kind","amount","description","reference","category"]
+        let accountFields=["openingBalance","statementBalance","bookBalance","receipts","disbursements","transfersIn","transfersOut","depositsInTransit","outstandingChecks"]
+        let transactionFields=["date","account","kind","amount","description","reference"]
         let fundFields=["name","account","amount","restriction"], obligationFields=["name","amount","dueDate","note"]
         for index in opened.accounts.indices { for name in accountFields { addReviewPath(&opened,"accounts.\(index).\(name)") } }
         for index in opened.transactions.indices { for name in transactionFields { addReviewPath(&opened,"transactions.\(index).\(name)") } }
@@ -401,33 +401,34 @@ struct TreasuryView: View {
         }
     }
     func accountFields(_ index:Int) -> some View {
-        let entries:[(String,String,WritableKeyPath<TreasuryAccount,String?>)] = [("Beginning bank balance","openingBalance",\.openingBalance),("Statement ending balance","statementBalance",\.statementBalance),("Treasurer’s book balance","bookBalance",\.bookBalance),("Total receipts","receipts",\.receipts),("Total payments","disbursements",\.disbursements),("Transfers in","transfersIn",\.transfersIn),("Transfers out","transfersOut",\.transfersOut),("Deposits in transit","depositsInTransit",\.depositsInTransit),("Outstanding checks","outstandingChecks",\.outstandingChecks),("Bank share or hold","bankHold",\.bankHold)]
+        let entries:[(String,String,WritableKeyPath<TreasuryAccount,String?>)] = [("Beginning Balance","openingBalance",\.openingBalance),("Total Receipts","receipts",\.receipts),("Total Disbursements","disbursements",\.disbursements),("Transfers In","transfersIn",\.transfersIn),("Transfers Out","transfersOut",\.transfersOut),("Bank Statement Ending Balance","statementBalance",\.statementBalance),("Deposits in Transit","depositsInTransit",\.depositsInTransit),("Outstanding Checks","outstandingChecks",\.outstandingChecks),("Treasurer’s Book Balance","bookBalance",\.bookBalance)]
         return ForEach(entries.indices,id:\.self) { i in HStack { Text(entries[i].0).frame(maxWidth:.infinity,alignment:.leading);TextField("Enter correct value",text:accountAmount(index,entries[i].2,entries[i].1)).frame(width:140);reviewButton("accounts.\(index).\(entries[i].1)") } }
     }
     func accountPicker(_ value:Binding<String>) -> some View { Picker("Account",selection:value) { Text("Choose account").tag("");ForEach(workspace.draft?.accounts ?? []) { a in Text(a.name).tag(a.id) } } }
     func tx(_ i:Int,_ key:WritableKeyPath<TreasuryTransaction,String>) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i][keyPath:key] ?? ""},set:{workspace.draft?.transactions[i][keyPath:key]=$0}) }
     func txAmount(_ i:Int) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i].amount ?? ""},set:{workspace.draft?.transactions[i].amount=$0}) }
     var activity: some View {
-        GroupBox("Receipts, payments and transfers") { VStack(alignment:.leading,spacing:14) {
+        GroupBox("Receipts, Disbursements and Transfers") { VStack(alignment:.leading,spacing:14) {
+            Text("These entries become the Receipts, Disbursements and Account Activity sections in the September report format.").font(.callout).foregroundStyle(.secondary)
             ForEach((workspace.draft?.transactions ?? []).indices,id:\.self) { i in VStack(alignment:.leading) {
                 reviewedField("Bank-posted date (YYYY-MM-DD)","transactions.\(i).date",tx(i,\.date));reviewedAccountPicker("transactions.\(i).account",tx(i,\.account))
-                HStack { Picker("Entry type",selection:reviewed("transactions.\(i).kind",tx(i,\.kind))) { Text("Needs review").tag("review");Text("Receipt").tag("receipt");Text("Payment").tag("payment");Text("Transfer in").tag("transfer_in");Text("Transfer out").tag("transfer_out") };reviewButton("transactions.\(i).kind") }
-                reviewedField("Amount","transactions.\(i).amount",txAmount(i));reviewedField("Description","transactions.\(i).description",tx(i,\.description));reviewedField("Check / reference","transactions.\(i).reference",tx(i,\.reference));reviewedField("Category","transactions.\(i).category",tx(i,\.category));Toggle("Bank-posted date confirmed",isOn:Binding(get:{workspace.draft?.transactions[i].postedDateConfirmed == true},set:{workspace.draft?.transactions[i].postedDateConfirmed=$0}));Button("Remove entry",role:.destructive) { clearCollectionReviews("transactions");workspace.draft?.transactions.remove(at:i) };Divider()
+                HStack { Picker("Entry type",selection:reviewed("transactions.\(i).kind",tx(i,\.kind))) { Text("Needs correction").tag("review");Text("Receipt").tag("receipt");Text("Disbursement").tag("payment");Text("Transfer into this account").tag("transfer_in");Text("Transfer out of this account").tag("transfer_out") };reviewButton("transactions.\(i).kind") }
+                reviewedField("Amount","transactions.\(i).amount",txAmount(i));reviewedField("Description used on the report","transactions.\(i).description",tx(i,\.description));reviewedField("Check number or reference","transactions.\(i).reference",tx(i,\.reference));Toggle("Bank-posted date confirmed",isOn:Binding(get:{workspace.draft?.transactions[i].postedDateConfirmed == true},set:{workspace.draft?.transactions[i].postedDateConfirmed=$0}));Button("Remove entry",role:.destructive) { clearCollectionReviews("transactions");workspace.draft?.transactions.remove(at:i) };Divider()
             } }
             Button("Add activity") { clearCollectionReviews("transactions");workspace.draft?.transactions.append(TreasuryTransaction(account:workspace.draft?.accounts.first?.id ?? "")) }
         }.padding(10) }
     }
-    var funds: some View { GroupBox("Fenced and restricted funds") { VStack(alignment:.leading,spacing:12) {
+    var funds: some View { GroupBox("Fenced Money") { VStack(alignment:.leading,spacing:12) {
         ForEach((workspace.draft?.funds ?? []).indices,id:\.self) { i in VStack {
             reviewedField("Fund name","funds.\(i).name",Binding(get:{workspace.draft?.funds[i].name ?? ""},set:{workspace.draft?.funds[i].name=$0}));reviewedAccountPicker("funds.\(i).account",Binding(get:{workspace.draft?.funds[i].account ?? ""},set:{workspace.draft?.funds[i].account=$0}));reviewedField("Amount","funds.\(i).amount",Binding(get:{workspace.draft?.funds[i].amount ?? ""},set:{workspace.draft?.funds[i].amount=$0}));reviewedField("Restriction / designation","funds.\(i).restriction",Binding(get:{workspace.draft?.funds[i].restriction ?? ""},set:{workspace.draft?.funds[i].restriction=$0}));Button("Remove fund",role:.destructive) { clearCollectionReviews("funds");workspace.draft?.funds.remove(at:i) }
         } }
-        Button("Add fund") { clearCollectionReviews("funds");workspace.draft?.funds.append(TreasuryFund(account:workspace.draft?.accounts.first?.id ?? "")) };Toggle("I confirmed all fund balances and restrictions. If none is listed, none applies.",isOn:flag(\.fundsReviewed))
+        Button("Add fund") { clearCollectionReviews("funds");workspace.draft?.funds.append(TreasuryFund(account:workspace.draft?.accounts.first?.id ?? "")) };Toggle("I confirmed all Fenced Money. If none is listed, none applies.",isOn:flag(\.fundsReviewed))
     }.padding(10) } }
-    var obligations: some View { GroupBox("Unpaid obligations and upcoming bills") { VStack(alignment:.leading,spacing:12) {
+    var obligations: some View { GroupBox("Outstanding Obligations") { VStack(alignment:.leading,spacing:12) {
         ForEach((workspace.draft?.obligations ?? []).indices,id:\.self) { i in VStack {
             reviewedField("Payee / bill","obligations.\(i).name",Binding(get:{workspace.draft?.obligations[i].name ?? ""},set:{workspace.draft?.obligations[i].name=$0}));reviewedField("Amount","obligations.\(i).amount",Binding(get:{workspace.draft?.obligations[i].amount ?? ""},set:{workspace.draft?.obligations[i].amount=$0}));reviewedField("Due date (YYYY-MM-DD)","obligations.\(i).dueDate",Binding(get:{workspace.draft?.obligations[i].dueDate ?? ""},set:{workspace.draft?.obligations[i].dueDate=$0}));reviewedField("Note","obligations.\(i).note",Binding(get:{workspace.draft?.obligations[i].note ?? ""},set:{workspace.draft?.obligations[i].note=$0}));Button("Remove obligation",role:.destructive) { clearCollectionReviews("obligations");workspace.draft?.obligations.remove(at:i) }
         } }
-        Button("Add obligation") { clearCollectionReviews("obligations");workspace.draft?.obligations.append(TreasuryObligation()) };Toggle("I confirmed unpaid obligations. If none is listed, none remains unpaid.",isOn:flag(\.obligationsReviewed))
+        Button("Add obligation") { clearCollectionReviews("obligations");workspace.draft?.obligations.append(TreasuryObligation()) };Toggle("I confirmed all Outstanding Obligations. If none are listed, none applies.",isOn:flag(\.obligationsReviewed))
     }.padding(10) } }
     var workflow: some View { VStack(alignment:.leading,spacing:10) {
         if editable { Button("Save corrections") { Task { _ = await workspace.save() } } }
