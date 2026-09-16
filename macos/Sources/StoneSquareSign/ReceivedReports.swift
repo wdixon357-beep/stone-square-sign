@@ -71,25 +71,57 @@ struct ReceivedReportsView: View {
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.load() } }
             }
             if !model.error.isEmpty { Text(model.error).foregroundStyle(.red).padding() }
-            HSplitView {
-                List(model.reports, selection: $model.selectedID) { report in
-                    Button { Task { await model.open(report) } } label: {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(report.title).font(.headline)
-                            Text("\(report.preparedBy), \(report.office)").font(.callout).foregroundStyle(.secondary)
-                            Text(LodgeDateTime.display(report.submittedAt)).font(.caption).foregroundStyle(.secondary)
-                        }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
-                    }.buttonStyle(.plain).tag(report.id)
-                }
-                .frame(minWidth: 300, idealWidth: 360)
-                if model.pdf != nil {
-                    LodgeDocumentPreview(data: model.pdf).frame(minWidth: 500)
+            GeometryReader { available in
+                if available.size.width < 760 {
+                    Group {
+                        if model.pdf != nil { reportPreview }
+                        else { reportList }
+                    }
+                    .frame(width: available.size.width, height: available.size.height)
+                    .clipped()
                 } else {
-                    ContentUnavailableView(model.reports.isEmpty ? "No reports received" : "Choose a report", systemImage: "doc.richtext", description: Text(model.reports.isEmpty ? "Submitted Lodge reports will appear here." : "The PDF will open inside the Dashboard."))
+                    HStack(spacing: 0) {
+                        reportList.frame(width: min(max(available.size.width * 0.32, 260), 380))
+                        Divider()
+                        reportPreview.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(width: available.size.width, height: available.size.height)
+                    .clipped()
                 }
             }
             if model.busy { ProgressView().padding(.bottom, 12) }
         }
         .task { model.configure(appModel); await model.load() }
+    }
+
+    private var reportList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(model.reports) { report in
+                    Button { Task { await model.open(report) } } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(report.title).font(.headline).lineLimit(2)
+                            Text("\(report.preparedBy), \(report.office)").font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                            Text(LodgeDateTime.display(report.submittedAt)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .background(model.selectedID == report.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    @ViewBuilder private var reportPreview: some View {
+        if model.pdf != nil {
+            LodgeDocumentPreview(data: model.pdf)
+        } else {
+            ContentUnavailableView(model.reports.isEmpty ? "No reports received" : "Choose a report", systemImage: "doc.richtext", description: Text(model.reports.isEmpty ? "Submitted Lodge reports will appear here." : "The PDF will open inside the Dashboard."))
+        }
     }
 }

@@ -99,6 +99,51 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
 @MainActor
 final class DashboardApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var windowObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        windowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeMainNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let window = note.object as? NSWindow else { return }
+            Task { @MainActor in self?.keepOnScreen(window) }
+        }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.keepEveryWindowOnScreen() }
+        }
+        Task { @MainActor in
+            await Task.yield()
+            keepEveryWindowOnScreen()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let windowObserver { NotificationCenter.default.removeObserver(windowObserver) }
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+    }
+
+    private func keepEveryWindowOnScreen() {
+        NSApplication.shared.windows.filter(\.isVisible).forEach(keepOnScreen)
+    }
+
+    private func keepOnScreen(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        var frame = window.frame
+        frame.size.width = min(frame.width, visible.width)
+        frame.size.height = min(frame.height, visible.height)
+        frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - frame.width)
+        frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
+        if frame != window.frame { window.setFrame(frame, display: true, animate: false) }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let reason = AppUpdater.shared.unfinishedWorkReason else { return .terminateNow }
         AppUpdater.shared.showUnfinishedWork(reason)

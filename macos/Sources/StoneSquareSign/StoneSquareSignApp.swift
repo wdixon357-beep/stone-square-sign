@@ -12,9 +12,9 @@ struct StoneSquareSignApp: App {
                 .environmentObject(model)
                 .task { updater.start() }
                 .frame(
-                    minWidth: 1120,
+                    minWidth: 720,
                     maxWidth: .infinity,
-                    minHeight: 740,
+                    minHeight: 620,
                     maxHeight: .infinity
                 )
         }
@@ -25,6 +25,6 @@ struct StoneSquareSignApp: App {
             }
         }
         .windowStyle(.titleBar)
-        .defaultSize(width: 1280, height: 820)
+        .defaultSize(width: 1180, height: 780)
     }
 }
