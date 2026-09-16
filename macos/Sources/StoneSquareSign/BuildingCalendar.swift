@@ -17,6 +17,7 @@ enum BuildingRevision: Codable, Equatable {
 struct BuildingRequest: Decodable, Identifiable {
     let id: String; let organization: String; let contactName: String; let contact: String
     let date: String; let start: String?; let end: String?; let spaces: [String]
+    let bathroomAccess: Bool?
     let description: String; let status: String; let note: String?
     let decidedAt: String?; let decidedBy: String?; let revision: BuildingRevision
     let requesterNotified: Bool
@@ -125,6 +126,7 @@ struct BuildingRequestsView: View {
                             LabeledContent("Date", value: LodgeCalendarDates.displayDate(request.date))
                             LabeledContent("Time", value: [LodgeCalendarDates.displayTime(request.start), LodgeCalendarDates.displayTime(request.end)].filter { !$0.isEmpty }.joined(separator: " to "))
                             LabeledContent("Requested spaces", value: request.spaces.joined(separator: ", "))
+                            if request.spaces == ["Front yard"] { LabeledContent("Restroom access", value: request.bathroomAccess == true ? "Yes" : "No") }
                             LabeledContent("Contact", value: [request.contactName, request.contact].filter { !$0.isEmpty }.joined(separator: " · "))
                             if let coordinator = request.coordinator { LabeledContent("Request coordinator", value: "\(coordinator.name) · \(coordinator.email)") }
                             Text(request.description).textSelection(.enabled)
@@ -471,16 +473,18 @@ struct NewBuildingRequestDraft: Encodable, Equatable {
     static let availableSpaces = ["Lodge building", "Back yard", "Front yard"]
     var bookings = [BuildingBooking()]
     var spaces: [String] = []
+    var bathroomAccess: Bool?
     var phone = ""
     var details = ""
     var submissionId = UUID().uuidString
-    enum CodingKeys: String, CodingKey { case bookings, spaces, phone, details = "purpose", submissionId }
+    enum CodingKeys: String, CodingKey { case bookings, spaces, bathroomAccess, phone, details = "purpose", submissionId }
     var validationMessage: String? {
         guard (1...12).contains(bookings.count), bookings.allSatisfy(\.valid) else { return "Enter 1 to 12 dates with valid start and end times. Use HH:MM in Eastern Time." }
         guard Set(bookings.map { $0.date }).count == bookings.count else { return "List each date only once." }
         guard bookings.allSatisfy({ $0.date >= LodgeCalendarDates.key(Date()) }) else { return "Choose today or an upcoming date." }
         guard phone.count <= 40, details.count <= 1000 else { return "Use no more than 40 characters for the phone number and 1,000 for event details." }
         guard !spaces.isEmpty, spaces.allSatisfy(Self.availableSpaces.contains) else { return "Choose at least one space." }
+        if spaces == ["Front yard"], bathroomAccess == nil { return "Choose whether you will need restroom access." }
         guard !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Describe the event and how the space will be used." }
         return nil
     }
@@ -626,7 +630,15 @@ private struct NewBuildingRequestView: View {
                         ForEach(NewBuildingRequestDraft.availableSpaces, id: \.self) { space in
                             Toggle(space, isOn: Binding(get: { workspace.draft.spaces.contains(space) }, set: { selected in
                                 if selected { workspace.draft.spaces.append(space) } else { workspace.draft.spaces.removeAll { $0 == space } }
+                                if workspace.draft.spaces != ["Front yard"] { workspace.draft.bathroomAccess = nil }
                             })).toggleStyle(.checkbox)
+                        }
+                        if workspace.draft.spaces == ["Front yard"] {
+                            Picker("Will you need access to the restroom?", selection: $workspace.draft.bathroomAccess) {
+                                Text("Choose").tag(nil as Bool?)
+                                Text("Yes").tag(true as Bool?)
+                                Text("No").tag(false as Bool?)
+                            }
                         }
                     }
                     Section("Availability review") {

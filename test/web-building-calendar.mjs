@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { BuildingCalendarWorkspace, monthBounds, eventOccurs, formatCalendarTime, eventTime } from '../public/building-calendar.js';
+import { BuildingCalendarWorkspace, monthBounds, eventOccurs, formatCalendarTime, eventTime, validateBuildingRequest } from '../public/building-calendar.js';
 assert.deepEqual(monthBounds(new Date(2028,1,5)),{from:'2028-02-01',to:'2028-02-29'});
 assert.equal(eventOccurs({startDate:'2026-09-30',endDate:'2026-10-02'},'2026-10-02'),true);
 assert.equal(eventOccurs({startDate:'2026-09-30',endDate:'2026-10-02'},'2026-10-03'),false);
@@ -14,6 +14,8 @@ assert.equal(formatCalendarTime('12:00'), '12:00 PM');
 assert.equal(formatCalendarTime('7:30 pm'), '7:30 PM');
 assert.equal(formatCalendarTime('7:30'), '7:30 AM');
 assert.equal(eventTime({startTime:'19:30',endTime:'22:00'}), '7:30 PM to 10:00 PM');
+assert.match(validateBuildingRequest({bookings:[{date:'2026-10-20',start:'10:00',end:'12:00'}],spaces:['Front yard'],purpose:'Outdoor event'}),/restroom access/);
+assert.equal(validateBuildingRequest({bookings:[{date:'2026-10-20',start:'10:00',end:'12:00'}],spaces:['Front yard'],bathroomAccess:false,purpose:'Outdoor event'}),'');
 let permissions=['building.view','calendar.view'], calls=[], failConflict=false;
 const workspace=new BuildingCalendarWorkspace({user:()=>({role:'officer',permissions}),api:async(path,init)=>{calls.push({path,init});if(init){if(failConflict)throw Object.assign(Error('changed'),{status:409});return{request};}return path.startsWith('/api/building')?{requests:[request],canDecide:true}:{events:[],warnings:[]};}});
 await workspace.building();assert.doesNotMatch(workspace.buildingRoot.querySelector('.building-requests').innerHTML,/data-building="approved"/);

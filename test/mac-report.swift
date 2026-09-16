@@ -471,7 +471,7 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         print("PASS: periodic account refresh applies changed permissions without another sign-in")
         precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/auth/me" || $0.path == "/api/generation/status" || $0.path == "/api/proposals" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
         print("PASS: generation and proposal fixtures make no signing or document delivery requests")
-        let buildingPayload = Data(#"{"requests":[{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","start":"","end":"","spaces":["Hall"],"description":"Synthetic request","status":"pending","note":"","revision":"r1","requesterNotified":false}],"canDecide":true}"#.utf8)
+        let buildingPayload = Data(#"{"requests":[{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","start":"","end":"","spaces":["Front yard"],"bathroomAccess":true,"description":"Synthetic request","status":"pending","note":"","revision":"r1","requesterNotified":false}],"canDecide":true}"#.utf8)
         let building = BuildingRequestsWorkspace()
         var buildingReader = warden; buildingReader.permissions = ["building.view", "calendar.view"]
         reportApp.user = buildingReader
@@ -494,7 +494,7 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         let decisionBody = try JSONSerialization.jsonObject(with: buildingDecision.body) as! [String: Any]
         precondition(decisionBody["revision"] as? String == "r1" && decisionBody["decision"] as? String == "approved")
         GenerationFixture.beforeReply = nil; GenerationFixture.statusCode = 200
-        let approvedPayload = Data(#"{"request":{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","spaces":["Hall"],"description":"Synthetic request","status":"approved","revision":"r2","requesterNotified":false}}"#.utf8)
+        let approvedPayload = Data(#"{"request":{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","spaces":["Front yard"],"bathroomAccess":true,"description":"Synthetic request","status":"approved","revision":"r2","requesterNotified":false}}"#.utf8)
         GenerationFixture.response = approvedPayload
         let recordedDecision = await building.decide(building.requests[0], decision: "approved", note: "Synthetic note", using: reportApp)
         precondition(recordedDecision && building.message.contains("not been confirmed") && building.messageIsWarning && building.requests[0].status == "approved")

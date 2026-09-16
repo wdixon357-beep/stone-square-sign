@@ -22,13 +22,16 @@ export function buildingSubmission(input,user) {
  if(!purpose)throw fail(400,'Describe the event or activity.');
  const spaces=Array.isArray(input?.spaces)?[...new Set(input.spaces)]:[];
  if(!spaces.length||spaces.some(v=>!['Lodge building','Back yard','Front yard'].includes(v)))throw fail(400,'Select the spaces you need.');
+ const frontYardOnly=spaces.length===1&&spaces[0]==='Front yard';
+ if(frontYardOnly&&typeof input?.bathroomAccess!=='boolean')throw fail(400,'Choose whether you will need restroom access.');
+ const bathroomAccess=frontYardOnly?input.bathroomAccess:null;
  if(!Array.isArray(input?.bookings)||input.bookings.length<1||input.bookings.length>12)throw fail(400,'Include between one and twelve dates.');
  const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
  const bookings=input.bookings.map(b=>({date:String(b?.date||''),start:String(b?.start||''),end:String(b?.end||'')}));
  if(bookings.some(b=>!validDate(b.date)||b.date<today||!TIME.test(b.start)||!TIME.test(b.end)||b.end<=b.start))throw fail(400,'Use valid upcoming dates and an end time later than the start time.');
  if(new Set(bookings.map(b=>b.date)).size!==bookings.length)throw fail(400,'List each date only once.');
  if(!user?.name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email||''))throw fail(400,'Your officer account needs a name and valid email address.');
- return {org:'Stone Square Lodge No. 22',name:user.name,contact:user.email,phone,purpose,spaces,bookings:bookings.sort((a,b)=>a.date.localeCompare(b.date)),clientSubmissionKey:crypto.createHash('sha256').update(String(user.id)+':'+submissionId).digest('hex')};
+ return {org:'Stone Square Lodge No. 22',name:user.name,contact:user.email,phone,purpose,spaces,bathroomAccess,bookings:bookings.sort((a,b)=>a.date.localeCompare(b.date)),clientSubmissionKey:crypto.createHash('sha256').update(String(user.id)+':'+submissionId).digest('hex')};
 }
 export async function initializeBuildingCalendar(){await dbRun(`CREATE TABLE IF NOT EXISTS lodge_calendar_events (id TEXT PRIMARY KEY,event_json TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,created_by INTEGER REFERENCES users(id),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT)`);}
 const showEvent=(r,editable)=>({...JSON.parse(r.event_json),id:r.id,revision:String(r.revision),editable});
