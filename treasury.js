@@ -14,18 +14,67 @@ export const currency = cents => cents === null || cents === undefined ? 'Needs 
 export const validDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v ? v : '';
 const amount = v => dollars(money(v));
 const accountFields = ['openingBalance', 'statementBalance', 'bookBalance', 'receipts', 'disbursements', 'transfersIn', 'transfersOut', 'depositsInTransit', 'outstandingChecks', 'bankHold'];
+export const TREASURY_FIELD_REVIEW_STATES = new Set(['matched', 'corrected', 'unresolved']);
 export const emptyAccount = (id = 'checking', name = 'Checking') => Object.fromEntries([['id', id], ['name', name], ['activityComplete', false], ...accountFields.map(k => [k, null])]);
+const present = value => value !== null && value !== undefined && String(value).trim() !== '' && value !== 'review';
+const reviewablePaths = draft => [
+  ...draft.accounts.flatMap((_account, index) => accountFields.map(field => `accounts.${index}.${field}`)),
+  ...draft.transactions.flatMap((_row, index) => ['date','account','kind','amount','description','reference','category'].map(field => `transactions.${index}.${field}`)),
+  ...draft.funds.flatMap((_row, index) => ['name','account','amount','restriction'].map(field => `funds.${index}.${field}`)),
+  ...draft.obligations.flatMap((_row, index) => ['name','amount','dueDate','note'].map(field => `obligations.${index}.${field}`)),
+];
+const pathValue = (value, path) => path.split('.').reduce((object, key) => object?.[key], value);
+function validCorrection(draft, path) {
+  const parts = path.split('.'), value = pathValue(draft, path);
+  if (!present(value)) return false;
+  if (parts[0] === 'accounts') {
+    const amountValue = money(value), field = parts[2];
+    return amountValue !== null && (['openingBalance','statementBalance','bookBalance'].includes(field) || amountValue >= 0);
+  }
+  if (parts[0] === 'transactions') {
+    if (parts[2] === 'date') return validDate(value) !== '';
+    if (parts[2] === 'account') return draft.accounts.some(account => account.id === value);
+    if (parts[2] === 'kind') return ['receipt','payment','transfer_in','transfer_out'].includes(value);
+    if (parts[2] === 'amount') return money(value) !== null && money(value) >= 0;
+    return true;
+  }
+  if (parts[0] === 'funds') {
+    if (parts[2] === 'account') return draft.accounts.some(account => account.id === value);
+    if (parts[2] === 'amount') return money(value) !== null && money(value) >= 0;
+    return true;
+  }
+  if (parts[0] === 'obligations') {
+    if (parts[2] === 'dueDate') return validDate(value) !== '';
+    if (parts[2] === 'amount') return money(value) !== null && money(value) >= 0;
+    return true;
+  }
+  return false;
+}
+function normalizeFieldReviews(input, draft) {
+  const saved = input.fieldReviews && typeof input.fieldReviews === 'object' && !Array.isArray(input.fieldReviews) ? input.fieldReviews : {};
+  const supported = new Set((draft.extractionNotes || []).flatMap(note => [...String(note).matchAll(/Source evidence: ([a-z]+\[?\d*\]?\.[A-Za-z0-9_.\[\]-]+)\s*[→-]/g)].map(match => match[1].replaceAll('[','.').replaceAll(']',''))));
+  return Object.fromEntries(reviewablePaths(draft).map(path => {
+    const valueIsPresent = present(pathValue(draft, path));
+    // A green source match is derived from server-verified evidence, never
+    // from a client-supplied badge. An officer correction can remain green
+    // only while the normalized value is still valid and present.
+    const state = !valueIsPresent ? 'unresolved' : saved[path] === 'corrected' && validCorrection(draft,path) ? 'corrected' : supported.has(path) ? 'matched' : 'unresolved';
+    return [path, state];
+  }));
+}
 export function normalizeTreasury(input = {}) {
   for (const [key,limit] of [['accounts',6],['transactions',500],['funds',50],['obligations',100],['unmappedLines',1000]]) if (Array.isArray(input[key]) && input[key].length > limit) throw Object.assign(new Error(`This report has too many ${key}. Use a smaller reporting period.`), { statusCode:400 });
   const accounts = (Array.isArray(input.accounts) ? input.accounts : [emptyAccount(), emptyAccount('savings', 'Savings')]).slice(0, 6).map((a, i) => ({ id: text(a.id || `account${i}`, 40), name: text(a.name || `Account ${i + 1}`, 80), activityComplete: a.activityComplete === true, ...Object.fromEntries(accountFields.map(k => [k, amount(a[k])])) }));
   if (new Set(accounts.map(a => a.id)).size !== accounts.length) throw Object.assign(new Error('Each account must have a unique identifier.'), { statusCode: 400 });
   const rows = (key, max = 500) => (Array.isArray(input[key]) ? input[key] : []).slice(0, max);
-  return { version: 1, previousMeetingDate: validDate(input.previousMeetingDate), periodStart: validDate(input.periodStart), periodEnd: validDate(input.periodEnd), presentedOn: validDate(input.presentedOn), bankName: text(input.bankName, 120), accounts,
+  const draft = { version: 2, previousMeetingDate: validDate(input.previousMeetingDate), periodStart: validDate(input.periodStart), periodEnd: validDate(input.periodEnd), presentedOn: validDate(input.presentedOn), bankName: text(input.bankName, 120), accounts,
     transactions: rows('transactions').map(t => ({ date: validDate(t.date), postedDateConfirmed: t.postedDateConfirmed === true, account: text(t.account, 40), kind: ['receipt', 'payment', 'transfer_in', 'transfer_out'].includes(t.kind) ? t.kind : 'review', description: text(t.description, 500), amount: amount(t.amount), reference: text(t.reference, 80), category: text(t.category, 80) })),
     funds: rows('funds', 50).map(f => ({ name: text(f.name, 120), account: text(f.account, 40), amount: amount(f.amount), restriction: text(f.restriction, 300) })),
     obligations: rows('obligations', 100).map(o => ({ name: text(o.name, 150), dueDate: validDate(o.dueDate), amount: amount(o.amount), note: text(o.note, 400) })),
     fundsReviewed: input.fundsReviewed === true, obligationsReviewed: input.obligationsReviewed === true, sourceReviewed: input.sourceReviewed === true,
     remarks: text(input.remarks, 10000), unmappedLines: rows('unmappedLines', 1000).map(l => text(l, 1000)), sourceNames: rows('sourceNames', 10).map(n => text(n, 150)), extractionNotes: rows('extractionNotes', 1000).map(n => text(n, 1000)) };
+  draft.fieldReviews = normalizeFieldReviews(input, draft);
+  return draft;
 }
 const sum = values => values.some(v => v === null) ? null : values.reduce((a, b) => a + b, 0);
 export function calculateTreasury(input) {

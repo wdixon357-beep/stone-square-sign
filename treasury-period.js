@@ -46,9 +46,10 @@ export function treasuryWindowForDraft(draft) {
   return { previousMeeting: previousCutoff, periodStart: draft.periodStart, periodEnd: draft.periodEnd };
 }
 
-export function applyTreasuryMeetingCycle(input, cycle, { excludeUncertain = true } = {}) {
+export function applyTreasuryMeetingCycle(input, cycle, { excludeUncertain = true, validatedWindowFields = [] } = {}) {
   const draft = structuredClone(input);
-  const sourceWindowMismatch = Boolean(draft.periodStart && draft.periodEnd && (draft.periodStart !== cycle.periodStart || draft.periodEnd !== cycle.periodEnd));
+  const sourceWindowMatches = draft.periodStart === cycle.periodStart && draft.periodEnd === cycle.periodEnd;
+  const validated = new Set(validatedWindowFields);
   draft.previousMeetingDate = cycle.previousMeeting;
   draft.periodStart = cycle.periodStart;
   draft.periodEnd = cycle.periodEnd;
@@ -64,10 +65,19 @@ export function applyTreasuryMeetingCycle(input, cycle, { excludeUncertain = tru
   draft.extractionNotes = [...(draft.extractionNotes || [])].filter(note => !/^Reporting window fixed|^\d+ source entr(?:y|ies)/i.test(note));
   draft.extractionNotes.push(`Reporting window fixed by the Lodge: posted activity from ${cycle.periodStart} through ${cycle.periodEnd}.`);
   if (excluded.length) draft.extractionNotes.push(`${excluded.length} source ${excluded.length === 1 ? 'entry was' : 'entries were'} kept in the original banking records but excluded from report activity because the posted date was outside the reporting window or unavailable.`);
-  if (excluded.length || sourceWindowMismatch) {
+  if (!sourceWindowMatches) {
     const boundaryFields = ['openingBalance','statementBalance','bookBalance','receipts','disbursements','transfersIn','transfersOut','depositsInTransit','outstandingChecks','bankHold'];
-    draft.accounts = (draft.accounts || []).map(account => ({ ...account, activityComplete:false, ...Object.fromEntries(boundaryFields.map(field => [field,null])) }));
-    draft.extractionNotes.push('Full-statement balances and totals were not used as reporting-window balances. Confirm each account at the reporting boundaries before signing.');
+    draft.accounts = (draft.accounts || []).map((account, index) => ({
+      ...account,
+      activityComplete:false,
+      ...Object.fromEntries(boundaryFields.map(field => [field, validated.has(`accounts.${index}.${field}`) ? account[field] : null])),
+    }));
+    draft.extractionNotes.push(validated.size
+      ? 'Only balances and totals with source evidence at the fixed reporting boundaries were retained. Confirm unresolved account fields before signing.'
+      : 'Full-statement balances and totals were not used as reporting-window balances. Confirm each account at the reporting boundaries before signing.');
+  } else if (excluded.length) {
+    draft.accounts = (draft.accounts || []).map(account => ({ ...account, activityComplete:false }));
+    draft.extractionNotes.push('Figures retained in the report were individually matched to the fixed reporting window. Confirm that the included activity is complete before signing.');
   }
   return draft;
 }

@@ -33,6 +33,7 @@ const draft = {
   accounts: [{ id: 'checking', name: 'Checking', openingBalance: 1200, statementBalance: 1380, bookBalance: 1380, receipts: 300, disbursements: 120, transfersIn: 0, transfersOut: 0, depositsInTransit: 0, outstandingChecks: 0, bankHold: 0, activityComplete: true }],
   transactions: [{ date: '2026-08-12', postedDateConfirmed: true, account: 'checking', kind: 'receipt', amount: 300, description: 'Fundraiser receipts', reference: '', category: 'Fundraiser' }],
   funds: [], obligations: [], remarks: 'Accounts reconciled.', fundsReviewed: true, obligationsReviewed: true, sourceReviewed: true,
+  fieldReviews: { 'accounts.0.openingBalance': 'matched', 'accounts.0.statementBalance': 'matched', 'accounts.0.bookBalance': 'corrected', 'accounts.0.receipts': 'matched', 'accounts.0.disbursements': 'matched', 'accounts.0.transfersIn': 'unresolved', 'accounts.0.transfersOut': 'unresolved', 'accounts.0.depositsInTransit': 'matched', 'accounts.0.outstandingChecks': 'matched', 'accounts.0.bankHold': 'matched', 'transactions.0.date': 'matched', 'transactions.0.account': 'matched', 'transactions.0.kind': 'matched', 'transactions.0.amount': 'matched', 'transactions.0.description': 'matched', 'transactions.0.reference': 'unresolved', 'transactions.0.category': 'matched' },
 };
 
 const api = async (request, response, url) => {

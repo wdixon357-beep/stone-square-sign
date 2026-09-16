@@ -37,8 +37,10 @@ Opening/closing times, an individual Brother's missed instruction months, and co
 - Checking and savings intake remain separate for pasted transactions, screenshots and statements. The service labels both source blocks and preserves each uploaded file's account so values cannot be moved between accounts during organization.
 
 - Accept PDF statements, screenshots and typed banking notes; retain the source for officer review. Saving information for later is separate from completing a report. Do not assume Marable or any particular person will prepare it.
+- Saving banking information for later preserves the source without a paid call. When one authorized preparer claims that record, the shared service immediately runs the same evidence-checked organization used for direct report completion and prefills that preparer's draft. The atomic claim happens first so competing officers cannot trigger duplicate reports or duplicate generation calls.
 - Bank-material upload access and report preparation access are separate. McDuffie and John Brown can provide banking records; Marable's preparation access does not imply bank-account access. WM has full application access.
 - Preserve exact cents, explicit reporting dates, account context and transaction direction. Unknown values stay unknown, never zero. Keep transfers distinct from receipts/payments. The application calculates balances and reconciliation; the model cannot invent totals, evidence or confirmations.
+- Every imported financial field displays its review state. A green check means the value was matched to exact uploaded evidence or corrected by an officer. A red X means the value is unresolved and opens that field for correction. Editing an unresolved field records it as an officer correction. Reorganizing the original source rebuilds these states from the new extraction evidence.
 - Treasury retains its own preparation/signing workflow without a WM review stage. That exception does not remove WM review from minutes.
 
 ## Workflow, costs and presentation

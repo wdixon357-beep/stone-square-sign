@@ -158,12 +158,12 @@ try {
   check('Upload-only cannot choose report completion', (await api('/api/treasury/generate', uploadOnly.token, 'POST', bankingForm('complete'))).status === 403);
   result = await api(`/api/treasury/${report.id}/assign`, preparer.token, 'POST', {revision: report.revision, preparerUserId: preparer.user.id});
   assert.equal(result.status, 200); report = result.data.report;
-  check('Treasury preparer can claim saved information without bank access', report.preparerUserId === preparer.user.id && await providerCalls() === 0);
+  check('Treasury preparer claim automatically organizes saved information without bank access', report.preparerUserId === preparer.user.id && await providerCalls() === 1 && Object.keys(report.draft.fieldReviews).length > 0);
   check('Upload-only cannot organize an assigned report', (await api(`/api/treasury/${report.id}/organize`, uploadOnly.token, 'POST', {revision: report.revision})).status === 403);
-  check('Stale treasury revision is rejected before a paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: 1})).status === 409 && await providerCalls() === 0);
-  check('Invalid treasury revision is rejected before a paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: String(report.revision)})).status === 409 && await providerCalls() === 0);
+  check('Stale treasury revision is rejected before another paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: 1})).status === 409 && await providerCalls() === 1);
+  check('Invalid treasury revision is rejected before another paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: String(report.revision)})).status === 409 && await providerCalls() === 1);
   result = await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: report.revision});
-  check('Assigned preparer can organize the shared source', result.status === 200 && await providerCalls() === 1);
+  check('Assigned preparer can deliberately reorganize the shared source from the cached extraction', result.status === 200 && await providerCalls() === 1);
   check('Preparer generation notices do not disclose provider details', !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(result.data.draft.extractionNotes)));
   check('Organization returns an unsaved replacement', (await api('/api/treasury', preparer.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
   const beforeEditing = await providerCalls();

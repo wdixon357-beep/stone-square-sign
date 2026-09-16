@@ -83,7 +83,7 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(organized, meetingCycle) : organized);
   }
   if (typeof generateStructured !== 'function') throw new TypeError('generateStructured must be a function');
-  const cycleInstruction = meetingCycle ? `\nThe application has fixed this report to bank-posted activity from ${meetingCycle.periodStart} through ${meetingCycle.periodEnd}, inclusive. This ending date is the date the report was prepared. Do not include, total, summarize, infer, or use transactions outside that range. Do not use a transaction date, check date, monthly statement period, or pending date to replace the bank-posted date. Do not treat a full-statement total or balance as a reporting-window total unless the source explicitly identifies it at the fixed boundary. Leave periodStart, periodEnd and presentedOn null because the application controls the reporting window and the actual presentation date.` : '';
+  const cycleInstruction = meetingCycle ? `\nThe application has fixed this report to bank-posted activity from ${meetingCycle.periodStart} through ${meetingCycle.periodEnd}, inclusive. This ending date is the date the report was prepared. Do not include, total, summarize, infer, or use transactions outside that range. Do not use a transaction date, check date, monthly statement period, or pending date to replace the bank-posted date. Do not treat a full-statement total or balance as a reporting-window total unless the source explicitly identifies it at the fixed boundary. For an account balance or total, cite an evidence excerpt that includes the applicable fixed boundary date or the full fixed range. Leave periodStart, periodEnd and presentedOn null because the application controls the reporting window and the actual presentation date.` : '';
   const response = await generateStructured({
     purpose: 'treasury', schemaName: 'treasury_source_extraction', schema: TREASURY_AI_SCHEMA, instructions: instructions + cycleInstruction,
     input: JSON.stringify({ sourceText: source, sourceNames, sourceNotes, meetingCycle }),
@@ -242,22 +242,48 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     remarks: text(response.remarks), sourceReviewed: false, fundsReviewed: false, obligationsReviewed: false,
     sourceNames, extractionNotes: [...sourceNotes, 'Terra (GPT-5.6) organized this draft; source verification is required.', 'Terra retained the imported source text for a complete officer review.'], unmappedLines: retainedSource(source),
   };
+  const sourceWindowMatches = meetingCycle && draft.periodStart === meetingCycle.periodStart && draft.periodEnd === meetingCycle.periodEnd;
+  const boundaryKinds = {
+    openingBalance: 'opening', statementBalance: 'ending', bookBalance: 'ending', receipts: 'range', disbursements: 'range',
+    transfersIn: 'range', transfersOut: 'range', depositsInTransit: 'ending', outstandingChecks: 'ending', bankHold: 'ending',
+  };
+  const validatedWindowFields = new Set();
+  if (meetingCycle && !sourceWindowMatches) {
+    for (const field of acceptedEvidence) {
+      const path = fieldPaths.get(field);
+      const match = path?.match(/^accounts\[(\d+)\]\.([A-Za-z]+)$/);
+      if (!match || !Object.hasOwn(boundaryKinds, match[2])) continue;
+      const kind = boundaryKinds[match[2]];
+      const expectedAmount = money(field.value);
+      const supported = field.evidence.split(/\r?\n/).some(line => {
+        const amounts = quotedAmounts(line);
+        if (expectedAmount === null || !amounts.some(candidate => candidate === expectedAmount || (kind === 'range' && Math.abs(candidate) === expectedAmount))) return false;
+        const dates = quotedDates(line);
+        if (kind === 'opening') return dates.size === 1 && (dates.has(meetingCycle.periodStart) || dates.has(meetingCycle.previousMeeting));
+        if (kind === 'ending') return dates.size === 1 && dates.has(meetingCycle.periodEnd);
+        return dates.size === 2 && dates.has(meetingCycle.periodStart) && dates.has(meetingCycle.periodEnd);
+      });
+      if (supported) validatedWindowFields.add(`accounts.${match[1]}.${match[2]}`);
+    }
+  }
   if (rejected) draft.extractionNotes.push(`Terra: ${rejected} extracted ${rejected === 1 ? 'entry did' : 'entries did'} not match the cited source and need review.`);
   // Keep field-level references with the saved draft. The full original source
   // stays above; review notes contain locations rather than repeated bank data.
   // A quote repeated in the source points explicitly to its first occurrence.
   let note = '';
   for (const field of acceptedEvidence) {
+    const path = fieldPaths.get(field);
+    if (meetingCycle && !sourceWindowMatches && /^accounts\[\d+\]\.(?:openingBalance|statementBalance|bookBalance|receipts|disbursements|transfersIn|transfersOut|depositsInTransit|outstandingChecks|bankHold)$/.test(path) && !validatedWindowFields.has(path.replaceAll('[','.').replaceAll(']',''))) continue;
     const start = evidencePositions.get(field) ?? source.indexOf(field.evidence);
     const end = start + field.evidence.length - 1;
     const firstLine = lineAt(start) + 1;
     const lastLine = lineAt(end) + 1;
     const location = firstLine === lastLine ? `line ${firstLine}` : `lines ${firstLine} through ${lastLine}`;
     const repeated = occurrences(field.evidence).length > 1 ? evidencePositions.has(field) ? ' (matching account context)' : ' (first matching occurrence)' : '';
-    const reference = `Source evidence: ${fieldPaths.get(field)} → ${location}${repeated}.`;
+    const reference = `Source evidence: ${path} → ${location}${repeated}.`;
     if (note && note.length + reference.length + 1 > 1000) { draft.extractionNotes.push(note); note = ''; }
     note += `${note ? '\n' : ''}${reference}`;
   }
   if (note) draft.extractionNotes.push(note);
-  return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(draft, meetingCycle) : draft);
+  return normalizeTreasury(meetingCycle ? applyTreasuryMeetingCycle(draft, meetingCycle, { validatedWindowFields:[...validatedWindowFields] }) : draft);
 }

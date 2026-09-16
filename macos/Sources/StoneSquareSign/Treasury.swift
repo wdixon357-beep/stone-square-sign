@@ -17,6 +17,7 @@ struct TreasuryDraft: Codable, Equatable {
     var accounts: [TreasuryAccount]; var transactions: [TreasuryTransaction]; var funds: [TreasuryFund]; var obligations: [TreasuryObligation]
     var fundsReviewed: Bool; var obligationsReviewed: Bool; var sourceReviewed: Bool
     var remarks: String; var unmappedLines: [String]; var sourceNames: [String]; var extractionNotes: [String]
+    var fieldReviews: [String:String]? = nil
 }
 struct TreasuryRecord: Codable, Identifiable { var id: String; var status: String; var revision: Int; var createdByUserId: Int; var preparerUserId: Int?; var uploadedBy: String; var createdBy: String; var preparerRole: String; var draft: TreasuryDraft }
 extension TreasuryRecord {
@@ -24,7 +25,7 @@ extension TreasuryRecord {
         user?.can("treasury.prepare") == true || (user?.can("treasury.view") == true && ["ready_for_distribution", "distributed"].contains(status))
     }
 }
-struct TreasuryPayload: Decodable { var report: TreasuryRecord; var notificationWarnings: [String]? }
+struct TreasuryPayload: Decodable { var report: TreasuryRecord; var notificationWarnings: [String]?; var organizationWarning: String? }
 struct TreasuryList: Decodable { var reports: [TreasuryRecord] }
 struct ReorganizedTreasuryPayload: Decodable { var draft: TreasuryDraft }
 
@@ -59,7 +60,20 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
         } catch { message = error.localizedDescription }
     }
     func refreshGenerationStatus() async { generationStatus = await GenerationStatus.load(using: transport) }
-    func open(_ report: TreasuryRecord) { selectedPreparer=report.preparerUserId ?? 0; originalText="";sourceFiles=[]; Task { await loadSources(report.id); await refreshGenerationStatus() }; selected = report; draft = report.draft; dirty = false; pdf = nil; preview() }
+    func open(_ report: TreasuryRecord) {
+        selectedPreparer=report.preparerUserId ?? 0; originalText="";sourceFiles=[]
+        Task { await loadSources(report.id); await refreshGenerationStatus() }
+        selected = report; var opened=report.draft;opened.fieldReviews = opened.fieldReviews ?? [:]
+        let accountFields=["openingBalance","statementBalance","bookBalance","receipts","disbursements","transfersIn","transfersOut","depositsInTransit","outstandingChecks","bankHold"]
+        let transactionFields=["date","account","kind","amount","description","reference","category"]
+        let fundFields=["name","account","amount","restriction"], obligationFields=["name","amount","dueDate","note"]
+        for index in opened.accounts.indices { for name in accountFields { addReviewPath(&opened,"accounts.\(index).\(name)") } }
+        for index in opened.transactions.indices { for name in transactionFields { addReviewPath(&opened,"transactions.\(index).\(name)") } }
+        for index in opened.funds.indices { for name in fundFields { addReviewPath(&opened,"funds.\(index).\(name)") } }
+        for index in opened.obligations.indices { for name in obligationFields { addReviewPath(&opened,"obligations.\(index).\(name)") } }
+        draft = opened; dirty = false; pdf = nil; preview()
+    }
+    private func addReviewPath(_ draft: inout TreasuryDraft,_ path:String) { if draft.fieldReviews?[path] == nil { draft.fieldReviews?[path]="unresolved" } }
     func loadSources(_ id: String) async {
         do {
             let source=try JSONDecoder().decode(TreasurySourcePayload.self,from:await transport.request("/api/treasury/\(id)/source"))
@@ -72,7 +86,7 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
         if dirty { guard await save() else {return} }
         do {
             let data=try await transport.request("/api/treasury/\(current.id)/assign",method:"POST",body:JSONSerialization.data(withJSONObject:["revision":selected!.revision,"preparerUserId":selectedPreparer]))
-            let report=try JSONDecoder().decode(TreasuryPayload.self,from:data).report;open(report);await refresh();message="Assigned to \(report.createdBy). The original records and prefilled draft are available in their Treasurer Reports."
+            let payload=try JSONDecoder().decode(TreasuryPayload.self,from:data);let report=payload.report;open(report);await refresh();message=payload.organizationWarning?.isEmpty == false ? payload.organizationWarning! : "Assigned to \(report.createdBy). The original records were organized into the prefilled report."
         } catch {message=error.localizedDescription}
     }
     func downloadSource(_ file: TreasurySourceFile) async {
@@ -337,8 +351,8 @@ struct TreasuryView: View {
             Text("Uploaded by \(record.uploadedBy)").font(.caption)
             if record.status == "awaiting_preparer" {
                 Text("Banking information saved").font(.headline)
-                Text("These records are available for an authorized preparer. No one has been assigned automatically.").font(.callout)
-                if model.user?.can("treasury.prepare") == true { Button("I’m completing this report") { workspace.selectedPreparer = model.user?.id ?? 0; confirmingAssignment = true }.buttonStyle(.borderedProminent) }
+                Text("Claiming these records will organize the uploaded information into the report and prevent another officer from working on the same report.").font(.callout)
+                if model.user?.can("treasury.prepare") == true { Button("Claim and organize this report") { workspace.selectedPreparer = model.user?.id ?? 0; confirmingAssignment = true }.buttonStyle(.borderedProminent) }
             } else {Text("Preparing officer: \(record.createdBy)").font(.headline)}
             if (record.status == "awaiting_preparer" && (record.createdByUserId == model.user?.id || model.user?.role == "owner")) || (record.status == "draft" && model.user?.role == "owner") {
                 DisclosureGroup(record.status == "awaiting_preparer" ? "Assign a preparing officer (optional)" : "Change preparing officer") { assignmentPicker }
@@ -352,7 +366,27 @@ struct TreasuryView: View {
     } }
     var metadata: some View { GroupBox("Report details") { VStack(alignment:.leading) { Text("Only bank-posted activity from \(workspace.draft?.periodStart.isEmpty == false ? workspace.draft?.periodStart ?? "" : "the first included date") through \(workspace.draft?.periodEnd.isEmpty == false ? workspace.draft?.periodEnd ?? "" : "the report preparation date") is included. PDFs, screenshots, pasted activity and typed notes are all limited to these dates.").font(.caption).foregroundStyle(.secondary);TextField("First included date (YYYY-MM-DD)",text:text(\.periodStart)).disabled(true);TextField("Report prepared through (YYYY-MM-DD)",text:text(\.periodEnd)).disabled(true);TextField("Date actually presented (YYYY-MM-DD)",text:text(\.presentedOn));TextField("Bank or credit union",text:text(\.bankName)) }.padding(10) } }
     var importReview: some View { DisclosureGroup("Source and import review") { Text(workspace.draft?.sourceNames.joined(separator:", ") ?? "");Text(workspace.draft?.extractionNotes.joined(separator:"\n") ?? "");Text("Review these lines that did not map to a financial field:").font(.caption);Text(workspace.draft?.unmappedLines.joined(separator:"\n") ?? "").font(.caption).textSelection(.enabled) } }
-    func accountAmount(_ index:Int,_ key:WritableKeyPath<TreasuryAccount,String?>) -> Binding<String> { Binding(get:{workspace.draft?.accounts[index][keyPath:key] ?? ""},set:{workspace.draft?.accounts[index][keyPath:key]=$0}) }
+    func reviewState(_ path:String) -> String { workspace.draft?.fieldReviews?[path] ?? "unresolved" }
+    func reviewed(_ path:String,_ value:Binding<String>) -> Binding<String> { Binding(get:{value.wrappedValue},set:{newValue in value.wrappedValue=newValue;workspace.draft?.fieldReviews?[path]=newValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || newValue == "review" ? "unresolved" : "corrected"}) }
+    func reviewedField(_ label:String,_ path:String,_ value:Binding<String>) -> some View { HStack { TextField(label,text:reviewed(path,value));reviewButton(path) } }
+    func reviewedAccountPicker(_ path:String,_ value:Binding<String>) -> some View { HStack { accountPicker(reviewed(path,value));reviewButton(path) } }
+    func clearCollectionReviews(_ collection:String) {
+        workspace.draft?.fieldReviews = workspace.draft?.fieldReviews?.filter { !$0.key.hasPrefix("\(collection).") }
+        workspace.draft?.extractionNotes = workspace.draft?.extractionNotes.flatMap { note in
+            note.components(separatedBy:"\n").filter { !$0.contains("Source evidence: \(collection)[") }
+        } ?? []
+    }
+    func accountAmount(_ index:Int,_ key:WritableKeyPath<TreasuryAccount,String?>,_ field:String) -> Binding<String> { Binding(get:{workspace.draft?.accounts[index][keyPath:key] ?? ""},set:{value in workspace.draft?.accounts[index][keyPath:key]=value;workspace.draft?.fieldReviews?["accounts.\(index).\(field)"]=value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "unresolved" : "corrected"}) }
+    func reviewButton(_ path:String) -> some View {
+        let state=reviewState(path),good=state == "matched" || state == "corrected"
+        return Button {
+            workspace.draft?.fieldReviews?[path] = "unresolved"
+            workspace.message = "Enter the correct information. The field will turn green when your correction is recorded."
+        } label: {
+            Label(state == "matched" ? "Matched to uploaded source" : state == "corrected" ? "Officer correction recorded" : "Needs correction", systemImage: good ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .labelStyle(.iconOnly).foregroundStyle(good ? Color.green : Color.red).font(.title3)
+        }.buttonStyle(.plain).help(good ? "Matched or corrected. Select if this value is incorrect." : "Needs correction. Enter the correct value in this field.")
+    }
     var accounts: some View {
         VStack(alignment:.leading,spacing:16) {
             ForEach(Array((workspace.draft?.accounts ?? []).enumerated()),id:\.element.id) { index,account in
@@ -360,39 +394,40 @@ struct TreasuryView: View {
                     TextField("Account label",text:Binding(get:{workspace.draft?.accounts[index].name ?? ""},set:{workspace.draft?.accounts[index].name=$0}))
                     accountFields(index)
                     Toggle("All bank activity for this account is listed. Calculate blank activity totals from the entries.",isOn:Binding(get:{workspace.draft?.accounts[index].activityComplete ?? false},set:{workspace.draft?.accounts[index].activityComplete=$0}))
-                    Button("Remove account",role:.destructive) { workspace.draft?.accounts.remove(at:index) }
+                    Button("Remove account",role:.destructive) { clearCollectionReviews("accounts");workspace.draft?.accounts.remove(at:index) }
                 }.padding(10) }
             }
-            Button("Add account") { workspace.draft?.accounts.append(TreasuryAccount()) }
+            Button("Add account") { clearCollectionReviews("accounts");workspace.draft?.accounts.append(TreasuryAccount()) }
         }
     }
     func accountFields(_ index:Int) -> some View {
-        let entries:[(String,WritableKeyPath<TreasuryAccount,String?>)] = [("Beginning bank balance",\.openingBalance),("Statement ending balance",\.statementBalance),("Treasurer’s book balance",\.bookBalance),("Total receipts",\.receipts),("Total payments",\.disbursements),("Transfers in",\.transfersIn),("Transfers out",\.transfersOut),("Deposits in transit",\.depositsInTransit),("Outstanding checks",\.outstandingChecks),("Bank share or hold",\.bankHold)]
-        return ForEach(entries.indices,id:\.self) { i in HStack { Text(entries[i].0).frame(maxWidth:.infinity,alignment:.leading);TextField("Needs review",text:accountAmount(index,entries[i].1)).frame(width:140) } }
+        let entries:[(String,String,WritableKeyPath<TreasuryAccount,String?>)] = [("Beginning bank balance","openingBalance",\.openingBalance),("Statement ending balance","statementBalance",\.statementBalance),("Treasurer’s book balance","bookBalance",\.bookBalance),("Total receipts","receipts",\.receipts),("Total payments","disbursements",\.disbursements),("Transfers in","transfersIn",\.transfersIn),("Transfers out","transfersOut",\.transfersOut),("Deposits in transit","depositsInTransit",\.depositsInTransit),("Outstanding checks","outstandingChecks",\.outstandingChecks),("Bank share or hold","bankHold",\.bankHold)]
+        return ForEach(entries.indices,id:\.self) { i in HStack { Text(entries[i].0).frame(maxWidth:.infinity,alignment:.leading);TextField("Enter correct value",text:accountAmount(index,entries[i].2,entries[i].1)).frame(width:140);reviewButton("accounts.\(index).\(entries[i].1)") } }
     }
     func accountPicker(_ value:Binding<String>) -> some View { Picker("Account",selection:value) { Text("Choose account").tag("");ForEach(workspace.draft?.accounts ?? []) { a in Text(a.name).tag(a.id) } } }
     func tx(_ i:Int,_ key:WritableKeyPath<TreasuryTransaction,String>) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i][keyPath:key] ?? ""},set:{workspace.draft?.transactions[i][keyPath:key]=$0}) }
+    func txAmount(_ i:Int) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i].amount ?? ""},set:{workspace.draft?.transactions[i].amount=$0}) }
     var activity: some View {
         GroupBox("Receipts, payments and transfers") { VStack(alignment:.leading,spacing:14) {
             ForEach((workspace.draft?.transactions ?? []).indices,id:\.self) { i in VStack(alignment:.leading) {
-                TextField("Bank-posted date (YYYY-MM-DD)",text:tx(i,\.date));accountPicker(tx(i,\.account))
-                Picker("Entry type",selection:tx(i,\.kind)) { Text("Needs review").tag("review");Text("Receipt").tag("receipt");Text("Payment").tag("payment");Text("Transfer in").tag("transfer_in");Text("Transfer out").tag("transfer_out") }
-                TextField("Amount",text:Binding(get:{workspace.draft?.transactions[i].amount ?? ""},set:{workspace.draft?.transactions[i].amount=$0}));TextField("Description",text:tx(i,\.description));TextField("Check / reference",text:tx(i,\.reference));TextField("Category",text:tx(i,\.category));Toggle("Bank-posted date confirmed",isOn:Binding(get:{workspace.draft?.transactions[i].postedDateConfirmed == true},set:{workspace.draft?.transactions[i].postedDateConfirmed=$0}));Button("Remove entry",role:.destructive) { workspace.draft?.transactions.remove(at:i) };Divider()
+                reviewedField("Bank-posted date (YYYY-MM-DD)","transactions.\(i).date",tx(i,\.date));reviewedAccountPicker("transactions.\(i).account",tx(i,\.account))
+                HStack { Picker("Entry type",selection:reviewed("transactions.\(i).kind",tx(i,\.kind))) { Text("Needs review").tag("review");Text("Receipt").tag("receipt");Text("Payment").tag("payment");Text("Transfer in").tag("transfer_in");Text("Transfer out").tag("transfer_out") };reviewButton("transactions.\(i).kind") }
+                reviewedField("Amount","transactions.\(i).amount",txAmount(i));reviewedField("Description","transactions.\(i).description",tx(i,\.description));reviewedField("Check / reference","transactions.\(i).reference",tx(i,\.reference));reviewedField("Category","transactions.\(i).category",tx(i,\.category));Toggle("Bank-posted date confirmed",isOn:Binding(get:{workspace.draft?.transactions[i].postedDateConfirmed == true},set:{workspace.draft?.transactions[i].postedDateConfirmed=$0}));Button("Remove entry",role:.destructive) { clearCollectionReviews("transactions");workspace.draft?.transactions.remove(at:i) };Divider()
             } }
-            Button("Add activity") { workspace.draft?.transactions.append(TreasuryTransaction(account:workspace.draft?.accounts.first?.id ?? "")) }
+            Button("Add activity") { clearCollectionReviews("transactions");workspace.draft?.transactions.append(TreasuryTransaction(account:workspace.draft?.accounts.first?.id ?? "")) }
         }.padding(10) }
     }
     var funds: some View { GroupBox("Fenced and restricted funds") { VStack(alignment:.leading,spacing:12) {
         ForEach((workspace.draft?.funds ?? []).indices,id:\.self) { i in VStack {
-            TextField("Fund name",text:Binding(get:{workspace.draft?.funds[i].name ?? ""},set:{workspace.draft?.funds[i].name=$0}));accountPicker(Binding(get:{workspace.draft?.funds[i].account ?? ""},set:{workspace.draft?.funds[i].account=$0}));TextField("Amount",text:Binding(get:{workspace.draft?.funds[i].amount ?? ""},set:{workspace.draft?.funds[i].amount=$0}));TextField("Restriction / designation",text:Binding(get:{workspace.draft?.funds[i].restriction ?? ""},set:{workspace.draft?.funds[i].restriction=$0}));Button("Remove fund",role:.destructive) { workspace.draft?.funds.remove(at:i) }
+            reviewedField("Fund name","funds.\(i).name",Binding(get:{workspace.draft?.funds[i].name ?? ""},set:{workspace.draft?.funds[i].name=$0}));reviewedAccountPicker("funds.\(i).account",Binding(get:{workspace.draft?.funds[i].account ?? ""},set:{workspace.draft?.funds[i].account=$0}));reviewedField("Amount","funds.\(i).amount",Binding(get:{workspace.draft?.funds[i].amount ?? ""},set:{workspace.draft?.funds[i].amount=$0}));reviewedField("Restriction / designation","funds.\(i).restriction",Binding(get:{workspace.draft?.funds[i].restriction ?? ""},set:{workspace.draft?.funds[i].restriction=$0}));Button("Remove fund",role:.destructive) { clearCollectionReviews("funds");workspace.draft?.funds.remove(at:i) }
         } }
-        Button("Add fund") { workspace.draft?.funds.append(TreasuryFund(account:workspace.draft?.accounts.first?.id ?? "")) };Toggle("I confirmed all fund balances and restrictions. If none is listed, none applies.",isOn:flag(\.fundsReviewed))
+        Button("Add fund") { clearCollectionReviews("funds");workspace.draft?.funds.append(TreasuryFund(account:workspace.draft?.accounts.first?.id ?? "")) };Toggle("I confirmed all fund balances and restrictions. If none is listed, none applies.",isOn:flag(\.fundsReviewed))
     }.padding(10) } }
     var obligations: some View { GroupBox("Unpaid obligations and upcoming bills") { VStack(alignment:.leading,spacing:12) {
         ForEach((workspace.draft?.obligations ?? []).indices,id:\.self) { i in VStack {
-            TextField("Payee / bill",text:Binding(get:{workspace.draft?.obligations[i].name ?? ""},set:{workspace.draft?.obligations[i].name=$0}));TextField("Amount",text:Binding(get:{workspace.draft?.obligations[i].amount ?? ""},set:{workspace.draft?.obligations[i].amount=$0}));TextField("Due date (YYYY-MM-DD)",text:Binding(get:{workspace.draft?.obligations[i].dueDate ?? ""},set:{workspace.draft?.obligations[i].dueDate=$0}));TextField("Note",text:Binding(get:{workspace.draft?.obligations[i].note ?? ""},set:{workspace.draft?.obligations[i].note=$0}));Button("Remove obligation",role:.destructive) { workspace.draft?.obligations.remove(at:i) }
+            reviewedField("Payee / bill","obligations.\(i).name",Binding(get:{workspace.draft?.obligations[i].name ?? ""},set:{workspace.draft?.obligations[i].name=$0}));reviewedField("Amount","obligations.\(i).amount",Binding(get:{workspace.draft?.obligations[i].amount ?? ""},set:{workspace.draft?.obligations[i].amount=$0}));reviewedField("Due date (YYYY-MM-DD)","obligations.\(i).dueDate",Binding(get:{workspace.draft?.obligations[i].dueDate ?? ""},set:{workspace.draft?.obligations[i].dueDate=$0}));reviewedField("Note","obligations.\(i).note",Binding(get:{workspace.draft?.obligations[i].note ?? ""},set:{workspace.draft?.obligations[i].note=$0}));Button("Remove obligation",role:.destructive) { clearCollectionReviews("obligations");workspace.draft?.obligations.remove(at:i) }
         } }
-        Button("Add obligation") { workspace.draft?.obligations.append(TreasuryObligation()) };Toggle("I confirmed unpaid obligations. If none is listed, none remains unpaid.",isOn:flag(\.obligationsReviewed))
+        Button("Add obligation") { clearCollectionReviews("obligations");workspace.draft?.obligations.append(TreasuryObligation()) };Toggle("I confirmed unpaid obligations. If none is listed, none remains unpaid.",isOn:flag(\.obligationsReviewed))
     }.padding(10) } }
     var workflow: some View { VStack(alignment:.leading,spacing:10) {
         if editable { Button("Save corrections") { Task { _ = await workspace.save() } } }

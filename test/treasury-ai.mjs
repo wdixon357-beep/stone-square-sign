@@ -62,17 +62,34 @@ const cycleFiltered = await generateTreasuryDraft(`${source}\n09/05/2026 Deposit
 check('fixed-window generation keeps checking and savings while excluding statement activity and monthly totals outside the period', cycleFiltered.periodStart === '2026-09-04' && cycleFiltered.periodEnd === '2026-09-17' && cycleFiltered.transactions.every(row => row.date >= '2026-09-04' && row.date <= '2026-09-17') && cycleFiltered.accounts.every(account => account.openingBalance === null && account.statementBalance === null) && ['checking','savings'].every(id=>cycleFiltered.accounts.some(account=>account.id===id)));
 
 let fixedWindowRequest;
-await generateTreasuryDraft(source, {
+const fixedWindowOutput = await generateTreasuryDraft(source, {
   meetingCycle: { previousMeeting:'2026-09-03', periodStart:'2026-09-04', periodEnd:'2026-09-15' },
   generateStructured: async value => { fixedWindowRequest=value; return response(); },
 });
-check('structured processing cannot calculate from material outside the fixed preparation-date window', fixedWindowRequest.instructions.includes('Do not include, total, summarize, infer, or use transactions outside that range') && fixedWindowRequest.instructions.includes('2026-09-04 through 2026-09-15'));
+check('structured processing cannot calculate from material outside the fixed preparation-date window', fixedWindowRequest.instructions.includes('Do not include, total, summarize, infer, or use transactions outside that range') && fixedWindowRequest.instructions.includes('2026-09-04 through 2026-09-15') && fixedWindowOutput.accounts[0].openingBalance === null && fixedWindowOutput.accounts[0].statementBalance === null && fixedWindowOutput.fieldReviews['accounts.0.openingBalance'] === 'unresolved' && fixedWindowOutput.fieldReviews['accounts.0.statementBalance'] === 'unresolved');
+
+const broadBoundarySource = `Checking\nAugust opening balance: $1,000.00\nUnrelated report note dated 2026-09-15`;
+const broadBoundaryResponse = response();
+broadBoundaryResponse.periodStart = cite(null, ''); broadBoundaryResponse.periodEnd = cite(null, ''); broadBoundaryResponse.transactions = [];
+broadBoundaryResponse.accounts[0].openingBalance = cite('1000.00', broadBoundarySource);
+const broadBoundaryOutput = await generateTreasuryDraft(broadBoundarySource, { meetingCycle:{previousMeeting:'2026-09-03',periodStart:'2026-09-04',periodEnd:'2026-09-15'}, generateStructured:async()=>broadBoundaryResponse });
+check('an unrelated boundary date elsewhere in a broad citation cannot validate an old balance', broadBoundaryOutput.accounts[0].openingBalance === null && broadBoundaryOutput.fieldReviews['accounts.0.openingBalance'] === 'unresolved');
+
+const boundarySource = `Checking\nOpening balance on 2026-09-04: $1,000.00\nStatement balance on 2026-09-15: $1,150.00\nReceipts from 2026-09-04 through 2026-09-15: $150.00`;
+const boundaryResponse = response();
+boundaryResponse.periodStart = cite(null, ''); boundaryResponse.periodEnd = cite(null, ''); boundaryResponse.transactions = [];
+boundaryResponse.accounts[0].openingBalance = cite('1000.00', 'Opening balance on 2026-09-04: $1,000.00');
+boundaryResponse.accounts[0].statementBalance = cite('1150.00', 'Statement balance on 2026-09-15: $1,150.00');
+boundaryResponse.accounts[0].receipts = cite('150.00', 'Receipts from 2026-09-04 through 2026-09-15: $150.00');
+const boundaryOutput = await generateTreasuryDraft(boundarySource, { meetingCycle:{previousMeeting:'2026-09-03',periodStart:'2026-09-04',periodEnd:'2026-09-15'}, generateStructured:async()=>boundaryResponse });
+check('account figures remain matched only when their citations include the applicable fixed boundary dates', boundaryOutput.accounts[0].openingBalance === '1000.00' && boundaryOutput.accounts[0].statementBalance === '1150.00' && boundaryOutput.accounts[0].receipts === '150.00' && ['openingBalance','statementBalance','receipts'].every(field=>boundaryOutput.fieldReviews[`accounts.0.${field}`] === 'matched'));
 
 let request;
 const output = await generateTreasuryDraft(source, { sourceNames: ['synthetic.png'], sourceNotes: ['Synthetic screenshot was read with OCR. Check every amount.'], generateStructured: async value => { request = value; return response(); } });
 assert.equal(request.instructions, TREASURY_REPORT_RULES);
 check('callback receives treasury routing and exact source text', request.purpose === 'treasury' && request.schemaName === 'treasury_source_extraction' && JSON.parse(request.input).sourceText === source);
 check('supported source figures keep existing normalized dollar strings', output.accounts[0].openingBalance === '1000.00' && output.accounts[0].statementBalance === '1150.00' && output.transactions[0].amount === '200.00');
+check('source-matched fields carry green review states while unsupported fields carry correction states', output.fieldReviews['accounts.0.openingBalance'] === 'matched' && output.fieldReviews['accounts.0.statementBalance'] === 'matched' && output.fieldReviews['accounts.0.bankHold'] === 'unresolved' && output.fieldReviews['transactions.0.amount'] === 'matched');
 check('structured processing confirms only a source-supported bank-posted date', output.transactions[0].postedDateConfirmed === true);
 check('explicit reporting month and cited statement year are resolved deterministically', output.periodStart === '2026-08-01' && output.periodEnd === '2026-08-31' && output.transactions[0].date === '2026-08-03');
 check('missing balances remain unknown and officer confirmations remain unset', output.accounts[0].bankHold === null && output.accounts[0].bookBalance === null && !output.accounts[0].activityComplete && !output.sourceReviewed && !output.fundsReviewed && !output.obligationsReviewed);

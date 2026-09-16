@@ -37,7 +37,7 @@ async function accountSources(req) {
     files:groups.flatMap(({label,files})=>files.map(file=>({file,accountLabel:label}))),
   };
 }
-const serial = row => ({ preparerUserId:row.preparer_user_id, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft:JSON.parse(row.draft_json), submittedDraft:row.submitted_json?JSON.parse(row.submitted_json):null, calculation:calculateTreasury(JSON.parse(row.draft_json)), preparerAttestedAt:row.preparer_attested_at });
+const serial = row => {const draft=normalizeTreasury(JSON.parse(row.draft_json));return { preparerUserId:row.preparer_user_id, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft, submittedDraft:row.submitted_json?normalizeTreasury(JSON.parse(row.submitted_json)):null, calculation:calculateTreasury(draft), preparerAttestedAt:row.preparer_attested_at };};
 const fetchRecord = id => dbGet('SELECT * FROM treasury_reports WHERE id = ? AND deleted_at IS NULL',[id]);
 const canPrepare = user => hasPermission(user,'treasury.prepare');
 // A report has exactly one active editor. The administrator can take over through the
@@ -196,7 +196,22 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
         throw error(409,'This report changed. Reopen it before assigning.');
       }
       await audit(req,row.id,'assigned',{previousPreparerUserId:row.preparer_user_id,preparerUserId:preparer.id});
-    });broadcast('treasury_changed',{reason:'report_claimed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id))});
+    });
+    let organizationWarning='';
+    if(row.status==='awaiting_preparer'&&row.source_text.trim()){
+      try{
+        const meetingCycle=treasuryWindowForDraft(draft)||await reportingWindow();
+        const organized=await generateTreasuryDraft(row.source_text,{sourceNames:draft.sourceNames,sourceNotes:draft.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(preparer.id)});
+        const current=await fetchRecord(row.id);
+        if(current?.status==='draft'&&current.preparer_user_id===preparer.id&&current.revision===row.revision+1){
+          const changed=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND preparer_user_id=?',[JSON.stringify(organized),new Date().toISOString(),row.id,current.revision,preparer.id]);
+          if(changed.changes)await audit(req,row.id,'source_organized',{automatic:true});
+        }
+      }catch{
+        organizationWarning='The report was claimed, but the banking source could not be organized automatically. Select Reorganize original source to try again, or enter corrections in the marked fields.';
+      }
+    }
+    broadcast('treasury_changed',{reason:'report_claimed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id)),organizationWarning});
   }));
   // Return an unsaved replacement. Existing corrections and signatures stay intact.
   app.post('/api/treasury/:id/organize',requirePrepare,rateLimit({key:'treasury-generate',maximum:12,windowMs:3600000}),route(async(req,res)=>{
@@ -205,7 +220,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(!row.source_text.trim())throw error(400,'This manually entered report has no uploaded source to organize. Continue editing its report fields.');
     const previous=JSON.parse(row.draft_json);
     const meetingCycle=treasuryWindowForDraft(previous)||await reportingWindow();
-    const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)/i.test(note)),meetingCycle,generateStructured:generationFor(req.user.id)});
+    const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(req.user.id)});
     const current=await record(req);revision(req,current);
     if(!editable(current,req.user))throw error(409,'This report changed while its source was being organized. Reopen it before continuing.');
     await audit(req,row.id,'source_organized');
