@@ -39,7 +39,7 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
 @MainActor final class TreasuryWorkspace: ObservableObject {
     @Published var records: [TreasuryRecord] = []; @Published var selected: TreasuryRecord?; @Published var draft: TreasuryDraft?
     @Published var uploadIntent = "save"
-    @Published var checkingSource = ""; @Published var checkingFiles: [URL] = []; @Published var savingsSource = ""; @Published var savingsFiles: [URL] = []; @Published var messageIsWarning = false; @Published var message = "" { didSet { messageIsWarning = false } }; @Published var busy = false
+    @Published var bankingSource = ""; @Published var bankingFiles: [URL] = []; @Published var messageIsWarning = false; @Published var message = "" { didSet { messageIsWarning = false } }; @Published var busy = false
     @Published var pdf: Data?; @Published var previewMessage = ""; @Published var dirty = false
     @Published var preparers: [TreasuryPreparer] = []; @Published var selectedPreparer = 0
     @Published var originalText = ""; @Published var sourceFiles: [TreasurySourceFile] = []; @Published var accessUsers: [TreasuryAccessUser] = []
@@ -119,20 +119,19 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
             let boundary = "Treasury-\(UUID().uuidString)"; var data = Data()
             func append(_ value: String) { data.append(Data(value.utf8)) }
             append("--\(boundary)\r\nContent-Disposition: form-data; name=\"intent\"\r\n\r\n\(uploadIntent)\r\n")
-            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"checkingSourceText\"\r\n\r\n\(checkingSource)\r\n")
-            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"savingsSourceText\"\r\n\r\n\(savingsSource)\r\n")
-            if checkingFiles.count + savingsFiles.count > 5 { throw ClientError.server("Choose no more than five files total.") }
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"sourceText\"\r\n\r\n\(bankingSource)\r\n")
+            if bankingFiles.count > 5 { throw ClientError.server("Choose no more than five files total.") }
             var total = 0
-            for (field,files) in [("checkingFiles",checkingFiles),("savingsFiles",savingsFiles)] { for file in files {
+            for file in bankingFiles {
                 let bytes = try Data(contentsOf: file); total += bytes.count
                 if bytes.count > 12*1024*1024 || total > 20*1024*1024 { throw ClientError.server("Use files under 12 MB each and 20 MB combined.") }
                 let name = file.lastPathComponent.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
-                append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(field)\"; filename=\"\(name)\"\r\nContent-Type: application/octet-stream\r\n\r\n"); data.append(bytes); append("\r\n")
-            } }
+                append("--\(boundary)\r\nContent-Disposition: form-data; name=\"files\"; filename=\"\(name)\"\r\nContent-Type: application/octet-stream\r\n\r\n"); data.append(bytes); append("\r\n")
+            }
             append("--\(boundary)--\r\n")
             let result = try await transport.request("/api/treasury/generate", method: "POST", body: data, contentType: "multipart/form-data; boundary=\(boundary)")
             let report = try JSONDecoder().decode(TreasuryPayload.self, from: result).report
-            await refresh(); checkingSource = ""; checkingFiles = []; savingsSource = ""; savingsFiles = []
+            await refresh(); bankingSource = ""; bankingFiles = []
             if report.status == "awaiting_preparer" {close();message="Banking information saved. Authorized preparers have a Dashboard alert until one of them claims the report."}
             else {open(report);message="Review the prefilled information and complete your report."}
         } catch { message = error.localizedDescription }
@@ -271,20 +270,14 @@ struct TreasuryView: View {
         Form {
             if model.user?.can("treasury.prepare") == true { Section { Button("Create blank report") { Task { await workspace.createBlank() } }.buttonStyle(.borderedProminent) } }
             if model.user?.can("treasury.upload") == true { Section {
-            GroupBox("Checking account information") { VStack(alignment:.leading,spacing:12) {
+            GroupBox("Banking records") { VStack(alignment:.leading,spacing:12) {
                 GenerationStatusView(status: workspace.generationStatus)
-                Button("Choose checking files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.checkingFiles=panel.urls } }
-                ForEach(workspace.checkingFiles,id:\.self) { Text($0.lastPathComponent).font(.caption) }
-                if !workspace.checkingFiles.isEmpty { Button("Clear checking files") { workspace.checkingFiles=[] } }
-                Text("Upload statements or screenshots, or paste checking transactions and balances below.").font(.callout).foregroundStyle(.secondary)
-                TextEditor(text:$workspace.checkingSource).font(.body).frame(minHeight:130).border(Color.gray.opacity(0.25))
-            }.padding(12) }
-            GroupBox("Savings account information") { VStack(alignment:.leading,spacing:12) {
-                Button("Choose savings files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.savingsFiles=panel.urls } }
-                ForEach(workspace.savingsFiles,id:\.self) { Text($0.lastPathComponent).font(.caption) }
-                if !workspace.savingsFiles.isEmpty { Button("Clear savings files") { workspace.savingsFiles=[] } }
-                Text("Upload statements or screenshots, or paste savings transactions and balances below.").font(.callout).foregroundStyle(.secondary)
-                TextEditor(text:$workspace.savingsSource).font(.body).frame(minHeight:130).border(Color.gray.opacity(0.25))
+                Text("Add the banking records once. Account names and statement headings are used to separate checking, savings and any additional accounts automatically.").font(.callout).foregroundStyle(.secondary)
+                Button("Choose banking files") { let panel=NSOpenPanel();panel.allowsMultipleSelection=true;panel.allowedContentTypes=[.pdf,.png,.jpeg,.plainText];if panel.runModal() == .OK { workspace.bankingFiles=panel.urls } }
+                ForEach(workspace.bankingFiles,id:\.self) { Text($0.lastPathComponent).font(.caption) }
+                if !workspace.bankingFiles.isEmpty { Button("Clear banking files") { workspace.bankingFiles=[] } }
+                Text("Upload statements, transaction screenshots or exported records, or paste transactions, balances and banking notes below. Include the account or product name when typing information.").font(.callout).foregroundStyle(.secondary)
+                TextEditor(text:$workspace.bankingSource).font(.body).frame(minHeight:160).border(Color.gray.opacity(0.25))
             }.padding(12) }
             GroupBox("Report handoff") { VStack(alignment:.leading,spacing:12) {
                 Text("Report dates are set automatically. Add bank-posted dates for transactions. Use no more than five files total.").font(.callout).foregroundStyle(.secondary)
@@ -293,7 +286,7 @@ struct TreasuryView: View {
                     if model.user?.can("treasury.prepare") == true {Text("I’m completing the report").tag("complete")}
                 }.pickerStyle(.radioGroup)
                 Text("The uploaded banking information is organized into a prefilled report. Save it for another authorized preparer, or open the prefilled report and complete it yourself.").font(.caption)
-                Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.checkingSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.savingsSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.checkingFiles.isEmpty && workspace.savingsFiles.isEmpty)
+                Button("Continue") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.bankingSource.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && workspace.bankingFiles.isEmpty)
             }.padding(12) } }
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
                 ForEach(workspace.accessUsers.filter { !$0.canPrepare }) { user in HStack { Text(user.name); Spacer(); Button(user.uploadEnabled ? "Remove upload access" : "Allow bank record uploads") { pendingAccessUser = user } } }
@@ -446,6 +439,11 @@ struct TreasuryView: View {
     var activity: some View {
         GroupBox("Receipts, Disbursements and Transfers") { VStack(alignment:.leading,spacing:14) {
             Text("These entries become the Receipts, Disbursements and Account Activity sections in the September report format.").font(.callout).foregroundStyle(.secondary)
+            if workspace.draft?.transactions.isEmpty != false {
+                Text("No current-period transactions were found. No bank-posted activity from \(workspace.draft?.periodStart ?? "the first included date") through \(workspace.draft?.periodEnd ?? "the report preparation date") appeared in the uploaded records. Earlier statements remain available under Original banking records and notes, but their transactions are not included in this report.").font(.callout).fontWeight(.semibold).foregroundStyle(.orange)
+            } else if let count=workspace.draft?.transactions.count {
+                Text("\(count) current-period \(count == 1 ? "transaction was" : "transactions were") organized from the uploaded records.").font(.callout).fontWeight(.semibold)
+            }
             ForEach((workspace.draft?.transactions ?? []).indices,id:\.self) { i in VStack(alignment:.leading) {
                 reviewedField("Bank-posted date (YYYY-MM-DD)","transactions.\(i).date",tx(i,\.date));reviewedAccountPicker("transactions.\(i).account",tx(i,\.account))
                 HStack { Picker("Entry type",selection:reviewed("transactions.\(i).kind",tx(i,\.kind))) { Text("Needs correction").tag("review");Text("Receipt").tag("receipt");Text("Disbursement").tag("payment");Text("Transfer into this account").tag("transfer_in");Text("Transfer out of this account").tag("transfer_out") };reviewButton("transactions.\(i).kind") }

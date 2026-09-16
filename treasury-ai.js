@@ -21,14 +21,15 @@ const instructions = TREASURY_REPORT_RULES;
 
 export function applyCreditUnionDepositSummary(draft, source) {
   if (!/Deposit Accounts\s+Balance Forward\s+Deposits\s+Withdrawals\s+Ending Balance/i.test(source)
-    || !/\bPRIME SHARE\b/i.test(source) || !/\b(?:NO-INTEREST\s+)?SHARE DRAFT\b/i.test(source)) return draft;
+    || (!/\bPRIME SHARE\b/i.test(source) && !/\b(?:NO-INTEREST\s+)?SHARE DRAFT\b/i.test(source))) return draft;
   const rows = [];
   for (const line of source.split('\n')) {
     const account = /\b(?:NO-INTEREST\s+)?SHARE DRAFT\b/i.test(line) ? 'checking' : /\bPRIME SHARE\b/i.test(line) ? 'savings' : '';
     if (!account) continue;
     const amounts = [...line.matchAll(/\(?-?\$?\d[\d,]*\.\d{2}\)?/g)].map(match => dollars(money(match[0]))).filter(value => value !== null);
     if (amounts.length < 4) continue;
-    const [openingBalance, receipts, disbursements, statementBalance] = amounts.slice(-4);
+    const [openingBalance, receipts, sourceDisbursements, statementBalance] = amounts.slice(-4);
+    const disbursements = dollars(Math.abs(money(sourceDisbursements)));
     rows.push({ account, openingBalance, receipts, disbursements, statementBalance });
   }
   if (!rows.length) return draft;

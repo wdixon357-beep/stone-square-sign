@@ -151,7 +151,7 @@ export function organizeTreasury(source, options = {}) {
   const lines = String(source).replace(/\r/g, '').split(/\n|;\s*/).map(l => l.trim()).filter(Boolean);
   let account = '', section = '', year = '', pending = '', postedSection = false;
   const seen = new Set();
-  const inferAccount = line => /\bchecking\b|share\s*0070\b/i.test(line) ? 'checking' : /\bsavings\b|prime share|share\s*0001\b/i.test(line) ? 'savings' : '';
+  const inferAccount = line => /\bchecking\b|(?:no-interest\s+)?share draft|share\s*0070\b/i.test(line) ? 'checking' : /\bsavings\b|prime share|share\s*0001\b/i.test(line) ? 'savings' : '';
   for (const raw of lines) {
     const line = raw.replace(/^[*•\s]+/, '').replace(/[*]+$/, '').replace(/-{2,}/g,' ');
     const named = inferAccount(line);

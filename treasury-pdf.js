@@ -125,7 +125,7 @@ export async function buildTreasuryPdf({ draft, status = 'draft', preparedBy = '
   for(const account of calc.accounts) {
     subheading(`${account.name} Account Activity`);
     const entries=draft.transactions.filter(t=>t.account===account.id&&t.postedDateConfirmed&&t.date&&(!draft.periodStart||t.date>=draft.periodStart)&&(!draft.periodEnd||t.date<=draft.periodEnd)).sort((a,b)=>a.date.localeCompare(b.date));
-    if(entries.length)activityTable(entries,account.opening);else paragraph('No account activity recorded for this account.');
+    if(entries.length)activityTable(entries,account.opening);else paragraph(`No bank-posted activity was identified in the uploaded records from ${date(draft.periodStart)} through ${date(draft.periodEnd)} for this account.`);
   }
   if(draft.remarks){heading("Treasurer's Remarks");for(const line of draft.remarks.split('\n').filter(Boolean))paragraph(line,true);}
   if(calc.issues.length){heading('Items Requiring Review');for(const issue of calc.issues)paragraph(issue,true);}

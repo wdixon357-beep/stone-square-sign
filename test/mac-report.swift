@@ -375,9 +375,9 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("Meeting Minutes edits") == true)
         organizing.dirty = false; organizing.source = "Unsaved source"
         precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("source notes") == true)
-        organizing.source = ""; treasury.checkingSource = "Unsaved banking source"
+        organizing.source = ""; treasury.bankingSource = "Unsaved banking source"
         precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("source material") == true)
-        treasury.checkingSource = ""; treasury.originalText = "Previously saved banking source"
+        treasury.bankingSource = ""; treasury.originalText = "Previously saved banking source"
         model.source = "Locally saved report notes"; model.changed()
         precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false) == nil)
         agenda.dirty = true
