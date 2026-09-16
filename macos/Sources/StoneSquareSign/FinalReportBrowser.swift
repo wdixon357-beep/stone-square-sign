@@ -25,6 +25,7 @@ struct FinalReportBrowserView: View {
     @State private var pdf: Data?
     @State private var message = ""
     @State private var loading = false
+    @State private var browserPane = 0
     @StateObject private var transport = MinutesWorkspace()
     var initialSelection: String? = nil
     var onClose: (() -> Void)? = nil
@@ -69,7 +70,7 @@ struct FinalReportBrowserView: View {
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(SignTheme.gold.opacity(0.7), lineWidth: 1))
                 .padding(.horizontal, 18).padding(.top, 14)
             }
-            HSplitView {
+            AdaptiveWorkspaceSplit(primaryTitle: "Reports", secondaryTitle: "Document preview", compactPane: $browserPane) {
                 List(selection: $selectedID) {
                     Section(kind == .minutes ? "Signed meeting minutes" : "Finalized in Dashboard") { ForEach(records) { record in
                         VStack(alignment: .leading, spacing: 5) {
@@ -83,7 +84,8 @@ struct FinalReportBrowserView: View {
                             Text("Historical Lodge archive").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag("archive:\(record.id)")
                     } }
-                }.frame(minWidth: 230, idealWidth: 300, maxWidth: 400)
+                }
+            } secondary: {
                 if pdf != nil { LodgeDocumentPreview(data: pdf) }
                 else { ContentUnavailableView(records.isEmpty && archives.isEmpty ? "No reports available" : "Choose a report", systemImage: "doc.text").frame(maxWidth: .infinity, maxHeight: .infinity) }
             }
@@ -92,7 +94,7 @@ struct FinalReportBrowserView: View {
         }
         .task(id: kind) { transport.configure(model); await refresh(); if let initialSelection { selectedID = "current:\(initialSelection)" } }
         .onChange(of: model.minutesRecordsRevision) { _, _ in if kind == .minutes { Task { await refresh() } } }
-        .onChange(of: selectedID) { _, id in pdf = nil; if let id { Task { await open(id) } } }
+        .onChange(of: selectedID) { _, id in pdf = nil; if let id { browserPane = 1; Task { await open(id) } } }
     }
     private func refresh() async {
         loading = true; defer { loading = false }

@@ -52,6 +52,78 @@ extension NativeWorkspaceHeader where Actions == EmptyView {
     init(title: String, subtitle: String, symbol: String) { self.init(title: title, subtitle: subtitle, symbol: symbol) { EmptyView() } }
 }
 
+struct AdaptiveWorkspaceSplit<Primary: View, Secondary: View>: View {
+    let primaryTitle: String
+    let secondaryTitle: String
+    @Binding var compactPane: Int
+    let primary: Primary
+    let secondary: Secondary
+
+    init(
+        primaryTitle: String,
+        secondaryTitle: String,
+        compactPane: Binding<Int>,
+        @ViewBuilder primary: () -> Primary,
+        @ViewBuilder secondary: () -> Secondary
+    ) {
+        self.primaryTitle = primaryTitle
+        self.secondaryTitle = secondaryTitle
+        _compactPane = compactPane
+        self.primary = primary()
+        self.secondary = secondary()
+    }
+
+    var body: some View {
+        GeometryReader { available in
+            if available.size.width < 820 {
+                VStack(spacing: 0) {
+                    Picker("Workspace section", selection: $compactPane) {
+                        Text(primaryTitle).tag(0)
+                        Text(secondaryTitle).tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    Divider()
+                    Group { compactPane == 0 ? AnyView(primary) : AnyView(secondary) }
+                        .frame(width: available.size.width)
+                        .frame(maxHeight: .infinity)
+                        .clipped()
+                }
+                .frame(width: available.size.width, height: available.size.height)
+                .clipped()
+            } else {
+                let primaryWidth = min(max(available.size.width * 0.46, 340), 620)
+                HStack(spacing: 0) {
+                    primary.frame(width: primaryWidth).frame(maxHeight: .infinity).clipped()
+                    Divider()
+                    secondary.frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+                }
+                .frame(width: available.size.width, height: available.size.height)
+                .clipped()
+            }
+        }
+    }
+}
+
+struct AdaptiveControlBar<Wide: View, Compact: View>: View {
+    let wide: Wide
+    let compact: Compact
+
+    init(@ViewBuilder wide: () -> Wide, @ViewBuilder compact: () -> Compact) {
+        self.wide = wide()
+        self.compact = compact()
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            wide
+            compact
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     @State private var showRequiredSignature = false
@@ -566,12 +638,20 @@ struct NativeCandidateTrackerView: View {
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadCandidateRecords() } }
                 if canEdit { Button("Add record", systemImage: "plus") { editingRecord = .blank(category: category); creatingRecord = true }.buttonStyle(.borderedProminent) }
             }
-            HStack(spacing: 12) {
-                Picker("Section", selection: $category) { ForEach(categories, id: \.self) { Text($0).tag($0) } }.frame(maxWidth: 270)
-                TextField("Search records", text: $query).textFieldStyle(.roundedBorder)
-                Picker("Owner", selection: $ownerFilter) { ForEach(ownerOptions, id: \.self) { Text($0).tag($0) } }.frame(maxWidth: 200)
-                Picker("Status", selection: $statusFilter) { ForEach(statusOptions, id: \.self) { Text($0).tag($0) } }.frame(maxWidth: 190)
-                Button("Clear") { query = ""; ownerFilter = "All owners"; statusFilter = "All statuses" }
+            AdaptiveControlBar {
+                HStack(spacing: 12) {
+                    sectionPicker.frame(maxWidth: 270)
+                    TextField("Search records", text: $query).textFieldStyle(.roundedBorder)
+                    ownerPicker.frame(maxWidth: 200)
+                    statusPicker.frame(maxWidth: 190)
+                    clearFiltersButton
+                }
+            } compact: {
+                VStack(alignment: .leading, spacing: 10) {
+                    sectionPicker
+                    TextField("Search records", text: $query).textFieldStyle(.roundedBorder)
+                    HStack(spacing: 10) { ownerPicker; statusPicker; clearFiltersButton }
+                }
             }.padding(16)
             Divider()
             Table(filteredRecords, selection: $selectedRecordID) {
@@ -608,6 +688,22 @@ struct NativeCandidateTrackerView: View {
             CandidateRecordEditorView(record: record, isNew: creatingRecord, categories: categories)
                 .environmentObject(model)
         }
+    }
+
+    private var sectionPicker: some View {
+        Picker("Section", selection: $category) { ForEach(categories, id: \.self) { Text($0).tag($0) } }
+    }
+
+    private var ownerPicker: some View {
+        Picker("Owner", selection: $ownerFilter) { ForEach(ownerOptions, id: \.self) { Text($0).tag($0) } }
+    }
+
+    private var statusPicker: some View {
+        Picker("Status", selection: $statusFilter) { ForEach(statusOptions, id: \.self) { Text($0).tag($0) } }
+    }
+
+    private var clearFiltersButton: some View {
+        Button("Clear") { query = ""; ownerFilter = "All owners"; statusFilter = "All statuses" }
     }
 
     private func recordCard(_ record: CandidateRecord) -> some View {
@@ -793,7 +889,7 @@ struct CandidateRecordEditorView: View {
             }
             .padding(20)
         }
-        .frame(minWidth: 720, minHeight: 720)
+        .frame(minWidth: 560, idealWidth: 720, minHeight: 560, idealHeight: 720)
         .updateDraftGuard(active: record != initialRecord || model.candidateTrackerLoading, reason: "Save or cancel the candidate record before updating.")
         .interactiveDismissDisabled(record != initialRecord || model.candidateTrackerLoading)
         .alert("Discard candidate record changes?", isPresented: $confirmCancel) {
@@ -1152,7 +1248,7 @@ struct LocationConfirmationView: View {
             }
         }
         .padding(30)
-        .frame(width: 640)
+        .frame(minWidth: 480, idealWidth: 640, maxWidth: 640)
     }
 }
 
@@ -1223,7 +1319,7 @@ struct DispensationPasteReviewView: View {
             }
         }
         .padding(30)
-        .frame(width: 680)
+        .frame(minWidth: 500, idealWidth: 680, maxWidth: 680)
     }
 }
 
@@ -1449,7 +1545,7 @@ struct PDFPreviewView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 920, minHeight: 720)
+        .frame(minWidth: 620, idealWidth: 920, minHeight: 540, idealHeight: 720)
         .task {
             do {
                 let data = try await model.pdfData(document: document)
@@ -1801,7 +1897,7 @@ struct SignatureApprovalView: View {
         }
         .updateDraftGuard(reason: "Finish or cancel the signature review before updating.")
         .padding(30)
-        .frame(width: 760)
+        .frame(minWidth: 520, idealWidth: 760, maxWidth: 760)
         .task {
             signatureImage = try? await model.signatureImage()
             if document.isDispensation {
@@ -1895,7 +1991,7 @@ struct SignatureSetupView: View {
         }
         .updateDraftGuard(reason: "Save or cancel the signature setup before updating.")
         .padding(30)
-        .frame(width: 780)
+        .frame(minWidth: 520, idealWidth: 780, maxWidth: 780)
         .onAppear {
             if name.isEmpty { name = model.user?.name ?? "" }
             if initials.isEmpty { initials = initialsForName(model.user?.name ?? "") }
@@ -2064,7 +2160,7 @@ struct DuesView: View {
                 }
 
                 if let ledger = model.dues {
-                    HStack(spacing: 14) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 14)], spacing: 14) {
                         duesTile("Collected", lodgeMoney(ledger.totals.collectedCents))
                         duesTile("Outstanding", lodgeMoney(ledger.totals.outstandingCents))
                         duesTile("Paid in full", "\(ledger.totals.paidCount)")
@@ -2367,7 +2463,7 @@ struct MyDuesView: View {
                 if let record = model.myDues {
                     Text(record.duesYear).font(.headline)
                     ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 12) { tile("Assessment", lodgeMoney(record.row.assessedCents)); tile("Received", lodgeMoney(record.row.paidCents)); tile("Balance", record.row.creditCents > 0 ? "\(lodgeMoney(record.row.creditCents)) credit" : lodgeMoney(record.row.remainingCents)); tile("Status", status(record.row.status)) }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) { tile("Assessment", lodgeMoney(record.row.assessedCents)); tile("Received", lodgeMoney(record.row.paidCents)); tile("Balance", record.row.creditCents > 0 ? "\(lodgeMoney(record.row.creditCents)) credit" : lodgeMoney(record.row.remainingCents)); tile("Status", status(record.row.status)) }
                         VStack(spacing: 12) { tile("Assessment", lodgeMoney(record.row.assessedCents)); tile("Received", lodgeMoney(record.row.paidCents)); tile("Balance", record.row.creditCents > 0 ? "\(lodgeMoney(record.row.creditCents)) credit" : lodgeMoney(record.row.remainingCents)); tile("Status", status(record.row.status)) }
                     }
                     ViewThatFits(in: .horizontal) {
@@ -2454,7 +2550,7 @@ struct DuesAdjustmentView: View {
         Form { Picker("Brother",selection:$rosterId){Text("Choose a Brother").tag(Int?.none);ForEach(rows.sorted{$0.name<$1.name}){row in if let id=row.rosterId{Text(row.name).tag(Int?.some(id))}}};Picker("Type",selection:$type){ForEach(["payment","credit","refund","chargeback","correction"],id:\.self){Text($0.capitalized)}};TextField("Amount",text:$amount);DatePicker("Date",selection:$date,displayedComponents:.date);Picker("Method",selection:$method){ForEach(["Cash","Check","Money order","Bank transfer","Other"],id:\.self){Text($0)}};TextField("Reference",text:$reference);TextField("Note",text:$note,axis:.vertical).lineLimit(2...5) }
         Text(message).font(.caption).foregroundStyle(.red)
         HStack{Spacer();Button("Record activity"){Task{await save()}}.buttonStyle(.borderedProminent).disabled(working||rosterId==nil||Double(amount)==nil)}
-    }.padding(24).frame(minWidth:560,minHeight:520) }
+    }.padding(24).frame(minWidth:460,idealWidth:560,minHeight:500,idealHeight:520) }
     @MainActor private func save() async { guard let rosterId else{return};working=true;defer{working=false};let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.dateFormat="yyyy-MM-dd";do{let data=try JSONEncoder().encode(DuesAdjustmentDraft(rosterId:rosterId,transactionType:type,amount:amount,effectiveDate:formatter.string(from:date),paymentMethod:method,sourceReference:reference,note:note));let _:MessageResponse=try await model.request("/api/dues/adjustments",method:"POST",body:data);await saved();dismiss()}catch{message=error.localizedDescription}}
 }
 

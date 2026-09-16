@@ -118,6 +118,7 @@ struct AgendaCreatorView: View {
     @ObservedObject var workspace: AgendaWorkspace
     @State private var deleting: AgendaRecord?
     @State private var leave = false
+    @State private var editorPane = 0
     var body: some View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Agenda Creator", subtitle: workspace.selected == nil ? "Create, save, and resume Lodge agenda drafts" : "Build the agenda in stages and save it before leaving", symbol: "list.number") {
@@ -150,7 +151,7 @@ struct AgendaCreatorView: View {
         }.listStyle(.inset)
     }
     private var editor: some View {
-        HSplitView {
+        AdaptiveWorkspaceSplit(primaryTitle: "Agenda entries", secondaryTitle: "Document preview", compactPane: $editorPane) {
             Form {
                 Section("Meeting details") {
                     TextField("Meeting date, YYYY-MM-DD", text: binding(\.meetingDate))
@@ -172,11 +173,12 @@ struct AgendaCreatorView: View {
                     Text("Review these names when Lodge offices change.").font(.caption).foregroundStyle(.secondary)
                     ForEach(workspace.draft?.officers.indices ?? 0..<0, id: \.self) { index in HStack { TextField("Office", text: officer(index, \.office)); TextField("Name", text: officer(index, \.name)) } }
                 }
-            }.formStyle(.grouped).frame(minWidth: 390, idealWidth: 510)
+            }.formStyle(.grouped)
+        } secondary: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack { VStack(alignment: .leading) { Text("Document preview").font(.headline); Text(workspace.previewMessage).font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("Save PDF") { if let pdf = workspace.pdf { saveDocument(pdf, name: "Stone Square Agenda.pdf", type: .pdf) } }.disabled(workspace.pdf == nil || workspace.previewMessage != "Preview matches the current fields.") }
                 LodgeDocumentPreview(data: workspace.pdf)
-            }.padding(14).frame(minWidth: 320, idealWidth: 520)
+            }.padding(14)
         }
     }
     private func binding(_ key: WritableKeyPath<AgendaDraft, String>) -> Binding<String> { Binding(get: { workspace.draft?[keyPath: key] ?? "" }, set: { workspace.draft?[keyPath: key] = $0 }) }

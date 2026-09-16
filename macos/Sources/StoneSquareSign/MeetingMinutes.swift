@@ -239,6 +239,7 @@ struct MeetingMinutesView: View {
     @State private var showingHistory = false
     @State private var readonlyRecord: MinutesRecord?
     @State private var deferredRecordsRefresh = false
+    @State private var editorPane = 0
     private var editable: Bool { model.user?.can("minutes.prepare") == true && (workspace.selected?.status == "draft" || (workspace.selected?.status == "awaiting_master_attestation" && model.user?.role == "owner")) }
     private func text(_ key: WritableKeyPath<MinutesDraft, String?>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key] ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 })
@@ -287,9 +288,9 @@ struct MeetingMinutesView: View {
             if workspace.dirty { deferredRecordsRefresh = true }
             else { Task { await workspace.refresh() } }
         }
-        .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .minutes, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
+        .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .minutes, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
         .sheet(item: $readonlyRecord) { record in
-            FinalReportBrowserView(kind: .minutes, initialSelection: record.id, onClose: { readonlyRecord = nil }).environmentObject(model).frame(minWidth: 800, minHeight: 650)
+            FinalReportBrowserView(kind: .minutes, initialSelection: record.id, onClose: { readonlyRecord = nil }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700)
         }
         .onChange(of: workspace.draft) { old, new in
             guard old != nil, old != new else { return }
@@ -321,16 +322,10 @@ struct MeetingMinutesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 if let newest = workspace.records.first(where: { ["ready_for_distribution", "distributed", "approved_by_lodge"].contains($0.status) }) {
-                    HStack(spacing: 16) {
-                        Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(SignTheme.gold)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && newest.status == "ready_for_distribution"
-                                 ? "WM review complete, ready to send to the Craft"
-                                 : "Meeting minutes are available to view").font(.headline).foregroundStyle(SignTheme.navy)
-                            Text("\(MinutesDateText.minutesTitle(newest.draft.meetingDate)) is signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("View signed minutes") { showingHistory = true }.buttonStyle(.borderedProminent)
+                    AdaptiveControlBar {
+                        HStack(spacing: 16) { signedMinutesNotice(newest); Spacer(); signedMinutesButton }
+                    } compact: {
+                        VStack(alignment: .leading, spacing: 12) { signedMinutesNotice(newest); signedMinutesButton }
                     }
                     .padding(16)
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
@@ -345,14 +340,10 @@ struct MeetingMinutesView: View {
                             Text("Detect automatically").tag("auto"); Text("Compiled meeting notes").tag("compiled_notes"); Text("Meeting transcript").tag("transcript")
                         }.frame(maxWidth: 380)
                         TextEditor(text: $workspace.source).font(.body).frame(minHeight: 150).padding(5).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                        HStack {
-                            Button("Choose file…", systemImage: "doc.badge.plus") {
-                                let panel = NSOpenPanel(); panel.allowedContentTypes = [.plainText, .pdf, UTType(filenameExtension: "docx") ?? .data]; panel.allowsMultipleSelection = false
-                                if panel.runModal() == .OK { workspace.fileURL = panel.url }
-                            }
-                            if let file = workspace.fileURL { Text(file.lastPathComponent).lineLimit(1); Button("Remove file") { workspace.fileURL = nil } }
-                            Spacer()
-                            Button("Create draft minutes") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace.fileURL == nil)
+                        AdaptiveControlBar {
+                            HStack { sourceFileControls; Spacer(); createMinutesButton }
+                        } compact: {
+                            VStack(alignment: .leading, spacing: 10) { sourceFileControls; createMinutesButton }
                         }
                     }.padding(14)
                 }
@@ -388,8 +379,34 @@ struct MeetingMinutesView: View {
             }.padding(22)
         }
     }
+    private func signedMinutesNotice(_ record: MinutesRecord) -> some View {
+        HStack(spacing: 16) {
+            Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(SignTheme.gold)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && record.status == "ready_for_distribution"
+                     ? "WM review complete, ready to send to the Craft"
+                     : "Meeting minutes are available to view").font(.headline).foregroundStyle(SignTheme.navy)
+                Text("\(MinutesDateText.minutesTitle(record.draft.meetingDate)) is signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private var signedMinutesButton: some View {
+        Button("View signed minutes") { showingHistory = true }.buttonStyle(.borderedProminent)
+    }
+    private var sourceFileControls: some View {
+        HStack {
+            Button("Choose file…", systemImage: "doc.badge.plus") {
+                let panel = NSOpenPanel(); panel.allowedContentTypes = [.plainText, .pdf, UTType(filenameExtension: "docx") ?? .data]; panel.allowsMultipleSelection = false
+                if panel.runModal() == .OK { workspace.fileURL = panel.url }
+            }
+            if let file = workspace.fileURL { Text(file.lastPathComponent).lineLimit(1); Button("Remove file") { workspace.fileURL = nil } }
+        }
+    }
+    private var createMinutesButton: some View {
+        Button("Create draft minutes") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace.fileURL == nil)
+    }
     private var editor: some View {
-        HSplitView {
+        AdaptiveWorkspaceSplit(primaryTitle: "Minutes entries", secondaryTitle: "Document preview", compactPane: $editorPane) {
             Form {
                 Section {
                     GenerationStatusView(status: workspace.generationStatus)
@@ -449,12 +466,13 @@ struct MeetingMinutesView: View {
                     }
                     workflow
                 }
-            }.formStyle(.grouped).frame(minWidth: 340, idealWidth: 480)
+            }.formStyle(.grouped)
+        } secondary: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Text("Document preview").font(.headline); Spacer(); Button("Save PDF") { if let pdf = workspace.pdf { saveDocument(pdf, name: "Meeting Minutes.pdf", type: .pdf) } }.disabled(workspace.pdf == nil || workspace.previewMessage != "Preview matches the current fields.") }
                 Text(workspace.previewMessage).font(.caption).foregroundStyle(.secondary)
                 LodgeDocumentPreview(data: workspace.pdf)
-            }.padding(14).frame(minWidth: 280, idealWidth: 480)
+            }.padding(14)
         }
     }
     private var metadata: some View {

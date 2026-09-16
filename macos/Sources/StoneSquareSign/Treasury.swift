@@ -181,6 +181,7 @@ struct TreasuryView: View {
     @State private var pendingWorkflowAction: String?
     @State private var pendingAccessUser: TreasuryAccessUser?
     @State private var confirmingAssignment = false
+    @State private var editorPane = 0
     var editable: Bool { guard model.user?.can("treasury.prepare") == true, let r = workspace.selected else { return false }; return r.status == "draft" && r.preparerUserId == model.user?.id }
     var canFinalize: Bool {
         guard editable, let draft = workspace.draft else { return false }
@@ -210,8 +211,8 @@ struct TreasuryView: View {
             }
         }.background(Color(nsColor:.windowBackgroundColor)).disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh(); await workspace.loadAccess() }
-        .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id, onClose: { readonlyReport = nil }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
-        .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .treasury, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 800, minHeight: 650) }
+        .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id, onClose: { readonlyReport = nil }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
+        .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .treasury, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
         .onChange(of:workspace.draft) { old,new in if old != nil && new != nil { workspace.dirty = new != workspace.selected?.draft; workspace.preview() } }
         .alert("Delete this unsigned report?",isPresented:Binding(get:{deleting != nil},set:{if !$0 { deleting = nil }})) { Button("Delete",role:.destructive) { if let record = deleting { Task { await workspace.remove(record) } } }; Button("Cancel",role:.cancel) {} }
         .alert("Leave unsaved changes?",isPresented:$leave) { Button("Leave changes",role:.destructive) { workspace.close() }; Button("Keep editing",role:.cancel) {} }
@@ -286,7 +287,7 @@ struct TreasuryView: View {
         } }.formStyle(.grouped)
     }
     var editor: some View {
-        HSplitView {
+        AdaptiveWorkspaceSplit(primaryTitle: "Report entries", secondaryTitle: "Document preview", compactPane: $editorPane) {
             VStack(spacing: 0) {
                 Picker("Report section", selection: $editorSection) {
                     Text("Details").tag(0); Text("Accounts").tag(1); Text("Activity").tag(2); Text("Review").tag(3)
@@ -322,12 +323,13 @@ struct TreasuryView: View {
                         Section("Complete the report") { workflow }
                     }
                 }.formStyle(.grouped).textFieldStyle(.roundedBorder)
-            }.frame(minWidth: 360, idealWidth: 500)
+            }
+        } secondary: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack { Text("Document preview").font(.headline); Spacer(); Button("Save PDF") { if let pdf = workspace.pdf { saveDocument(pdf, name: "Treasurer Report.pdf", type: .pdf) } }.disabled(workspace.pdf == nil || workspace.previewMessage != "Preview matches the current fields.") }
                 Text(workspace.previewMessage).font(.caption).foregroundStyle(.secondary)
                 LodgeDocumentPreview(data: workspace.pdf)
-            }.padding(16).frame(minWidth: 280, idealWidth: 480)
+            }.padding(16)
         }
     }
     var handoff: some View { VStack(alignment:.leading,spacing:12) {

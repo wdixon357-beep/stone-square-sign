@@ -98,6 +98,7 @@ struct BuildingRequestsView: View {
     @State private var depositDecision = ""
     @State private var authorizationConditions = ""
     @State private var attestationPending = false
+    @State private var requestPane = 0
     private var selected: BuildingRequest? { workspace.requests.first { $0.id == selectedID } }
     private var visible: [BuildingRequest] { workspace.requests.filter { filter == "all" || $0.status == filter } }
     var body: some View {
@@ -106,7 +107,7 @@ struct BuildingRequestsView: View {
                 if model.user?.can("building.view") == true { Button("Refresh") { Task { await workspace.load(using: model) } }.disabled(workspace.busy) }
                 if model.user?.can("building.request") == true { Button("New Building Request") { showingNewRequest = true }.buttonStyle(.borderedProminent) }
             }
-            if model.user?.can("building.view") == true { HSplitView {
+            if model.user?.can("building.view") == true { AdaptiveWorkspaceSplit(primaryTitle: "Requests", secondaryTitle: "Request details", compactPane: $requestPane) {
                 VStack {
                     Picker("Status", selection: $filter) { Text("All").tag("all"); Text("Pending").tag("pending"); Text("Approved").tag("approved"); Text("Declined").tag("denied") }.padding(12)
                     List(visible, selection: $selectedID) { request in
@@ -115,7 +116,8 @@ struct BuildingRequestsView: View {
                             Text("\(LodgeCalendarDates.displayDate(request.date)) · \(request.statusLabel)").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag(request.id)
                     }
-                }.frame(minWidth: 230, idealWidth: 310, maxWidth: 400)
+                }
+            } secondary: {
                 if let request = selected {
                     Form {
                         Section(request.organization) {
@@ -174,7 +176,7 @@ struct BuildingRequestsView: View {
         }
         .task { await workspace.load(using: model) }
         .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
-        .onChange(of: selectedID) { _, _ in note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; depositDecision = ""; authorizationConditions = "" }
+        .onChange(of: selectedID) { _, id in note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; depositDecision = ""; authorizationConditions = ""; if id != nil { requestPane = 1 } }
         .updateDraftGuard(active: !note.isEmpty || workspace.busy || newRequest.hasUnsubmittedChanges || newRequest.busy, reason: "Finish your building request draft before updating.")
         .alert(decision == "approved" ? "Approve this building request?" : "Decline this building request?", isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } })) {
             Button("Confirm decision") {
@@ -303,6 +305,7 @@ struct LodgeCalendarView: View {
     @State private var selectedID: String?
     @State private var editing: CalendarEditorSelection?
     @State private var deleting: LodgeCalendarEvent?
+    @State private var calendarPane = 0
     private var visible: [LodgeCalendarEvent] { workspace.events.filter { scope == "month" || $0.includes(day: LodgeCalendarDates.key(day)) } }
     private var selected: LodgeCalendarEvent? { visible.first { $0.id == selectedID } }
     private var rangeKey: String { LodgeCalendarDates.range(day).0 }
@@ -312,23 +315,28 @@ struct LodgeCalendarView: View {
                 Button("Refresh") { Task { await workspace.load(date: day, using: model) } }.disabled(workspace.busy)
                 if model.user?.can("calendar.manage") == true { Button("Add event") { editing = CalendarEditorSelection(event: nil, day: LodgeCalendarDates.key(day)) }.buttonStyle(.borderedProminent).disabled(workspace.busy) }
             }
-            HStack(spacing: 14) {
-                Button { moveMonth(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous month")
-                DatePicker("Date", selection: $day, displayedComponents: .date).datePickerStyle(.field).environment(\.timeZone, LodgeCalendarDates.calendar.timeZone)
-                Button { moveMonth(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Next month")
-                Button("Today") { day = Date() }
-                Spacer()
-                Picker("Agenda", selection: $scope) { Text("Month").tag("month"); Text("Selected day").tag("day") }.pickerStyle(.segmented).frame(width: 250)
+            AdaptiveControlBar {
+                HStack(spacing: 14) {
+                    calendarNavigation
+                    Spacer()
+                    scopePicker.frame(width: 250)
+                }
+            } compact: {
+                VStack(alignment: .leading, spacing: 10) {
+                    calendarNavigation
+                    scopePicker
+                }
             }.padding(16).disabled(workspace.busy)
             Divider()
-            HSplitView {
+            AdaptiveWorkspaceSplit(primaryTitle: "Events", secondaryTitle: "Event details", compactPane: $calendarPane) {
                 List(visible, selection: $selectedID) { event in
                     VStack(alignment: .leading, spacing: 5) {
                         Text(event.title).font(.headline)
                         Text([LodgeCalendarDates.displayDate(event.startDate), event.allDay ? "All day" : [LodgeCalendarDates.displayTime(event.startTime), LodgeCalendarDates.displayTime(event.endTime)].filter { !$0.isEmpty }.joined(separator: " to ")].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                         Text(event.category.capitalized).font(.caption2).foregroundStyle(.secondary)
                     }.padding(.vertical, 6).tag(event.id)
-                }.frame(minWidth: 260, idealWidth: 350, maxWidth: 460)
+                }
+            } secondary: {
                 if let event = selected {
                     Form {
                         Section(event.title) {
@@ -356,12 +364,24 @@ struct LodgeCalendarView: View {
             if !workspace.message.isEmpty { Text(workspace.message).font(.callout).padding(12) }
         }
         .task(id: rangeKey) { await workspace.load(date: day, using: model) }
+        .onChange(of: selectedID) { _, id in if id != nil { calendarPane = 1 } }
         .sheet(item: $editing) { selection in LodgeCalendarEditor(workspace: workspace, event: selection.event, day: selection.day, visibleDate: day).environmentObject(model) }
         .alert("Remove this calendar event?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Remove event", role: .destructive) { if let event = deleting { Task { await workspace.remove(event, date: day, using: model) } }; deleting = nil }
             Button("Cancel", role: .cancel) { deleting = nil }
         } message: { Text("The event will be removed from the Lodge calendar.") }
         .updateDraftGuard(active: workspace.busy, reason: "Wait for the calendar operation to finish before updating.")
+    }
+    private var calendarNavigation: some View {
+        HStack(spacing: 10) {
+            Button { moveMonth(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous month")
+            DatePicker("Date", selection: $day, displayedComponents: .date).datePickerStyle(.field).environment(\.timeZone, LodgeCalendarDates.calendar.timeZone)
+            Button { moveMonth(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Next month")
+            Button("Today") { day = Date() }
+        }
+    }
+    private var scopePicker: some View {
+        Picker("Agenda", selection: $scope) { Text("Month").tag("month"); Text("Selected day").tag("day") }.pickerStyle(.segmented)
     }
     private func moveMonth(_ offset: Int) { if let next = LodgeCalendarDates.calendar.date(byAdding: .month, value: offset, to: day) { day = next } }
 }
@@ -411,7 +431,7 @@ private struct LodgeCalendarEditor: View {
                 Button("Save event") { Task { if await workspace.save(draft, event: event, date: visibleDate, using: model) { dismiss() } } }
                     .buttonStyle(.borderedProminent).disabled(!draft.valid || workspace.busy)
             }.padding(18)
-        }.frame(width: 650, height: 620)
+        }.frame(minWidth: 500, idealWidth: 650, minHeight: 520, idealHeight: 620)
         .interactiveDismissDisabled(workspace.busy || draft != initialDraft)
         .updateDraftGuard(active: draft != initialDraft || workspace.busy, reason: "Finish or cancel your calendar event changes before updating.")
         .alert("Discard calendar event changes?", isPresented: $confirmingCancel) {
@@ -636,7 +656,7 @@ private struct NewBuildingRequestView: View {
                     Button(workspace.retryPending ? "Retry same request" : "Submit request") { confirmingSubmit = true }.buttonStyle(.borderedProminent).disabled(!workspace.canSubmit)
                 }.padding(18)
             }
-        }.frame(width: 790, height: 760)
+        }.frame(minWidth: 560, idealWidth: 790, minHeight: 600, idealHeight: 760)
         .environment(\.timeZone, LodgeCalendarDates.calendar.timeZone)
         .environment(\.calendar, LodgeCalendarDates.calendar)
         .interactiveDismissDisabled(workspace.busy || workspace.hasUnsubmittedChanges)
