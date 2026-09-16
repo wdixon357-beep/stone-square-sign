@@ -51,6 +51,14 @@ private struct AgendaDeletePayload: Encodable { let revision: Int }
     private var previewTask: Task<Void, Never>?
     private var generation = 0
 
+    private func savedLabel(_ value: String) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = parser.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        guard let date else { return "Draft saved" }
+        return "Last saved \(date.formatted(date: .abbreviated, time: .shortened))"
+    }
+
     func configure(_ model: AppModel) { transport.configure(model) }
     func refresh() async {
         do { records = try JSONDecoder().decode(AgendaListPayload.self, from: await transport.request("/api/agendas")).agendas }
@@ -61,11 +69,11 @@ private struct AgendaDeletePayload: Encodable { let revision: Int }
         do {
             let data = try await transport.request("/api/agendas", method: "POST", body: Data("{}".utf8))
             let record = try JSONDecoder().decode(AgendaPayload.self, from: data).agenda
-            await refresh(); open(record); message = "New agenda created."
+            await refresh(); open(record); message = "Draft created and saved. You can return to it from the URL or this Mac."
         } catch { message = error.localizedDescription }
     }
     func open(_ record: AgendaRecord) {
-        selected = record; draft = record.draft; dirty = false; pdf = nil; message = ""; updatePreview()
+        selected = record; draft = record.draft; dirty = false; pdf = nil; message = savedLabel(record.updatedAt); updatePreview()
     }
     func close() { previewTask?.cancel(); generation += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
     func save() async -> Bool {
@@ -74,7 +82,7 @@ private struct AgendaDeletePayload: Encodable { let revision: Int }
         do {
             let data = try await transport.request("/api/agendas/\(selected.id)", method: "PUT", body: JSONEncoder().encode(AgendaSavePayload(revision: selected.revision, draft: draft)))
             let record = try JSONDecoder().decode(AgendaPayload.self, from: data).agenda
-            self.selected = record; self.draft = record.draft; dirty = false; await refresh(); message = "Agenda saved."; return true
+            self.selected = record; self.draft = record.draft; dirty = false; await refresh(); message = "Draft saved. \(savedLabel(record.updatedAt)). You can safely leave and continue later."; return true
         } catch { message = error.localizedDescription; return false }
     }
     func remove(_ record: AgendaRecord) async {
@@ -82,7 +90,7 @@ private struct AgendaDeletePayload: Encodable { let revision: Int }
         do { _ = try await transport.request("/api/agendas/\(record.id)", method: "DELETE", body: JSONEncoder().encode(AgendaDeletePayload(revision: record.revision))); if selected?.id == record.id { close() }; await refresh(); message = "Agenda deleted." }
         catch { message = error.localizedDescription }
     }
-    func changed() { dirty = draft != selected?.draft; updatePreview() }
+    func changed() { dirty = draft != selected?.draft; if dirty { message = "Unsaved changes" }; updatePreview() }
     func addSection() { draft?.sections.append(AgendaItem(id: UUID().uuidString, heading: "New Agenda Section", scheduledTime: "", body: "")); changed() }
     func removeSection(_ index: Int) { draft?.sections.remove(at: index); changed() }
     func move(_ index: Int, by offset: Int) {
@@ -112,9 +120,9 @@ struct AgendaCreatorView: View {
     @State private var leave = false
     var body: some View {
         VStack(spacing: 0) {
-            NativeWorkspaceHeader(title: "Agenda Creator", subtitle: workspace.selected == nil ? "Create the Lodge meeting agenda" : "Edit and preview the meeting order", symbol: "list.number") {
-                if workspace.selected == nil { Button("Create agenda") { Task { await workspace.create() } }.buttonStyle(.borderedProminent) }
-                else { Button("All agendas") { if workspace.dirty { leave = true } else { workspace.close() } }; Button("Save agenda") { Task { _ = await workspace.save() } }.buttonStyle(.borderedProminent) }
+            NativeWorkspaceHeader(title: "Agenda Creator", subtitle: workspace.selected == nil ? "Create, save, and resume Lodge agenda drafts" : "Build the agenda in stages and save it before leaving", symbol: "list.number") {
+                if workspace.selected == nil { Button("Create Agenda Draft") { Task { await workspace.create() } }.buttonStyle(.borderedProminent) }
+                else { Button("All Agenda Drafts") { if workspace.dirty { leave = true } else { workspace.close() } }; Button("Save Draft") { Task { _ = await workspace.save() } }.buttonStyle(.borderedProminent).disabled(!workspace.dirty) }
             }
             if workspace.draft == nil { list } else { editor }
             if !workspace.message.isEmpty { Text(workspace.message).font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar) }
@@ -129,13 +137,13 @@ struct AgendaCreatorView: View {
     }
     private var list: some View {
         List {
-            Section("Saved agendas") {
-                if workspace.records.isEmpty { ContentUnavailableView("No agendas yet", systemImage: "list.number", description: Text("Create an agenda to begin with the Lodge format.")) }
+            Section("Saved agenda drafts") {
+                if workspace.records.isEmpty { ContentUnavailableView("No agenda drafts yet", systemImage: "list.number", description: Text("Create a draft and save your progress as you build the meeting order.")) }
                 ForEach(workspace.records) { record in
                     HStack(spacing: 14) {
                         Image(systemName: "list.number").font(.title2).foregroundStyle(SignTheme.gold)
-                        VStack(alignment: .leading, spacing: 4) { Text(record.draft.meetingDate.isEmpty ? "Meeting date needs review" : MinutesDateText.display(record.draft.meetingDate)).font(.headline); Text(record.draft.meetingType).font(.caption).foregroundStyle(.secondary) }
-                        Spacer(); Button("Open") { workspace.open(record) }; Button("Delete", role: .destructive) { deleting = record }
+                        VStack(alignment: .leading, spacing: 4) { Text(record.draft.meetingDate.isEmpty ? "Meeting date needs review" : MinutesDateText.display(record.draft.meetingDate)).font(.headline); Text("Draft · \(record.draft.meetingType)").font(.caption).foregroundStyle(.secondary) }
+                        Spacer(); Button("Resume Draft") { workspace.open(record) }; Button("Delete Draft", role: .destructive) { deleting = record }
                     }.padding(.vertical, 7)
                 }
             }

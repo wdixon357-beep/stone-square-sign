@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { PDFParse } from 'pdf-parse';
+import { readFile } from 'node:fs/promises';
 
 const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
 const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
@@ -26,13 +27,19 @@ try {
   const created = await api('/api/agendas', owner.token, 'POST', {}); assert.equal(created.status, 201); assert.match(created.cache, /no-store/);
   let agenda = created.data.agenda; assert.equal(agenda.draft.sections[0].heading, 'Opening'); assert.ok(agenda.draft.officers.some(item => item.name === 'David Marable' && item.office === 'Assistant Treasurer'));
   for (const suffix of ['', '/preview', '/pdf']) assert.equal((await api(`/api/agendas/${agenda.id}${suffix}`, officer.token, suffix === '/preview' ? 'POST' : 'GET', suffix === '/preview' ? { draft: agenda.draft } : undefined)).status, 403);
+  agenda.draft.subtitle = 'Work in progress';
+  const partial = await api(`/api/agendas/${agenda.id}`, owner.token, 'PUT', { revision: agenda.revision, draft: agenda.draft }); assert.equal(partial.status, 200); agenda = partial.data.agenda;
+  assert.equal((await api(`/api/agendas/${agenda.id}`, owner.token)).data.agenda.draft.subtitle, 'Work in progress');
+  assert.equal((await api('/api/agendas', owner.token)).data.agendas[0].revision, agenda.revision);
   agenda.draft.meetingDate = '2026-09-17'; agenda.draft.subtitle = 'A focused stated communication'; agenda.draft.sections[1].body = 'Brother Example requested the prayers of the Lodge.';
-  const saved = await api(`/api/agendas/${agenda.id}`, owner.token, 'PUT', { revision: agenda.revision, draft: agenda.draft }); assert.equal(saved.status, 200); agenda = saved.data.agenda; assert.equal(agenda.revision, 2);
+  const saved = await api(`/api/agendas/${agenda.id}`, owner.token, 'PUT', { revision: agenda.revision, draft: agenda.draft }); assert.equal(saved.status, 200); agenda = saved.data.agenda; assert.equal(agenda.revision, 3);
   assert.equal((await api(`/api/agendas/${agenda.id}`, owner.token, 'PUT', { revision: 1, draft: agenda.draft })).status, 409);
   const preview = await api(`/api/agendas/${agenda.id}/preview`, owner.token, 'POST', { draft: agenda.draft }); assert.equal(preview.status, 200); assert.equal(preview.data.subarray(0, 4).toString(), '%PDF');
   const parser = new PDFParse({ data: preview.data }); const extracted = (await parser.getText()).text; await parser.destroy();
   assert.match(extracted, /Stone Square Lodge No\. 22/); assert.match(extracted, /AGENDA, STATED COMMUNICATION/); assert.match(extracted, /Thursday, September 17, 2026/); assert.match(extracted, /Brother Example requested the prayers/);
   assert.equal((await api(`/api/agendas/${agenda.id}`, owner.token, 'DELETE', { revision: agenda.revision })).status, 200);
   assert.equal((await api('/api/agendas', owner.token)).data.agendas.length, 0);
-  console.log('Agenda Creator checks passed: owner-only access, template defaults, revision protection, PDF output and deletion.');
+  const webAgenda = await readFile(new URL('../public/agenda.js', import.meta.url), 'utf8');
+  assert.match(webAgenda, />Save Draft</); assert.match(webAgenda, />Resume Draft</); assert.match(webAgenda, /Unsaved changes/); assert.match(webAgenda, /Last saved/);
+  console.log('Agenda Creator checks passed: owner-only access, persistent partial drafts, clear save and resume controls, revision protection, PDF output and deletion.');
 } finally { server.kill('SIGTERM'); }

@@ -1099,7 +1099,7 @@ struct LandingDashboardView: View {
                     if model.user?.canReadMinutes == true {
                         homeRow("Meeting Minutes", model.user?.can("minutes.prepare") == true ? "Prepare, review and attest to meeting records" : "Read finalized meeting records", "text.document.fill", action: openMinutes)
                     }
-                    if model.user?.role == "owner" { homeRow("Agenda Creator", "Create and preview the Lodge meeting agenda", "list.number", action: openAgenda) }
+                    if model.user?.role == "owner" { homeRow("Agenda Creator", "Create, save, resume, and preview Lodge agenda drafts", "list.number", action: openAgenda) }
                     if model.user?.canUseTreasury == true {
                         homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? (model.treasuryAlerts.isEmpty ? "Prepare and review treasurer reports" : "\(model.treasuryAlerts.count) banking record\(model.treasuryAlerts.count == 1 ? "" : "s") awaiting a preparer") : model.user?.can("treasury.upload") == true ? "Provide banking records and view reports" : "Read finalized treasurer reports", "chart.bar.doc.horizontal.fill", action: openTreasury)
                     }
