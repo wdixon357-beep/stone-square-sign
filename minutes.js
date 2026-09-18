@@ -32,7 +32,7 @@ export const MINUTES_SCHEMA = {
       items: {
         type: 'object', additionalProperties: false, required: ['name', 'title', 'status'],
         properties: {
-          name: { type: 'string' }, title: { type: 'string' },
+          name: { type: 'string', minLength: 1 }, title: { type: 'string' },
           status: { type: 'string', enum: ['present', 'absent', 'excused', 'not_recorded'] },
         },
       },
@@ -97,6 +97,9 @@ function validateGeneratedShape(value, schema, path = 'response') {
   const allowed = Array.isArray(schema.type) ? schema.type : [schema.type];
   if (!allowed.includes(type)) throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
   if (schema.enum && !schema.enum.includes(value)) throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
+  if (type === 'string' && schema.minLength != null && [...value].length < schema.minLength) {
+    throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
+  }
   if (type === 'object') {
     if ((schema.required || []).some(key => !Object.hasOwn(value, key))
       || schema.additionalProperties === false && Object.keys(value).some(key => !Object.hasOwn(schema.properties, key))) {
@@ -109,6 +112,9 @@ function validateGeneratedShape(value, schema, path = 'response') {
 function checkedGeneratedDraft(response, source, localDraft) {
   validateGeneratedShape(response, MINUTES_GENERATION_SCHEMA);
   const {draft: generated, evidence} = response;
+  if (generated.officerAttendance.some(entry => !entry.name.trim())) {
+    throw generationError('Minutes generation returned an invalid officer attendance name. Please try again.');
+  }
   if (generated.income.length || generated.expenses.length || generated.actionItems.length) {
     throw generationError('Minutes generation included unsupported transaction or action tables. Please try again.');
   }
@@ -201,7 +207,14 @@ function checkedGeneratedDraft(response, source, localDraft) {
     if (entry.status === 'not_recorded') continue;
     const quote = quotesFor(`officerAttendance[${index}].status`);
     if (!attendanceEstablished(quote, entry.name, entry.status)) {
-      throw generationError('An officer attendance status is not established by its source reference. Please try again.');
+      // A transcript often mentions an officer speaking without providing a roll
+      // call. That mention cannot establish attendance, but it also should not
+      // discard an otherwise usable minutes draft. Keep the officer on the roster,
+      // reset only the unsupported status, and make the required review explicit.
+      entry.status = 'not_recorded';
+      const normalizedEntry = normalized.officerAttendance[index];
+      if (normalizedEntry) normalizedEntry.status = 'not_recorded';
+      warnings.push(`Confirm attendance for ${entry.name}: the source mentions the officer but does not establish an attendance status.`);
     }
   }
   generated.sensitiveReview.forEach((detail, index) => {

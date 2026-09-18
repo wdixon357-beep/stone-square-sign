@@ -167,6 +167,30 @@ try {
   await rejectResponse(result => {result.draft.closingTime = '10:00 PM';}, /disagreed with the source/);
   await rejectResponse(result => {result.evidence.find(entry => entry.field === 'closingPrayerGiven').quote = 'The Lodge closed at 9:00 PM.';}, /does not establish closingPrayerGiven/);
   await rejectResponse(result => {result.draft.present[0] = 'Brother Missing Name';}, /not established/);
+  const unsupportedOfficerAttendance = response();
+  unsupportedOfficerAttendance.draft.officerAttendance = [{name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'}];
+  unsupportedOfficerAttendance.evidence.push({field:'officerAttendance[0].status',quote:'Presiding: WM Dixon-Saunders'});
+  const attendanceReviewDraft = await generateMinutesDraft(source, {generateStructured:async()=>unsupportedOfficerAttendance});
+  assert.equal(attendanceReviewDraft.officerAttendance[0].status,'not_recorded');
+  assert.ok(attendanceReviewDraft.warnings.some(warning=>/Confirm attendance for WM Dixon-Saunders/.test(warning)));
+  const duplicateOfficerAttendance = response();
+  duplicateOfficerAttendance.draft.officerAttendance = [
+    {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'},
+    {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'},
+  ];
+  duplicateOfficerAttendance.evidence.push(
+    {field:'officerAttendance[0].status',quote:'Present: WM Dixon-Saunders'},
+    {field:'officerAttendance[1].status',quote:'Presiding: WM Dixon-Saunders'},
+  );
+  const duplicateAttendanceDraft = await generateMinutesDraft(`${source}\nPresent: WM Dixon-Saunders`, {generateStructured:async()=>duplicateOfficerAttendance});
+  assert.equal(duplicateAttendanceDraft.officerAttendance[0].status,'present');
+  assert.equal(duplicateAttendanceDraft.officerAttendance[1].status,'not_recorded');
+  await rejectResponse(result => {
+    result.draft.officerAttendance = [
+      {name:'   ',title:'',status:'present'},
+      {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'},
+    ];
+  }, /invalid officer attendance name/);
   await rejectResponse(result => {result.draft.income = [{date:null, reference:null, party:null, description:'Unsupported receipt', amount:'100'}];}, /unsupported transaction/);
   const providerFailure = Object.assign(new Error('Monthly limit reached.'), {statusCode: 429});
   await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => {throw providerFailure;}}), error => error === providerFailure);

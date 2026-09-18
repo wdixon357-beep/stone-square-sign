@@ -12,6 +12,15 @@ const bytes = v => v ? Buffer.from(v) : null;
 const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*1024*1024, files:5, fields:6, fieldSize:180000 }, fileFilter:(_req,file,done)=>/\.(pdf|png|jpe?g|txt)$/i.test(file.originalname)?done(null,true):done(error(400,'Choose a PDF, PNG, JPG or TXT file.')) });
 const uploadFields = upload.fields([{name:'files',maxCount:5},{name:'checkingFiles',maxCount:5},{name:'savingsFiles',maxCount:5}]);
 const fileList = files => Array.isArray(files) ? files : Object.values(files||{}).flat();
+export const treasuryPeriodCovered = (pending, finalizedDrafts = []) => {
+  const start=String(pending?.periodStart||''),end=String(pending?.periodEnd||'');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end))return false;
+  return finalizedDrafts.some(draft=>{
+    const finalStart=String(draft?.periodStart||''),finalEnd=String(draft?.periodEnd||'');
+    return /^\d{4}-\d{2}-\d{2}$/.test(finalStart)&&/^\d{4}-\d{2}-\d{2}$/.test(finalEnd)
+      &&finalStart<=start&&finalEnd>=end;
+  });
+};
 async function accountSources(req) {
   const legacy=Array.isArray(req.files)?req.files:fileList(req.files?.files);
   const checking=fileList(req.files?.checkingFiles),savings=fileList(req.files?.savingsFiles);
@@ -37,7 +46,7 @@ async function accountSources(req) {
     files:groups.flatMap(({label,files})=>files.map(file=>({file,accountLabel:label}))),
   };
 }
-const serial = row => {const draft=normalizeTreasury(JSON.parse(row.draft_json));return { preparerUserId:row.preparer_user_id, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft, submittedDraft:row.submitted_json?normalizeTreasury(JSON.parse(row.submitted_json)):null, calculation:calculateTreasury(draft), preparerAttestedAt:row.preparer_attested_at };};
+const serial = row => {const draft=normalizeTreasury(JSON.parse(row.draft_json));return { preparerUserId:row.preparer_user_id, supersededByReportId:row.superseded_by_report_id||null, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft, submittedDraft:row.submitted_json?normalizeTreasury(JSON.parse(row.submitted_json)):null, calculation:calculateTreasury(draft), preparerAttestedAt:row.preparer_attested_at };};
 const fetchRecord = id => dbGet('SELECT * FROM treasury_reports WHERE id = ? AND deleted_at IS NULL',[id]);
 const canPrepare = user => hasPermission(user,'treasury.prepare');
 // A report has exactly one active editor. The administrator can take over through the
@@ -69,6 +78,8 @@ export async function initTreasurySchema() {
     preparer_attested_at TEXT, master_attested_at TEXT, master_name TEXT, deleted_at TEXT)`);
   await dbRun('ALTER TABLE treasury_reports ADD COLUMN IF NOT EXISTS preparer_user_id INTEGER REFERENCES users(id)');
   await dbRun('ALTER TABLE treasury_reports ADD COLUMN IF NOT EXISTS uploader_name TEXT');
+  await dbRun('ALTER TABLE treasury_reports ADD COLUMN IF NOT EXISTS superseded_by_report_id TEXT REFERENCES treasury_reports(id)');
+  await dbRun('ALTER TABLE treasury_reports ADD COLUMN IF NOT EXISTS superseded_at TEXT');
   await dbRun("UPDATE treasury_reports SET preparer_user_id=created_by_user_id,uploader_name=preparer_name WHERE uploader_name IS NULL");
   await dbRun('CREATE TABLE IF NOT EXISTS treasury_upload_access (user_id INTEGER PRIMARY KEY REFERENCES users(id), granted_by INTEGER NOT NULL REFERENCES users(id), granted_at TEXT NOT NULL)');
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_sources (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), name TEXT NOT NULL, mime TEXT NOT NULL, bytes BYTEA NOT NULL)`);
@@ -106,7 +117,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   const reportingWindow=()=>currentTreasuryReportingWindow();
   const record=async req=>{
     const row=await fetchRecord(req.params.id);
-    const visible=row&&(canPrepare(req.user)||(hasPermission(req.user,'treasury.upload')&&row.created_by_user_id===req.user.id&&['awaiting_preparer','draft'].includes(row.status))||(hasPermission(req.user,'treasury.view')&&finalized(row)&&await signedSnapshot(row)));
+    const visible=row&&(canPrepare(req.user)||(hasPermission(req.user,'treasury.upload')&&row.created_by_user_id===req.user.id&&['awaiting_preparer','draft','superseded'].includes(row.status))||(hasPermission(req.user,'treasury.view')&&finalized(row)&&await signedSnapshot(row)));
     if(!visible)throw error(404,'Treasurer report not found.');return row;
   };
   const revision=(req,row)=>{if(req.body?.revision!==row.revision)throw error(409,'This report changed in another window. Reopen it before saving or signing.');};
@@ -136,7 +147,8 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   }));
   app.get('/api/treasury/alerts',requirePrepare,route(async(_req,res)=>{
     const rows=await dbAll("SELECT id,uploader_name,created_at,draft_json FROM treasury_reports WHERE deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL ORDER BY created_at ASC");
-    res.json({alerts:rows.map(row=>{
+    const completed=await dbAll("SELECT draft_json,preparer_attested_at FROM treasury_reports WHERE deleted_at IS NULL AND status IN ('ready_for_distribution','distributed') AND preparer_attested_at IS NOT NULL");
+    res.json({alerts:rows.filter(row=>!completed.some(item=>item.preparer_attested_at>row.created_at&&treasuryPeriodCovered(JSON.parse(row.draft_json),[JSON.parse(item.draft_json)]))).map(row=>{
       const draft=JSON.parse(row.draft_json),period=draft.periodEnd||draft.periodStart||'';
       return {
         id:row.id,
@@ -149,7 +161,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   }));
   app.get('/api/treasury',route(async(req,res)=>{
     const ownUploads=!canPrepare(req.user)&&hasPermission(req.user,'treasury.upload');
-    const filter=canPrepare(req.user)?'':` AND ((${finalSql})${ownUploads?" OR (created_by_user_id=? AND status IN ('awaiting_preparer','draft'))":''})`;
+    const filter=canPrepare(req.user)?'':` AND ((${finalSql})${ownUploads?" OR (created_by_user_id=? AND status IN ('awaiting_preparer','draft','superseded'))":''})`;
     const rows=await dbAll('SELECT * FROM treasury_reports WHERE deleted_at IS NULL'+filter+' ORDER BY created_at DESC',ownUploads?[req.user.id]:[]);
     res.json({reports:await Promise.all(rows.map(row=>visibleReport(row,req.user)))});
   }));
@@ -275,6 +287,11 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       const changed=await dbRun("UPDATE treasury_reports SET status='ready_for_distribution',submitted_json=draft_json,preparer_attested_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",[time,time,row.id,row.revision]);
       if(!changed.changes)throw error(409,'This report changed. Reopen it before signing.');
       await dbRun('INSERT INTO treasury_attestations (id,report_id,phase,user_id,draft_json,signature_bytes,created_at) VALUES (?,?,?,?,?,?,?)',[crypto.randomUUID(),row.id,'preparer',req.user.id,row.draft_json,bytes(signature.signature_bytes),time]);await audit(req,row.id,'preparer_attested');
+      const waiting=await dbAll("SELECT id,draft_json,created_at FROM treasury_reports WHERE id<>? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL FOR UPDATE",[row.id]);
+      for(const pending of waiting.filter(item=>item.created_at<time&&treasuryPeriodCovered(JSON.parse(item.draft_json),[draft]))){
+        const closed=await dbRun("UPDATE treasury_reports SET status='superseded',superseded_by_report_id=?,superseded_at=?,revision=revision+1,updated_at=? WHERE id=? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL AND created_at<?",[row.id,time,time,pending.id,time]);
+        if(closed.changes)await audit(req,pending.id,'superseded_by_completed_report',{completedReportId:row.id});
+      }
     });
     const recipients=await dbAll("SELECT DISTINCT email FROM users WHERE access_revoked_at IS NULL AND (id=? OR role='secretary')",[row.preparer_user_id]);
     const warnings=[];

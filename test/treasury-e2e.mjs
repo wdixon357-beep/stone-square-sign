@@ -31,6 +31,9 @@ try{
  check('Secretary cannot overwrite another preparer draft',(await api(`/api/treasury/${r.id}`,secretary.token,'PUT',{draft:completeTreasuryFixture,revision:r.revision})).status===403);
  const confidentialFixture={...cycleFixture,sourceNames:['private-statement-name.txt'],unmappedLines:['Private extracted source marker'],extractionNotes:['Private extraction marker']};
  response=await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:confidentialFixture,revision:r.revision});check('Reconciled corrections save',response.status===200);r=response.data.report;
+ const duplicateSource=new FormData();duplicateSource.set('intent','save');duplicateSource.set('sourceText',notes);
+ const duplicateWaiting=(await api('/api/treasury/generate',secretary.token,'POST',duplicateSource)).data.report;
+ check('Duplicate banking source starts with a visible waiting alert',(await api('/api/treasury/alerts',treasurer.token)).data.alerts.some(alert=>alert.id===duplicateWaiting.id));
  check('Viewer cannot request an unsigned PDF',(await api(`/api/treasury/${r.id}/pdf`,viewer.token)).status===404);
  check('Stale save rejected',(await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:completeTreasuryFixture,revision:1})).status===409);
  check('Cannot distribute an unsigned draft',(await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision})).status===403);
@@ -42,6 +45,14 @@ try{
  ]);
  check('Concurrent overlapping reports cannot both be finalized',competingSignatures.filter(item=>item.status===200).length===1&&competingSignatures.filter(item=>item.status===409).length===1);
  response=competingSignatures.find(item=>item.status===200);check('Preparing officer signature finalizes the report',response.data.report.status==='ready_for_distribution');r=response.data.report;
+ check('Completing a report clears duplicate banking alerts for its covered period',!(await api('/api/treasury/alerts',treasurer.token)).data.alerts.some(alert=>alert.id===duplicateWaiting.id));
+ const retainedDuplicate=(await api('/api/treasury',treasurer.token)).data.reports.find(report=>report.id===duplicateWaiting.id);
+ check('Superseded duplicate banking information remains retrievable for reconciliation',retainedDuplicate?.status==='superseded'&&retainedDuplicate.supersededByReportId===r.id);
+ const retainedSource=await api(`/api/treasury/${duplicateWaiting.id}/source`,treasurer.token);
+ check('Superseded duplicate retains its original source',retainedSource.status===200&&retainedSource.data.text.replaceAll('\r\n','\n')===notes.replaceAll('\r\n','\n'));
+ const closeoutAudit=(await api('/api/admin/activity?days=1',owner.token)).data.events;
+ check('Superseded duplicate closeout is recorded in the audit history',closeoutAudit.some(event=>event.action==='treasury_superseded_by_completed_report'));
+ check('Superseded duplicate cannot be claimed or deleted',(await api(`/api/treasury/${duplicateWaiting.id}/assign`,treasurer.token,'POST',{revision:retainedDuplicate.revision,preparerUserId:treasurer.user.id})).status===409&&(await api(`/api/treasury/${duplicateWaiting.id}`,treasurer.token,'DELETE')).status===409);
  check('Email failure is visible without losing the report',response.data.notificationWarnings.length>0);
  check('WM attestation endpoint is removed',(await api(`/api/treasury/${r.id}/master-attest`,owner.token,'POST',{revision:r.revision})).status===404);
  check('Signed snapshot belongs to the preparer',r.preparerAttestedAt&&JSON.stringify(r.submittedDraft)===JSON.stringify(r.draft));

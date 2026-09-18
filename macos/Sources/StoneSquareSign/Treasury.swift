@@ -19,7 +19,7 @@ struct TreasuryDraft: Codable, Equatable {
     var remarks: String; var unmappedLines: [String]; var sourceNames: [String]; var extractionNotes: [String]
     var fieldReviews: [String:String]? = nil
 }
-struct TreasuryRecord: Codable, Identifiable { var id: String; var status: String; var revision: Int; var createdByUserId: Int; var preparerUserId: Int?; var uploadedBy: String; var createdBy: String; var preparerRole: String; var draft: TreasuryDraft }
+struct TreasuryRecord: Codable, Identifiable { var id: String; var status: String; var revision: Int; var createdByUserId: Int; var preparerUserId: Int?; var supersededByReportId: String? = nil; var uploadedBy: String; var createdBy: String; var preparerRole: String; var draft: TreasuryDraft }
 extension TreasuryRecord {
     func canOpen(for user: User?) -> Bool {
         user?.can("treasury.prepare") == true || (user?.can("treasury.view") == true && ["ready_for_distribution", "distributed"].contains(status))
@@ -132,7 +132,7 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
             let result = try await transport.request("/api/treasury/generate", method: "POST", body: data, contentType: "multipart/form-data; boundary=\(boundary)")
             let report = try JSONDecoder().decode(TreasuryPayload.self, from: result).report
             await refresh(); bankingSource = ""; bankingFiles = []
-            if report.status == "awaiting_preparer" {close();message="Banking information saved. Authorized preparers have a Dashboard alert until one of them claims the report."}
+            if report.status == "awaiting_preparer" {close();message="Banking information saved. The Dashboard alert closes when a preparer claims it or a signed report covers that reporting period."}
             else {open(report);message="Review the prefilled information and complete your report."}
         } catch { message = error.localizedDescription }
         await refreshGenerationStatus()
@@ -291,7 +291,7 @@ struct TreasuryView: View {
             if model.user?.role == "owner" { DisclosureGroup("Bank record upload access") { Text("Allow an account to supply records for another preparing officer. This does not grant bank login or other Lodge permissions.").font(.caption)
                 ForEach(workspace.accessUsers.filter { !$0.canPrepare }) { user in HStack { Text(user.name); Spacer(); Button(user.uploadEnabled ? "Remove upload access" : "Allow bank record uploads") { pendingAccessUser = user } } }
             } }
-            ForEach(workspace.records) { record in HStack { VStack(alignment:.leading) { Text(record.draft.periodEnd.isEmpty ? "Reporting date needs review" : LodgeCalendarDates.displayDate(record.draft.periodEnd)).font(.headline);Text("\(record.preparerUserId == model.user?.id ? "Assigned to you" : record.createdBy.isEmpty ? "Available for a preparer" : record.createdBy) · Uploaded by \(record.uploadedBy) · \((record.status == "awaiting_preparer" ? "Banking information saved for a report" : record.status.replacingOccurrences(of:"_",with:" ")))").font(.caption) }; Spacer();if record.canOpen(for: model.user) { Button("Review") { if model.user?.can("treasury.prepare") != true && ["ready_for_distribution", "distributed"].contains(record.status) { readonlyReport = record } else { workspace.open(record) } } }; if model.user?.can("treasury.prepare") == true && ["draft","awaiting_preparer"].contains(record.status) && (model.user?.role == "owner" || record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id) { Button("Delete",role:.destructive) { deleting=record } } }.padding(14).background(.background,in:RoundedRectangle(cornerRadius:12)) }
+            ForEach(workspace.records) { record in HStack { VStack(alignment:.leading) { Text(record.draft.periodEnd.isEmpty ? "Reporting date needs review" : LodgeCalendarDates.displayDate(record.draft.periodEnd)).font(.headline);Text("\(record.preparerUserId == model.user?.id ? "Assigned to you" : record.createdBy.isEmpty ? "Available for a preparer" : record.createdBy) · Uploaded by \(record.uploadedBy) · \((record.status == "awaiting_preparer" ? "Banking information saved for a report" : record.status == "superseded" ? "Covered period, source retained for review" : record.status.replacingOccurrences(of:"_",with:" ")))").font(.caption) }; Spacer();if record.canOpen(for: model.user) { Button("Review") { if model.user?.can("treasury.prepare") != true && ["ready_for_distribution", "distributed"].contains(record.status) { readonlyReport = record } else { workspace.open(record) } } }; if model.user?.can("treasury.prepare") == true && ["draft","awaiting_preparer"].contains(record.status) && (model.user?.role == "owner" || record.createdByUserId == model.user?.id || record.preparerUserId == model.user?.id) { Button("Delete",role:.destructive) { deleting=record } } }.padding(14).background(.background,in:RoundedRectangle(cornerRadius:12)) }
         } }.formStyle(.grouped)
     }
     var editor: some View {

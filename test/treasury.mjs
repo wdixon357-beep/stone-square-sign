@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { treasuryPeriodCovered } from '../treasury-routes.js';
 import { PDFDocument } from 'pdf-lib';
 import { PDFParse } from 'pdf-parse';
 import { readFile } from 'node:fs/promises';
@@ -77,6 +78,9 @@ const undated=structuredClone(d);undated.transactions.push({...undated.transacti
 const unconfirmed=structuredClone(d);unconfirmed.transactions[0].postedDateConfirmed=false;const unconfirmedCalc=calculateTreasury(unconfirmed);assert.match(unconfirmedCalc.issues.join(' '),/uses the bank-posted date/);assert.equal(unconfirmedCalc.accounts[0].receipts,0);
 const pendingSource=organizeTreasury('Checking\nPosted transactions\nPending 08/06/2026 Card authorization $500.00');assert.equal(pendingSource.transactions.length,0);assert.ok(pendingSource.unmappedLines.some(line=>/Pending/.test(line)));
 const pendingSection=organizeTreasury('Checking\nPosted transactions\n08/05/2026 Deposit $25.00\nPending transactions\n08/06/2026 Card authorization $500.00');assert.equal(pendingSection.transactions.length,1);assert.equal(pendingSection.transactions[0].postedDateConfirmed,true);assert.ok(pendingSection.unmappedLines.some(line=>/08\/06\/2026/.test(line)));
+assert.equal(treasuryPeriodCovered({periodStart:'2026-09-04',periodEnd:'2026-09-16'},[{periodStart:'2026-09-04',periodEnd:'2026-09-16'}]),true);
+assert.equal(treasuryPeriodCovered({periodStart:'2026-09-04',periodEnd:'2026-09-17'},[{periodStart:'2026-09-04',periodEnd:'2026-09-16'}]),false);
+assert.equal(treasuryPeriodCovered({periodStart:'',periodEnd:'2026-09-16'},[{periodStart:'2026-09-04',periodEnd:'2026-09-16'}]),false);
 const unifiedDexsta=organizeTreasury('DEXSTA Federal Credit Union\nNO-INTEREST SHARE DRAFT\nPosted transactions\n09/05/2026 Deposit dues $25.00\nPRIME SHARE\nPosted transactions\n09/06/2026 Deposit dividend $1.00');assert.equal(unifiedDexsta.transactions.length,2);assert.equal(unifiedDexsta.transactions[0].account,'checking');assert.equal(unifiedDexsta.transactions[1].account,'savings');
 assert.equal(money('not supplied'),null);assert.equal(money('0'),0);assert.equal(money('$1,234.56'),123456);assert.equal(money('(25.00)'),-2500);assert.equal(money('1.001'),null);
 assert.equal(normalizeTreasury({periodEnd:'2026-02-30'}).periodEnd,'');
