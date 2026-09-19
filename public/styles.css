@@ -207,6 +207,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-section-card input { margin-bottom: 9px; color: var(--navy); font-weight: 800; }
 .minutes-section-card textarea { min-height: 130px; resize: vertical; line-height: 1.5; }
 .minutes-editor-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.minutes-editor-exit-bar { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin: 0 0 16px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,253,248,.97); box-shadow: 0 8px 20px rgba(7,27,47,.08); }
+.minutes-editor-exit-bar span { flex: 1 1 240px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .minutes-detail-section { display: grid; gap: 10px; }
 .minutes-detail-section h3, .minutes-document-preview h3 { margin: 0; color: var(--navy); font: 22px Georgia, serif; }
 .minutes-detail-section > p, .minutes-document-preview > p { margin: 0; color: var(--muted); font-size: 11px; }
@@ -334,6 +336,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
   .minutes-row .status, .minutes-row-actions { grid-column: 2; justify-self: start; }
   .minutes-editor-actions { flex-direction: column; }
   .minutes-editor-actions button { width: 100%; }
+  .minutes-editor-exit-bar { align-items: stretch; }
+  .minutes-editor-exit-bar span { flex-basis: 100%; }
+  .minutes-editor-exit-bar button { width: 100%; }
   .builder-grid .field-wide { grid-column: auto; }
   .location-lookup { grid-template-columns: 1fr; }
   .location-lookup label { grid-column: auto; }

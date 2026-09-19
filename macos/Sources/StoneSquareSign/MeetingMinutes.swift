@@ -259,7 +259,15 @@ struct MeetingMinutesView: View {
             NativeWorkspaceHeader(title: "Meeting Minutes", subtitle: workspace.selected == nil ? "Prepare and manage the Lodge meeting record" : status, symbol: "text.document.fill") {
                 if workspace.selected != nil {
                     if workspace.dirty { Text("Unsaved changes").font(.caption).foregroundStyle(.secondary) }
-                    Button("Back to records") { if workspace.dirty { confirmClose = true } else { workspace.close() } }
+                    Button("Exit and keep saved draft") { if workspace.dirty { confirmClose = true } else { workspace.close() } }
+                    if editable {
+                        Button("Save draft and exit") {
+                            Task {
+                                if workspace.dirty { await workspace.save() }
+                                if !workspace.dirty { workspace.close() }
+                            }
+                        }.buttonStyle(.borderedProminent)
+                    }
                     if editable { Button("Save corrections") { Task { await workspace.save() } }.buttonStyle(.borderedProminent) }
                 } else {
                     Button("Historical minutes") { showingHistory = true }
@@ -303,12 +311,12 @@ struct MeetingMinutesView: View {
         .alert("Reorganize the original source?", isPresented: $confirmReorganize) {
             Button("Reorganize") { Task { await workspace.reorganize() } }; Button("Cancel", role: .cancel) {}
         } message: { Text("This replaces the editor contents with a fresh draft. Review it before saving.") }
-        .alert("Leave unsaved corrections?", isPresented: $confirmClose) {
-            Button("Discard corrections", role: .destructive) {
+        .alert("Exit this meeting minutes draft?", isPresented: $confirmClose) {
+            Button("Exit and keep saved draft", role: .destructive) {
                 workspace.close()
                 if deferredRecordsRefresh { deferredRecordsRefresh = false; Task { await workspace.refresh() } }
             }; Button("Keep editing", role: .cancel) {}
-        }
+        } message: { Text("Only the latest unsaved corrections will be discarded. The uploaded transcript and last saved draft will remain available.") }
         .alert("Confirm record action", isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } })) {
             Button("Continue") { if let action = pendingAction { Task { await workspace.action(action, body: action == "lodge-approval" ? ["approvalDate": approvalDate, "approvalNote": approvalNote] : [:]) } } }
             Button("Cancel", role: .cancel) {}

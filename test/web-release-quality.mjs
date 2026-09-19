@@ -69,6 +69,11 @@ assert.match(nativeAPI, /event: treasury_changed/, 'the Mac app must refresh ale
 assert.match(nativeViews, /treasuryAlertButtons/, 'the Mac app must display its waiting banking-record alerts');
 assert.match(app, /beforeunload/, 'unfinished long-form work must be protected on reload');
 assert.match(app, /sessionStorage/, 'non-sensitive drafts must recover within the current tab');
+assert.match(html, /id="saveExitMinutes"[^>]*>Save draft and exit</, 'meeting minutes must provide a clear save and exit action');
+assert.match(html, /id="exitMinutesEditor"[^>]*>Exit and keep saved draft</, 'meeting minutes must provide a clear exit action');
+assert.match(app, /uploaded transcript and last saved draft will remain available/, 'exiting minutes must explain what remains saved');
+assert.match(nativeMinutes, /Save draft and exit/, 'the Mac app must provide the same save and exit action');
+assert.match(nativeMinutes, /Exit and keep saved draft/, 'the Mac app must provide the same safe exit action');
 assert.doesNotMatch(treasury, /sessionStorage|localStorage/, 'banking data must not be retained in browser storage');
 assert.match(treasury, /Matched to uploaded source/, 'web treasurer fields must identify values matched to uploaded evidence');
 assert.match(treasury, /Officer confirmed/, 'web treasurer fields must identify officer-confirmed prefills');

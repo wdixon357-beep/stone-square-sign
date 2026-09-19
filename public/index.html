@@ -443,7 +443,7 @@
 
       <section id="minutesEditorModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="minutesEditorTitle">
         <div class="modal-body minutes-editor-body">
-          <button id="closeMinutesEditor" class="modal-close" type="button" aria-label="Close">&times;</button>
+          <button id="closeMinutesEditor" class="modal-close" type="button" aria-label="Exit meeting minutes draft">&times;</button>
           <p class="eyebrow">MEETING MINUTES DRAFT</p>
           <h2 id="minutesEditorTitle">Review meeting minutes</h2>
           <div class="minutes-view-switch" role="group" aria-label="Minutes workspace view">
@@ -453,6 +453,11 @@
           <p id="minutesEditorGenerationStatus" class="helper generation-status" role="status"></p>
           <button id="reorganizeMinutes" class="secondary small" type="button">Reorganize original source</button>
           <p id="minutesEditorStatus" class="minutes-status-line"></p>
+          <div class="minutes-editor-exit-bar" aria-label="Meeting minutes draft controls">
+            <span>Your transcript and saved draft remain available until you return.</span>
+            <button id="saveExitMinutes" class="primary" type="button">Save draft and exit</button>
+            <button id="exitMinutesEditor" class="secondary" type="button">Exit and keep saved draft</button>
+          </div>
             <section id="minutesMasterChanges" class="minutes-master-changes hidden"></section>
             <div id="minutesReviewWarnings" class="minutes-review-warning hidden"></div>
           <form id="minutesEditorForm" class="minutes-editor-form">

@@ -1200,6 +1200,7 @@ const updateMinutesEditorControls = (item) => {
   $('reorganizeMinutes').classList.toggle('hidden', item.status !== 'draft');
   document.querySelectorAll('.remove-section').forEach(button => { button.disabled = !editable; });
   $('saveMinutes').classList.toggle('hidden', !editable);
+  $('saveExitMinutes').classList.toggle('hidden', !editable);
   $('submitMinutesReview').classList.toggle('hidden', item.status !== 'draft'
     || !can('minutes.prepare') || item.createdByUserId !== state.user.id);
   $('authorizeMinutes').classList.toggle('hidden', role !== 'owner' || item.status !== 'awaiting_master_attestation');
@@ -1778,8 +1779,9 @@ $('generateMinutes').addEventListener('click', async () => {
   }
 });
 
-$('closeMinutesEditor').addEventListener('click', () => {
-  if (state.minutesEditorDirty && !window.confirm('Close these minutes without saving your latest corrections?')) return;
+const closeMinutesEditor = ({ confirmUnsaved = true } = {}) => {
+  if (confirmUnsaved && state.minutesEditorDirty
+      && !window.confirm('Exit and discard only your latest unsaved corrections? The uploaded transcript and last saved draft will remain available.')) return false;
   hide($('minutesEditorModal'));
   clearTimeout(minutesPreviewTimer); ++minutesPreviewRevision; state.editingMinutesId = null;
   state.minutesEditorDirty = false;
@@ -1789,6 +1791,23 @@ $('closeMinutesEditor').addEventListener('click', () => {
   $('minutesPreviewDownload').removeAttribute('href');
   hide($('minutesPreviewDownload'));
   if (state.minutesRecordsRefreshPending) renderMinutes();
+  return true;
+};
+$('closeMinutesEditor').addEventListener('click', () => closeMinutesEditor());
+$('exitMinutesEditor').addEventListener('click', () => closeMinutesEditor());
+$('saveExitMinutes').addEventListener('click', async () => {
+  const button = $('saveExitMinutes');
+  button.disabled = true;
+  try {
+    if (state.minutesEditorDirty) await saveMinutesCorrections();
+    closeMinutesEditor({ confirmUnsaved: false });
+    await renderMinutes();
+    setMessage($('minutesMessage'), 'Your meeting minutes draft is saved. You can return to it from Active drafts and reviews.');
+  } catch (error) {
+    setMessage($('minutesEditorMessage'), error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 });
 $('minutesEditView').addEventListener('click', () => setMinutesView(false));
 $('minutesPreviewView').addEventListener('click', () => setMinutesView(true));
