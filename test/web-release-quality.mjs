@@ -63,7 +63,7 @@ assert.match(app, /event: treasury_changed/, 'the website must refresh a banking
 assert.match(treasuryRoutes, /status='awaiting_preparer' AND preparer_user_id IS NULL/, 'alerts must include only unclaimed banking records');
 assert.match(treasuryRoutes, /WHERE id=\? AND revision=\?/, 'claiming must use an atomic revision check');
 assert.match(treasury, /this\.record\.preparerUserId===this\.user\(\)\.id/, 'the website must allow only the assigned preparer to edit an active report');
-assert.match(server, /type === 'treasury_changed'[\s\S]*treasury\.prepare/, 'banking workflow events must be limited to authorized preparers');
+assert.match(server, /type === 'treasury_changed'[\s\S]*treasury\.view/, 'banking workflow events must be limited to authorized treasury viewers');
 assert.match(nativeAPI, /func refreshTreasuryAlerts\(\)/, 'the Mac app must refresh waiting banking-record alerts');
 assert.match(nativeAPI, /event: treasury_changed/, 'the Mac app must refresh alerts after a live banking workflow event');
 assert.match(nativeViews, /treasuryAlertButtons/, 'the Mac app must display its waiting banking-record alerts');

@@ -180,10 +180,10 @@ try {
   result = await api(`/api/treasury/${report.id}/assign`, owner.token, 'POST', {revision: report.revision, preparerUserId: owner.user.id});
   check('WM explicitly takes over before editing another preparer report', result.status === 200 && result.data.report.preparerUserId === owner.user.id);
   report = result.data.report;
-  check('The prior preparer loses write access after WM takeover', (await api(`/api/treasury/${report.id}`, preparer.token, 'PUT', {revision: report.revision, draft: completeTreasuryFixture})).status === 403);
+  check('The prior preparer loses write access after WM takeover', (await api(`/api/treasury/${report.id}`, preparer.token, 'PUT', {revision: report.revision, draft: completeTreasuryFixture})).status === 404);
   result = await api(`/api/treasury/${report.id}/organize`, owner.token, 'POST', {revision: report.revision});
   check('WM sees the provider failure after taking over the draft', result.status >= 500 && await providerCalls() > beforeEditing);
-  check('Provider failure retains the original source and saved draft', (await api(`/api/treasury/${report.id}/source`, preparer.token)).data.text === sourceBefore && (await api('/api/treasury', preparer.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
+  check('Provider failure retains the original source and saved draft', (await api(`/api/treasury/${report.id}/source`, owner.token)).data.text === sourceBefore && (await api('/api/treasury', owner.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
   result = await api(`/api/treasury/${report.id}/assign`, owner.token, 'POST', {revision: report.revision, preparerUserId: preparer.user.id});
   assert.equal(result.status, 200); report = result.data.report;
   result = await api(`/api/treasury/${report.id}`, preparer.token, 'PUT', {revision: report.revision, draft: fixtureForCycle(report)});

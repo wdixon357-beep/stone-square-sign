@@ -1,5 +1,5 @@
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
-import { hasPermission, resolvePermissions, mountAccessRoutes, UNIVERSAL_RECORD_ROLES } from './access-control.js';
+import { hasPermission, resolvePermissions, mountAccessRoutes, UNIVERSAL_RECORD_ROLES, ensureBrotherSelfServiceAccess } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
 import path from 'node:path';
@@ -504,20 +504,26 @@ const searchLocationAddress = async (query) => {
 };
 
 const realtimeClients = new Set();
-/* A Warden has no business receiving document events. He cannot open any of those documents,
- * so the id is useless to him, but he should not be handed it at all. He gets the proposal
- * events, which are his, and nothing else. */
-const WARDEN_EVENTS = new Set(['proposals_changed', 'queue_changed', 'minutes_records_changed', 'connected']);
+
+const disconnectRealtimeUser = (userId) => {
+  for (const client of realtimeClients) {
+    if (client.userId !== userId) continue;
+    client.response.write(`event: access_changed\ndata: {}\n\n`);
+    client.response.end();
+    realtimeClients.delete(client);
+  }
+};
 
 const broadcast = (type, data = {}) => {
   const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of realtimeClients) {
-    if (client.role === 'member' && !['connected','treasury_changed'].includes(type)) continue;
-    if (type === 'treasury_changed' && client.role !== 'owner' && !client.permissions?.includes('treasury.prepare')) continue;
+    if (type === 'queue_changed' && !client.permissions?.includes('documents.status')) continue;
+    if (type === 'proposals_changed' && client.role !== 'owner' && !client.permissions?.includes('proposals.create')) continue;
+    if (type === 'treasury_changed' && !client.permissions?.includes('treasury.view')) continue;
     if (type === 'minutes_review_changed' && client.role !== 'owner') continue;
     if (type === 'minutes_completion_changed' && client.role !== 'owner' && !client.permissions?.includes('minutes.prepare')) continue;
     if (type === 'minutes_records_changed' && !client.permissions?.includes('minutes.view')) continue;
-    if (client.role === 'warden' && !WARDEN_EVENTS.has(type)) continue;
+    if (type === 'profile_changed' && data.userId !== client.userId) continue;
     client.response.write(event);
   }
 };
@@ -1144,6 +1150,10 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '4mb' }));
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  next();
+});
 app.get('/', async (_req, res, next) => {
   try {
     const index = await fs.readFile(path.join(APP_DIR, 'public', 'index.html'), 'utf8');
@@ -1218,7 +1228,6 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
     let name = suppliedName;
     let invitation = null;
     let joinedWithCode = false;
-    let matchedInvitationByEmail = false;
     if (invitationToken) {
       invitation = await dbGet(
         'SELECT * FROM invitations WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?',
@@ -1229,20 +1238,6 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
       }
       role = invitation.role;
       name = invitation.name || suppliedName;
-    } else if (await dbGet(
-      'SELECT 1 FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ?',
-      [email, nowIso()],
-    )) {
-      /* He was invited, and he typed the address he was invited at. Requiring him to find the
-       * private link as well helps nobody: the Master already decided this man holds this office,
-       * and the link is only a convenience for carrying that decision to him. */
-      invitation = await dbGet(
-        'SELECT * FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ?',
-        [email, nowIso()],
-      );
-      role = invitation.role;
-      name = invitation.name || suppliedName;
-      matchedInvitationByEmail = true;
     } else if (LODGE_ACCESS_CODE && accessCode) {
       /* Self serve. The code proves he is one of ours; the office he claims is still held to one
        * man, so a second person cannot quietly become Secretary behind the first one's back. */
@@ -1278,25 +1273,6 @@ app.post('/api/auth/register', rateLimit({ key: 'register', maximum: 20, windowM
         if (!invitation || normalizeEmail(invitation.email) !== email) {
           throw httpError(403, 'This invitation is invalid, expired, or belongs to another email.');
         }
-        role = invitation.role;
-        name = invitation.name || suppliedName;
-        await lockOfficeRole(role);
-        if (OFFICE_ROLES.has(role)) {
-          const occupied = await dbGet(
-            `SELECT 1 FROM users WHERE role = ? AND email NOT LIKE '%.local'
-             AND access_revoked_at IS NULL AND email <> ?`,
-            [role, email],
-          );
-          if (occupied) throw httpError(409, 'That office already has an active account.');
-        }
-      }
-      if (matchedInvitationByEmail) {
-        /* Re-read under the lock. Two men racing the same invitation must not both get in. */
-        invitation = await dbGet(
-          'SELECT * FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ? FOR UPDATE',
-          [email, nowIso()],
-        );
-        if (!invitation) throw httpError(403, 'That invitation has already been used or has expired.');
         role = invitation.role;
         name = invitation.name || suppliedName;
         await lockOfficeRole(role);
@@ -1627,7 +1603,18 @@ app.put('/api/profile/signature', requireAuth, requireSignatureProfile, rateLimi
       return res.status(400).json({ error: 'Create a visible signature before saving.' });
     }
     const bytes = Buffer.from(signatureData.replace(/^data:image\/png;base64,/, ''), 'base64');
-    if (bytes.length < 300) return res.status(400).json({ error: 'Create a visible signature before saving.' });
+    const pngMagic = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]);
+    const width = bytes.length >= 24 ? bytes.readUInt32BE(16) : 0;
+    const height = bytes.length >= 24 ? bytes.readUInt32BE(20) : 0;
+    if (bytes.length < 300 || !bytes.subarray(0,8).equals(pngMagic) || width < 1 || height < 1 || width > 4096 || height > 4096) {
+      return res.status(400).json({ error: 'Create a visible signature before saving.' });
+    }
+    try {
+      const validationDocument = await PDFDocument.create();
+      await validationDocument.embedPng(bytes);
+    } catch {
+      return res.status(400).json({ error: 'Create a visible signature before saving.' });
+    }
     await dbRun(
       `INSERT INTO profile_signatures (user_id, signature_bytes, signature_type, style_name, updated_at)
        VALUES (?, ?, ?, ?, ?)
@@ -1760,6 +1747,7 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
    await dbRun('UPDATE users SET role=?, permissions_json=? WHERE id=?',[role,permissions,id]);
    await endUserActivity(id,'Account permissions changed');
    await dbRun('DELETE FROM sessions WHERE user_id=?',[id]);
+   disconnectRealtimeUser(id);
    await addAudit({userId:req.user.id,action:'officer_role_changed',ip:req.ip,details:{userId:id,name:account.name,before:account.role,after:role}});
   });res.json({ok:true});
  }catch(e){next(e)}
@@ -1805,6 +1793,7 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
     await dbRun('UPDATE users SET access_revoked_at = ? WHERE id = ?', [revokedAt, account.id]);
     await endUserActivity(account.id, 'Access revoked');
     await dbRun('DELETE FROM sessions WHERE user_id = ?', [account.id]);
+    disconnectRealtimeUser(account.id);
     await dbRun('DELETE FROM reset_codes WHERE user_id = ?', [account.id]);
     await dbRun('DELETE FROM invitations WHERE email = ? AND used_at IS NULL', [email]);
     await dbRun('DELETE FROM profile_signatures WHERE user_id = ?', [account.id]);
@@ -3508,7 +3497,7 @@ app.get('/api/generation/status', requireAuth, async (req, res, next) => {
   try { res.setHeader('Cache-Control', 'no-store'); res.json(await generationStatus({ includeBudget: req.user.role === 'owner' })); } catch (error) { next(error); }
 });
 
-mountAccessRoutes(app,{requireAuth,requireOwner});
+mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged:disconnectRealtimeUser});
 mountBuildingCalendar(app,{requireAuth});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
@@ -3539,6 +3528,7 @@ app.use((error, _req, res, _next) => {
 validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
+await ensureBrotherSelfServiceAccess();
 await initializeBuildingCalendar();
 await initAgendaSchema();
 await initTreasurySchema();

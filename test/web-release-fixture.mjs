@@ -48,6 +48,7 @@ const api = async (request, response, url) => {
   if (url.pathname === '/api/minutes/review-alerts') return json(response, { alerts: [] });
   if (url.pathname === '/api/minutes/completion-alerts') return json(response, { alerts: [] });
   if (url.pathname === '/api/treasury/alerts') return json(response, { alerts: [] });
+  if (url.pathname === '/api/documents/1/file') return pdf(response);
   if (url.pathname === '/api/documents') return json(response, { documents: [{ id: 1, title: 'Community Event Dispensation', original_name: 'dispensation.pdf', status: 'completed', needsSignature: false, template_kind: 'dispensation_v1', created_at: '2026-09-10T19:00:00Z', submitted_at: '2026-09-11T13:00:00Z', signers: [{ signer_name: 'William McDuffie', signed_at: '2026-09-10T20:00:00Z', signer_role: 'secretary' }] }] });
   if (url.pathname === '/api/officers') return json(response, { officers: [{ id: 2, name: 'William McDuffie', email: 'secretary@example.invalid', role: 'secretary' }, { id: 3, name: 'Adrian Reese', email: 'assistant@example.invalid', role: 'assistant_secretary' }], pending: [] });
   if (url.pathname === '/api/submission-profiles') return json(response, { profiles: [{ role: 'worshipful_master', name: user.name, address: 'Lodge profile address' }] });

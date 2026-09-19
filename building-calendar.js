@@ -40,7 +40,7 @@ const PORTAL='https://request.stonesquare22pha.org';
 export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch}){
  const permit=key=>(req,res,next)=>hasPermission(req.user,key)?next():res.status(403).json({error:'This area or action is not enabled for your account.'});
  const remote=async(path,req,body)=>{
-  const response=await fetcher(PORTAL+path,{method:body?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(18000),headers:{Authorization:req.get('authorization'),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+  const response=await fetcher(PORTAL+path,{method:body?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(18000),headers:{Authorization:`Bearer ${req.authRawToken}`,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
   let payload;try{payload=await response.json();}catch{throw fail(502,'Building Requests could not be reached. Try again shortly.');}
   if(!response.ok)throw fail([400,401,403,404,409].includes(response.status)?response.status:502,payload.error||'Building Requests could not be loaded.');
   return payload;

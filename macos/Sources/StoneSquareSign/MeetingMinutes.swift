@@ -44,9 +44,11 @@ final class MinutesWorkspace: ObservableObject {
     @Published var records: [MinutesRecord] = []
     @Published var selected: MinutesRecord?
     @Published var draft: MinutesDraft?
-    @Published var source = ""
-    @Published var sourceType = "auto"
-    @Published var fileURL: URL?
+    @Published var source = "" { didSet { if source != oldValue { persistLocalSourceDraft() } } }
+    @Published var sourceType = "auto" { didSet { if sourceType != oldValue { persistLocalSourceDraft() } } }
+    @Published var fileURL: URL? { didSet { if fileURL != oldValue { persistLocalSourceDraft() } } }
+    @Published var sourceFileName = ""
+    @Published var localDraftSaved = false
     @Published var pdf: Data?
     @Published var messageIsWarning = false
     @Published var message = "" { didSet { messageIsWarning = false } }
@@ -58,13 +60,130 @@ final class MinutesWorkspace: ObservableObject {
     var token = ""
     private var previewTask: Task<Void, Never>?
     private var revision = 0
+    private var configuredUserID: Int?
+    private var restoringLocalDraft = false
+    private let persistenceDirectory: URL?
     private let session: URLSession
 
-    init(session: URLSession = .shared) { self.session = session }
+    private struct LocalSourceDraft: Codable {
+        let source: String
+        let sourceType: String
+        let storedFileName: String?
+        let originalFileName: String?
+        let savedAt: Date
+    }
+
+    init(
+        session: URLSession = .shared,
+        persistenceDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("Stone Square Sign")
+    ) {
+        self.session = session
+        self.persistenceDirectory = persistenceDirectory
+    }
+
+    private func draftURL(for userID: Int) -> URL? {
+        persistenceDirectory?.appendingPathComponent("minutes-source-draft-\(userID).json")
+    }
+    private func storedSourceURL(for userID: Int, extension fileExtension: String) -> URL? {
+        let safeExtension = fileExtension.lowercased().filter { $0.isLetter || $0.isNumber }
+        return persistenceDirectory?.appendingPathComponent("minutes-source-file-\(userID)\(safeExtension.isEmpty ? "" : ".\(safeExtension)")")
+    }
+    private func loadLocalSourceDraft(for userID: Int) {
+        restoringLocalDraft = true
+        defer { restoringLocalDraft = false }
+        source = ""; sourceType = "auto"; fileURL = nil; sourceFileName = ""; localDraftSaved = false
+        guard let url = draftURL(for: userID), let data = try? Data(contentsOf: url),
+              let saved = try? JSONDecoder().decode(LocalSourceDraft.self, from: data),
+              Date().timeIntervalSince(saved.savedAt) < 30 * 86400 else { return }
+        source = saved.source
+        sourceType = ["auto", "compiled_notes", "transcript"].contains(saved.sourceType) ? saved.sourceType : "auto"
+        if let name = saved.storedFileName,
+           let stored = persistenceDirectory?.appendingPathComponent(name),
+           FileManager.default.fileExists(atPath: stored.path) {
+            fileURL = stored
+            sourceFileName = saved.originalFileName ?? stored.lastPathComponent
+        }
+        localDraftSaved = !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fileURL != nil
+    }
+    func persistLocalSourceDraft() {
+        guard !restoringLocalDraft, let userID = configuredUserID, let url = draftURL(for: userID) else { return }
+        let hasSource = !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fileURL != nil
+        guard hasSource else {
+            try? FileManager.default.removeItem(at: url)
+            localDraftSaved = false
+            return
+        }
+        let storedFileName: String?
+        if let fileURL, let persistenceDirectory,
+           fileURL.standardizedFileURL.deletingLastPathComponent() == persistenceDirectory.standardizedFileURL {
+            storedFileName = fileURL.lastPathComponent
+        } else {
+            storedFileName = nil
+        }
+        let saved = LocalSourceDraft(
+            source: source,
+            sourceType: sourceType,
+            storedFileName: storedFileName,
+            originalFileName: sourceFileName.isEmpty ? fileURL?.lastPathComponent : sourceFileName,
+            savedAt: Date()
+        )
+        do {
+            let data = try JSONEncoder().encode(saved)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            localDraftSaved = true
+        } catch {
+            localDraftSaved = false
+            message = "This minutes source could not be saved on this Mac. Keep Meeting Minutes open until the draft is created."
+        }
+    }
+    func selectSourceFile(_ externalURL: URL) {
+        guard let userID = configuredUserID,
+              let destination = storedSourceURL(for: userID, extension: externalURL.pathExtension) else {
+            fileURL = externalURL; sourceFileName = externalURL.lastPathComponent; return
+        }
+        do {
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            for item in (try? FileManager.default.contentsOfDirectory(at: destination.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? []
+              where item.lastPathComponent.hasPrefix("minutes-source-file-\(userID)") {
+                try? FileManager.default.removeItem(at: item)
+            }
+            try FileManager.default.copyItem(at: externalURL, to: destination)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+            sourceFileName = externalURL.lastPathComponent
+            fileURL = destination
+            persistLocalSourceDraft()
+            message = "Source file saved on this Mac until the minutes draft is created."
+        } catch {
+            message = "The selected source file could not be saved on this Mac. \(error.localizedDescription)"
+        }
+    }
+    func clearLocalSourceDraft() {
+        restoringLocalDraft = true
+        if let userID = configuredUserID {
+            if let url = draftURL(for: userID) { try? FileManager.default.removeItem(at: url) }
+            if let directory = persistenceDirectory {
+                for item in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+                  where item.lastPathComponent.hasPrefix("minutes-source-file-\(userID)") {
+                    try? FileManager.default.removeItem(at: item)
+                }
+            }
+        }
+        source = ""; sourceType = "auto"; fileURL = nil; sourceFileName = ""; localDraftSaved = false
+        restoringLocalDraft = false
+    }
+    func prepareForDisplay() {
+        if selected == nil { message = ""; messageIsWarning = false }
+    }
 
     func configure(_ model: AppModel) {
         baseURL = URL(string: model.serverAddress.trimmingCharacters(in: .whitespacesAndNewlines))
         token = model.webSessionToken ?? ""
+        if let userID = model.user?.id, configuredUserID != userID {
+            configuredUserID = userID
+            loadLocalSourceDraft(for: userID)
+        }
     }
     func request(_ path: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json") async throws -> Data {
         guard let baseURL, let url = URL(string: path, relativeTo: baseURL), !token.isEmpty else { throw ClientError.invalidServer }
@@ -131,7 +250,7 @@ final class MinutesWorkspace: ObservableObject {
             append("--\(boundary)--\r\n")
             let result = try await request("/api/minutes/generate", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
             let record = try JSONDecoder().decode(MinutesPayload.self, from: result).minutes
-            await refresh(); source = ""; self.fileURL = nil; open(record)
+            await refresh(); clearLocalSourceDraft(); open(record)
         } catch { message = error.localizedDescription }
         await refreshGenerationStatus()
     }
@@ -240,6 +359,11 @@ struct MeetingMinutesView: View {
     @State private var readonlyRecord: MinutesRecord?
     @State private var deferredRecordsRefresh = false
     @State private var editorPane = 0
+    let onExit: () -> Void
+    init(workspace: MinutesWorkspace, onExit: @escaping () -> Void = {}) {
+        self.workspace = workspace
+        self.onExit = onExit
+    }
     private var editable: Bool { model.user?.can("minutes.prepare") == true && (workspace.selected?.status == "draft" || (workspace.selected?.status == "awaiting_master_attestation" && model.user?.role == "owner")) }
     private func text(_ key: WritableKeyPath<MinutesDraft, String?>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key] ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 })
@@ -270,6 +394,12 @@ struct MeetingMinutesView: View {
                     }
                     if editable { Button("Save corrections") { Task { await workspace.save() } }.buttonStyle(.borderedProminent) }
                 } else {
+                    if !workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.fileURL != nil {
+                        Button("Save draft and exit") {
+                            workspace.persistLocalSourceDraft()
+                            if workspace.localDraftSaved { onExit() }
+                        }.buttonStyle(.borderedProminent)
+                    }
                     Button("Historical minutes") { showingHistory = true }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await workspace.refresh() } }
                 }
@@ -288,6 +418,7 @@ struct MeetingMinutesView: View {
         .disabled(workspace.busy)
         .task {
             workspace.configure(model)
+            workspace.prepareForDisplay()
             await workspace.refresh()
             openRequestedSignedMinutes()
         }
@@ -348,6 +479,10 @@ struct MeetingMinutesView: View {
                             Text("Detect automatically").tag("auto"); Text("Compiled meeting notes").tag("compiled_notes"); Text("Meeting transcript").tag("transcript")
                         }.frame(maxWidth: 380)
                         TextEditor(text: $workspace.source).font(.body).frame(minHeight: 150).padding(5).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                        if workspace.localDraftSaved {
+                            Label("Saved privately on this Mac until you create the minutes draft.", systemImage: "checkmark.circle.fill")
+                                .font(.caption).foregroundStyle(.green)
+                        }
                         AdaptiveControlBar {
                             HStack { sourceFileControls; Spacer(); createMinutesButton }
                         } compact: {
@@ -405,9 +540,9 @@ struct MeetingMinutesView: View {
         HStack {
             Button("Choose file…", systemImage: "doc.badge.plus") {
                 let panel = NSOpenPanel(); panel.allowedContentTypes = [.plainText, .pdf, UTType(filenameExtension: "docx") ?? .data]; panel.allowsMultipleSelection = false
-                if panel.runModal() == .OK { workspace.fileURL = panel.url }
+                if panel.runModal() == .OK, let url = panel.url { workspace.selectSourceFile(url) }
             }
-            if let file = workspace.fileURL { Text(file.lastPathComponent).lineLimit(1); Button("Remove file") { workspace.fileURL = nil } }
+            if let file = workspace.fileURL { Text(workspace.sourceFileName.isEmpty ? file.lastPathComponent : workspace.sourceFileName).lineLimit(1); Button("Remove file") { workspace.sourceFileName = ""; workspace.fileURL = nil } }
         }
     }
     private var createMinutesButton: some View {

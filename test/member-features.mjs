@@ -4,11 +4,20 @@ import {spawn} from 'node:child_process';import {createServer} from 'node:http';
 const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'ss-member-'));
 process.env.DATABASE_URL='';process.env.PGLITE_DIR=tmp;process.env.NODE_ENV='test';
 const db=await import('../db.js');await db.connect();await db.initSchema();
+const {ensureBrotherSelfServiceAccess}=await import('../access-control.js');
 for(const r of [{f:'William',l:'Owner',e:['owner@example.org']},{f:'James',l:'Member',e:['james@example.org']},{f:'Peter',l:'Member',e:['peter@example.org']},{f:'Legacy',l:'Invite',e:['legacy@example.org']}])await db.dbRun('insert into roster(first_name,last_name,title,prefix,emails,updated_at) values(?,?,?,?,?,?)',[r.f,r.l,'Brother','Bro.',r.e,new Date().toISOString()]);
 const migrationUser=await db.dbRun('insert into users(email,password_hash,name,role,created_at) values(?,?,?,?,?)',['migration@example.org','not-used','Migration Fixture','signer',new Date().toISOString()]);
 const legacyInvite=await db.dbRun('insert into invitations(email,name,role,token_hash,invited_by_user_id,expires_at,created_at) values(?,?,?,?,?,?,?)',['legacy@example.org','Legacy Invite','warden','legacy-invite-hash',migrationUser.lastID,new Date(Date.now()+86400000).toISOString(),new Date().toISOString()]);
 await db.initSchema();
 assert.ok((await db.dbGet('select roster_id from invitations where id=?',[legacyInvite.lastID])).roster_id,'existing invitations are linked to their verified roster record during migration');
+const linkedRoster=await db.dbGet("select id from roster where first_name='Legacy' and last_name='Invite'");
+const driftedUser=await db.dbRun('insert into users(email,password_hash,name,role,created_at,permissions_json,roster_id) values(?,?,?,?,?,?,?)',['drifted@example.org','not-used','Drifted Brother','officer',new Date().toISOString(),'[]',linkedRoster.id]);
+await db.dbRun('update invitations set permissions_json=? where id=?',['[]',legacyInvite.lastID]);
+await ensureBrotherSelfServiceAccess();
+for(const record of [await db.dbGet('select * from users where id=?',[driftedUser.lastID]),await db.dbGet('select * from invitations where id=?',[legacyInvite.lastID])]){
+ const granted=JSON.parse(record.permissions_json);assert.ok(granted.includes('dues.self')&&granted.includes('suggestions.create'),'existing roster-linked accounts and invitations receive Brother self-service access');
+}
+await db.dbRun('delete from users where id=?',[driftedUser.lastID]);
 await db.dbRun('delete from invitations where id=?',[legacyInvite.lastID]);await db.dbRun('delete from users where id=?',[migrationUser.lastID]);await db.dbRun("delete from roster where first_name='Legacy' and last_name='Invite'");await db.close();
 const zeffyPayment={id:'pay-1',campaign_id:'annual',status:'succeeded',created:Date.UTC(2026,8,1)/1000,amount:5000,buyer:{email:'james@example.org',first_name:'James',last_name:'Member'}};
 const zeffy=createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[zeffyPayment,{...zeffyPayment}],has_more:false}));});zeffy.listen(0,'127.0.0.1');await once(zeffy,'listening');

@@ -28,7 +28,7 @@ try{
  await api(`/api/treasury/${splitReport.id}`,treasurer.token,'DELETE');
  const cycleFixture=structuredClone(completeTreasuryFixture);Object.assign(cycleFixture,{previousMeetingDate:r.draft.previousMeetingDate,periodStart:r.draft.periodStart,periodEnd:r.draft.periodEnd});cycleFixture.transactions.forEach(row=>row.date=r.draft.periodStart);
  check('Unknown confirmations block attestation',(await api(`/api/treasury/${r.id}/preparer-attest`,treasurer.token,'POST',{revision:r.revision})).status===409);
- check('Secretary cannot overwrite another preparer draft',(await api(`/api/treasury/${r.id}`,secretary.token,'PUT',{draft:completeTreasuryFixture,revision:r.revision})).status===403);
+ check('Secretary cannot open or overwrite another preparer draft',(await api(`/api/treasury/${r.id}`,secretary.token,'PUT',{draft:completeTreasuryFixture,revision:r.revision})).status===404);
  const confidentialFixture={...cycleFixture,sourceNames:['private-statement-name.txt'],unmappedLines:['Private extracted source marker'],extractionNotes:['Private extraction marker']};
  response=await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:confidentialFixture,revision:r.revision});check('Reconciled corrections save',response.status===200);r=response.data.report;
  const duplicateSource=new FormData();duplicateSource.set('intent','save');duplicateSource.set('sourceText',notes);
@@ -36,7 +36,7 @@ try{
  check('Duplicate banking source starts with a visible waiting alert',(await api('/api/treasury/alerts',treasurer.token)).data.alerts.some(alert=>alert.id===duplicateWaiting.id));
  check('Viewer cannot request an unsigned PDF',(await api(`/api/treasury/${r.id}/pdf`,viewer.token)).status===404);
  check('Stale save rejected',(await api(`/api/treasury/${r.id}`,treasurer.token,'PUT',{draft:completeTreasuryFixture,revision:1})).status===409);
- check('Cannot distribute an unsigned draft',(await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision})).status===403);
+ check('Another preparer cannot open or distribute an unsigned draft',(await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision})).status===404);
  let competing=(await api('/api/treasury/drafts',treasurer.token,'POST')).data.report;
  competing=(await api(`/api/treasury/${competing.id}`,treasurer.token,'PUT',{revision:competing.revision,draft:cycleFixture})).data.report;
  const competingSignatures=await Promise.all([
@@ -46,13 +46,14 @@ try{
  check('Concurrent overlapping reports cannot both be finalized',competingSignatures.filter(item=>item.status===200).length===1&&competingSignatures.filter(item=>item.status===409).length===1);
  response=competingSignatures.find(item=>item.status===200);check('Preparing officer signature finalizes the report',response.data.report.status==='ready_for_distribution');r=response.data.report;
  check('Completing a report clears duplicate banking alerts for its covered period',!(await api('/api/treasury/alerts',treasurer.token)).data.alerts.some(alert=>alert.id===duplicateWaiting.id));
- const retainedDuplicate=(await api('/api/treasury',treasurer.token)).data.reports.find(report=>report.id===duplicateWaiting.id);
- check('Superseded duplicate banking information remains retrievable for reconciliation',retainedDuplicate?.status==='superseded'&&retainedDuplicate.supersededByReportId===r.id);
- const retainedSource=await api(`/api/treasury/${duplicateWaiting.id}/source`,treasurer.token);
- check('Superseded duplicate retains its original source',retainedSource.status===200&&retainedSource.data.text.replaceAll('\r\n','\n')===notes.replaceAll('\r\n','\n'));
+ const retainedDuplicate=(await api('/api/treasury',secretary.token)).data.reports.find(report=>report.id===duplicateWaiting.id);
+ check('Superseded duplicate banking information remains retrievable to its uploader for reconciliation',retainedDuplicate?.status==='superseded'&&retainedDuplicate.supersededByReportId===r.id);
+ check('Unrelated preparers do not receive the superseded banking source in their list',!(await api('/api/treasury',treasurer.token)).data.reports.some(report=>report.id===duplicateWaiting.id));
+ const retainedSource=await api(`/api/treasury/${duplicateWaiting.id}/source`,secretary.token);
+ check('The uploader can still retrieve the superseded original source',retainedSource.status===200&&retainedSource.data.text.replaceAll('\r\n','\n')===notes.replaceAll('\r\n','\n'));
  const closeoutAudit=(await api('/api/admin/activity?days=1',owner.token)).data.events;
  check('Superseded duplicate closeout is recorded in the audit history',closeoutAudit.some(event=>event.action==='treasury_superseded_by_completed_report'));
- check('Superseded duplicate cannot be claimed or deleted',(await api(`/api/treasury/${duplicateWaiting.id}/assign`,treasurer.token,'POST',{revision:retainedDuplicate.revision,preparerUserId:treasurer.user.id})).status===409&&(await api(`/api/treasury/${duplicateWaiting.id}`,treasurer.token,'DELETE')).status===409);
+ check('Superseded duplicate cannot be claimed or deleted',(await api(`/api/treasury/${duplicateWaiting.id}/assign`,secretary.token,'POST',{revision:retainedDuplicate.revision,preparerUserId:secretary.user.id})).status===409&&(await api(`/api/treasury/${duplicateWaiting.id}`,secretary.token,'DELETE')).status===409);
  check('Email failure is visible without losing the report',response.data.notificationWarnings.length>0);
  check('WM attestation endpoint is removed',(await api(`/api/treasury/${r.id}/master-attest`,owner.token,'POST',{revision:r.revision})).status===404);
  check('Signed snapshot belongs to the preparer',r.preparerAttestedAt&&JSON.stringify(r.submittedDraft)===JSON.stringify(r.draft));
@@ -124,13 +125,13 @@ try{
 	check('Upload-only officers cannot read preparer alerts',(await api('/api/treasury/alerts',member.token)).status===403);
 	check('Other preparing officers can find saved information',(await api('/api/treasury',assistant.token)).data.reports.some(r=>r.id===available.id));
  const claims=await Promise.all([treasurer,assistant].map(u=>api(`/api/treasury/${available.id}/assign`,u.token,'POST',{revision:available.revision,preparerUserId:u.user.id})));
- check('Only one preparer can start the same saved report',claims.filter(r=>r.status===200).length===1&&claims.filter(r=>r.status===409).length===1);
+ check('Only one preparer can start the same saved report',claims.filter(r=>r.status===200).length===1&&claims.filter(r=>r.status===404).length===1);
 	available=claims.find(r=>r.status===200).data.report;
 	check('Claiming the report clears its waiting alert',!(await api('/api/treasury/alerts',assistant.token)).data.alerts.some(a=>a.id===available.id));
 	check('Starting saved information retains its original uploader',available.status==='draft'&&available.createdByUserId===secretary.user.id&&available.preparerUserId!==secretary.user.id);
 	const other=available.preparerUserId===treasurer.user.id?assistant:treasurer;
-	check('Another preparer cannot take an already started report',(await api(`/api/treasury/${available.id}/assign`,other.token,'POST',{revision:available.revision,preparerUserId:other.user.id})).status===409);
-	check('Another preparer cannot edit an already started report',(await api(`/api/treasury/${available.id}`,other.token,'PUT',{revision:available.revision,draft:completeTreasuryFixture})).status===403);
+	check('Another preparer cannot open or take an already started report',(await api(`/api/treasury/${available.id}/assign`,other.token,'POST',{revision:available.revision,preparerUserId:other.user.id})).status===404);
+	check('Another preparer cannot open or edit an already started report',(await api(`/api/treasury/${available.id}`,other.token,'PUT',{revision:available.revision,draft:completeTreasuryFixture})).status===404);
  const completing=new FormData();completing.set('sourceText',notes);completing.set('intent','complete');
  const ownReport=(await api('/api/treasury/generate',treasurer.token,'POST',completing)).data.report;
  check('Completing the report opens the uploader own draft',ownReport.status==='draft'&&ownReport.preparerUserId===treasurer.user.id);
@@ -155,6 +156,8 @@ try{
  const claimedSource=await api(`/api/treasury/${uploadOnly.id}/source`,assistant.token);
  assert.equal(claimedSource.status,200,JSON.stringify(claimedSource.data));
  check('Claiming preparer can read the saved banking material',claimedSource.data.text.replaceAll('\r\n','\n')===notes);
+ check('Another preparer cannot list a claimed working report',!(await api('/api/treasury',secretary.token)).data.reports.some(item=>item.id===uploadOnly.id));
+ check('Another preparer cannot read a claimed report source',(await api(`/api/treasury/${uploadOnly.id}/source`,secretary.token)).status===404);
  const ownerManual=await api('/api/treasury/drafts',owner.token,'POST');check('WM retains manual report preparation',ownerManual.status===201);
  await permissions(treasurer,['treasury.view']);
  check('Explicit permissions override Treasurer office immediately',(await api('/api/treasury/drafts',treasurer.token,'POST')).status===403&&(await api('/api/treasury/generate',treasurer.token,'POST',completing)).status===403);

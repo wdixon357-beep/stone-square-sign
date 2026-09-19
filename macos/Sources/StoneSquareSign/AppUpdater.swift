@@ -31,7 +31,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         if minutes.dirty || (minutes.draft != nil && minutes.draft != minutes.selected?.draft) {
             return "Save or discard your Meeting Minutes edits before updating."
         }
-        if !minutes.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minutes.fileURL != nil {
+        if (!minutes.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minutes.fileURL != nil) && !minutes.localDraftSaved {
             return "Save or clear the source notes in Meeting Minutes before updating."
         }
         if treasury.dirty || (treasury.draft != nil && treasury.draft != treasury.selected?.draft) {

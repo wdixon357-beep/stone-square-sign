@@ -330,6 +330,35 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         precondition(unavailableStatus == nil)
         print("PASS: unconfigured and unavailable generation states remain distinct without inventing an allowance")
 
+        let minutesDraftDirectory = scratch.appendingPathComponent("minutes-local-draft")
+        let localMinutes = MinutesWorkspace(session: generationSession, persistenceDirectory: minutesDraftDirectory)
+        reportApp.user = User(id: 501, email: "owner@example.invalid", name: "QA Owner", role: "owner", hasSignature: true)
+        localMinutes.configure(reportApp)
+        localMinutes.source = "Synthetic unfinished minutes source."
+        localMinutes.sourceType = "compiled_notes"
+        let selectedFile = scratch.appendingPathComponent("minutes-source.txt")
+        try Data("Synthetic file source".utf8).write(to: selectedFile)
+        localMinutes.selectSourceFile(selectedFile)
+        precondition(localMinutes.localDraftSaved && localMinutes.fileURL != selectedFile)
+        localMinutes.message = "An officer attendance status is not established by its source reference. Please try again."
+        localMinutes.prepareForDisplay()
+        precondition(localMinutes.message.isEmpty)
+        let restoredMinutes = MinutesWorkspace(session: generationSession, persistenceDirectory: minutesDraftDirectory)
+        restoredMinutes.configure(reportApp)
+        precondition(restoredMinutes.source == localMinutes.source)
+        precondition(restoredMinutes.sourceType == "compiled_notes")
+        precondition(restoredMinutes.sourceFileName == "minutes-source.txt")
+        precondition(restoredMinutes.fileURL != nil)
+        precondition(restoredMinutes.localDraftSaved)
+        reportApp.user = User(id: 502, email: "other@example.invalid", name: "Other Officer", role: "secretary", hasSignature: true)
+        let isolatedMinutes = MinutesWorkspace(session: generationSession, persistenceDirectory: minutesDraftDirectory)
+        isolatedMinutes.configure(reportApp)
+        precondition(isolatedMinutes.source.isEmpty && isolatedMinutes.fileURL == nil && !isolatedMinutes.localDraftSaved)
+        reportApp.user = User(id: 501, email: "owner@example.invalid", name: "QA Owner", role: "owner", hasSignature: true)
+        restoredMinutes.clearLocalSourceDraft()
+        precondition(restoredMinutes.source.isEmpty && restoredMinutes.fileURL == nil && !restoredMinutes.localDraftSaved)
+        print("PASS: unfinished minutes source and selected files persist privately per user, stale errors clear on return, and explicit clearing removes the local draft")
+
         organizing.selected = minutesRecord; organizing.draft = changedDraft
         GenerationFixture.response = try JSONEncoder().encode(["draft": minutesRecord.draft])
         await organizing.reorganize()
@@ -375,6 +404,9 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("Meeting Minutes edits") == true)
         organizing.dirty = false; organizing.source = "Unsaved source"
         precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("source notes") == true)
+        organizing.localDraftSaved = true
+        precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false) == nil)
+        organizing.localDraftSaved = false
         organizing.source = ""; treasury.bankingSource = "Unsaved banking source"
         precondition(AppUpdater.unfinishedReportWork(report: model, minutes: organizing, treasury: treasury, agenda: agenda, operationInProgress: false)?.contains("source material") == true)
         treasury.bankingSource = ""; treasury.originalText = "Previously saved banking source"

@@ -44,7 +44,21 @@ export function resolvePermissions(user){
  }
 }
 export const hasPermission=(user,key)=>resolvePermissions(user).includes(key);
-export function mountAccessRoutes(app,{requireAuth,requireOwner}){
+export async function ensureBrotherSelfServiceAccess(){
+ const groups=[
+  ['users',"roster_id IS NOT NULL AND role<>'owner' AND access_revoked_at IS NULL"],
+  ['invitations',"roster_id IS NOT NULL AND role<>'owner' AND used_at IS NULL AND expires_at>?"],
+ ];
+ for(const [table,where] of groups){
+  const params=table==='invitations'?[new Date().toISOString()]:[];
+  for(const account of await dbAll(`SELECT id,role,permissions_json FROM ${table} WHERE ${where}`,params)){
+   const before=resolvePermissions(account),after=[...new Set([...before,'dues.self','suggestions.create'])];
+   if(after.length===before.length)continue;
+   await dbRun(`UPDATE ${table} SET permissions_json=? WHERE id=?`,[JSON.stringify(permissionsForStorage(after,account.role)),account.id]);
+  }
+ }
+}
+export function mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged=()=>{}}){
  app.get('/api/admin/access',requireAuth,requireOwner,async(req,res,next)=>{try{
  const users=await dbAll("SELECT id,name,email,role,permissions_json,access_revoked_at FROM users WHERE email NOT LIKE '%.local' ORDER BY name");
  const invites=await dbAll('SELECT id,name,email,role,permissions_json FROM invitations WHERE used_at IS NULL AND expires_at>? ORDER BY name',[new Date().toISOString()]);
@@ -61,6 +75,7 @@ export function mountAccessRoutes(app,{requireAuth,requireOwner}){
  const permissions=normalizePermissions(req.body.permissions,account.role),stored=permissionsForStorage(req.body.permissions,account.role);
  await dbRun(`UPDATE ${table} SET permissions_json=? WHERE id=?`,[JSON.stringify(stored),id]);
  await dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',[req.user.id,'officer_permissions_changed',req.ip,JSON.stringify({key:req.body.key,name:account.name,before:resolvePermissions(account),after:permissions}),new Date().toISOString()]);
+ if(table==='users')onAccessChanged(id);
  });res.json({ok:true});
  }catch(e){next(e)}});
 }

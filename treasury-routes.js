@@ -52,6 +52,11 @@ const canPrepare = user => hasPermission(user,'treasury.prepare');
 // A report has exactly one active editor. The administrator can take over through the
 // assignment route, which immediately removes the previous preparer's write access.
 const editable = (row,user) => canPrepare(user)&&row.status==='draft'&&row.preparer_user_id===user.id;
+const canOpenWorkingReport = (row,user) => user.role==='owner'
+  || row.created_by_user_id===user.id
+  || row.preparer_user_id===user.id
+  || (canPrepare(user)&&row.status==='awaiting_preparer'&&row.preparer_user_id===null);
+const canReadSource = canOpenWorkingReport;
 const finalized = row => ['ready_for_distribution','distributed'].includes(row.status)&&Boolean(row.preparer_attested_at&&row.submitted_json);
 const signedSnapshot = row => dbGet("SELECT draft_json,signature_bytes FROM treasury_attestations WHERE report_id=? AND phase='preparer' ORDER BY created_at DESC,id DESC LIMIT 1",[row.id]);
 const finalSql = "status IN ('ready_for_distribution','distributed') AND preparer_attested_at IS NOT NULL AND submitted_json IS NOT NULL AND EXISTS (SELECT 1 FROM treasury_attestations a WHERE a.report_id=treasury_reports.id AND a.phase='preparer')";
@@ -60,7 +65,7 @@ async function currentTreasuryReportingWindow(reference=easternDate()) {
   return treasuryReportingWindow(reference,rows.map(row=>JSON.parse(row.draft_json).periodEnd));
 }
 async function visibleReport(row,user) {
-  if(canPrepare(user))return serial(row);
+  if(user.role==='owner'||(canPrepare(user)&&(row.preparer_user_id===user.id||(row.status==='awaiting_preparer'&&row.preparer_user_id===null))))return serial(row);
   const snapshot=finalized(row)?await signedSnapshot(row):null;
   const draft=snapshot?normalizeTreasury(JSON.parse(snapshot.draft_json)):normalizeTreasury();
   draft.sourceNames=[];draft.unmappedLines=[];draft.extractionNotes=[];
@@ -117,7 +122,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   const reportingWindow=()=>currentTreasuryReportingWindow();
   const record=async req=>{
     const row=await fetchRecord(req.params.id);
-    const visible=row&&(canPrepare(req.user)||(hasPermission(req.user,'treasury.upload')&&row.created_by_user_id===req.user.id&&['awaiting_preparer','draft','superseded'].includes(row.status))||(hasPermission(req.user,'treasury.view')&&finalized(row)&&await signedSnapshot(row)));
+    const visible=row&&(canOpenWorkingReport(row,req.user)||(hasPermission(req.user,'treasury.view')&&finalized(row)&&await signedSnapshot(row)));
     if(!visible)throw error(404,'Treasurer report not found.');return row;
   };
   const revision=(req,row)=>{if(req.body?.revision!==row.revision)throw error(409,'This report changed in another window. Reopen it before saving or signing.');};
@@ -160,9 +165,17 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     })});
   }));
   app.get('/api/treasury',route(async(req,res)=>{
-    const ownUploads=!canPrepare(req.user)&&hasPermission(req.user,'treasury.upload');
-    const filter=canPrepare(req.user)?'':` AND ((${finalSql})${ownUploads?" OR (created_by_user_id=? AND status IN ('awaiting_preparer','draft','superseded'))":''})`;
-    const rows=await dbAll('SELECT * FROM treasury_reports WHERE deleted_at IS NULL'+filter+' ORDER BY created_at DESC',ownUploads?[req.user.id]:[]);
+    let filter='',params=[];
+    if(req.user.role!=='owner'){
+      const working=canPrepare(req.user)
+        ? " OR created_by_user_id=? OR preparer_user_id=? OR (status='awaiting_preparer' AND preparer_user_id IS NULL)"
+        : hasPermission(req.user,'treasury.upload')
+          ? " OR (created_by_user_id=? AND status IN ('awaiting_preparer','draft','superseded'))"
+          : '';
+      filter=` AND ((${finalSql})${working})`;
+      params=canPrepare(req.user)?[req.user.id,req.user.id]:hasPermission(req.user,'treasury.upload')?[req.user.id]:[];
+    }
+    const rows=await dbAll('SELECT * FROM treasury_reports WHERE deleted_at IS NULL'+filter+' ORDER BY created_at DESC',params);
     res.json({reports:await Promise.all(rows.map(row=>visibleReport(row,req.user)))});
   }));
   app.post('/api/treasury/drafts',requirePrepare,route(async(req,res)=>{
@@ -241,10 +254,10 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     res.json({draft});
   }));
   app.get('/api/treasury/:id/source',requirePrepare,route(async(req,res)=>{
-    const row=await record(req);const files=await dbAll('SELECT id,name,mime,account_label AS "accountLabel" FROM treasury_sources WHERE report_id=? ORDER BY account_label,name',[row.id]);res.json({text:row.source_text,files});
+    const row=await record(req);if(!canReadSource(row,req.user))throw error(403,'Only the uploader, assigned preparing officer or administrator can open these banking records.');const files=await dbAll('SELECT id,name,mime,account_label AS "accountLabel" FROM treasury_sources WHERE report_id=? ORDER BY account_label,name',[row.id]);res.json({text:row.source_text,files});
   }));
   app.get('/api/treasury/:id/sources/:sourceId',requirePrepare,route(async(req,res)=>{
-    const row=await record(req),file=await dbGet('SELECT name,bytes FROM treasury_sources WHERE id=? AND report_id=?',[req.params.sourceId,row.id]);
+    const row=await record(req);if(!canReadSource(row,req.user))throw error(403,'Only the uploader, assigned preparing officer or administrator can download these banking records.');const file=await dbGet('SELECT name,bytes FROM treasury_sources WHERE id=? AND report_id=?',[req.params.sourceId,row.id]);
     if(!file)throw error(404,'Source file not found.');
     await audit(req,row.id,'source_downloaded');
     res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);res.setHeader('X-Content-Type-Options','nosniff');res.type('application/octet-stream').send(bytes(file.bytes));

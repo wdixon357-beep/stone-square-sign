@@ -484,7 +484,7 @@ struct WorkspaceView: View {
         case .receivedReports:
             if model.user?.role == "owner" { ReceivedReportsView() }
         case .minutes:
-            if model.user?.can("minutes.prepare") == true { MeetingMinutesView(workspace: minutesWorkspace) }
+            if model.user?.can("minutes.prepare") == true { MeetingMinutesView(workspace: minutesWorkspace, onExit: { selection = .home }) }
             else { FinalReportBrowserView(kind: .minutes) }
         case .agenda: if model.user?.role == "owner" { AgendaCreatorView(workspace: agendaWorkspace) }
         case .treasury:

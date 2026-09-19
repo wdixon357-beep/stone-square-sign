@@ -16,7 +16,7 @@ try{
  let sourceMode='ok',portalRejectIdentity=false,portalConflict=false,storeAvailable=true;const remoteCalls=[];
  let busy=[{date:'2026-09-17',start:'19:30',end:'21:00',label:'Stone Square Lodge Stated Meeting',status:'approved'},{date:'2026-09-21',start:'19:00',end:'20:00',label:'Synthetic visiting Chapter',status:'approved'},{date:'2026-09-21',start:'19:00',end:'20:00',label:'Synthetic visiting Chapter',status:'approved'},{date:'2026-09-22',start:'',end:'',label:'Synthetic pending request',status:'pending',ref:'SSL-TEST'},{date:'2026-13-99',label:'Invalid source date',status:'approved'}];
  const app=express();app.use(express.json());
- mountBuildingCalendar(app,{requireAuth:async(req,res,next)=>{req.user=await dbGet('SELECT * FROM users WHERE id=?',[Number(req.get('x-test-user'))||-1]);if(!req.user)return res.status(401).json({error:'Sign in'});next();},fetcher:async(url,init)=>{
+ mountBuildingCalendar(app,{requireAuth:async(req,res,next)=>{req.user=await dbGet('SELECT * FROM users WHERE id=?',[Number(req.get('x-test-user'))||-1]);if(!req.user)return res.status(401).json({error:'Sign in'});req.authRawToken=req.get('x-cookie-session')||String(req.get('authorization')||'').replace(/^Bearer\s+/i,'');next();},fetcher:async(url,init)=>{
   remoteCalls.push({url,init});assert.equal(new URL(url).origin,'https://request.stonesquare22pha.org');
   if(url.includes('/api/calendar')){if(sourceMode==='fail')throw Error('Synthetic unavailable feed');if(sourceMode==='malformed')return new Response('{}',{status:200});return Response.json({busy,warning:sourceMode==='warning'?'Calendar source reports incomplete data.':undefined});}
   if(url.includes('decide='))return portalRejectIdentity?Response.json({error:'Designated officer only'},{status:403}):portalConflict?Response.json({error:'Request changed'},{status:409}):Response.json({ok:true,request:{id:'SSL-TEST',status:'approved',revision:'next'}});
@@ -40,6 +40,8 @@ try{
  check('Authorized designated officer can decide',(await api('/api/building/requests/SSL-TEST/decision',designated,'POST',{decision:'denied',revision:'old'})).status===200);
  portalRejectIdentity=true;check('Private portal identity rejection propagates for a capable warden',(await api('/api/building/requests/SSL-TEST/decision',designated,'POST',{decision:'approved',revision:'old'})).status===403);portalRejectIdentity=false;
  check('Bridge preserves requester authorization',remoteCalls.at(-1).init.headers.Authorization==='Bearer synthetic-session');
+ const cookieRead=await fetch(origin+'/api/building/requests',{headers:{'x-test-user':String(reader),'x-cookie-session':'verified-cookie-session'}});
+ check('Website cookie session is forwarded to the building portal as a verified bearer',cookieRead.status===200&&remoteCalls.at(-1).init.headers.Authorization==='Bearer verified-cookie-session');
  await dbRun('UPDATE users SET permissions_json=? WHERE id=?',[JSON.stringify(['building.view']),designated]);check('Designated identity still requires decision capability',(await api('/api/building/requests/SSL-TEST/decision',designated,'POST',{decision:'approved',revision:'old'})).status===403);
  storeAvailable=false;check('Missing reservation storage is not an empty successful queue',(await api('/api/building/requests',owner)).status===503);storeAvailable=true;
  for(const method of ['POST','PUT','DELETE'])check('Reader cannot mutate calendar via '+method,(await api('/api/lodge-calendar'+(method==='POST'?'':'/unknown'),reader,method,baseEvent)).status===403);

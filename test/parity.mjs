@@ -160,7 +160,7 @@ check('the Mac app opens the authenticated minutes workspace',
   macMinutes.includes("/api/minutes")
   && macMinutes.includes('forHTTPHeaderField: "Authorization"')
   && !macMinutes.includes("WKWebView")
-  && macViews.includes('MeetingMinutesView(workspace: minutesWorkspace)'));
+  && macViews.includes('MeetingMinutesView(workspace: minutesWorkspace, onExit:'));
 
 const builder = read('public/index.html');
 const macBuilder = macViews;

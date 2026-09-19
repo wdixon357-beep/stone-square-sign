@@ -110,7 +110,7 @@ const api = async (method, route, { token, body, raw } = {}) => {
   const payload = type.includes('application/json')
     ? await res.json()
     : Buffer.from(await res.arrayBuffer());
-  return { status: res.status, payload };
+  return { status: res.status, payload, headers: res.headers };
 };
 
 const server = spawn(process.execPath, ['server.js'], {
@@ -243,6 +243,8 @@ try {
   const ownProfiles = await api('GET', '/api/submission-profiles', { token: secToken });
   check('the Secretary sees only his own saved details', ownProfiles.payload.profiles?.length === 1
     && ownProfiles.payload.profiles[0].role === 'secretary');
+  check('authenticated records are never stored in browser or intermediary caches',
+    ownProfiles.headers.get('cache-control') === 'private, no-store', ownProfiles.headers.get('cache-control'));
   check('a viewer cannot read officer mailing addresses',
     (await api('GET', '/api/submission-profiles', { token: viewerToken })).status === 403);
   const invalidProfile = await api('PUT', '/api/submission-profiles/assistant_secretary', {
@@ -266,6 +268,10 @@ try {
   check('signature comes back as a PNG from the database',
     gotSig.status === 200 && Buffer.isBuffer(gotSig.payload) && gotSig.payload.subarray(1, 4).toString() === 'PNG',
     `status ${gotSig.status}`);
+  const malformedSignature = await api('PUT', '/api/profile/signature', {
+    token: secToken, body: { signatureData: `data:image/png;base64,${'A'.repeat(1000)}`, signatureType: 'drawn' },
+  });
+  check('malformed data cannot be saved as a signature', malformedSignature.status === 400, String(malformedSignature.status));
 
   await api('PUT', '/api/profile/signature', { token: asstToken, body: { signatureData: SIG, signatureType: 'typed', styleName: 'Formal' } });
 
@@ -681,11 +687,16 @@ try {
   const accessBeforeSecretaryReview = await api('GET', '/api/admin/access', { token: wmToken });
   const secretaryAccess = accessBeforeSecretaryReview.payload.accounts?.find(account => account.email === 'mcduff8995@example.org' && !account.pending);
   check('the Secretary account is available for the completion notice access check', Boolean(secretaryAccess));
+  const secretaryAccessStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${secToken}` } });
+  let secretaryAccessEvents = '';
+  const secretaryAccessReader = collectEvents(secretaryAccessStream, text => { secretaryAccessEvents += text; });
   const withoutMinutes = secretaryAccess.permissions.filter(permission => !permission.startsWith('minutes.'));
   const disabledSecretaryMinutes = await api('PUT', '/api/admin/access', {
     token: wmToken, body: { key: secretaryAccess.key, permissions: withoutMinutes },
   });
   check('the Master can disable the Secretary minutes workspace before review completes', disabledSecretaryMinutes.status === 200);
+  await secretaryAccessReader;
+  check('permission changes close the existing live stream so it reconnects with current access', secretaryAccessEvents.includes('event: access_changed'));
   const completionMailBeforeDisabledReview = deliveredMail.length;
   const secretaryReviewed = await api('POST', `/api/minutes/${secretaryMinutesId}/master-attest`, { token: wmToken });
   const disabledReviewNotices = deliveredMail.slice(completionMailBeforeDisabledReview);
@@ -1221,8 +1232,8 @@ try {
   check('a viewer cannot send anything to the District Deputy',
     viewerSubmit.status === 403, String(viewerSubmit.status));
 
-  /* Invitations the Master can see the state of, and that do not require the officer to find
-   * the private link. He was invited; typing the address he was invited at is enough. */
+  /* Invitations the Master can see the state of. The private token remains required so
+   * knowing a Brother's invited email address cannot claim his account. */
   /* What the District Deputy decided. Recorded as its own fact, because neither dispensation
    * the Lodge holds as approved has a single mark in its approval block; both were granted by
    * email over a blank endorsement. */
@@ -1322,11 +1333,17 @@ try {
   const withoutLink = await api('POST', '/api/auth/register', {
     body: { email: 'waiting@example.org', name: 'Waiting Brother', password: 'a long enough secret' },
   });
-  check('he can create his account without ever opening the private link',
-    withoutLink.status === 201 && Boolean(withoutLink.payload.token),
-    JSON.stringify(withoutLink.payload).slice(0, 200));
+  check('knowing an invited email address is not enough to claim the account',
+    withoutLink.status === 403, String(withoutLink.status));
+  const waitingToken = new URL(invited.payload.inviteUrl).searchParams.get('invite');
+  const withPrivateLink = await api('POST', '/api/auth/register', {
+    body: { email: 'waiting@example.org', name: 'Waiting Brother', password: 'a long enough secret', invitationToken: waitingToken },
+  });
+  check('the invited Brother can create his account with the private invitation token',
+    withPrivateLink.status === 201 && Boolean(withPrivateLink.payload.token),
+    JSON.stringify(withPrivateLink.payload).slice(0, 200));
   check('and he gets the office the Master invited him to, not one he chose',
-    withoutLink.payload.user?.role === 'viewer', withoutLink.payload.user?.role);
+    withPrivateLink.payload.user?.role === 'viewer', withPrivateLink.payload.user?.role);
 
   const afterJoin = await api('GET', '/api/officers', { token: wmToken });
   check('once he is in he moves from pending to active',
