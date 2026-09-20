@@ -172,6 +172,7 @@ enum OfficerSeatState { case none, pending, active
 struct InviteResponse: Codable { let inviteUrl: String; let emailSent: Bool; let expiresAt: String }
 struct SignatureResponse: Codable { let message: String; let user: User }
 struct MessageResponse: Codable { let message: String; var notificationWarnings: [String]? = nil }
+struct SetupResponse: Codable { let needsOwnerSetup: Bool; let registrationMode: String; let emailDeliveryReady: Bool }
 struct EmptyResponse: Codable { let ok: Bool }
 struct UploadResponse: Codable {
     let document: UploadedDocument

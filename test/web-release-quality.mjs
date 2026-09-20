@@ -46,7 +46,7 @@ assert.match(nativeMinutes, /func claim\(_ record: MinutesRecord\) async/, 'the 
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'every officer with minutes access must receive a signed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening signed minutes must acknowledge only that officer alert');
 assert.match(html, /id="minutesReviewAlerts"[^>]+workflow-alerts/, 'minutes alerts must be prominent at the top of the Dashboard');
-assert.match(app, /Signed and available to all officers/, 'the website must state when signed minutes are available to officers');
+assert.match(app, /Signed and available in the Dashboard/, 'the website must state when signed minutes are available to authorized Dashboard users');
 assert.match(app, /WM review complete, ready to send to the Craft/, 'the website must highlight signed minutes for the Master and Secretary offices');
 assert.match(app, /Meeting minutes are available to view/, 'the website must alert every other officer that signed minutes can be viewed');
 assert.match(app, /const minutesDocumentTitle = \(item\) => `Meeting Minutes, \$\{minutesDateLabel\(item\)\}`/, 'current minutes titles must use one readable date format');
@@ -59,7 +59,7 @@ assert.match(app, /Mark as sent to the Craft/, 'the website must let an authoriz
 assert.match(app, /Historical meeting minutes[\s\S]*finalizedMinutes\.forEach/, 'the website must file signed current minutes under Historical meeting minutes');
 assert.match(app, /path === 'master-attest'[\s\S]*hide\(\$\('minutesEditorModal'\)\)[\s\S]*renderMinutes/, 'the website must leave review and return to the historical list after the Master signs');
 assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either Secretary must be allowed to record distribution');
-assert.match(nativeMinutes, /Signed and available to all officers/, 'the Mac app must use the same minutes status wording');
+assert.match(nativeMinutes, /Signed and available in the Dashboard/, 'the Mac app must use the same minutes status wording');
 assert.match(app, /event: minutes_records_changed/, 'the website must refresh an open minutes archive after publication');
 assert.match(nativeAPI, /event: minutes_records_changed/, 'the Mac app must refresh an open minutes archive after publication');
 assert.match(nativeMinutes, /mayReview\(record\) \? "Review" : "View PDF"/, 'the Mac app must open another preparer signed minutes as a finalized PDF');
@@ -135,6 +135,10 @@ modalTags.forEach(tag => assert.match(tag, /aria-hidden="true"/, `modal must sta
 assert.match(app, /modalFocusOrigins/, 'modal focus must return to its opener');
 assert.match(app, /event\.key !== 'Tab'/, 'keyboard focus must stay inside an open modal');
 assert.match(styles, /:focus-visible/, 'keyboard focus must be visible');
+assert.match(html, /role="tab"[^>]+aria-selected="true"[^>]+aria-controls="loginForm"/, 'account navigation must expose an accessible selected tab');
+assert.match(app, /\['ArrowLeft', 'ArrowRight', 'Home', 'End'\]/, 'account tabs must support keyboard navigation');
+assert.match(server, /INSERT INTO rate_limits[\s\S]*Retry-After/, 'rate limiting must use the shared database and tell clients when to retry');
+assert.match(server, /app\.get\('\/api\/ready'[\s\S]*SELECT 1 AS ready/, 'deployment readiness must verify the database separately from liveness');
 assert.match(styles, /prefers-reduced-motion:\s*reduce/, 'motion must respect the operating system preference');
 assert.match(html, /id="memberWelcome"[\s\S]*id="memberWelcomeName"/, 'Brother sign-in must include a dedicated accessible welcome screen');
 assert.match(app, /user\?\.role !== 'member'[\s\S]*Welcome, Bro\. \$\{brotherSurname\(user\.name\)\}/, 'the welcome screen must use the Brother surname and stay limited to member accounts');
@@ -151,6 +155,7 @@ assert.match(styles, /\.content > section,[^}]+min-width:\s*0/, 'every web works
 assert.match(styles, /\.sidebar-foot \.text-button \{[^}]*white-space:\s*nowrap/, 'tablet account controls must remain readable instead of collapsing into vertical letters');
 assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.sidebar nav \{[^}]*grid-column:\s*1 \/ -1[^}]*grid-row:\s*2/, 'tablet navigation must use its own full-width row instead of overlapping account controls');
 assert.match(styles, /\.panel-title > button,[^}]+flex:\s*0 0 auto/, 'panel action labels must keep their readable width on phones');
+assert.match(styles, /\.minutes-row > \* \{ min-width: 0; \}[\s\S]*\.minutes-row h3[^}]*overflow-wrap: anywhere/, 'minutes titles must wrap inside phone-width record rows');
 assert.match(app, /resetWorkspaceScroll[\s\S]*scrollTo\?\.\(\{ top: 0, left: 0/, 'changing website workspaces must return the content pane to its top edge');
 assert.match(treasury, /top\(\).*scrollTo\?\./, 'opening a treasurer report must return the content pane to its top edge');
 

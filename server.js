@@ -186,7 +186,8 @@ const clearWebSessionCookie = (res) => {
 };
 
 const createTransporter = () => {
-  const { SMTP_HOST: host, SMTP_USER: user, SMTP_PASS: pass, MAIL_FROM: from } = process.env;
+  const { SMTP_USER: user, SMTP_PASS: pass, MAIL_FROM: from } = process.env;
+  const host = process.env.SMTP_HOST || (user && pass && from ? 'smtp.gmail.com' : '');
   if (!host || !user || !pass || !from) return null;
   return nodemailer.createTransport({
     host,
@@ -444,20 +445,29 @@ const requireOwnerOrWarden = (req, res, next) => {
   return requireWarden(req, res, next);
 };
 
-const rateBuckets = new Map();
-const rateLimit = ({ key, maximum, windowMs }) => (req, res, next) => {
-  const bucketKey = `${key}:${req.ip}`;
-  const current = rateBuckets.get(bucketKey);
-  const time = Date.now();
-  if (!current || current.resetAt < time) {
-    rateBuckets.set(bucketKey, { count: 1, resetAt: time + windowMs });
-    return next();
-  }
-  if (current.count >= maximum) {
-    return res.status(429).json({ error: 'Too many attempts. Please wait and try again.' });
-  }
-  current.count += 1;
-  next();
+let rateLimitRequests = 0;
+const rateLimit = ({ key, maximum, windowMs }) => async (req, res, next) => {
+  try {
+    const now = new Date();
+    const resetAt = new Date(now.getTime() + windowMs).toISOString();
+    const source = String(req.ip || req.socket?.remoteAddress || 'unknown').trim().slice(0, 120);
+    const bucketKey = crypto.createHash('sha256').update(`${key}:${source}`).digest('hex');
+    const row = await dbGet(
+      `INSERT INTO rate_limits (bucket_key,count,reset_at) VALUES (?,1,?)
+       ON CONFLICT(bucket_key) DO UPDATE SET
+         count=CASE WHEN rate_limits.reset_at<=? THEN 1 ELSE rate_limits.count+1 END,
+         reset_at=CASE WHEN rate_limits.reset_at<=? THEN EXCLUDED.reset_at ELSE rate_limits.reset_at END
+       RETURNING count,reset_at`,
+      [bucketKey, resetAt, now.toISOString(), now.toISOString()],
+    );
+    if ((++rateLimitRequests & 255) === 0) await dbRun('DELETE FROM rate_limits WHERE reset_at < ?', [now.toISOString()]);
+    if (Number(row.count) > maximum) {
+      const seconds = Math.max(1, Math.ceil((Date.parse(row.reset_at) - now.getTime()) / 1000));
+      res.setHeader('Retry-After', String(seconds));
+      return res.status(429).json({ error: 'Too many attempts. Please wait and try again.' });
+    }
+    next();
+  } catch (error) { next(error); }
 };
 
 const locationSearchCache = new Map();
@@ -1177,9 +1187,9 @@ app.use('/pdfjs/build', express.static(path.join(APP_DIR, 'node_modules/pdfjs-di
 app.use('/pdfjs/standard_fonts', express.static(path.join(APP_DIR, 'node_modules/pdfjs-dist/standard_fonts'), { index: false, maxAge: '1d' }));
 app.use(express.static(path.join(APP_DIR, 'public'), {
   index: false,
-  etag: false,
-  maxAge: 0,
-  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate'),
+  etag: true,
+  maxAge: '5m',
+  setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate'),
 }));
 
 /* Render and the daytime keep-awake workflow call this frequently. It is deliberately
@@ -1194,6 +1204,20 @@ app.get('/api/health', (_req, res) => {
     database: 'not-checked',
     time: nowIso(),
   });
+});
+
+/* Deployment and operator checks call readiness deliberately. The frequent hosting
+ * liveness probe above remains process-only so it does not keep Neon awake. */
+app.get('/api/ready', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    await dbGet('SELECT 1 AS ready');
+    res.json({ ok: true, service: 'stone-square-sign', version: APP_VERSION,
+      database: 'ready', emailDeliveryReady: Boolean(transporter), time: nowIso() });
+  } catch {
+    res.status(503).json({ ok: false, service: 'stone-square-sign', version: APP_VERSION,
+      database: 'unavailable', emailDeliveryReady: Boolean(transporter), time: nowIso() });
+  }
 });
 
 app.get('/api/version', (_req, res) => {
@@ -3704,7 +3728,7 @@ app.listen(PORT, '0.0.0.0', () => {
   }
   /* Reset answers are deliberately identical whether or not delivery works, so a
    * broken mail configuration is silent to the user. Say it loudly here instead. */
-  if (IS_PRODUCTION && !process.env.SMTP_HOST) {
-    console.warn('WARNING: no SMTP_HOST. Invitations, record copies and password reset codes cannot be delivered.');
+  if (IS_PRODUCTION && !transporter) {
+    console.warn('WARNING: email delivery is not configured. Invitations, record copies and password reset codes cannot be delivered.');
   }
 });

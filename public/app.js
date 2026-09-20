@@ -43,6 +43,7 @@ const state = {
   proposalDirty: false,
   dispensationDirty: false,
   minutesSourceDirty: false,
+  emailDeliveryReady: null,
 };
 let treasuryWorkspace;
 let agendaWorkspace;
@@ -266,9 +267,13 @@ const setActiveTab = (which) => {
   };
   Object.values(mapping).forEach(([buttonId, formId]) => {
     $(buttonId).classList.remove('active');
+    $(buttonId).setAttribute('aria-selected', 'false');
+    $(buttonId).tabIndex = -1;
     hide($(formId));
   });
   $(mapping[which][0]).classList.add('active');
+  $(mapping[which][0]).setAttribute('aria-selected', 'true');
+  $(mapping[which][0]).tabIndex = 0;
   show($(mapping[which][1]));
   setMessage(authMessage, '');
 };
@@ -407,6 +412,10 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
   if (!agendaWorkspace && user.role === 'owner') { const { AgendaWorkspace } = await import('/agenda.js'); agendaWorkspace = new AgendaWorkspace({ api: apiFetch, user: () => state.user }); }
   applyWorkspacePermissions(user);
+  if (user.role === 'owner' && state.emailDeliveryReady === false) {
+    $('serviceHealthAlert').innerHTML = '<strong>Email delivery needs attention.</strong><p>Invitations, password reset codes, and record notifications are saved, but email cannot leave the dashboard until the mail service is connected.</p>';
+    show($('serviceHealthAlert'));
+  } else hide($('serviceHealthAlert'));
   restoreWebDrafts();
   const supportedDeepLinks = new Set(['home','building','calendar','reports','minutes','treasury','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports']);
   showWorkspaceSection(supportedDeepLinks.has(requestedWorkspaceSection) ? requestedWorkspaceSection : 'home');
@@ -780,7 +789,7 @@ const MINUTES_STATUS = {
   organizing: 'Organizing source',
   draft: 'Working draft',
   awaiting_master_attestation: 'Waiting for the Worshipful Master',
-  ready_for_distribution: 'Signed and available to all officers',
+  ready_for_distribution: 'Signed and available in the Dashboard',
   distributed: 'Distributed by the Secretary or Assistant Secretary',
   approved_by_lodge: 'Approved by the Lodge',
 };
@@ -2375,6 +2384,14 @@ $('sessionDetails').addEventListener('click', () => {
 });
 $('showRegister').addEventListener('click', () => setActiveTab('register'));
 $('showReset').addEventListener('click', () => setActiveTab('reset'));
+document.querySelector('.auth-tabs').addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll('.auth-tab')];
+  const current = Math.max(0, tabs.indexOf(document.activeElement));
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+    : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault(); tabs[next].click(); tabs[next].focus();
+});
 
 $('loginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -3005,6 +3022,11 @@ const initialize = async () => {
   if (inviteEmail) $('registerEmail').value = inviteEmail;
   try {
     const setup = await apiFetch('/api/setup');
+    state.emailDeliveryReady = setup.emailDeliveryReady === true;
+    if (!state.emailDeliveryReady) {
+      $('requestReset').disabled = true;
+      $('resetDeliveryHint').textContent = 'Email recovery is temporarily unavailable. Ask the Worshipful Master to reset your account access.';
+    }
     if (setup.registrationMode === 'access_code' && !state.invitationToken) {
       show($('selfServeFields'));
       $('registerEyebrow').textContent = 'LODGE OFFICERS';

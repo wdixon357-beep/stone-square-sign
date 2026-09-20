@@ -242,7 +242,14 @@ struct AuthenticationView: View {
                     TextField("Email address", text: $email).textContentType(.emailAddress)
                     if mode == 2 { TextField("Six digit code", text: $code) }
                     SecureField(mode == 2 ? "New password" : mode == 1 ? "Create password" : "Password", text: $password)
-                    if mode == 2 { Button("Send reset code") { Task { await model.requestReset(email: email) } } }
+                    if mode == 2 {
+                        Button("Send reset code") { Task { await model.requestReset(email: email) } }
+                            .disabled(model.emailDeliveryReady == false)
+                        if model.emailDeliveryReady == false {
+                            Text("Email recovery is temporarily unavailable. Ask the Worshipful Master to reset your account access.")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
                 }
                 #if DEBUG
                 Section {
@@ -264,6 +271,7 @@ struct AuthenticationView: View {
         }.padding(32).frame(width: 470).disabled(model.isBusy)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
+            .task { await model.loadServiceSetup() }
     }
 
     private var buttonTitle: String {
@@ -663,14 +671,30 @@ struct NativeCandidateTrackerView: View {
                 }
             }.padding(16)
             Divider()
-            Table(filteredRecords, selection: $selectedRecordID) {
-                TableColumn("Name", value: \.name)
-                TableColumn("Status", value: \.status)
-                TableColumn("Owner", value: \.owner)
-                TableColumn("Next step", value: \.nextStep)
-            }.overlay {
-                if model.candidateTrackerLoading && model.candidateRecords.isEmpty { ProgressView("Loading records…") }
-                else if filteredRecords.isEmpty { ContentUnavailableView("No matching records", systemImage: "person.text.rectangle", description: Text("Choose another section or adjust the filters.")) }
+            GeometryReader { available in
+                Group {
+                    if available.size.width < 780 {
+                        List(filteredRecords) { record in
+                            Button { selectedRecordID = record.id } label: {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    HStack { Text(record.name).font(.headline); Spacer(); Text(record.status).font(.caption.weight(.semibold)).foregroundStyle(trackerGold) }
+                                    if !record.owner.isEmpty { Text("Owner: \(record.owner)").font(.caption).foregroundStyle(.secondary) }
+                                    if !record.nextStep.isEmpty { Text(record.nextStep).font(.callout).fixedSize(horizontal: false, vertical: true) }
+                                }.padding(.vertical, 5).contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                        }
+                    } else {
+                        Table(filteredRecords, selection: $selectedRecordID) {
+                            TableColumn("Name", value: \.name)
+                            TableColumn("Status", value: \.status)
+                            TableColumn("Owner", value: \.owner)
+                            TableColumn("Next step", value: \.nextStep)
+                        }
+                    }
+                }.overlay {
+                    if model.candidateTrackerLoading && model.candidateRecords.isEmpty { ProgressView("Loading records…") }
+                    else if filteredRecords.isEmpty { ContentUnavailableView("No matching records", systemImage: "person.text.rectangle", description: Text("Choose another section or adjust the filters.")) }
+                }
             }
             if let record = filteredRecords.first(where: { $0.id == selectedRecordID }) {
                 Divider()
@@ -1193,6 +1217,14 @@ struct LandingDashboardView: View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
             List {
+                if model.user?.role == "owner", model.emailDeliveryReady == false {
+                    Section("Service status") {
+                        Label("Email delivery needs attention", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Invitations, password reset codes, and record notifications are saved, but email cannot leave the Dashboard until the mail service is connected.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
                 Section("Reports and records") {
                     if model.user?.canOpen(.building) == true { homeRow("Building Requests", model.user?.can("building.view") == true ? "Submit building requests and view recorded decisions" : "Submit a request to use the Lodge building", "building.2", action: openBuilding) }
                     if model.user?.canOpen(.lodgeCalendar) == true { homeRow("Lodge Calendar", "View scheduled events", "calendar", action: openCalendar) }
@@ -1218,6 +1250,7 @@ struct LandingDashboardView: View {
                 }
             }.listStyle(.inset).environment(\.defaultMinListRowHeight, 48)
         }.background(Color(nsColor: .windowBackgroundColor))
+            .task { if model.emailDeliveryReady == nil { await model.loadServiceSetup() } }
     }
     private func homeRow(_ title: String, _ detail: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -1432,7 +1465,59 @@ struct DocumentRow: View {
         return roles.contains("secretary") != roles.contains("assistant_secretary")
     }
 
+    private var statusText: String {
+        document.isRescinded ? "Rescinded" : document.isComplete ? "Completed" : document.needsSignature ? "Your signature" : "Awaiting"
+    }
+
+    private var statusColor: Color {
+        document.isRescinded ? .red : document.isComplete ? .green : SignTheme.navy
+    }
+
+    @ViewBuilder private var compactActions: some View {
+        if model.user?.role != "viewer" {
+            Menu("Actions") {
+                Button("View", action: open)
+                if model.user?.role == "owner" && !document.isTerminal && onlyOneSecretary {
+                    Button("Let either Secretary sign") { pendingQueueAction = .offerToBothSecretaries }
+                }
+                if model.user?.can("documents.sign") == true && document.needsSignature && !document.isTerminal {
+                    Button("Review and sign", action: sign)
+                }
+                if model.user?.role == "owner" && document.isComplete && document.isDispensation {
+                    Button("Draft in my mail app") { Task { await model.draftToDistrictDeputy(document: document) } }
+                    if document.submittedAt == nil {
+                        Button("Send to the District Deputy") { pendingQueueAction = .submitToDistrictDeputy }
+                    } else {
+                        Button("Send again") { pendingQueueAction = .resendToDistrictDeputy }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var compactRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(document.isRescinded ? "R" : queueNumber.map(String.init) ?? "✓")
+                .font(.caption.weight(.bold)).foregroundStyle(SignTheme.navy)
+                .frame(width: 28, height: 28).background(SignTheme.gold.opacity(0.25), in: Circle())
+            VStack(alignment: .leading, spacing: 8) {
+                Text(document.displayTitle).font(.headline).foregroundStyle(SignTheme.navy)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(document.signers) { signer in SignerStatusView(signer: signer).font(.caption) }
+                HStack(spacing: 10) {
+                    Text(statusText).font(.caption.weight(.semibold)).foregroundStyle(statusColor)
+                    Spacer(minLength: 8)
+                    compactActions
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     var body: some View {
+        ViewThatFits(in: .horizontal) {
         HStack(spacing: 14) {
             Text(document.isRescinded ? "R" : queueNumber.map(String.init) ?? "✓")
                 .font(.caption.weight(.bold))
@@ -1499,6 +1584,8 @@ struct DocumentRow: View {
                     }
                 }
             }
+        }.fixedSize(horizontal: true, vertical: false)
+        compactRow
         }
         .padding(.vertical, 13)
         .alert(pendingQueueAction?.title ?? "Confirm document action", isPresented: Binding(
@@ -2344,6 +2431,14 @@ struct ProposalReviewView: View {
     @State private var notes: [String: String] = [:]
     @State private var busyID: String?
     @State private var pendingDecision: PendingDecision?
+    @State private var edits: [String: [String: String]] = [:]
+
+    private func editBinding(_ proposal: WardenProposal, _ key: String, _ original: String?) -> Binding<String> {
+        Binding(
+            get: { edits[proposal.id]?[key] ?? original ?? "" },
+            set: { value in var row = edits[proposal.id] ?? [:]; row[key] = value; edits[proposal.id] = row }
+        )
+    }
 
     private struct PendingDecision: Identifiable {
         let proposal: WardenProposal
@@ -2408,6 +2503,16 @@ struct ProposalReviewView: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                             }
                             if proposal.isPending {
+                                Group {
+                                    TextField("What it is", text: editBinding(proposal, "title", proposal.title))
+                                    TextField("What is being asked", text: editBinding(proposal, "requestDetails", proposal.requestDetails), axis: .vertical).lineLimit(3...8)
+                                    TextField("Event date, YYYY-MM-DD", text: editBinding(proposal, "eventDate", proposal.eventDate))
+                                    TextField("Time", text: editBinding(proposal, "eventTime", proposal.eventTime))
+                                    TextField("Location", text: editBinding(proposal, "locationName", proposal.locationName))
+                                    TextField("Street", text: editBinding(proposal, "streetAddress", proposal.streetAddress))
+                                    TextField("City, state, and ZIP", text: editBinding(proposal, "cityState", proposal.cityState))
+                                }
+                                .textFieldStyle(.roundedBorder)
                                 TextField("A note back to him, optional", text: Binding(
                                     get: { notes[proposal.id] ?? "" },
                                     set: { notes[proposal.id] = $0 }
@@ -2421,7 +2526,7 @@ struct ProposalReviewView: View {
                                     if busyID == proposal.id { ProgressView().controlSize(.small) }
                                 }
                                 .disabled(busyID != nil)
-                                Text("To change the wording before approving, use the web page. This decides it as written.")
+                                Text("Your edits above become the wording on the dispensation when you approve it.")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else if let wm = proposal.wmNote, !wm.isEmpty {
                                 Text("Your note: \(wm)").font(.callout).foregroundStyle(.secondary)
@@ -2452,7 +2557,15 @@ struct ProposalReviewView: View {
         busyID = proposal.id
         let text = notes[proposal.id] ?? ""
         Task {
-            if await model.decideProposal(id: proposal.id, decision: decision, wmNote: text) { notes[proposal.id] = nil }
+            let defaults = [
+                "requestDate": proposal.requestDate ?? "", "eventDate": proposal.eventDate ?? "",
+                "requestDetails": proposal.requestDetails ?? "", "eventTime": proposal.eventTime ?? "",
+                "locationName": proposal.locationName ?? "", "streetAddress": proposal.streetAddress ?? "",
+                "cityState": proposal.cityState ?? "", "title": proposal.title ?? "",
+            ]
+            if await model.decideProposal(id: proposal.id, decision: decision, wmNote: text, editedFields: defaults.merging(edits[proposal.id] ?? [:]) { _, edited in edited }) {
+                notes[proposal.id] = nil; edits[proposal.id] = nil
+            }
             busyID = nil
         }
     }

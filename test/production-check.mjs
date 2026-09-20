@@ -3,7 +3,7 @@ import { expectedProduction, checkProduction, waitForProduction } from '../scrip
 
 const expected = await expectedProduction();
 const commit = 'a'.repeat(40);
-const bodies = { ...expected.assets, '/api/version': JSON.stringify({ version: expected.version, commit }) };
+const bodies = { ...expected.assets, '/api/version': JSON.stringify({ version: expected.version, commit }), '/api/ready': JSON.stringify({ ok: true, database: 'ready' }) };
 const fetcher = async url => new Response(bodies[new URL(url).pathname], { status: 200 });
 const run = (overrides = {}) => checkProduction({ expected, commit, fetcher, ...overrides });
 assert.deepEqual(await run(), []);
@@ -23,6 +23,12 @@ assert.ok((await run()).some(issue => issue.includes('not reported')));
 bodies['/api/version'] = 'not json';
 assert.ok((await run()).some(issue => issue.includes('invalid version response')));
 bodies['/api/version'] = JSON.stringify({ version: expected.version, commit });
+const ready = bodies['/api/ready'];
+bodies['/api/ready'] = JSON.stringify({ ok: false, database: 'unavailable' });
+assert.ok((await run()).some(issue => issue.includes('database is not ready')));
+bodies['/api/ready'] = 'not json';
+assert.ok((await run()).some(issue => issue.includes('invalid readiness response')));
+bodies['/api/ready'] = ready;
 assert.ok((await run({ fetcher: async () => new Response('Unavailable', { status: 503 }) })).some(issue => issue.includes('HTTP 503')));
 assert.ok((await run({ fetcher: async () => { throw Error('network unavailable'); } })).some(issue => issue.includes('network unavailable')));
 const broken = structuredClone(expected);

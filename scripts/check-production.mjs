@@ -41,6 +41,13 @@ export async function checkProduction({ expected, commit, base = 'https://stone-
       if (live.commit !== commit) issues.push(`Server commit is ${live.commit || 'not reported'}; expected ${commit}.`);
     } catch { issues.push('/api/version: invalid version response.'); }
   }
+  const readinessText = await get('/api/ready');
+  if (readinessText !== null) {
+    try {
+      const readiness = JSON.parse(readinessText);
+      if (readiness.ok !== true || readiness.database !== 'ready') issues.push('/api/ready: database is not ready.');
+    } catch { issues.push('/api/ready: invalid readiness response.'); }
+  }
   // Check required static bindings as well as matching bytes. Optional bindings
   // deliberately allow controls which are not on every page.
   const required = new Set([...expected.assets['/app.js'].matchAll(/\$\('([^']+)'\)(?!\?\.)/g)].map(match => match[1]));

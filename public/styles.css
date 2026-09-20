@@ -188,8 +188,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-available-notice p { margin: 5px 0 0; color: #675328; font-size: 12px; line-height: 1.55; }
 .minutes-available-notice button { flex: 0 0 auto; }
 .minutes-row { display: grid; grid-template-columns: 46px minmax(220px, 1fr) auto auto; align-items: center; gap: 15px; padding: 17px 0; border-top: 1px solid var(--line); }
+.minutes-row > * { min-width: 0; }
 .minutes-row .doc-icon { width: 42px; }
-.minutes-row h3 { margin: 0 0 5px; color: var(--navy); font-size: 14px; }
+.minutes-row h3 { margin: 0 0 5px; color: var(--navy); font-size: 14px; overflow-wrap: anywhere; }
 .minutes-row p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .minutes-row-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .minutes-editor-body { width: min(1040px, 100%); }

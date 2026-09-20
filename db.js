@@ -182,6 +182,12 @@ export const initSchema = async (exec = run) => {
     expires_at TEXT NOT NULL,
     used INTEGER DEFAULT 0
   )`);
+  await exec(`CREATE TABLE IF NOT EXISTS rate_limits (
+    bucket_key TEXT PRIMARY KEY,
+    count INTEGER NOT NULL,
+    reset_at TEXT NOT NULL
+  )`);
+  await exec('CREATE INDEX IF NOT EXISTS rate_limits_reset ON rate_limits(reset_at)');
   await exec(`CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
     title TEXT,

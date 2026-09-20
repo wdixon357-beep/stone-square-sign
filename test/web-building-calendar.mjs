@@ -25,6 +25,15 @@ await workspace.decision({dataset:{building:'approved',id:request.id}});assert.e
 confirmed=true;await workspace.decision({dataset:{building:'approved',id:request.id}});assert.deepEqual(JSON.parse(calls.find(c=>c.init).init.body),{decision:'approved',note:'Reviewed note',revision:7});
 failConflict=true;await workspace.decision({dataset:{building:'denied',id:request.id}});assert.match(workspace.buildingRoot.querySelector('[data-message]').textContent,/changed before your decision/);failConflict=false;
 const secretaryCalls=[];const secretaryRequest={...request,status:'approved',agreementStatus:'awaiting_secretary_attestation'};
+const ownerCalls=[];const privateRequest={...request,ownerOnly:true};
+const ownerWorkspace=new BuildingCalendarWorkspace({user:()=>({role:'owner',permissions:['building.view','building.decide']}),api:async(path,init)=>{ownerCalls.push({path,init});return init?{request:privateRequest}:{requests:[privateRequest],canDecide:true};}});
+ownerWorkspace.requestFormOpen=true;
+await ownerWorkspace.building();
+assert.match(ownerWorkspace.buildingRoot.querySelector('.building-requests').innerHTML,/No security deposit is required/);
+assert.doesNotMatch(ownerWorkspace.buildingRoot.querySelector('.building-requests').innerHTML,/building-auth-deposit/);
+await ownerWorkspace.decision({dataset:{building:'approved',id:privateRequest.id}});
+const ownerPayload=JSON.parse(ownerCalls.find(c=>c.init).init.body);
+assert.equal(Object.hasOwn(ownerPayload.authorization,'deposit'),false);
 const secretaryWorkspace=new BuildingCalendarWorkspace({user:()=>({role:'secretary',permissions:['building.view']}),api:async(path,init)=>{secretaryCalls.push({path,init});return init?{request:secretaryRequest}:{requests:[secretaryRequest],canDecide:false};}});
 secretaryWorkspace.requests=[secretaryRequest];await secretaryWorkspace.decision({dataset:{building:'attest',id:secretaryRequest.id}});
 assert.equal(secretaryCalls[0].path,'/api/building/requests/SSL-TEST/attest');

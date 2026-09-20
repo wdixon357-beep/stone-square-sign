@@ -197,6 +197,7 @@ final class AppModel: ObservableObject {
     @Published var myDuesError: String?
     @Published var biometricLoginEnabled: Bool
     @Published var biometricLoginAvailable: Bool
+    @Published var emailDeliveryReady: Bool?
     @Published var messageIsWarning = false
     @Published var message = "" { didSet { messageIsWarning = false } }
     @Published var isError = false
@@ -229,6 +230,7 @@ final class AppModel: ObservableObject {
         #endif
         biometricLoginEnabled = UserDefaults.standard.bool(forKey: "biometric-login-enabled")
         biometricLoginAvailable = BiometricCredentialStore.isAvailable
+        emailDeliveryReady = nil
         /* Always restore the session. Throwing it away when Touch ID is on meant every quit
          * became a fresh sign in, and the Keychain read that was supposed to replace it fails
          * whenever the app is rebuilt, because an ad hoc signature changes every build and the
@@ -416,6 +418,15 @@ final class AppModel: ObservableObject {
             let body = try JSONSerialization.data(withJSONObject: ["email": email])
             let response: MessageResponse = try await self.request("/api/auth/forgot-password", method: "POST", body: body)
             self.message = response.message
+        }
+    }
+
+    func loadServiceSetup() async {
+        do {
+            let response: SetupResponse = try await request("/api/setup")
+            emailDeliveryReady = response.emailDeliveryReady
+        } catch {
+            emailDeliveryReady = nil
         }
     }
 
@@ -1055,10 +1066,13 @@ final class AppModel: ObservableObject {
 
     /* approve | decline | changes. The Master may correct any field before approving; the
      * server creates the real dispensation through the same path his own builder uses. */
-    func decideProposal(id: String, decision: String, wmNote: String) async -> Bool {
+    func decideProposal(id: String, decision: String, wmNote: String, editedFields: [String: String] = [:]) async -> Bool {
         messageIsWarning = false
         do {
-            let body = try JSONSerialization.data(withJSONObject: ["decision": decision, "wmNote": wmNote])
+            var payload = editedFields
+            payload["decision"] = decision
+            payload["wmNote"] = wmNote
+            let body = try JSONSerialization.data(withJSONObject: payload)
             let response: ProposalDecisionResponse = try await request(
                 "/api/proposals/\(id)/decision",
                 method: "POST",

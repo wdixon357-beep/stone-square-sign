@@ -41,6 +41,10 @@ for (const [name, source] of Object.entries({ treasury, minutes, agenda, reportG
 assert.match(minutes, /AdaptiveControlBar[\s\S]*recordSummary\(record\)[\s\S]*recordActions\(record\)/, 'minutes handoff rows must reflow at compact widths');
 assert.match(minutes, /recordActions[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*recordActionControls/, 'minutes status and claim controls must stack before they clip');
 assert.match(views, /treasuryAlertButtons[\s\S]*HStack\(alignment: \.top[\s\S]*xmark\.circle\.fill/, 'Mac banking alerts must keep a compact dismiss control beside wrapped alert text');
+assert.match(views, /struct DocumentRow[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*compactRow/, 'Live Queue rows must switch to a compact card before signer names collapse');
+assert.match(views, /available\.size\.width < 780[\s\S]*List\(filteredRecords\)[\s\S]*Table\(filteredRecords/, 'Candidate Tracker must use readable cards in compact windows and a table when space permits');
+assert.match(views, /TextField\("What is being asked"[\s\S]*editedFields:/, 'the native Warden review must allow the Worshipful Master to correct proposal wording');
+assert.doesNotMatch(views, /use the web page\. This decides it as written/, 'the Mac app must not send the Worshipful Master to the website to edit a proposal');
 assert.match(treasury, /Text\("Transactions"\)\.tag\(2\)/, 'the Mac treasurer editor must label its banking-history page clearly');
 assert.ok(treasury.includes('Text("Transaction \\(i + 1)")'), 'each Mac transaction row must have a numbered heading');
 assert.match(treasury, /LodgeCalendarDates\.displayDate[\s\S]*"Date not found"/, 'each Mac transaction row must show a readable bank date or a clear missing-date label');

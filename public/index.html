@@ -27,8 +27,8 @@
     <link rel="apple-touch-icon" href="/og-image.png" />
     <link rel="icon" href="/og-image.png" />
     <link rel="stylesheet" href="/styles.css?v=__APP_VERSION__" />
-      <link rel="stylesheet" href="/treasury.css">
-<link rel="stylesheet" href="/activity.css">
+    <link rel="stylesheet" href="/treasury.css?v=__APP_VERSION__">
+    <link rel="stylesheet" href="/activity.css?v=__APP_VERSION__">
 </head>
   <body>
     <div class="grain" aria-hidden="true"></div>
@@ -61,13 +61,13 @@
         </div>
 
         <div class="auth-card">
-          <div class="auth-tabs" role="tablist">
-            <button id="showLogin" class="auth-tab active" type="button">Sign in</button>
-            <button id="showRegister" class="auth-tab" type="button">Create account</button>
-            <button id="showReset" class="auth-tab" type="button">Reset</button>
+          <div class="auth-tabs" role="tablist" aria-label="Account access">
+            <button id="showLogin" class="auth-tab active" type="button" role="tab" aria-selected="true" aria-controls="loginForm">Sign in</button>
+            <button id="showRegister" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="registerForm" tabindex="-1">Create account</button>
+            <button id="showReset" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="forgotForm" tabindex="-1">Reset</button>
           </div>
 
-          <form id="loginForm" class="auth-panel">
+          <form id="loginForm" class="auth-panel" role="tabpanel" aria-labelledby="showLogin">
             <div class="form-heading"><p class="eyebrow">WELCOME BACK</p><h2>Sign in to continue</h2></div>
             <label for="loginEmail">Email address</label>
             <input id="loginEmail" type="email" autocomplete="email" placeholder="name@example.com" required />
@@ -76,7 +76,7 @@
             <button class="primary" type="submit">Sign in securely</button>
           </form>
 
-          <form id="registerForm" class="auth-panel hidden">
+          <form id="registerForm" class="auth-panel hidden" role="tabpanel" aria-labelledby="showRegister">
             <div class="form-heading"><p id="registerEyebrow" class="eyebrow">PRIVATE INVITATION</p><h2 id="registerHeading">Activate your account</h2></div>
             <p id="registerHelp" class="helper">Use the email address from your invitation.</p>
             <label for="registerName">Full name</label>
@@ -98,12 +98,12 @@
             <button class="primary" type="submit">Create secure account</button>
           </form>
 
-          <form id="forgotForm" class="auth-panel hidden">
+          <form id="forgotForm" class="auth-panel hidden" role="tabpanel" aria-labelledby="showReset">
             <div class="form-heading"><p class="eyebrow">ACCOUNT RECOVERY</p><h2>Reset your password</h2></div>
             <label for="resetEmail">Email address</label>
             <input id="resetEmail" type="email" autocomplete="email" placeholder="you@example.org" required />
-            <button id="requestReset" class="secondary" type="button">Send six digit code</button>
-            <p class="hint">The code is sent to the email address on your account.</p>
+            <button id="requestReset" class="secondary" type="button">Send a six-digit code</button>
+            <p id="resetDeliveryHint" class="hint">The code is sent to the email address on your account.</p>
             <label for="resetCode">Reset code</label>
             <input id="resetCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
             <label for="resetPassword">New password</label>
@@ -157,6 +157,7 @@
           <p id="permissionRefreshNotice" class="helper hidden" role="status"></p>
           <section id="minutesReviewAlerts" class="workflow-alerts hidden" role="status" aria-live="polite" aria-label="Meeting minutes alerts"></section>
           <section id="treasuryAlerts" class="workflow-alerts hidden" role="status" aria-live="polite" aria-label="Treasurer report alerts"></section>
+          <section id="serviceHealthAlert" class="workflow-alerts hidden owner-only" role="status" aria-live="polite" aria-label="Dashboard service status"></section>
           <section id="landingSection" class="landing-section">
             <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
             <div class="document-menu">

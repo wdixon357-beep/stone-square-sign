@@ -7,7 +7,7 @@ private func minutesStatusLabel(_ status: String) -> String {
     switch status {
     case "awaiting_preparer": "Awaiting Adrian or McDuffie"
     case "organizing": "Creating the organized draft"
-    case "ready_for_distribution": "Signed and available to all officers"
+    case "ready_for_distribution": "Signed and available in the Dashboard"
     case "distributed": "Distributed by the Secretary or Assistant Secretary"
     default: status.replacingOccurrences(of: "_", with: " ").capitalized
     }

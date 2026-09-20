@@ -30,7 +30,7 @@ struct BuildingRequest: Decodable, Identifiable {
 }
 struct BuildingCoordinator: Decodable { let name: String; let title: String?; let email: String }
 struct BuildingRequestsResponse: Decodable { let requests: [BuildingRequest]; let canDecide: Bool }
-struct BuildingAuthorization: Encodable { let date: String; let record: String; let fee: String; let insurance: String; let deposit: String; let conditions: String }
+struct BuildingAuthorization: Encodable { let date: String; let record: String; let fee: String; let insurance: String; let conditions: String }
 private struct BuildingDecisionBody: Encodable { let decision: String; let note: String; let revision: BuildingRevision; let authorization: BuildingAuthorization? }
 private struct BuildingAttestationBody: Encodable { let revision: BuildingRevision }
 private struct BuildingDecisionResponse: Decodable { let request: BuildingRequest }
@@ -96,7 +96,6 @@ struct BuildingRequestsView: View {
     @State private var authorizationRecord = ""
     @State private var approvedFee = ""
     @State private var insuranceDecision = ""
-    @State private var depositDecision = ""
     @State private var authorizationConditions = ""
     @State private var attestationPending = false
     @State private var requestPane = 0
@@ -147,13 +146,13 @@ struct BuildingRequestsView: View {
                                     TextField("Minutes or resolution reference", text: $authorizationRecord)
                                     TextField("Approved fee", text: $approvedFee)
                                     Picker("Insurance", selection: $insuranceDecision) { Text("Choose").tag(""); Text("Required").tag("required"); Text("Waived").tag("waived") }
-                                    Picker("Security deposit", selection: $depositDecision) { Text("Choose").tag(""); Text("Required").tag("required"); Text("Waived").tag("waived") }
+                                    LabeledContent("Security deposit", value: "No security deposit is required")
                                     TextField("Conditions", text: $authorizationConditions, axis: .vertical).lineLimit(2...6)
                                     Text("Approval applies your saved signature. Secretary attestation is required before payment access is released.").font(.caption).foregroundStyle(.secondary)
                                 }
                                 HStack {
                                     Button("Approve") { decision = "approved" }.buttonStyle(.borderedProminent)
-                                        .disabled(note.count > 3000 || (request.ownerOnly == true && (authorizationRecord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || approvedFee.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || insuranceDecision.isEmpty || depositDecision.isEmpty)))
+                                        .disabled(note.count > 3000 || (request.ownerOnly == true && (authorizationRecord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || approvedFee.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || insuranceDecision.isEmpty)))
                                     Button("Decline") { decision = "denied" }.disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || note.count > 3000)
                                 }
                             }
@@ -178,12 +177,12 @@ struct BuildingRequestsView: View {
         }
         .task { await workspace.load(using: model) }
         .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
-        .onChange(of: selectedID) { _, id in note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; depositDecision = ""; authorizationConditions = ""; if id != nil { requestPane = 1 } }
+        .onChange(of: selectedID) { _, id in note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; authorizationConditions = ""; if id != nil { requestPane = 1 } }
         .updateDraftGuard(active: !note.isEmpty || workspace.busy || newRequest.hasUnsubmittedChanges || newRequest.busy, reason: "Finish your building request draft before updating.")
         .alert(decision == "approved" ? "Approve this building request?" : "Decline this building request?", isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } })) {
             Button("Confirm decision") {
                 if let request = selected, let decision {
-                    let authorization = request.ownerOnly == true && decision == "approved" ? BuildingAuthorization(date: LodgeCalendarDates.key(authorizationDate), record: authorizationRecord, fee: approvedFee, insurance: insuranceDecision, deposit: depositDecision, conditions: authorizationConditions) : nil
+                    let authorization = request.ownerOnly == true && decision == "approved" ? BuildingAuthorization(date: LodgeCalendarDates.key(authorizationDate), record: authorizationRecord, fee: approvedFee, insurance: insuranceDecision, conditions: authorizationConditions) : nil
                     Task { if await workspace.decide(request, decision: decision, note: note, authorization: authorization, using: model) { note = "" } }
                 }
                 decision = nil
