@@ -193,7 +193,10 @@ try {
   }, /invalid officer attendance name/);
   await rejectResponse(result => {result.draft.income = [{date:null, reference:null, party:null, description:'Unsupported receipt', amount:'100'}];}, /unsupported transaction/);
   const providerFailure = Object.assign(new Error('Monthly limit reached.'), {statusCode: 429});
-  await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => {throw providerFailure;}}), error => error === providerFailure);
+  const fallback = await generateMinutesDraft(source, {generateStructured: async () => {throw providerFailure;}});
+  assert.ok(fallback.sections.length);
+  assert.ok(fallback.warnings.some(warning => /local draft was created/i.test(warning)));
+  assert.ok(!fallback.warnings.some(warning => warning.includes('GPT-5.6 Terra')));
   const local = await generateMinutesDraft(source);
   assert.ok(local.sections.length);
   assert.ok(!local.warnings.some(warning => warning.includes('GPT-5.6 Terra')));

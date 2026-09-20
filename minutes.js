@@ -337,11 +337,21 @@ export const generateMinutesDraft = async (transcript, {
   if (testResponse) return normalizeMinutesDraft(JSON.parse(testResponse));
   const localDraft = organizeMeetingSource(source, { sourceType });
   if (typeof generateStructured === 'function') {
-    const response = await generateStructured({
-      purpose: 'minutes', schemaName: 'stone_square_meeting_minutes', schema: MINUTES_GENERATION_SCHEMA,
-      instructions: generationInstructions,
-      input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, source}),
-    });
+    let response;
+    try {
+      response = await generateStructured({
+        purpose: 'minutes', schemaName: 'stone_square_meeting_minutes', schema: MINUTES_GENERATION_SCHEMA,
+        instructions: generationInstructions,
+        input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, source}),
+      });
+    } catch (error) {
+      console.warn('Automatic minutes organization was unavailable:', error?.code || error?.message || 'unknown error');
+      return normalizeMinutesDraft({
+        ...localDraft,
+        warnings: [...(localDraft.warnings || []),
+          'Automatic organization could not be completed. A local draft was created from the transcript. Review every section before attesting.'],
+      });
+    }
     return checkedGeneratedDraft(response, source, localDraft);
   }
   return normalizeMinutesDraft(localDraft);
