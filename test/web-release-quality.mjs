@@ -8,6 +8,7 @@ const html = read('../public/index.html');
 const styles = read('../public/styles.css');
 const reportAssistant = read('../public/report-assistant.js');
 const webActivity = read('../public/activity.js');
+const buildingCalendar = read('../public/building-calendar.js');
 const server = read('../server.js');
 const nativeMinutes = read('../macos/Sources/StoneSquareSign/MeetingMinutes.swift');
 const nativeTreasury = read('../macos/Sources/StoneSquareSign/Treasury.swift');
@@ -156,6 +157,9 @@ assert.match(styles, /\.sidebar-foot \.text-button \{[^}]*white-space:\s*nowrap/
 assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.sidebar nav \{[^}]*grid-column:\s*1 \/ -1[^}]*grid-row:\s*2/, 'tablet navigation must use its own full-width row instead of overlapping account controls');
 assert.match(styles, /\.panel-title > button,[^}]+flex:\s*0 0 auto/, 'panel action labels must keep their readable width on phones');
 assert.match(styles, /\.minutes-row > \* \{ min-width: 0; \}[\s\S]*\.minutes-row h3[^}]*overflow-wrap: anywhere/, 'minutes titles must wrap inside phone-width record rows');
+assert.match(buildingCalendar, /class="building-agreement-text"/, 'building agreements must use a CSP-compatible style class');
+assert.doesNotMatch(buildingCalendar, /style="/, 'dynamic building-request content must not use inline styles blocked by the dashboard CSP');
+assert.match(styles, /\.building-agreement-text \{[^}]*white-space: pre-wrap[^}]*overflow: auto/, 'the full agreement must remain readable without inline styles');
 assert.match(app, /resetWorkspaceScroll[\s\S]*scrollTo\?\.\(\{ top: 0, left: 0/, 'changing website workspaces must return the content pane to its top edge');
 assert.match(treasury, /top\(\).*scrollTo\?\./, 'opening a treasurer report must return the content pane to its top edge');
 

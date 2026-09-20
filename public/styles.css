@@ -561,6 +561,7 @@ a { overflow-wrap: anywhere; }
 
 .building-requests { display: grid; gap: 16px; }
 .building-request p, .calendar-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.building-agreement-text { white-space: pre-wrap; margin-top: 12px; max-height: 520px; overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
 .calendar-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0; }
 .calendar-toolbar h2 { margin: 0; flex: 1; min-width: 180px; }
 .calendar-weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
