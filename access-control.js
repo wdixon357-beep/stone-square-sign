@@ -8,6 +8,7 @@ export const CAPABILITIES = [
 ].map(([id,label])=>({id,label}));
 const personal=['building.request','signature.manage','settings.manage'];
 const reader=['calendar.view','reports.create','minutes.view','treasury.view',...personal];
+export const MEMBER_BASELINE_PERMISSIONS=['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage'];
 export const UNIVERSAL_RECORD_ROLES=new Set(['secretary','assistant_secretary','treasurer','assistant_treasurer','treasury_preparer','warden','officer']);
 export function permissionsForStorage(values,role){
  const normalized=normalizePermissions(values,role);
@@ -24,10 +25,12 @@ export function normalizePermissions(values,role){
  if(p.has('treasury.upload'))p.add('treasury.view');if(p.has('documents.sign'))p.add('documents.status');
  if(p.has('candidates.edit'))p.add('candidates.view');
  if(UNIVERSAL_RECORD_ROLES.has(role)){p.add('minutes.view');p.add('treasury.view');}
+ if(role==='member')for(const permission of MEMBER_BASELINE_PERMISSIONS)p.add(permission);
  return [...p].sort();
 }
 export function resolvePermissions(user){
  if(user?.role==='owner')return CAPABILITIES.map(c=>c.id);
+ if(user?.role==='member'&&!user?.roster_id)return ['settings.manage'];
  if(Array.isArray(user?.permissions))return normalizePermissions(user.permissions,user.role);
  if(user?.permissions_json!==null&&user?.permissions_json!==undefined){try{return normalizePermissions(JSON.parse(user.permissions_json),user.role);}catch{return [];}}
  switch(user?.role){
@@ -36,7 +39,7 @@ export function resolvePermissions(user){
  case 'treasurer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','treasury.upload','dues.self','suggestions.create',...personal];
  case 'assistant_treasurer':case 'treasury_preparer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','dues.self','suggestions.create',...personal];
  case 'warden':return [...reader,'building.view','dues.self','dues.ledger','suggestions.create','documents.status','candidates.view','proposals.create'];
- case 'member':return ['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage'];
+ case 'member':return [...MEMBER_BASELINE_PERMISSIONS];
  case 'officer':return reader;
  case 'signer':return ['reports.create','documents.status','documents.sign',...personal];
  case 'viewer':return ['documents.status','candidates.view','settings.manage'];
@@ -51,17 +54,19 @@ export async function ensureBrotherSelfServiceAccess(){
  ];
  for(const [table,where] of groups){
   const params=table==='invitations'?[new Date().toISOString()]:[];
-  for(const account of await dbAll(`SELECT id,role,permissions_json FROM ${table} WHERE ${where}`,params)){
-   const before=resolvePermissions(account),after=[...new Set([...before,'dues.self','suggestions.create'])];
-   if(after.length===before.length)continue;
+  for(const account of await dbAll(`SELECT id,role,permissions_json,roster_id FROM ${table} WHERE ${where}`,params)){
+   const before=resolvePermissions(account),after=account.role==='member'?[...new Set([...before,...MEMBER_BASELINE_PERMISSIONS])]:[...new Set([...before,'dues.self','suggestions.create'])];
+   let stored=[];try{stored=JSON.parse(account.permissions_json||'[]')}catch{}
+   if(account.role!=='member'&&after.length===before.length)continue;
+   if(account.role==='member'&&MEMBER_BASELINE_PERMISSIONS.every(permission=>stored.includes(permission)))continue;
    await dbRun(`UPDATE ${table} SET permissions_json=? WHERE id=?`,[JSON.stringify(permissionsForStorage(after,account.role)),account.id]);
   }
  }
 }
 export function mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged=()=>{}}){
  app.get('/api/admin/access',requireAuth,requireOwner,async(req,res,next)=>{try{
- const users=await dbAll("SELECT id,name,email,role,permissions_json,access_revoked_at FROM users WHERE email NOT LIKE '%.local' ORDER BY name");
- const invites=await dbAll('SELECT id,name,email,role,permissions_json FROM invitations WHERE used_at IS NULL AND expires_at>? ORDER BY name',[new Date().toISOString()]);
+ const users=await dbAll("SELECT id,name,email,role,permissions_json,roster_id,access_revoked_at FROM users WHERE email NOT LIKE '%.local' ORDER BY name");
+ const invites=await dbAll('SELECT id,name,email,role,permissions_json,roster_id FROM invitations WHERE used_at IS NULL AND expires_at>? ORDER BY name',[new Date().toISOString()]);
  const rows=(items,pending)=>items.map(u=>({key:`${pending?'invite':'user'}:${u.id}`,id:u.id,name:u.name,email:u.email,role:u.role,pending,revoked:Boolean(u.access_revoked_at),permissions:resolvePermissions(u)}));
  res.setHeader('Cache-Control','no-store');res.json({capabilities:CAPABILITIES,accounts:[...rows(users,false),...rows(invites,true)]});
  }catch(e){next(e)}});

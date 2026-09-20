@@ -12,6 +12,8 @@ const agenda = read('../macos/Sources/StoneSquareSign/AgendaCreator.swift');
 const reportGenerator = read('../macos/Sources/StoneSquareSign/ReportGenerator.swift');
 const finalBrowser = read('../macos/Sources/StoneSquareSign/FinalReportBrowser.swift');
 const buildingCalendar = read('../macos/Sources/StoneSquareSign/BuildingCalendar.swift');
+const activity = read('../macos/Sources/StoneSquareSign/Activity.swift');
+const api = read('../macos/Sources/StoneSquareSign/APIClient.swift');
 const allWorkspaceSources = [views, received, treasury, minutes, agenda, reportGenerator, finalBrowser, buildingCalendar].join('\n');
 
 assert.match(app, /minWidth:\s*720/, 'the app must fit smaller Mac displays and split-screen windows');
@@ -42,5 +44,10 @@ assert.match(views, /treasuryAlertButtons[\s\S]*HStack\(alignment: \.top[\s\S]*x
 assert.match(treasury, /Text\("Transactions"\)\.tag\(2\)/, 'the Mac treasurer editor must label its banking-history page clearly');
 assert.ok(treasury.includes('Text("Transaction \\(i + 1)")'), 'each Mac transaction row must have a numbered heading');
 assert.match(treasury, /LodgeCalendarDates\.displayDate[\s\S]*"Date not found"/, 'each Mac transaction row must show a readable bank date or a clear missing-date label');
+assert.match(activity, /Dashboard Activity[\s\S]*Time by area/, 'the Mac administrator view must show activity for every account and time by work area');
+assert.match(api, /treasuryRecordsRevision[\s\S]*event: treasury_changed/, 'the Mac report archive must receive live treasury revisions');
+assert.match(finalBrowser, /onChange\(of: model\.treasuryRecordsRevision\)/, 'an open native treasury history must refresh after finalization');
+assert.match(treasury, /requestLiveRefresh\(\)[\s\S]*refreshPending = true[\s\S]*consumePendingRefresh/, 'native treasury changes must be queued while the workspace is busy');
+assert.match(treasury, /refreshInFlight[\s\S]*defer \{ refreshInFlight = false[\s\S]*consumePendingRefresh/, 'the Mac treasury workspace must replay a live refresh after an in-flight request');
 
 console.log('PASS: every Mac split workspace remains on-screen, bounded, and usable at compact widths.');

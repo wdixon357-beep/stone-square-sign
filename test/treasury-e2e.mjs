@@ -71,7 +71,8 @@ try{
  check('Signed report cannot be changed' ,(await api(`/api/treasury/${r.id}`,owner.token,'PUT',{draft:revised,revision:r.revision})).status===403);check('Signed report cannot be deleted',(await api(`/api/treasury/${r.id}`,owner.token,'DELETE')).status===409);
  response=await api(`/api/treasury/${r.id}/mark-distributed`,secretary.token,'POST',{revision:r.revision});check('Secretary records distribution without WM review',response.status===200&&response.data.report.status==='distributed');
  const upload=new FormData();upload.append('files',new Blob([notes]),'notes.txt');r=(await api('/api/treasury/generate',treasurer.token,'POST',upload)).data.report;check('TXT upload preserves original extracted source',(await api(`/api/treasury/${r.id}/source`,treasurer.token)).data.text===notes);check('Unsigned report deletes',(await api(`/api/treasury/${r.id}`,treasurer.token,'DELETE')).status===200);
- const assistant=await officer('treasury_preparer'),member=await officer('member');
+ const assistant=await officer('treasury_preparer'),member=await officer('officer');
+ await permissions(member,['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage']);
  check('Report preparer receives universal finalized minutes access',(await api('/api/minutes',assistant.token)).status===200);
  check('Report preparer cannot access dispensations',(await api('/api/documents',assistant.token)).status===403);
  const memberTreasury=await api('/api/treasury',member.token);
@@ -167,6 +168,7 @@ try{
  check('Revoked preparation hides prior own drafts and source',!(await api('/api/treasury',treasurer.token)).data.reports.some(r=>r.id===ownReport.id)&&(await api(`/api/treasury/${ownReport.id}/source`,treasurer.token)).status===403);
  check('Preparer choices reflect explicit overrides',!(await api('/api/treasury/preparers',owner.token)).data.preparers.some(u=>u.id===treasurer.user.id));
  await permissions(member,[]);
- check('Explicit disabled permissions override retained legacy upload grants',(await api('/api/treasury',member.token)).status===403&&(await api('/api/treasury/generate',member.token,'POST',ownUpload)).status===403);
+ const archiveOnly=await api('/api/treasury',member.token);
+ check('Removing custom access retains finished records but removes legacy upload grants',archiveOnly.status===200&&archiveOnly.data.reports.every(report=>report.preparerAttestedAt)&&(await api('/api/treasury/generate',member.token,'POST',ownUpload)).status===403);
  console.log(`${passed} treasurer workflow checks passed.`);
 }finally{server.kill();}

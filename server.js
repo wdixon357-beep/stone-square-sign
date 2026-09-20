@@ -1,5 +1,5 @@
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
-import { hasPermission, resolvePermissions, mountAccessRoutes, UNIVERSAL_RECORD_ROLES, ensureBrotherSelfServiceAccess } from './access-control.js';
+import { hasPermission, resolvePermissions, permissionsForStorage, mountAccessRoutes, ensureBrotherSelfServiceAccess } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
 import path from 'node:path';
@@ -277,7 +277,7 @@ const createAuthToken = async (userId, req) => {
 
 const userForResponse = async (user) => {
   const saved = await dbGet('SELECT 1 FROM profile_signatures WHERE user_id = ?', [user.id]);
-  const accessUser = await dbGet('SELECT role,permissions_json FROM users WHERE id=?',[user.id]);
+  const accessUser = await dbGet('SELECT role,permissions_json,roster_id FROM users WHERE id=?',[user.id]);
   return {
     id: user.id,
     email: user.email,
@@ -309,7 +309,8 @@ const WARDEN_EMAILS = new Set(
     .map((address) => address.trim().toLowerCase())
     .filter(Boolean),
 );
-const INVITABLE_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member', 'officer'];
+const ACCOUNT_ROLES = ['secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer', 'treasury_preparer', 'viewer', 'warden', 'member', 'officer'];
+const INVITABLE_ROLES = ACCOUNT_ROLES.filter((role) => role !== 'member');
 
 const requireAuth = async (req, res, next) => {
   try {
@@ -328,7 +329,7 @@ const requireAuth = async (req, res, next) => {
     }
     const tokenHash = hashSecret(token);
     const row = await dbGet(
-      `SELECT users.id, users.email, users.name, users.role, users.permissions_json, users.access_revoked_at,
+      `SELECT users.id, users.email, users.name, users.role, users.permissions_json, users.roster_id, users.access_revoked_at,
               sessions.id AS session_id, sessions.expires_at, sessions.last_seen_at
        FROM sessions JOIN users ON users.id = sessions.user_id
        WHERE sessions.token = ?`,
@@ -1679,6 +1680,7 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
       });
     }
     if (!isEmail(email) || !name || !INVITABLE_ROLES.includes(role)) {
+      if (role === 'member') return res.status(400).json({ error: 'Create Brother invitations from Member Access so the account is linked to the verified Lodge roster.' });
       return res.status(400).json({ error: 'Enter the officer name, valid email, and office.' });
     }
     const token = generateToken();
@@ -1736,11 +1738,12 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
  try{
   const id=Number(req.params.id),role=String(req.body.role||'');
   if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({error:'Choose an active account.'});
-  if(!INVITABLE_ROLES.includes(role))return res.status(400).json({error:'Choose an available account role.'});
+  if(!ACCOUNT_ROLES.includes(role))return res.status(400).json({error:'Choose an available account role.'});
   await withTransaction(async()=>{
-   const account=await dbGet('SELECT id,name,email,role,permissions_json,access_revoked_at FROM users WHERE id=? FOR UPDATE',[id]);
+   const account=await dbGet('SELECT id,name,email,role,permissions_json,roster_id,access_revoked_at FROM users WHERE id=? FOR UPDATE',[id]);
    if(!account||account.access_revoked_at)throw httpError(404,'Active account not found.');
    if(account.role==='owner'||id===req.user.id)throw httpError(403,'The Worshipful Master administrator account is permanent.');
+   if(role==='member'&&!account.roster_id)throw httpError(409,'Link this Brother through Member Access before assigning the Lodge Member role.');
    if(role==='warden'&&!WARDEN_EMAILS.has(account.email))throw httpError(403,'This email is not configured for a Warden seat.');
    await lockOfficeRole(role);
    if(OFFICE_ROLES.has(role)){
@@ -1748,10 +1751,8 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
     if(await dbGet('SELECT 1 FROM invitations WHERE role=? AND used_at IS NULL AND expires_at>? AND email<>?',[role,nowIso(),account.email]))throw httpError(409,'That office already has a pending invitation.');
    }
    if(account.role===role)return;
-   let permissions=account.permissions_json;
-   if(UNIVERSAL_RECORD_ROLES.has(account.role)&&!UNIVERSAL_RECORD_ROLES.has(role)&&permissions!==null){
-    try{permissions=JSON.stringify(JSON.parse(permissions).filter(value=>!['minutes.view','treasury.view'].includes(value)));}catch{permissions='[]';}
-   }
+   const targetPermissions=resolvePermissions({role,permissions_json:null,roster_id:account.roster_id});
+   const permissions=JSON.stringify(permissionsForStorage(targetPermissions,role));
    await dbRun('UPDATE users SET role=?, permissions_json=? WHERE id=?',[role,permissions,id]);
    await endUserActivity(id,'Account permissions changed');
    await dbRun('DELETE FROM sessions WHERE user_id=?',[id]);

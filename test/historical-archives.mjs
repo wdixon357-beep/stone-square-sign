@@ -27,6 +27,7 @@ try {
   response=await fetch(`${base}/api/archives/treasury/archive-minute/pdf`);assert.equal(response.status,404);
   response=await fetch(`${base}/api/archives/treasury/archive-treasury/pdf`);assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),/^inline/);assert.deepEqual(Buffer.from(await response.arrayBuffer()),bytes);
   const audit=await dbGet(`SELECT action,details_json FROM audit_events WHERE action='historical_report_viewed' AND details_json::jsonb ->> 'archiveId'='archive-treasury'`);assert.equal(audit.action,'historical_report_viewed');
-  user={id:1,role:'member',permissions:[]};response=await fetch(`${base}/api/archives/minutes`);assert.equal(response.status,403);
+  user={id:1,role:'member',roster_id:1,permissions:[]};response=await fetch(`${base}/api/archives/minutes`);assert.equal(response.status,200);
+  user={id:1,role:'viewer',permissions:[]};response=await fetch(`${base}/api/archives/minutes`);assert.equal(response.status,403);
   console.log('PASS: historical archives are separated by type, permission protected, metadata only in lists, and served inline inside the Dashboard.');
 } finally { await new Promise(resolve=>server.close(resolve));await close(); }

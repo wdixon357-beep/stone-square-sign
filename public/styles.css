@@ -720,3 +720,24 @@ summary { min-height: 44px; display: flex; align-items: center; }
 .received-report-preview .panel-title{margin-bottom:12px}
 #receivedReportFrame{width:100%;height:min(72vh,850px);border:1px solid var(--line);border-radius:8px;background:#fff}
 @media(max-width:900px){.received-reports-layout{grid-template-columns:1fr}#receivedReportFrame{height:68vh}}
+
+.member-welcome {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: max(22px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
+  pointer-events: none;
+  color: white;
+  text-align: center;
+  background: radial-gradient(circle at 50% 35%, #153a5d 0, #071b2f 58%, #03111f 100%);
+  animation: member-welcome-in .28s ease-out both;
+}
+.member-welcome > div { width: min(560px, 100%); }
+.member-welcome-mark { display: inline-grid; place-items: center; width: 72px; height: 72px; margin-bottom: 24px; border: 2px solid #d4a03b; border-radius: 50%; color: #d4a03b; font: 700 26px Georgia, serif; }
+.member-welcome p { margin: 0 0 12px; color: #dfb55c; font-size: 12px; font-weight: 800; letter-spacing: .2em; }
+.member-welcome h1 { margin: 0; font: clamp(36px, 7vw, 64px)/1.08 Georgia, serif; overflow-wrap: anywhere; }
+.member-welcome small { display: block; margin-top: 16px; color: #d8e1e9; font-size: clamp(14px, 2.4vw, 18px); }
+@keyframes member-welcome-in { from { opacity: 0; transform: scale(1.015); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .member-welcome { animation: none; } }

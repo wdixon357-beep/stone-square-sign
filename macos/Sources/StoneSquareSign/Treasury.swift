@@ -39,18 +39,27 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
 @MainActor final class TreasuryWorkspace: ObservableObject {
     @Published var records: [TreasuryRecord] = []; @Published var selected: TreasuryRecord?; @Published var draft: TreasuryDraft?
     @Published var uploadIntent = "save"
-    @Published var bankingSource = ""; @Published var bankingFiles: [URL] = []; @Published var messageIsWarning = false; @Published var message = "" { didSet { messageIsWarning = false } }; @Published var busy = false
-    @Published var pdf: Data?; @Published var previewMessage = ""; @Published var dirty = false
+    @Published var bankingSource = ""; @Published var bankingFiles: [URL] = []; @Published var messageIsWarning = false; @Published var message = "" { didSet { messageIsWarning = false } }; @Published var busy = false { didSet { if !busy { Task { await consumePendingRefresh() } } } }
+    @Published var pdf: Data?; @Published var previewMessage = ""; @Published var dirty = false { didSet { if !dirty { Task { await consumePendingRefresh() } } } }
     @Published var preparers: [TreasuryPreparer] = []; @Published var selectedPreparer = 0
     @Published var originalText = ""; @Published var sourceFiles: [TreasurySourceFile] = []; @Published var accessUsers: [TreasuryAccessUser] = []
     @Published var serviceUpdateRequired = false
     @Published var generationStatus: GenerationStatus?
     private var owner = false
     let transport: MinutesWorkspace
-    private var previewTask: Task<Void,Never>?; private var generation = 0
+    private var previewTask: Task<Void,Never>?; private var generation = 0; private var refreshInFlight = false; private var refreshPending = false
     init(session: URLSession = .shared) { transport = MinutesWorkspace(session: session) }
     func configure(_ model: AppModel) { transport.configure(model); owner = model.user?.role == "owner" }
+    func requestLiveRefresh() async { refreshPending = true; await consumePendingRefresh() }
+    func consumePendingRefresh() async {
+        guard refreshPending, !refreshInFlight, !busy, !dirty, selected == nil else { return }
+        refreshPending = false
+        await refresh()
+    }
     func refresh() async {
+        if refreshInFlight { refreshPending = true; return }
+        refreshInFlight = true
+        defer { refreshInFlight = false; if refreshPending { Task { await self.consumePendingRefresh() } } }
         await refreshGenerationStatus()
         do {
             records = try JSONDecoder().decode(TreasuryList.self, from: await transport.request("/api/treasury")).reports
@@ -103,7 +112,7 @@ struct TreasuryAccessPayload: Codable { var users: [TreasuryAccessUser] }
             message = user.uploadEnabled ? "Bank record upload access removed for \(user.name)." : "Bank record upload access enabled for \(user.name)."
         } catch { message = error.localizedDescription }
     }
-    func close() { previewTask?.cancel(); generation += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
+    func close() { previewTask?.cancel(); generation += 1; selected = nil; draft = nil; pdf = nil; dirty = false; Task { await consumePendingRefresh() } }
     func createBlank() async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do {
@@ -225,6 +234,9 @@ struct TreasuryView: View {
             }
         }.background(Color(nsColor:.windowBackgroundColor)).disabled(workspace.busy)
         .task { workspace.configure(model); await workspace.refresh(); await workspace.loadAccess() }
+        .onChange(of: model.treasuryRecordsRevision) { _, _ in
+            Task { await workspace.requestLiveRefresh() }
+        }
         .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id, onClose: { readonlyReport = nil }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
         .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .treasury, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
         .onChange(of:workspace.draft) { old,new in if old != nil && new != nil { workspace.dirty = new != workspace.selected?.draft; workspace.preview() } }

@@ -43,7 +43,7 @@ struct FinalReportBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NativeWorkspaceHeader(title: kind.title, subtitle: "Read finalized Lodge records", symbol: "doc.text") {
+            NativeWorkspaceHeader(title: kind.title, subtitle: "Read finalized and historical Lodge records", symbol: "doc.text") {
                 if selectedID != nil { Button("Close report") { selectedID = nil; pdf = nil } }
                 if let onClose { Button("Done") { onClose() } }
                 Button("Refresh") { Task { await refresh() } }.disabled(loading)
@@ -72,13 +72,13 @@ struct FinalReportBrowserView: View {
             }
             AdaptiveWorkspaceSplit(primaryTitle: "Reports", secondaryTitle: "Document preview", compactPane: $browserPane) {
                 List(selection: $selectedID) {
-                    Section(kind == .minutes ? "Signed meeting minutes" : "Finalized in Dashboard") { ForEach(records) { record in
+                    Section("Finalized in Dashboard") { ForEach(records) { record in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(displayLabel(record)).font(.headline).fixedSize(horizontal: false, vertical: true)
                             Text(kind == .minutes ? "Signed Lodge record · Prepared by \(record.createdBy)" : record.createdBy).font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag("current:\(record.id)")
                     } }
-                    Section("Historical Lodge archive") { ForEach(archives) { record in
+                    Section("Imported Lodge archive") { ForEach(archives) { record in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(record.title).font(.headline).fixedSize(horizontal: false, vertical: true)
                             Text("Historical Lodge archive").font(.caption).foregroundStyle(.secondary)
@@ -94,6 +94,7 @@ struct FinalReportBrowserView: View {
         }
         .task(id: kind) { transport.configure(model); await refresh(); if let initialSelection { selectedID = "current:\(initialSelection)" } }
         .onChange(of: model.minutesRecordsRevision) { _, _ in if kind == .minutes { Task { await refresh() } } }
+        .onChange(of: model.treasuryRecordsRevision) { _, _ in if kind == .treasury { Task { await refresh() } } }
         .onChange(of: selectedID) { _, id in pdf = nil; if let id { browserPane = 1; Task { await open(id) } } }
     }
     private func refresh() async {

@@ -169,6 +169,7 @@ final class AppModel: ObservableObject {
     @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
     @Published var minutesRecordsRevision = 0
     @Published var treasuryAlerts: [TreasuryAlert] = []
+    @Published var treasuryRecordsRevision = 0
     @Published var user: User?
     @Published var signInSession: SignInSession?
     @Published var showSignInNotice = false
@@ -545,6 +546,7 @@ final class AppModel: ObservableObject {
                             self.minutesRecordsRevision += 1
                         }
                         if line == "event: treasury_changed" {
+                            self.treasuryRecordsRevision += 1
                             await self.refreshTreasuryAlerts()
                         }
                         if line == "event: queue_changed" || line == "event: profile_changed" {

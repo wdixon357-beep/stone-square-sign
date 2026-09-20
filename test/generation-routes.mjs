@@ -143,7 +143,7 @@ try {
   const preparer = await officer(owner, 'treasury_preparer');
   // This fixture explicitly receives upload access; ordinary preparers do not.
   assert.equal((await api('/api/admin/access',owner.token,'PUT',{key:`user:${preparer.user.id}`,permissions:[...preparer.user.permissions,'treasury.upload']})).status,200);
-  const uploadOnly = await officer(owner, 'member');
+  const uploadOnly = await officer(owner, 'officer');
   const warden = await officer(owner, 'warden');
   const secretary = await officer(owner, 'secretary');
   check('Generation status requires sign-in', (await api('/api/generation/status')).status === 401);
@@ -151,7 +151,7 @@ try {
   check('Owner can inspect generation status without a key leak', status.status === 200 && !JSON.stringify(status.data).includes('test-only-secret'));
   check('Only the owner receives administrator generation details, model and shared monthly allowance', status.data.administratorDetails === true && status.data.model === 'gpt-5.6-terra' && status.data.monthlyLimitDollars === 5 && ['committedDollars','reservedDollars','remainingDollars'].every(key => typeof status.data[key] === 'number'));
   check('Generation status is never cached', /no-store/.test(status.headers.get('cache-control')));
-  for (const [role, account] of [['preparer', preparer], ['member', uploadOnly], ['warden', warden], ['secretary', secretary]]) {
+  for (const [role, account] of [['preparer', preparer], ['upload-only officer', uploadOnly], ['warden', warden], ['secretary', secretary]]) {
     const publicStatus = await api('/api/generation/status', account.token);
     check(`${role} generation status exposes only configuration availability`, publicStatus.status === 200 && JSON.stringify(publicStatus.data) === '{"configured":true}');
   }

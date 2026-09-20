@@ -75,6 +75,19 @@ const hide = (element) => {
 const authMessage = $('authMessage');
 const docMessage = $('docMessage');
 const delay = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+let memberWelcomeTimer;
+const brotherSurname = name => {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  while (parts.length > 1 && /^(?:jr\.?|sr\.?|ii|iii|iv|v)$/i.test(parts.at(-1))) parts.pop();
+  return parts.at(-1) || 'Brother';
+};
+const showMemberWelcome = user => {
+  if (user?.role !== 'member') return;
+  window.clearTimeout(memberWelcomeTimer);
+  $('memberWelcomeName').textContent = `Welcome, Bro. ${brotherSurname(user.name)}`;
+  show($('memberWelcome'));
+  memberWelcomeTimer = window.setTimeout(() => hide($('memberWelcome')), window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1600 : 2800);
+};
 
 const setMessage = (element, text, isError = false) => {
   element.textContent = text || '';
@@ -382,7 +395,7 @@ const applyWorkspacePermissions = user => {
   return { maySeeTreasury, maySeeMinutes };
 };
 
-const enterWorkspace = async (user, session) => {
+const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   state.user = user;
   const sessionDays = Number(session?.lifetimeDays);
   const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
@@ -393,11 +406,13 @@ const enterWorkspace = async (user, session) => {
   if (!buildingCalendarWorkspace) { const { BuildingCalendarWorkspace } = await import('/building-calendar.js'); buildingCalendarWorkspace = new BuildingCalendarWorkspace({api: apiFetch, user: () => state.user}); }
   if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
   if (!agendaWorkspace && user.role === 'owner') { const { AgendaWorkspace } = await import('/agenda.js'); agendaWorkspace = new AgendaWorkspace({ api: apiFetch, user: () => state.user }); }
-  const { maySeeTreasury, maySeeMinutes } = applyWorkspacePermissions(user);
+  applyWorkspacePermissions(user);
   restoreWebDrafts();
-  showWorkspaceSection(requestedWorkspaceSection === 'agenda' && user.role === 'owner' ? 'agenda' : requestedWorkspaceSection === 'activity' && user.role==='owner' ? 'activity' : requestedWorkspaceSection === 'receivedReports' && user.role === 'owner' ? 'receivedReports' : requestedWorkspaceSection === 'treasury' && maySeeTreasury ? 'treasury' : requestedWorkspaceSection === 'minutes' && maySeeMinutes ? 'minutes' : 'home');
+  const supportedDeepLinks = new Set(['home','building','calendar','reports','minutes','treasury','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports']);
+  showWorkspaceSection(supportedDeepLinks.has(requestedWorkspaceSection) ? requestedWorkspaceSection : 'home');
   hide($('authCard'));
   show($('appCard'));
+  if (freshLogin) showMemberWelcome(user);
   await refreshMinutesReviewAlerts();
   await refreshTreasuryAlerts();
   const [documents] = await Promise.all([
@@ -2030,7 +2045,10 @@ const startRealtime = async () => {
             if (state.minutesEditorDirty) state.minutesRecordsRefreshPending = true;
             else renderMinutes();
           }
-          if (event.includes('event: treasury_changed')) refreshTreasuryAlerts();
+          if (event.includes('event: treasury_changed')) {
+            refreshTreasuryAlerts();
+            if (state.activeSection === 'treasury' && treasuryWorkspace) treasuryWorkspace.requestLiveRefresh();
+          }
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();
           }
@@ -2372,7 +2390,7 @@ $('loginForm').addEventListener('submit', async (event) => {
     state.legacyToken = '';
     localStorage.removeItem('stone-square-sign-token');
     state.authEpoch += 1;
-    await enterWorkspace(payload.user, payload.session);
+    await enterWorkspace(payload.user, payload.session, { freshLogin: true });
   } catch (error) {
     setMessage(authMessage, error.message, true);
   }
@@ -2397,7 +2415,7 @@ $('registerForm').addEventListener('submit', async (event) => {
     localStorage.removeItem('stone-square-sign-token');
     state.authEpoch += 1;
     history.replaceState({}, '', '/');
-    await enterWorkspace(payload.user, payload.session);
+    await enterWorkspace(payload.user, payload.session, { freshLogin: true });
   } catch (error) {
     setMessage(authMessage, error.message, true);
   }

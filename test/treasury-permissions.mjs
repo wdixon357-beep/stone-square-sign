@@ -18,10 +18,11 @@ try{
   const time=new Date().toISOString();
   async function user(name,role,permissions=null){const {lastID}=await dbRun('INSERT INTO users(email,password_hash,name,role,created_at,permissions_json) VALUES(?,?,?,?,?,?)',[name.toLowerCase()+'@example.org','synthetic-unused-hash',name,role,time,permissions===null?null:JSON.stringify(permissions)]);return lastID;}
   const owner=await user('Owner','owner'),preparer=await user('Preparer','treasury_preparer'),viewer=await user('Viewer','viewer',['treasury.view']),legacy=await user('Legacy','member'),disabled=await user('Disabled','member',[]);
+  for(const [id,name] of [[legacy,'Legacy'],[disabled,'Disabled']]){await dbRun('INSERT INTO roster(first_name,last_name,title,prefix,emails,updated_at) VALUES(?,?,?,?,?,?)',[name,'Member','Brother','Bro.',[name.toLowerCase()+'@example.org'],time]);const roster=await dbGet('SELECT id FROM roster WHERE first_name=? AND last_name=?',[name,'Member']);await dbRun('UPDATE users SET roster_id=? WHERE id=?',[roster.id,id]);}
   for(const id of [legacy,disabled])await dbRun('INSERT INTO treasury_upload_access(user_id,granted_by,granted_at) VALUES(?,?,?)',[id,owner,time]);
   await initTreasurySchema();
   check('Existing upload grant migrates when permissions were never selected',(await treasuryAccess(await dbGet('SELECT * FROM users WHERE id=?',[legacy])))==='upload');
-  check('Explicit disabled permissions survive legacy grant migration',(await treasuryAccess(await dbGet('SELECT * FROM users WHERE id=?',[disabled])))===null);
+  check('An older empty member record keeps finished-report viewing without regaining legacy upload access',(await treasuryAccess(await dbGet('SELECT * FROM users WHERE id=?',[disabled])))==='view');
   const legacyBefore=(await dbGet('SELECT permissions_json FROM users WHERE id=?',[legacy])).permissions_json;
   await initTreasurySchema();
   check('Legacy grant migration is idempotent',(await dbGet('SELECT permissions_json FROM users WHERE id=?',[legacy])).permissions_json===legacyBefore);

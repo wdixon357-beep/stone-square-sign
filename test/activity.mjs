@@ -17,13 +17,13 @@ try{
  for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100));}
  const password='Local activity test password';const owner=(await api('/api/auth/register',null,'POST',{email:'activity-owner@example.org',name:'WM QA Owner',password})).data;
  async function officer(role){const email=role+'@example.org';const invite=(await api('/api/officers/invite',owner.token,'POST',{email,name:'QA '+role,role})).data;return(await api('/api/auth/register',null,'POST',{email,name:'QA '+role,password,invitationToken:new URL(invite.inviteUrl).searchParams.get('invite')})).data;}
- const treasurer=await officer('treasurer'),member=await officer('member');
+ const treasurer=await officer('treasurer'),basic=await officer('viewer');
  check('Registration reports the actual 90-day session expiration', owner.session.lifetimeDays === 90 && Math.abs(Date.parse(owner.session.expiresAt) - Date.now() - 90*86400000) < 10000);
  const restored = (await api('/api/auth/me', owner.token)).data;
  check('Remembered sign-in returns the same policy and expiration', restored.session.lifetimeDays === 90 && restored.session.expiresAt === owner.session.expiresAt);
  check('Anonymous cannot read officer activity',(await api('/api/admin/activity')).status===401);
  check('Treasurer cannot read other officers activity',(await api('/api/admin/activity',treasurer.token)).status===403);
- check('Basic member cannot read officer activity',(await api('/api/admin/activity',member.token)).status===403);
+ check('Basic account cannot read dashboard activity',(await api('/api/admin/activity',basic.token)).status===403);
  for(const path of ['/api/documents','/api/minutes','/api/treasury','/api/approvals','/api/officers','/api/submission-profiles','/api/proposals'])check('WM can open '+path,(await api(path,owner.token)).status===200);
  const dues=await api('/api/dues',owner.token);check('WM passes the dues access gate with missing test connection',dues.status===503&&dues.data.configured===false);
  check('WM can prepare proposals',(await api('/api/proposals',owner.token,'POST',{})).status===400);
@@ -34,6 +34,11 @@ try{
  check('Server measures time instead of trusting supplied totals',activity.sessions[0].activeSeconds>=1&&activity.sessions[0].activeSeconds<10);
  check('User filter limits sessions and actions',activity.sessions.every(s=>s.userId===treasurer.user.id)&&activity.events.every(e=>e.userId===treasurer.user.id));
  check('Work area appears in history',activity.events.some(e=>e.action==='workspace_opened'&&e.detail==='Treasurer Reports'));
+ check('Measured time is attributed to the active work area',activity.sessions[0].areas.some(area=>area.area==='Treasurer Reports'&&area.seconds>=1));
+ check('A safe click can be recorded without form content',(await api('/api/activity/interaction',treasurer.token,'POST',{kind:'activate',area:'treasury',target:'View finalized report'})).status===200);
+ activity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
+ check('WM sees a named dashboard interaction',activity.events.some(e=>e.action==='dashboard_interaction'&&e.detail.includes('Clicked Treasurer Reports')&&e.detail.includes('View finalized report')));
+ check('Invalid interaction areas are rejected',(await api('/api/activity/interaction',treasurer.token,'POST',{kind:'activate',area:'passwords',target:'Secret'})).status===400);
  const banking=new FormData();banking.set('intent','save');banking.set('sourceText','Period: August 2026\nChecking\nBeginning balance: $100.00\nEnding balance: $100.00\nNo receipts or payments.');
  const created=await api('/api/treasury/generate',treasurer.token,'POST',banking);check('Report activity fixture saves',created.status===201);
  const named=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
@@ -49,10 +54,10 @@ try{
  check('Sign-out closes history while preserving duration',activity.sessions[0].status==='Ended'&&activity.sessions[0].endedAt&&activity.sessions[0].activeSeconds===elapsed&&activity.events.some(e=>e.action==='signed_out'));
  check('Signed-out credential no longer works',(await api('/api/activity/heartbeat',treasurer.token,'POST',{active:true})).status===401);
  check('WM administrator cannot be demoted',(await api('/api/admin/accounts/'+owner.user.id+'/role',owner.token,'PUT',{role:'member'})).status===403);
- check('Member cannot change account roles',(await api('/api/admin/accounts/'+member.user.id+'/role',member.token,'PUT',{role:'treasurer'})).status===403);
- check('WM can assign report preparation access',(await api('/api/admin/accounts/'+member.user.id+'/role',owner.token,'PUT',{role:'assistant_treasurer'})).status===200);
- check('Role change ends old sign-ins',(await api('/api/auth/me',member.token)).status===401);
- const updated=(await api('/api/auth/login',null,'POST',{email:'member@example.org',password},'mac')).data;
+ check('Basic account cannot change account roles',(await api('/api/admin/accounts/'+basic.user.id+'/role',basic.token,'PUT',{role:'treasurer'})).status===403);
+ check('WM can assign report preparation access',(await api('/api/admin/accounts/'+basic.user.id+'/role',owner.token,'PUT',{role:'assistant_treasurer'})).status===200);
+ check('Role change ends old sign-ins',(await api('/api/auth/me',basic.token)).status===401);
+ const updated=(await api('/api/auth/login',null,'POST',{email:'viewer@example.org',password},'mac')).data;
  check('Password sign-in reports a fresh 90-day session', updated.session.lifetimeDays === 90 && Math.abs(Date.parse(updated.session.expiresAt) - Date.now() - 90*86400000) < 10000);
  check('Changed role is effective on next sign-in',updated.user.role==='assistant_treasurer'&&updated.user.treasuryAccess==='prepare');
  activity=(await api('/api/admin/activity',owner.token)).data;

@@ -135,14 +135,14 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   const audit=async(req,id,action,details={})=>dbRun('INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',[req.user.id,`treasury_${action}`,req.ip,req.get('user-agent')||'',JSON.stringify({reportId:id,...details}),new Date().toISOString()]);
   app.get('/api/treasury/access',route(async(req,res)=>{
     if(req.user.role!=='owner')throw error(403,'Only the administrator can manage bank record access.');
-    const users=await dbAll("SELECT id,name,role,permissions_json FROM users WHERE access_revoked_at IS NULL AND email NOT LIKE '%.local' ORDER BY name");
+    const users=await dbAll("SELECT id,name,role,permissions_json,roster_id FROM users WHERE access_revoked_at IS NULL AND email NOT LIKE '%.local' ORDER BY name");
     res.json({users:users.map(u=>({id:u.id,name:u.name,role:u.role,canPrepare:canPrepare(u),uploadEnabled:hasPermission(u,'treasury.upload')}))});
   }));
   app.put('/api/treasury/access/:userId',route(async(req,res)=>{
     if(req.user.role!=='owner')throw error(403,'Only the administrator can manage bank record access.');
     if(typeof req.body.enabled!=='boolean')throw error(400,'Choose an active account and its bank record access.');
     await withTransaction(async()=>{
-      const user=await dbGet('SELECT id,role,permissions_json FROM users WHERE id=? AND access_revoked_at IS NULL FOR UPDATE',[Number(req.params.userId)]);
+      const user=await dbGet('SELECT id,role,permissions_json,roster_id FROM users WHERE id=? AND access_revoked_at IS NULL FOR UPDATE',[Number(req.params.userId)]);
       if(!user)throw error(400,'Choose an active account and its bank record access.');
       if(user.role==='owner')throw error(409,'The Worshipful Master retains full access.');
       const permissions=new Set(resolvePermissions(user));
@@ -154,7 +154,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     });res.json({ok:true});
   }));
   app.get('/api/treasury/preparers',requirePrepare,route(async(_req,res)=>{
-    const users=await dbAll("SELECT id,name,role,permissions_json FROM users WHERE access_revoked_at IS NULL AND email NOT LIKE '%.local' ORDER BY name");res.json({preparers:users.filter(canPrepare).map(({id,name,role})=>({id,name,role}))});
+    const users=await dbAll("SELECT id,name,role,permissions_json,roster_id FROM users WHERE access_revoked_at IS NULL AND email NOT LIKE '%.local' ORDER BY name");res.json({preparers:users.filter(canPrepare).map(({id,name,role})=>({id,name,role}))});
   }));
   app.get('/api/treasury/alerts',requirePrepare,route(async(req,res)=>{
     const rows=await dbAll(`SELECT r.id,r.uploader_name,r.created_at,r.draft_json
@@ -231,7 +231,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     }
     const claimingAvailable=row.status==='awaiting_preparer'&&row.preparer_user_id===null&&req.treasuryAccess==='prepare'&&requestedPreparerId===req.user.id;
     if(!claimingAvailable&&req.user.role!=='owner'&&row.created_by_user_id!==req.user.id&&row.preparer_user_id!==req.user.id)throw error(403,'You can start an available report yourself. Reassignment requires the uploader, assigned preparer or administrator.');
-    const preparer=await dbGet("SELECT id,name,role,permissions_json FROM users WHERE id=? AND access_revoked_at IS NULL AND email NOT LIKE '%.local'",[requestedPreparerId]);
+    const preparer=await dbGet("SELECT id,name,role,permissions_json,roster_id FROM users WHERE id=? AND access_revoked_at IS NULL AND email NOT LIKE '%.local'",[requestedPreparerId]);
     if(!preparer||!canPrepare(preparer))throw error(400,'Choose an active officer with treasurer report preparation access.');
     const draft=JSON.parse(row.draft_json);draft.sourceReviewed=false;
     await withTransaction(async()=>{
@@ -333,7 +333,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   }));
   app.post('/api/treasury/:id/mark-distributed',requirePrepare,route(async(req,res)=>{
     const row=await record(req);revision(req,row);if(!['owner','secretary'].includes(req.user.role)||row.status!=='ready_for_distribution')throw error(403,'The Secretary records distribution after the preparing officer signs the report.');
-    const result=await dbRun("UPDATE treasury_reports SET status='distributed',revision=revision+1,updated_at=? WHERE id=? AND revision=?",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'distributed');res.json({report:serial(await fetchRecord(row.id))});
+    const result=await dbRun("UPDATE treasury_reports SET status='distributed',revision=revision+1,updated_at=? WHERE id=? AND revision=?",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'distributed');broadcast('treasury_changed',{reason:'report_distributed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id))});
   }));
   app.delete('/api/treasury/:id',requirePrepare,route(async(req,res)=>{
     const row=await record(req);if(!['awaiting_preparer','draft'].includes(row.status)||row.preparer_attested_at)throw error(409,'Signed reports cannot be deleted.');if(req.user.role!=='owner'&&row.created_by_user_id!==req.user.id&&row.preparer_user_id!==req.user.id)throw error(403,'Only the preparer or Worshipful Master can delete this draft.');

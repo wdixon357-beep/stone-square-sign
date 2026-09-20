@@ -12,13 +12,19 @@ await db.initSchema();
 assert.ok((await db.dbGet('select roster_id from invitations where id=?',[legacyInvite.lastID])).roster_id,'existing invitations are linked to their verified roster record during migration');
 const linkedRoster=await db.dbGet("select id from roster where first_name='Legacy' and last_name='Invite'");
 const driftedUser=await db.dbRun('insert into users(email,password_hash,name,role,created_at,permissions_json,roster_id) values(?,?,?,?,?,?,?)',['drifted@example.org','not-used','Drifted Brother','officer',new Date().toISOString(),'[]',linkedRoster.id]);
+await db.dbRun('insert into roster(first_name,last_name,title,prefix,emails,updated_at) values(?,?,?,?,?,?)',['Drifted','Member','Brother','Bro.',['drifted-member@example.org'],new Date().toISOString()]);
+const memberRoster=await db.dbGet("select id from roster where first_name='Drifted' and last_name='Member'");
+const driftedMember=await db.dbRun('insert into users(email,password_hash,name,role,created_at,permissions_json,roster_id) values(?,?,?,?,?,?,?)',['drifted-member@example.org','not-used','Drifted Lodge Member','member',new Date().toISOString(),'[]',memberRoster.id]);
 await db.dbRun('update invitations set permissions_json=? where id=?',['[]',legacyInvite.lastID]);
 await ensureBrotherSelfServiceAccess();
 for(const record of [await db.dbGet('select * from users where id=?',[driftedUser.lastID]),await db.dbGet('select * from invitations where id=?',[legacyInvite.lastID])]){
  const granted=JSON.parse(record.permissions_json);assert.ok(granted.includes('dues.self')&&granted.includes('suggestions.create'),'existing roster-linked accounts and invitations receive Brother self-service access');
 }
+const repairedMember=JSON.parse((await db.dbGet('select permissions_json from users where id=?',[driftedMember.lastID])).permissions_json);
+assert.ok(['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage'].every(permission=>repairedMember.includes(permission)),'older Lodge Member accounts receive the complete member baseline');
 await db.dbRun('delete from users where id=?',[driftedUser.lastID]);
-await db.dbRun('delete from invitations where id=?',[legacyInvite.lastID]);await db.dbRun('delete from users where id=?',[migrationUser.lastID]);await db.dbRun("delete from roster where first_name='Legacy' and last_name='Invite'");await db.close();
+await db.dbRun('delete from users where id=?',[driftedMember.lastID]);
+await db.dbRun('delete from invitations where id=?',[legacyInvite.lastID]);await db.dbRun('delete from users where id=?',[migrationUser.lastID]);await db.dbRun("delete from roster where first_name='Legacy' and last_name='Invite'");await db.dbRun("delete from roster where first_name='Drifted' and last_name='Member'");await db.close();
 const zeffyPayment={id:'pay-1',campaign_id:'annual',status:'succeeded',created:Date.UTC(2026,8,1)/1000,amount:5000,buyer:{email:'james@example.org',first_name:'James',last_name:'Member'}};
 const zeffy=createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[zeffyPayment,{...zeffyPayment}],has_more:false}));});zeffy.listen(0,'127.0.0.1');await once(zeffy,'listening');
 const probe=createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(r=>probe.close(r));const base=`http://127.0.0.1:${port}`;
@@ -31,6 +37,11 @@ try{for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}cat
  async function enroll(first,email){const row=roster.find(r=>r.first_name===first);const inv=await api(`/api/admin/member-access/${row.id}/invite`,owner.token,'POST',{email,sendEmail:false});assert.equal(inv.status,201);const token=new URL(inv.data.inviteUrl).searchParams.get('invite');const registered=await api('/api/auth/register',null,'POST',{email,name:`${first} Member`,password,invitationToken:token});assert.equal(registered.status,201);return registered.data;}
  const james=await enroll('James','james@example.org');const peter=await enroll('Peter','peter@example.org');
  check('Member account receives exact private capabilities',james.user.permissions.includes('dues.self')&&james.user.permissions.includes('suggestions.create')&&james.user.permissions.includes('minutes.view')&&james.user.permissions.includes('treasury.view')&&james.user.permissions.includes('reports.create'));
+ check('Brother can open finalized minutes and treasurer report lists',(await api('/api/minutes',james.token)).status===200&&(await api('/api/treasury',james.token)).status===200);
+ check('Brother can open both historical Lodge archives',(await api('/api/archives/minutes',james.token)).status===200&&(await api('/api/archives/treasury',james.token)).status===200);
+ check('Brother cannot open the document queue or signature tools',(await api('/api/documents',james.token)).status===403&&(await api('/api/profile/signature',james.token)).status===403);
+ check('Brother cannot open building, calendar, candidate or officer administration',(await api('/api/building/requests',james.token)).status===403&&(await api('/api/lodge-calendar?from=2026-09-01&to=2026-09-30',james.token)).status===403&&(await api('/api/tracker/handoff',james.token,'POST',{})).status===403&&(await api('/api/officers',james.token)).status===403);
+ check('Brother cannot read Dashboard Activity',(await api('/api/admin/activity',james.token)).status===403);
  const mine=await api('/api/dues/me',james.token);check('My Dues returns only the linked Brother',mine.status===200&&mine.data.row.name.includes('James')&&mine.data.row.paidCents===5000&&!('rows' in mine.data));
  check('Duplicate Zeffy payment identifiers count only once',mine.data.row.payments.filter(payment=>payment.externalId==='pay-1').length===1);
  check('Another Brother sees his own zero balance record',(await api('/api/dues/me',peter.token)).data.row.name.includes('Peter'));
@@ -42,5 +53,15 @@ try{for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}cat
  const updated=await api('/api/dues/me',james.token);check('Manual and Zeffy activity calculate together',updated.data.row.paidCents===7500);
  const reversed=await api(`/api/dues/adjustments/${adjust.data.id}/reverse`,owner.token,'POST',{reason:'Synthetic correction'});check('A correction preserves the original entry and adds an immutable reversal',reversed.status===201);
  const afterReversal=await api('/api/dues/me',james.token);check('Reversal arithmetic restores the verified Zeffy balance',afterReversal.data.row.paidCents===5000&&afterReversal.data.row.payments.some(payment=>payment.reversesAdjustmentId===adjust.data.id));
+ check('Promoting a roster-linked Brother ends his existing sign-in',(await api(`/api/admin/accounts/${peter.user.id}/role`,owner.token,'PUT',{role:'assistant_secretary'})).status===200&&(await api('/api/auth/me',peter.token)).status===401);
+ const promoted=(await api('/api/auth/login',null,'POST',{email:'peter@example.org',password})).data;
+ check('Promoting a Brother applies the complete office baseline',promoted.user.role==='assistant_secretary'&&['minutes.prepare','treasury.prepare','documents.sign','dues.ledger'].every(permission=>promoted.user.permissions.includes(permission)));
+ const elevated=[...promoted.user.permissions,'candidates.edit'];
+ check('Customized office access can be saved before a later role change',(await api('/api/admin/access',owner.token,'PUT',{key:`user:${peter.user.id}`,permissions:elevated})).status===200);
+ check('Returning an officer to Lodge Member ends the office sign-in',(await api(`/api/admin/accounts/${peter.user.id}/role`,owner.token,'PUT',{role:'member'})).status===200&&(await api('/api/auth/me',promoted.token)).status===401);
+ const returned=(await api('/api/auth/login',null,'POST',{email:'peter@example.org',password})).data;
+ const memberBaseline=['dues.self','minutes.view','reports.create','settings.manage','suggestions.create','treasury.view'];
+ check('Returning an officer to Lodge Member removes every office-only grant',returned.user.role==='member'&&JSON.stringify([...returned.user.permissions].sort())===JSON.stringify(memberBaseline)&&!returned.user.permissions.includes('candidates.edit')&&!returned.user.permissions.includes('documents.sign'));
  console.log(`${checks} member privacy and dues checks passed.`);
+ if(process.env.MEMBER_PREVIEW==='1'){console.log(`PREVIEW ${base} login james@example.org password ${password}`);await new Promise(()=>{});}
 }finally{app.kill('SIGTERM');zeffy.close();await fs.rm(tmp,{recursive:true,force:true});}

@@ -325,7 +325,7 @@ final class MinutesWorkspace: ObservableObject {
             await refresh()
             if action == "master-attest" {
                 close()
-                message = (["You reviewed and signed the minutes. They are now filed under Historical minutes and available to every officer."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
+                message = (["You reviewed and signed the minutes. They are now filed under Finalized in Dashboard and available to every Brother with minutes access."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
             } else {
                 open(payload.minutes)
                 message = (["Record updated."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
@@ -533,7 +533,7 @@ struct MeetingMinutesView: View {
                     VStack(spacing: 10) {
                         Image(systemName: "doc.text").font(.system(size: 38)).foregroundStyle(.tertiary)
                         Text("No active minutes").font(.title3.weight(.semibold))
-                        Text("Signed minutes are filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
+                        Text("Signed minutes are filed under Finalized in Dashboard.").font(.callout).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 26)
@@ -556,7 +556,7 @@ struct MeetingMinutesView: View {
                 Text(["owner", "secretary", "assistant_secretary"].contains(model.user?.role ?? "") && record.status == "ready_for_distribution"
                      ? "WM review complete, ready to send to the Craft"
                      : "Meeting minutes are available to view").font(.headline).foregroundStyle(SignTheme.navy)
-                Text("\(MinutesDateText.minutesTitle(record.draft.meetingDate)) is signed and filed under Historical minutes.").font(.callout).foregroundStyle(.secondary)
+                Text("\(MinutesDateText.minutesTitle(record.draft.meetingDate)) is signed and filed under Finalized in Dashboard.").font(.callout).foregroundStyle(.secondary)
             }
         }
     }

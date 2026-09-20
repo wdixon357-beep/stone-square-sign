@@ -326,7 +326,7 @@ struct WorkspaceView: View {
                         Label("Warden Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
                         Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
                         Label("Member Access", systemImage: "person.3.fill").tag(AppSection.memberAccess)
-                        Label("Officer Activity",systemImage:"clock.arrow.circlepath").tag(AppSection.activity)
+                        Label("Dashboard Activity",systemImage:"clock.arrow.circlepath").tag(AppSection.activity)
                     }
                     if model.user?.canReadApprovals == true { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
                     if model.user?.role == "owner" {

@@ -67,11 +67,13 @@ try{
  check('An occupied Assistant Treasurer seat cannot be assigned again',(await api('/api/officers/invitations/role',owner.token,'PUT',{email:otherEmail,role:'assistant_treasurer'})).status===409);
  check('Preparer implies view permission',normalizePermissions(['minutes.prepare']).includes('minutes.view'));
  check('Universal archives cannot be removed from an officer',JSON.stringify(resolvePermissions({role:'secretary',permissions_json:'[]'}))===JSON.stringify(['minutes.view','treasury.view']));
- check('Member access does not gain officer archives',resolvePermissions({role:'member',permissions_json:'[]'}).length===0);
+ const unlinkedMember=resolvePermissions({role:'member',permissions_json:'[]',roster_id:null});
+ check('An unlinked legacy member receives no private Lodge record access',JSON.stringify(unlinkedMember)===JSON.stringify(['settings.manage']));
+ const memberBaseline=resolvePermissions({role:'member',permissions_json:'[]',roster_id:999});
+ check('Roster-linked member baseline survives an old empty permission record',['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage'].every(permission=>memberBaseline.includes(permission)));
  check('Officer can list both historical archives',(await api('/api/archives/minutes',officer.token)).status===200&&(await api('/api/archives/treasury',officer.token)).status===200);
- check('Owner can move an officer to a member account',(await api(`/api/admin/accounts/${officer.user.id}/role`,owner.token,'PUT',{role:'member'})).status===200);
- const demoted=await api('/api/auth/login',null,'POST',{email:officerInvite.email,password});
- check('A demoted account loses role-provided archives',demoted.status===200&&(await api('/api/archives/minutes',demoted.data.token)).status===403&&(await api('/api/archives/treasury',demoted.data.token)).status===403);
+ check('An unlinked officer cannot become an orphaned member account',(await api(`/api/admin/accounts/${officer.user.id}/role`,owner.token,'PUT',{role:'member'})).status===409);
+ check('General Officer Access refuses unlinked Lodge Member invitations',(await api('/api/officers/invite',owner.token,'POST',{email:'unlinked-member@example.org',name:'Unlinked Member',role:'member',sendEmail:false})).status===400);
  console.log(`${checks} granular access checks passed.`);
  if(process.env.ACCESS_PREVIEW==='1'){console.log(`PREVIEW ${base} login access-warden@example.org password ${password}`);await new Promise(()=>{});}
 }finally{server.kill('SIGTERM');}

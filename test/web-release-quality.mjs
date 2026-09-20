@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 
 const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
 const app = read('../public/app.js');
 const html = read('../public/index.html');
 const styles = read('../public/styles.css');
 const reportAssistant = read('../public/report-assistant.js');
+const webActivity = read('../public/activity.js');
 const server = read('../server.js');
 const nativeMinutes = read('../macos/Sources/StoneSquareSign/MeetingMinutes.swift');
 const nativeTreasury = read('../macos/Sources/StoneSquareSign/Treasury.swift');
@@ -69,6 +71,10 @@ assert.match(app, /\/api\/treasury\/alerts\/\$\{alert\.id\}\/dismiss/, 'the webs
 assert.match(styles, /\.treasury-alert-row[^{]*\{[^}]*grid-template-columns:\s*minmax\(0,1fr\) auto/, 'banking alert text and dismissal controls must share a responsive row');
 assert.match(styles, /@media \(max-width: 520px\)[\s\S]*\.treasury-alert-row[^{]*\{[^}]*grid-template-columns:\s*1fr/, 'banking alert controls must stack on phones');
 assert.match(app, /event: treasury_changed/, 'the website must refresh a banking-record alert immediately after a live change');
+assert.match(app, /state\.activeSection === 'treasury'[\s\S]*treasuryWorkspace\.requestLiveRefresh\(\)/, 'an open website treasury archive must request a refresh when a report is finalized');
+assert.match(treasury, /requestLiveRefresh\(\)[\s\S]*refreshPending=true[\s\S]*loadingList/, 'live website treasury changes must queue while a list request is already running');
+assert.match(treasury, /consumePendingRefresh\(\)[\s\S]*queueMicrotask\(\(\)=>this\.list\(\)\)/, 'a queued website treasury refresh must have one safe replay path');
+assert.match(treasury, /finally\{this\.busy=false[\s\S]*this\.consumePendingRefresh\(\)/, 'a failed or completed busy treasury action must replay a queued live refresh');
 assert.match(treasuryRoutes, /status='awaiting_preparer' AND preparer_user_id IS NULL/, 'alerts must include only unclaimed banking records');
 assert.match(treasuryRoutes, /WHERE id=\? AND revision=\?/, 'claiming must use an atomic revision check');
 assert.match(treasury, /this\.record\.preparerUserId===this\.user\(\)\.id/, 'the website must allow only the assigned preparer to edit an active report');
@@ -76,6 +82,7 @@ assert.match(server, /type === 'treasury_changed'[\s\S]*treasury\.view/, 'bankin
 assert.match(nativeAPI, /func refreshTreasuryAlerts\(\)/, 'the Mac app must refresh waiting banking-record alerts');
 assert.match(nativeAPI, /func dismissTreasuryAlert\(_ alert: TreasuryAlert\)/, 'the Mac app must persist per-person banking alert dismissal');
 assert.match(nativeAPI, /event: treasury_changed/, 'the Mac app must refresh alerts after a live banking workflow event');
+assert.match(nativeAPI, /treasuryRecordsRevision \+= 1/, 'the Mac app must publish a record-list revision when a treasurer report changes');
 assert.match(nativeViews, /treasuryAlertButtons/, 'the Mac app must display its waiting banking-record alerts');
 assert.match(nativeViews, /xmark\.circle\.fill[\s\S]*Dismiss this reminder/, 'the Mac app must provide a visible banking reminder dismissal control');
 assert.match(app, /beforeunload/, 'unfinished long-form work must be protected on reload');
@@ -129,6 +136,15 @@ assert.match(app, /modalFocusOrigins/, 'modal focus must return to its opener');
 assert.match(app, /event\.key !== 'Tab'/, 'keyboard focus must stay inside an open modal');
 assert.match(styles, /:focus-visible/, 'keyboard focus must be visible');
 assert.match(styles, /prefers-reduced-motion:\s*reduce/, 'motion must respect the operating system preference');
+assert.match(html, /id="memberWelcome"[\s\S]*id="memberWelcomeName"/, 'Brother sign-in must include a dedicated accessible welcome screen');
+assert.match(app, /user\?\.role !== 'member'[\s\S]*Welcome, Bro\. \$\{brotherSurname\(user\.name\)\}/, 'the welcome screen must use the Brother surname and stay limited to member accounts');
+assert.match(app, /freshLogin:\s*true/, 'the Brother welcome must run after a fresh login without replaying on a remembered session');
+assert.match(styles, /\.member-welcome[\s\S]*env\(safe-area-inset-top\)/, 'the Brother welcome must fit phone and tablet safe areas');
+const activityLabel = webActivity.match(/label\(element\)\{[\s\S]*?\n \}/)?.[0] || '';
+assert.doesNotMatch(activityLabel, /textContent|getAttribute/, 'activity tracking must never copy rendered filenames, suggestion text, or other dynamic content');
+assert.match(treasury, /data-activity-name="Download banking source file"/, 'bank-source clicks must use a fixed privacy-safe activity label');
+assert.match(server, /users\.permissions_json, users\.roster_id/, 'authenticated member permissions must include the verified roster link');
+assert.match(app, /supportedDeepLinks[\s\S]*'myDues'[\s\S]*'suggestions'[\s\S]*'settings'/, 'authorized member links must open their requested work area');
 assert.match(styles, /@media \(max-width: 760px\)[\s\S]*overflow-x:\s*auto/, 'phone navigation must remain reachable without page overflow');
 assert.match(styles, /min-height:\s*44px/, 'touch controls must include a 44px target treatment');
 assert.match(styles, /\.content > section,[^}]+min-width:\s*0/, 'every web workspace section must be allowed to shrink inside the viewport');
@@ -137,5 +153,21 @@ assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.sidebar nav \{[^}]*gr
 assert.match(styles, /\.panel-title > button,[^}]+flex:\s*0 0 auto/, 'panel action labels must keep their readable width on phones');
 assert.match(app, /resetWorkspaceScroll[\s\S]*scrollTo\?\.\(\{ top: 0, left: 0/, 'changing website workspaces must return the content pane to its top edge');
 assert.match(treasury, /top\(\).*scrollTo\?\./, 'opening a treasurer report must return the content pane to its top edge');
+
+const treasurySandbox={globalThis:{},queueMicrotask,setTimeout,clearTimeout,URL,crypto,structuredClone,console};
+vm.runInNewContext(treasury.replace(/^import .*$/gm,'').replace('export class TreasuryWorkspace','class TreasuryWorkspace')+'\nglobalThis.TreasuryWorkspace=TreasuryWorkspace;',treasurySandbox);
+const { TreasuryWorkspace } = treasurySandbox.globalThis;
+const pendingWorkspace = Object.create(TreasuryWorkspace.prototype);
+Object.assign(pendingWorkspace,{busy:false,loadingList:false,dirty:false,record:null,previewView:null,refreshPending:false,root:{querySelectorAll:()=>[]},can:()=>true,message:()=>{}});
+let pendingListCalls=0,rejectBusyAction;
+pendingWorkspace.list=async()=>{pendingListCalls++;};
+pendingWorkspace.api=()=>new Promise((_resolve,reject)=>{rejectBusyAction=reject;});
+const failedAction=pendingWorkspace.run('new-draft',{disabled:false,isConnected:false});
+await new Promise(resolve=>setImmediate(resolve));
+pendingWorkspace.requestLiveRefresh();
+assert.equal(pendingListCalls,0,'a live treasury refresh must wait while an action is still running');
+rejectBusyAction(new Error('Synthetic failed action'));
+await failedAction;await new Promise(resolve=>setImmediate(resolve));
+assert.equal(pendingListCalls,1,'a live treasury refresh queued during a failed action must replay once the action ends');
 
 console.log('PASS: secure cookie auth, short-lived postMessage handoff, device controls, draft safeguards, notification truth, modal accessibility, responsive navigation and reduced motion.');
