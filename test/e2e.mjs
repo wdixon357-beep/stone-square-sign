@@ -448,6 +448,78 @@ try {
   check('the Master can grant finalized minutes viewing without preparation access', finalReaderGrant.status === 200
     && finalReaderSession.payload.user.permissions.includes('minutes.view')
     && !finalReaderSession.payload.user.permissions.includes('minutes.prepare'));
+
+  const handoffForm = new FormData();
+  handoffForm.append('sourceType', 'transcript');
+  handoffForm.append('transcriptText', 'WM Dixon-Saunders opened Stone Square Lodge No. 22 in due form. '
+    + 'The officers recorded attendance, sickness and distress, correspondence, committee reports, old business, new business, and the closing time. '
+    + 'This synthetic transcript verifies the private Secretary Office handoff and claim workflow.');
+  const mailBeforeHandoff = deliveredMail.length;
+  const handedOffMinutes = await api('POST', '/api/minutes/handoff', {
+    token: wmToken, body: handoffForm, raw: true,
+  });
+  check('the Worshipful Master can hand off a transcript without creating the draft',
+    handedOffMinutes.status === 201
+      && handedOffMinutes.payload.minutes?.status === 'awaiting_preparer'
+      && handedOffMinutes.payload.minutes?.sourceUploadedBy === 'W. Aaron Dixon-Saunders'
+      && handedOffMinutes.payload.minutes?.preparerUserId == null,
+    `${handedOffMinutes.status} ${JSON.stringify(handedOffMinutes.payload).slice(0, 220)}`);
+  const handoffNotices = deliveredMail.slice(mailBeforeHandoff);
+  check('the handoff immediately emails both Secretary offices', handoffNotices.length === 2
+    && handoffNotices.some(message => /mcduff8995@example\.org/i.test(message))
+    && handoffNotices.some(message => /adrianreese22@example\.org/i.test(message)),
+  `${handoffNotices.length} handoff notices delivered`);
+  const handoffId = handedOffMinutes.payload.minutes?.id;
+  const [handoffForSecretary, handoffForAssistant, handoffForFinalReader] = await Promise.all([
+    api('GET', '/api/minutes', { token: secToken }),
+    api('GET', '/api/minutes', { token: asstToken }),
+    api('GET', '/api/minutes', { token: officerToken }),
+  ]);
+  check('Adrian and McDuffie both see the unclaimed source while other officers do not',
+    handoffForSecretary.payload.minutes.some(item => item.id === handoffId && item.status === 'awaiting_preparer')
+      && handoffForAssistant.payload.minutes.some(item => item.id === handoffId && item.status === 'awaiting_preparer')
+      && !handoffForFinalReader.payload.minutes.some(item => item.id === handoffId));
+  const [secretaryClaim, assistantClaim] = await Promise.all([
+    api('POST', `/api/minutes/${handoffId}/claim`, { token: secToken }),
+    api('POST', `/api/minutes/${handoffId}/claim`, { token: asstToken }),
+  ]);
+  const claims = [secretaryClaim, assistantClaim];
+  const winningClaimIndex = claims.findIndex(result => result.status === 200);
+  const losingClaimIndex = claims.findIndex(result => result.status === 409);
+  check('an atomic claim allows exactly one Secretary to create the minutes draft',
+    winningClaimIndex >= 0 && losingClaimIndex >= 0
+      && claims[winningClaimIndex].payload.minutes?.status === 'draft'
+      && claims[winningClaimIndex].payload.minutes?.sourceUploadedBy === 'W. Aaron Dixon-Saunders'
+      && Boolean(claims[winningClaimIndex].payload.minutes?.claimedAt),
+    JSON.stringify(claims.map(result => ({ status: result.status, payload: result.payload }))));
+  const winningToken = winningClaimIndex === 0 ? secToken : asstToken;
+  const losingToken = losingClaimIndex === 0 ? secToken : asstToken;
+  const claimedDraft = claims[winningClaimIndex].payload.minutes;
+  const winnerPreview = await api('POST', `/api/minutes/${handoffId}/preview`, { token: winningToken, body: { draft: claimedDraft.draft } });
+  const loserPreview = await api('POST', `/api/minutes/${handoffId}/preview`, { token: losingToken, body: { draft: claimedDraft.draft } });
+  check('only the claiming Secretary can open the unfinished draft', winnerPreview.status === 200 && loserPreview.status === 404);
+  const handoffActivity = await api('GET', '/api/admin/activity?days=1', { token: wmToken });
+  const handoffActions = handoffActivity.payload.events?.filter(event => event.detail?.includes?.('Meeting minutes')).map(event => event.action) || [];
+  check('the handoff and claim are both retained in the administrative audit trail',
+    handoffActions.includes('minutes_source_handed_off') && handoffActions.includes('minutes_source_claimed'),
+    JSON.stringify(handoffActions));
+  const deleteClaimedHandoff = await api('DELETE', `/api/minutes/${handoffId}`, { token: wmToken });
+  check('the Worshipful Master can remove a claimed unsigned handoff during testing', deleteClaimedHandoff.status === 200);
+
+  const shortHandoffForm = new FormData();
+  shortHandoffForm.append('sourceType', 'compiled_notes');
+  shortHandoffForm.append('transcriptText', 'Too short to generate reliable minutes.');
+  const shortHandoff = await api('POST', '/api/minutes/handoff', { token: wmToken, body: shortHandoffForm, raw: true });
+  const shortHandoffId = shortHandoff.payload.minutes?.id;
+  const failedClaim = await api('POST', `/api/minutes/${shortHandoffId}/claim`, { token: secToken });
+  const afterFailedClaim = await api('GET', '/api/minutes', { token: asstToken });
+  const releasedSource = afterFailedClaim.payload.minutes?.find(item => item.id === shortHandoffId);
+  check('a failed generation returns the source to both Secretaries instead of stranding it',
+    failedClaim.status === 400 && releasedSource?.status === 'awaiting_preparer'
+      && releasedSource.preparerUserId == null && releasedSource.claimedAt == null,
+    `${failedClaim.status} ${JSON.stringify(releasedSource)}`);
+  await api('DELETE', `/api/minutes/${shortHandoffId}`, { token: wmToken });
+
   const ownerMinutesForm = new FormData();
   ownerMinutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '
     + 'A quorum was present. The Lodge discussed business, acted on a motion, and closed in due form. '

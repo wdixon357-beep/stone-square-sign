@@ -89,6 +89,7 @@ final class MinutesConflictFixture: URLProtocol {
 final class GenerationFixture: URLProtocol {
     static var response = Data()
     static var statusCode = 200
+    static var routeResponses: [String: (status: Int, data: Data)] = [:]
     static var requests: [(method: String, path: String, body: Data)] = []
     static var beforeReply: (@MainActor (URLRequest) -> Void)?
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -107,10 +108,12 @@ final class GenerationFixture: URLProtocol {
         Task { @MainActor in
             Self.requests.append((request.httpMethod ?? "GET", request.url!.path, body))
             Self.beforeReply?(request)
-            let payload = request.url!.path == "/api/generation/status"
+            let route = "\(request.httpMethod ?? "GET") \(request.url!.path)"
+            let configured = Self.routeResponses[route]
+            let payload = configured?.data ?? (request.url!.path == "/api/generation/status"
                 ? Data(#"{"configured":true,"administratorDetails":true,"model":"gpt-5.6-terra","monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8)
-                : Self.response
-            let response = HTTPURLResponse(url: request.url!, statusCode: Self.statusCode, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                : Self.response)
+            let response = HTTPURLResponse(url: request.url!, statusCode: configured?.status ?? Self.statusCode, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: payload)
             client?.urlProtocolDidFinishLoading(self)
@@ -120,6 +123,7 @@ final class GenerationFixture: URLProtocol {
 }
 
 struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
+struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notificationWarnings: [String] }
 
 @main struct NativeReportTests {
     @MainActor static func main() async throws {
@@ -320,6 +324,42 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
 
         let organizing = MinutesWorkspace(session: generationSession)
         organizing.baseURL = URL(string: "https://generation-fixture.invalid"); organizing.token = "synthetic-token"
+        let waitingRecord = try JSONDecoder().decode(MinutesRecord.self, from: Data(#"{"id":"waiting-minutes","status":"awaiting_preparer","createdBy":"WM Dixon-Saunders","sourceUploadedBy":"WM Dixon-Saunders","updatedAt":"2026-09-20T14:00:00.000Z","draft":{"meetingType":"Stated Communication","present":[],"excused":[],"visitors":[],"officerAttendance":[],"income":[],"expenses":[],"sections":[],"warnings":[],"sensitiveReview":[],"actionItems":[]}}"#.utf8))
+        let claimedRecord = try JSONDecoder().decode(MinutesRecord.self, from: Data(#"{"id":"waiting-minutes","status":"draft","createdBy":"Adrian Reese","sourceUploadedBy":"WM Dixon-Saunders","preparerUserId":502,"preparer":"Adrian Reese","claimedAt":"2026-09-20T14:05:00.000Z","updatedAt":"2026-09-20T14:05:05.000Z","draft":{"meetingDate":"2026-09-17","meetingType":"Stated Communication","present":[],"excused":[],"visitors":[],"officerAttendance":[],"income":[],"expenses":[],"sections":[{"heading":"Opening","body":"The Lodge opened in due form."}],"warnings":[],"sensitiveReview":[],"actionItems":[]}}"#.utf8))
+        organizing.source = "Synthetic transcript sent by the Worshipful Master for Adrian Reese or William McDuffie to claim and organize into the Lodge meeting minutes."
+        organizing.sourceType = "transcript"
+        GenerationFixture.requests = []
+        GenerationFixture.routeResponses = [
+            "POST /api/minutes/handoff": (201, try JSONEncoder().encode(MinutesSingleEnvelope(minutes: waitingRecord, notificationWarnings: []))),
+            "GET /api/minutes": (200, try JSONEncoder().encode(MinutesEnvelope(minutes: [waitingRecord]))),
+        ]
+        await organizing.handoff()
+        let handoffRequest = GenerationFixture.requests.first { $0.path == "/api/minutes/handoff" }!
+        let handoffBody = String(data: handoffRequest.body, encoding: .utf8) ?? ""
+        precondition(handoffRequest.method == "POST" && handoffBody.contains("Synthetic transcript sent by the Worshipful Master") && handoffBody.contains("transcript"))
+        precondition(organizing.source.isEmpty && organizing.records.first?.status == "awaiting_preparer" && organizing.message.contains("sent to Adrian Reese and William McDuffie"))
+        print("PASS: native owner handoff sends the source to both Secretary offices and refreshes the shared queue")
+
+        GenerationFixture.requests = []
+        GenerationFixture.routeResponses = [
+            "POST /api/minutes/waiting-minutes/claim": (200, try JSONEncoder().encode(MinutesSingleEnvelope(minutes: claimedRecord, notificationWarnings: []))),
+            "GET /api/minutes": (200, try JSONEncoder().encode(MinutesEnvelope(minutes: [claimedRecord]))),
+        ]
+        await organizing.claim(waitingRecord)
+        precondition(GenerationFixture.requests.first?.method == "POST" && GenerationFixture.requests.first?.path == "/api/minutes/waiting-minutes/claim")
+        precondition(organizing.selected?.id == claimedRecord.id && organizing.selected?.status == "draft" && organizing.message.contains("assigned to you"))
+        print("PASS: native Secretary claim opens the generated draft owned by the successful claimant")
+
+        organizing.close()
+        GenerationFixture.requests = []
+        GenerationFixture.routeResponses = [
+            "POST /api/minutes/waiting-minutes/claim": (409, Data(#"{"error":"This source has already been claimed by William M. McDuffie."}"#.utf8)),
+            "GET /api/minutes": (200, try JSONEncoder().encode(MinutesEnvelope(minutes: [waitingRecord]))),
+        ]
+        await organizing.claim(waitingRecord)
+        precondition(organizing.selected == nil && organizing.records.first?.id == waitingRecord.id && organizing.message.contains("already been claimed"))
+        print("PASS: native claim conflict refreshes the queue and explains that another Secretary claimed it")
+        GenerationFixture.routeResponses = [:]
         let status = await GenerationStatus.load(using: organizing)
         precondition(status?.explanation(forOwner: true).hasPrefix("Terra enabled.") == true && status?.allowance(forOwner: true)?.contains("$4.75 remaining of $5.00") == true)
         precondition(status?.allowance(forOwner: false) == nil)
@@ -501,7 +541,7 @@ struct MinutesEnvelope: Encodable { let minutes: [MinutesRecord] }
         await reportApp.refresh(silent: true)
         precondition(reportApp.user?.permissions == [] && reportApp.user?.canReadDues == false && reportApp.documents.isEmpty)
         print("PASS: periodic account refresh applies changed permissions without another sign-in")
-        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/auth/me" || $0.path == "/api/generation/status" || $0.path == "/api/proposals" || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
+        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/auth/me" || $0.path == "/api/generation/status" || $0.path == "/api/proposals" || $0.path == "/api/minutes" || $0.path == "/api/minutes/handoff" || $0.path.hasSuffix("/claim") || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
         print("PASS: generation and proposal fixtures make no signing or document delivery requests")
         let buildingPayload = Data(#"{"requests":[{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","start":"","end":"","spaces":["Front yard"],"bathroomAccess":true,"description":"Synthetic request","status":"pending","note":"","revision":"r1","requesterNotified":false}],"canDecide":true}"#.utf8)
         let building = BuildingRequestsWorkspace()

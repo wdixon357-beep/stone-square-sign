@@ -35,6 +35,12 @@ assert.doesNotMatch(app, /[?&]assertion=/, 'the assertion must not be placed in 
 assert.match(app, /\/api\/auth\/sessions/, 'My Settings must load signed-in devices');
 assert.match(app, /\/api\/auth\/sessions\/revoke-others/, 'My Settings must support ending other sessions');
 assert.match(app, /notificationWarnings/, 'notification delivery warnings must remain visible after successful writes');
+assert.match(server, /\/api\/minutes\/handoff/, 'the Master must have a private meeting-source handoff route');
+assert.match(server, /WHERE id = \? AND status = 'awaiting_preparer' AND preparer_user_id IS NULL/, 'Secretary claims must be atomic');
+assert.match(server, /recoverStaleMinutesClaims/, 'interrupted minutes generation must return stale claims to the shared queue');
+assert.match(server, /releaseMinutesClaim\(req\.params\.id, req\.user\.id, 'generation_failed'\)/, 'failed minutes generation must immediately release the claim');
+assert.match(nativeMinutes, /func handoff\(\) async/, 'the Mac app must submit a meeting source handoff');
+assert.match(nativeMinutes, /func claim\(_ record: MinutesRecord\) async/, 'the Mac app must claim a waiting meeting source');
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'every officer with minutes access must receive a signed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening signed minutes must acknowledge only that officer alert');
 assert.match(html, /id="minutesReviewAlerts"[^>]+workflow-alerts/, 'minutes alerts must be prominent at the top of the Dashboard');
@@ -54,7 +60,7 @@ assert.match(server, /\['owner', 'secretary', 'assistant_secretary'\]/, 'either 
 assert.match(nativeMinutes, /Signed and available to all officers/, 'the Mac app must use the same minutes status wording');
 assert.match(app, /event: minutes_records_changed/, 'the website must refresh an open minutes archive after publication');
 assert.match(nativeAPI, /event: minutes_records_changed/, 'the Mac app must refresh an open minutes archive after publication');
-assert.match(nativeMinutes, /mayReview \? "Review" : "View PDF"/, 'the Mac app must open another preparer signed minutes as a finalized PDF');
+assert.match(nativeMinutes, /mayReview\(record\) \? "Review" : "View PDF"/, 'the Mac app must open another preparer signed minutes as a finalized PDF');
 assert.match(server, /publishedMinutesSnapshot[\s\S]*buildMinutesDocx/, 'finalized Word copies must use captured attestation snapshots');
 assert.match(app, /preparer_completion'[\s\S]*showPdfBlob\(await apiFetch[\s\S]*completion-alert-seen/, 'a completed-review alert must open the signed PDF before acknowledgment');
 assert.match(html, /id="treasuryAlerts"[^>]+aria-live="polite"/, 'waiting banking records must have a persistent accessible alert region');
@@ -72,8 +78,15 @@ assert.match(app, /sessionStorage/, 'non-sensitive drafts must recover within th
 assert.match(html, /id="saveExitMinutes"[^>]*>Save draft and exit</, 'meeting minutes must provide a clear save and exit action');
 assert.match(html, /id="exitMinutesEditor"[^>]*>Exit and keep saved draft</, 'meeting minutes must provide a clear exit action');
 assert.match(app, /uploaded transcript and last saved draft will remain available/, 'exiting minutes must explain what remains saved');
+assert.match(html, /id="handoffMinutes"[^>]*>Send to Adrian and McDuffie</, 'the Worshipful Master must have a clear transcript handoff action');
+assert.match(app, /\/api\/minutes\/handoff/, 'the website must send the source to the private Secretary Office queue');
+assert.match(app, /\/api\/minutes\/\$\{item\.id\}\/claim/, 'either Secretary must be able to claim an unassigned source');
+assert.match(server, /status = 'organizing', preparer_user_id = \?, claimed_at = \?/, 'the Secretary claim must atomically assign the preparer before generation');
+assert.match(server, /WHERE id = \? AND status = 'awaiting_preparer' AND preparer_user_id IS NULL/, 'duplicate Secretary claims must be rejected at the database write');
 assert.match(nativeMinutes, /Save draft and exit/, 'the Mac app must provide the same save and exit action');
 assert.match(nativeMinutes, /Exit and keep saved draft/, 'the Mac app must provide the same safe exit action');
+assert.match(nativeMinutes, /Send to Adrian and McDuffie/, 'the Mac app must provide the same private transcript handoff');
+assert.match(nativeMinutes, /Claim and create draft/, 'the Mac app must let either Secretary claim the source');
 assert.doesNotMatch(treasury, /sessionStorage|localStorage/, 'banking data must not be retained in browser storage');
 assert.match(treasury, /Matched to uploaded source/, 'web treasurer fields must identify values matched to uploaded evidence');
 assert.match(treasury, /Officer confirmed/, 'web treasurer fields must identify officer-confirmed prefills');

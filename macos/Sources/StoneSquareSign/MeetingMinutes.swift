@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 
 private func minutesStatusLabel(_ status: String) -> String {
     switch status {
+    case "awaiting_preparer": "Awaiting Adrian or McDuffie"
+    case "organizing": "Creating the organized draft"
     case "ready_for_distribution": "Signed and available to all officers"
     case "distributed": "Distributed by the Secretary or Assistant Secretary"
     default: status.replacingOccurrences(of: "_", with: " ").capitalized
@@ -32,6 +34,7 @@ struct MinutesRecord: Codable, Identifiable {
     var masterChanges: [MinutesChange]?; var submittedDraft: MinutesDraft?
     var id: String; var draft: MinutesDraft; var status: String; var createdBy: String; var updatedAt: String
     var createdByUserId: Int?; var preparerRole: String?; var preparerAttestedAt: String?; var masterAttestedAt: String?
+    var sourceUploadedByUserId: Int?; var sourceUploadedBy: String?; var preparerUserId: Int?; var preparer: String?; var claimedAt: String?
     var approvedByLodgeOn: String?; var approvalNote: String?
 }
 struct MinutesListPayload: Decodable { let minutes: [MinutesRecord] }
@@ -231,28 +234,60 @@ final class MinutesWorkspace: ObservableObject {
         updatePreview()
     }
     func close() { previewTask?.cancel(); revision += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
+    private func sourceUploadBody() throws -> (body: Data, contentType: String) {
+        let boundary = "Minutes-\(UUID().uuidString)"
+        var body = Data()
+        func append(_ text: String) { body.append(Data(text.utf8)) }
+        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"sourceType\"\r\n\r\n\(sourceType)\r\n")
+        if let fileURL {
+            let bytes = try Data(contentsOf: fileURL)
+            if bytes.count > 12 * 1024 * 1024 { throw ClientError.server("Choose a file smaller than 12 MB.") }
+            let filename = (sourceFileName.isEmpty ? fileURL.lastPathComponent : sourceFileName)
+                .replacingOccurrences(of: "\"", with: "")
+                .replacingOccurrences(of: "\r", with: "")
+                .replacingOccurrences(of: "\n", with: "")
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"transcriptFile\"; filename=\"\(filename)\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+            body.append(bytes); append("\r\n")
+        } else {
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"transcriptText\"\r\n\r\n\(source)\r\n")
+        }
+        append("--\(boundary)--\r\n")
+        return (body, "multipart/form-data; boundary=\(boundary)")
+    }
     func generate() async {
         busy = true; defer { busy = false }
         do {
-            let boundary = "Minutes-\(UUID().uuidString)"
-            var body = Data()
-            func append(_ text: String) { body.append(Data(text.utf8)) }
-            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"sourceType\"\r\n\r\n\(sourceType)\r\n")
-            if let fileURL {
-                let bytes = try Data(contentsOf: fileURL)
-                if bytes.count > 12 * 1024 * 1024 { throw ClientError.server("Choose a file smaller than 12 MB.") }
-                let filename = fileURL.lastPathComponent.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
-                append("--\(boundary)\r\nContent-Disposition: form-data; name=\"transcriptFile\"; filename=\"\(filename)\"\r\nContent-Type: application/octet-stream\r\n\r\n")
-                body.append(bytes); append("\r\n")
-            } else {
-                append("--\(boundary)\r\nContent-Disposition: form-data; name=\"transcriptText\"\r\n\r\n\(source)\r\n")
-            }
-            append("--\(boundary)--\r\n")
-            let result = try await request("/api/minutes/generate", method: "POST", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
+            let upload = try sourceUploadBody()
+            let result = try await request("/api/minutes/generate", method: "POST", body: upload.body, contentType: upload.contentType)
             let record = try JSONDecoder().decode(MinutesPayload.self, from: result).minutes
             await refresh(); clearLocalSourceDraft(); open(record)
         } catch { message = error.localizedDescription }
         await refreshGenerationStatus()
+    }
+    func handoff() async {
+        busy = true; defer { busy = false }
+        do {
+            let upload = try sourceUploadBody()
+            let data = try await request("/api/minutes/handoff", method: "POST", body: upload.body, contentType: upload.contentType)
+            let payload = try JSONDecoder().decode(MinutesPayload.self, from: data)
+            clearLocalSourceDraft()
+            await refresh()
+            message = (["Transcript sent to Adrian Reese and William McDuffie. It is waiting for one of them to claim it."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
+            messageIsWarning = payload.notificationWarnings?.isEmpty == false
+        } catch { message = error.localizedDescription }
+    }
+    func claim(_ record: MinutesRecord) async {
+        busy = true; defer { busy = false }
+        do {
+            let data = try await request("/api/minutes/\(record.id)/claim", method: "POST", body: Data("{}".utf8))
+            let claimed = try JSONDecoder().decode(MinutesPayload.self, from: data).minutes
+            await refresh()
+            open(claimed)
+            message = "This source is assigned to you. Review every section before attesting."
+        } catch {
+            await refresh()
+            message = error.localizedDescription
+        }
     }
     func save() async {
         guard let record = selected, let draft else { return }
@@ -266,7 +301,7 @@ final class MinutesWorkspace: ObservableObject {
     }
     func remove(_ record: MinutesRecord) async {
         busy = true; defer { busy = false }
-        do { _ = try await request("/api/minutes/\(record.id)", method: "DELETE"); if selected?.id == record.id { close() }; await refresh(); message = "Draft deleted." }
+        do { _ = try await request("/api/minutes/\(record.id)", method: "DELETE"); if selected?.id == record.id { close() }; await refresh(); message = record.status == "awaiting_preparer" ? "Meeting source deleted." : "Draft deleted." }
         catch { message = error.localizedDescription }
     }
     func reorganize() async {
@@ -435,10 +470,10 @@ struct MeetingMinutesView: View {
             guard old != nil, old != new else { return }
             workspace.dirty = new != workspace.selected?.draft; workspace.updatePreview()
         }
-        .alert("Delete this unsigned draft?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-            Button("Delete draft", role: .destructive) { if let record = deleting { Task { await workspace.remove(record) } } }
+        .alert(deleting?.status == "awaiting_preparer" ? "Delete this meeting source?" : "Delete this unsigned draft?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button(deleting?.status == "awaiting_preparer" ? "Delete source" : "Delete draft", role: .destructive) { if let record = deleting { Task { await workspace.remove(record) } } }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("It will be removed from the active records. Signed and approved records cannot be deleted.") }
+        } message: { Text(deleting?.status == "awaiting_preparer" ? "It will be removed from the Secretary's Office queue." : "It will be removed from the active records. Signed and approved records cannot be deleted.") }
         .alert("Reorganize the original source?", isPresented: $confirmReorganize) {
             Button("Reorganize") { Task { await workspace.reorganize() } }; Button("Cancel", role: .cancel) {}
         } message: { Text("This replaces the editor contents with a fresh draft. Review it before saving.") }
@@ -472,21 +507,23 @@ struct MeetingMinutesView: View {
                 }
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("New draft").font(.headline)
-                        Text("Use compiled meeting notes or a corrected transcript. Attendance and agenda sections are organized for your review.").foregroundStyle(.secondary)
+                        Text("New transcript or meeting notes").font(.headline)
+                        Text(model.user?.role == "owner"
+                             ? "Upload the source for Adrian Reese or William McDuffie to claim, or create the draft yourself."
+                             : "Use compiled meeting notes or a corrected transcript. Attendance and agenda sections are organized for your review.").foregroundStyle(.secondary)
                         GenerationStatusView(status: workspace.generationStatus)
                         Picker("Source format", selection: $workspace.sourceType) {
                             Text("Detect automatically").tag("auto"); Text("Compiled meeting notes").tag("compiled_notes"); Text("Meeting transcript").tag("transcript")
                         }.frame(maxWidth: 380)
                         TextEditor(text: $workspace.source).font(.body).frame(minHeight: 150).padding(5).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                         if workspace.localDraftSaved {
-                            Label("Saved privately on this Mac until you create the minutes draft.", systemImage: "checkmark.circle.fill")
+                            Label("Saved privately on this Mac until you send it to the Secretaries or create the minutes draft.", systemImage: "checkmark.circle.fill")
                                 .font(.caption).foregroundStyle(.green)
                         }
                         AdaptiveControlBar {
-                            HStack { sourceFileControls; Spacer(); createMinutesButton }
+                            HStack { sourceFileControls; Spacer(); if model.user?.role == "owner" { handoffMinutesButton }; createMinutesButton }
                         } compact: {
-                            VStack(alignment: .leading, spacing: 10) { sourceFileControls; createMinutesButton }
+                            VStack(alignment: .leading, spacing: 10) { sourceFileControls; if model.user?.role == "owner" { handoffMinutesButton }; createMinutesButton }
                         }
                     }.padding(14)
                 }
@@ -502,22 +539,12 @@ struct MeetingMinutesView: View {
                     .padding(.vertical, 26)
                 }
                 ForEach(activeRecords) { record in
-                    HStack(spacing: 14) {
-                        Image(systemName: "doc.text").font(.title2).foregroundStyle(SignTheme.navy)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(MinutesDateText.minutesTitle(record.draft.meetingDate)).font(.headline)
-                            Text("Prepared by \(record.createdBy)").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(minutesStatusLabel(record.status)).font(.caption).foregroundStyle(.secondary)
-                        let mayReview = model.user?.role == "owner" || record.createdByUserId == model.user?.id
-                        Button(mayReview ? "Review" : "View PDF") {
-                            if mayReview { workspace.open(record) } else { readonlyRecord = record }
-                        }
-                        if record.status == "draft" && (model.user?.role == "owner" || record.createdByUserId == model.user?.id) {
-                            Button("Delete", role: .destructive) { deleting = record }
-                        }
-                    }.padding(16).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+                    AdaptiveControlBar {
+                        HStack(spacing: 14) { recordSummary(record); Spacer(); recordActions(record) }
+                    } compact: {
+                        VStack(alignment: .leading, spacing: 12) { recordSummary(record); recordActions(record) }
+                    }
+                    .padding(16).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
                 }
             }.padding(22)
         }
@@ -547,6 +574,49 @@ struct MeetingMinutesView: View {
     }
     private var createMinutesButton: some View {
         Button("Create draft minutes") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace.fileURL == nil)
+    }
+    private var handoffMinutesButton: some View {
+        Button("Send to Adrian and McDuffie") { Task { await workspace.handoff() } }
+            .disabled(workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace.fileURL == nil)
+    }
+    private func mayReview(_ record: MinutesRecord) -> Bool {
+        model.user?.role == "owner" || record.preparerUserId == model.user?.id || (record.preparerUserId == nil && record.createdByUserId == model.user?.id)
+    }
+    private func mayDelete(_ record: MinutesRecord) -> Bool {
+        guard ["awaiting_preparer", "draft"].contains(record.status) else { return false }
+        return model.user?.role == "owner" || record.preparerUserId == model.user?.id || (record.preparerUserId == nil && record.createdByUserId == model.user?.id)
+    }
+    @ViewBuilder private func recordSummary(_ record: MinutesRecord) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: record.status == "awaiting_preparer" ? "tray.and.arrow.down.fill" : "doc.text").font(.title2).foregroundStyle(SignTheme.navy)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(record.status == "awaiting_preparer" ? "Meeting source awaiting a preparer" : MinutesDateText.minutesTitle(record.draft.meetingDate)).font(.headline)
+                if record.status == "awaiting_preparer" {
+                    Text("Uploaded by \(record.sourceUploadedBy ?? record.createdBy). Adrian Reese or William McDuffie may claim it.").font(.caption).foregroundStyle(.secondary)
+                } else if record.status == "organizing" {
+                    Text("Claimed by \(record.preparer ?? record.createdBy). The organized draft is being created.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Prepared by \(record.preparer ?? record.createdBy)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    @ViewBuilder private func recordActions(_ record: MinutesRecord) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { recordActionControls(record) }
+            VStack(alignment: .leading, spacing: 8) { recordActionControls(record) }
+        }
+    }
+    @ViewBuilder private func recordActionControls(_ record: MinutesRecord) -> some View {
+        Text(minutesStatusLabel(record.status)).font(.caption).foregroundStyle(.secondary)
+        if record.status == "awaiting_preparer", ["secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
+            Button("Claim and create draft") { Task { await workspace.claim(record) } }.buttonStyle(.borderedProminent)
+        } else if !["awaiting_preparer", "organizing"].contains(record.status) {
+            Button(mayReview(record) ? "Review" : "View PDF") {
+                if mayReview(record) { workspace.open(record) } else { readonlyRecord = record }
+            }
+        }
+        if mayDelete(record) { Button("Delete", role: .destructive) { deleting = record } }
     }
     private var editor: some View {
         AdaptiveWorkspaceSplit(primaryTitle: "Minutes entries", secondaryTitle: "Document preview", compactPane: $editorPane) {

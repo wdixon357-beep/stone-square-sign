@@ -36,5 +36,7 @@ assert.doesNotMatch(buildingCalendar, /frame\(width: 790, height: 760\)/, 'the b
 for (const [name, source] of Object.entries({ treasury, minutes, agenda, reportGenerator, finalBrowser, buildingCalendar })) {
   assert.match(source, /AdaptiveWorkspaceSplit/, `${name} must use the bounded shared workspace layout`);
 }
+assert.match(minutes, /AdaptiveControlBar[\s\S]*recordSummary\(record\)[\s\S]*recordActions\(record\)/, 'minutes handoff rows must reflow at compact widths');
+assert.match(minutes, /recordActions[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*recordActionControls/, 'minutes status and claim controls must stack before they clip');
 
 console.log('PASS: every Mac split workspace remains on-screen, bounded, and usable at compact widths.');

@@ -251,7 +251,7 @@
             </div>
 
             <div class="minutes-workflow preparer-only" aria-label="Minutes workflow">
-              <span><b>1</b> Prepare notes or a transcript</span>
+              <span><b>1</b> Upload, hand off, or prepare the source</span>
               <span><b>2</b> Review the organized draft</span>
               <span><b>3</b> Preparer and Master attest</span>
               <span><b>4</b> McDuffie or Reese distributes the signed draft</span>
@@ -259,7 +259,7 @@
 
             <section class="panel minutes-generator preparer-only">
               <div class="panel-title"><div><p class="eyebrow">NEW DRAFT</p><h2>Add your meeting source</h2></div><span class="file-badge">TXT DOCX PDF</span></div>
-              <p class="helper">Use your compiled meeting notes or a corrected Plaud transcript. Attendance and agenda sections are organized automatically. Review the draft before attesting.</p>
+              <p class="helper">Use compiled meeting notes or a corrected Plaud transcript. The Worshipful Master can send the source to Adrian Reese and William McDuffie without creating the draft. Either Secretary may then claim it, and the other cannot duplicate the work.</p>
               <p id="minutesGenerationStatus" class="helper generation-status" role="status"></p>
               <label for="minutesSourceType">Source format</label><select id="minutesSourceType"><option value="auto">Detect automatically</option><option value="compiled_notes">Compiled meeting notes</option><option value="transcript">Meeting transcript</option></select>
               <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose meeting notes or a transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
@@ -267,7 +267,7 @@
               <p id="minutesSelectedFile" class="selected-file">No file selected</p>
               <label for="minutesTranscriptText">Or paste your meeting notes or transcript</label>
               <textarea id="minutesTranscriptText" rows="8" placeholder="Paste compiled notes or a corrected transcript here"></textarea>
-              <div class="builder-actions"><p id="minutesMessage" class="message" role="status"></p><button id="generateMinutes" class="primary" type="button">Create draft minutes</button></div>
+              <div class="builder-actions"><p id="minutesMessage" class="message" role="status"></p><div class="button-row"><button id="handoffMinutes" class="secondary owner-only" type="button">Send to Adrian and McDuffie</button><button id="generateMinutes" class="primary" type="button">Create draft minutes</button></div></div>
             </section>
 
             <section class="records">

@@ -761,6 +761,8 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
 };
 
 const MINUTES_STATUS = {
+  awaiting_preparer: 'Awaiting Adrian or McDuffie',
+  organizing: 'Organizing source',
   draft: 'Working draft',
   awaiting_master_attestation: 'Waiting for the Worshipful Master',
   ready_for_distribution: 'Signed and available to all officers',
@@ -983,7 +985,11 @@ const renderMinutes = async () => {
       const heading = document.createElement('h3');
       heading.textContent = minutesDocumentTitle(item);
       const detail = document.createElement('p');
-      detail.textContent = historical
+      detail.textContent = item.status === 'awaiting_preparer'
+        ? `Uploaded by ${item.sourceUploadedBy || item.createdBy}. Adrian Reese or William McDuffie may claim it.`
+        : item.status === 'organizing'
+        ? `Claimed by ${item.preparer || item.createdBy}. The organized draft is being created.`
+        : historical
         ? `Signed Lodge record. Prepared by ${item.createdBy}.`
         : `Prepared by ${item.createdBy}. Last saved by ${item.updatedBy}, ${formatDate(item.updatedAt)}.`;
       main.append(heading, detail);
@@ -992,17 +998,36 @@ const renderMinutes = async () => {
       status.textContent = MINUTES_STATUS[item.status] || item.status;
       const actions = document.createElement('div');
       actions.className = 'minutes-row-actions';
-      const open = document.createElement('button');
-      open.className = 'secondary small';
-      open.type = 'button';
-      const mayReview = !historical && can('minutes.prepare') && (state.user?.role === 'owner' || item.createdByUserId === state.user?.id);
-      open.textContent = mayReview ? 'Review' : 'View PDF';
-      open.addEventListener('click', async () => {
-        if (mayReview) return openMinutesEditor(item.id);
-        try { showPdfBlob(await apiFetch(`/api/minutes/${item.id}/pdf`), minutesDocumentTitle(item)); }
-        catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
-      });
-      actions.append(open);
+      if (item.status === 'awaiting_preparer' && ['secretary', 'assistant_secretary'].includes(state.user?.role)) {
+        const claim = document.createElement('button');
+        claim.className = 'primary small'; claim.type = 'button'; claim.textContent = 'Claim and create draft';
+        claim.addEventListener('click', async () => {
+          claim.disabled = true; claim.textContent = 'Claiming and organizing…';
+          setMessage($('minutesMessage'), 'Claiming the source and organizing it into the Lodge minutes template.');
+          try {
+            const payload = await apiFetch(`/api/minutes/${item.id}/claim`, { method: 'POST' });
+            await renderMinutes();
+            setMessage($('minutesMessage'), 'This source is assigned to you. Review every section before attesting.');
+            openMinutesEditor(payload.minutes.id);
+          } catch (error) {
+            await renderMinutes();
+            setMessage($('minutesMessage'), error.message, true);
+          }
+        });
+        actions.append(claim);
+      } else if (item.status !== 'awaiting_preparer' && item.status !== 'organizing') {
+        const open = document.createElement('button');
+        open.className = 'secondary small';
+        open.type = 'button';
+        const mayReview = !historical && can('minutes.prepare') && (state.user?.role === 'owner' || item.preparerUserId === state.user?.id || item.createdByUserId === state.user?.id);
+        open.textContent = mayReview ? 'Review' : 'View PDF';
+        open.addEventListener('click', async () => {
+          if (mayReview) return openMinutesEditor(item.id);
+          try { showPdfBlob(await apiFetch(`/api/minutes/${item.id}/pdf`), minutesDocumentTitle(item)); }
+          catch(error) { setMessage($('minutesReadMessage'), error.message, true); }
+        });
+        actions.append(open);
+      }
       if (historical && item.status === 'ready_for_distribution' && ['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role)) {
         const share = document.createElement('button');
         share.className = 'secondary small'; share.type = 'button'; share.textContent = 'Share signed PDF';
@@ -1025,11 +1050,11 @@ const renderMinutes = async () => {
         });
         actions.append(share, distributed);
       }
-      if (can('minutes.prepare') && item.status === 'draft' && (state.user.role === 'owner' || item.createdByUserId === state.user.id)) {
+      if (can('minutes.prepare') && ['awaiting_preparer', 'draft'].includes(item.status) && (state.user.role === 'owner' || item.preparerUserId === state.user.id || item.createdByUserId === state.user.id)) {
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary small danger-text'; remove.textContent = 'Delete';
         remove.addEventListener('click', async () => {
-          if (!confirm(`Delete the unsigned draft for ${minutesDateLabel(item)}? It will be removed from this list. Signed records cannot be deleted.`)) return;
+          if (!confirm(item.status === 'awaiting_preparer' ? 'Delete this unclaimed meeting source? It will be removed from the Secretary\'s Office queue.' : `Delete the unsigned draft for ${minutesDateLabel(item)}? It will be removed from this list. Signed records cannot be deleted.`)) return;
           remove.disabled = true;
           try { await apiFetch(`/api/minutes/${item.id}`, { method: 'DELETE' }); await renderMinutes(); }
           catch (error) { setMessage($('minutesMessage'), error.message, true); remove.disabled = false; }
@@ -1743,8 +1768,9 @@ $('minutesTranscriptFile').addEventListener('change', () => {
   state.minutesSourceDirty = Boolean($('minutesTranscriptFile').files[0]) || Boolean($('minutesTranscriptText').value.trim());
 });
 
-$('generateMinutes').addEventListener('click', async () => {
-  const button = $('generateMinutes');
+const submitMinutesSource = async ({ handoff = false } = {}) => {
+  const button = $(handoff ? 'handoffMinutes' : 'generateMinutes');
+  const otherButton = $(handoff ? 'generateMinutes' : 'handoffMinutes');
   const data = new FormData();
   const file = $('minutesTranscriptFile').files[0];
   const pasted = $('minutesTranscriptText').value.trim();
@@ -1757,27 +1783,39 @@ $('generateMinutes').addEventListener('click', async () => {
   }
   const sourceControls = ['minutesTranscriptFile', 'minutesTranscriptText', 'minutesSourceType'].map(id => $(id));
   sourceControls.forEach(control => { control.disabled = true; });
+  if (otherButton) otherButton.disabled = true;
   button.disabled = true;
-  button.textContent = 'Creating draft...';
-  setMessage($('minutesMessage'), 'Organizing the meeting source into the Lodge minutes template.');
+  button.textContent = handoff ? 'Sending to the Secretary’s Office…' : 'Creating draft…';
+  setMessage($('minutesMessage'), handoff
+    ? 'Saving the source privately for Adrian Reese or William McDuffie to claim.'
+    : 'Organizing the meeting source into the Lodge minutes template.');
   try {
-    const payload = await apiFetch('/api/minutes/generate', { method: 'POST', body: data });
+    const payload = await apiFetch(handoff ? '/api/minutes/handoff' : '/api/minutes/generate', { method: 'POST', body: data });
     $('minutesTranscriptFile').value = '';
     $('minutesSelectedFile').textContent = 'No file selected';
     $('minutesTranscriptText').value = '';
     state.minutesSourceDirty = false;
     clearSessionDraft('minutes-source');
     await renderMinutes();
-    setMessage($('minutesMessage'), 'Draft created. Review every section before sending it to the Worshipful Master.');
-    openMinutesEditor(payload.minutes.id);
+    if (handoff) {
+      const warnings = payload.notificationWarnings?.length ? ` ${payload.notificationWarnings.join(' ')}` : '';
+      setMessage($('minutesMessage'), `Transcript sent to Adrian Reese and William McDuffie. It is waiting for one of them to claim it.${warnings}`, Boolean(payload.notificationWarnings?.length));
+    } else {
+      setMessage($('minutesMessage'), 'Draft created. Review every section before sending it to the Worshipful Master.');
+      openMinutesEditor(payload.minutes.id);
+    }
   } catch (error) {
     setMessage($('minutesMessage'), error.message, true);
   } finally {
     button.disabled = false;
-    button.textContent = 'Create draft minutes';
+    button.textContent = handoff ? 'Send to Adrian and McDuffie' : 'Create draft minutes';
+    if (otherButton) otherButton.disabled = false;
     sourceControls.forEach(control => { control.disabled = false; });
   }
-});
+};
+
+$('handoffMinutes').addEventListener('click', () => submitMinutesSource({ handoff: true }));
+$('generateMinutes').addEventListener('click', () => submitMinutesSource());
 
 const closeMinutesEditor = ({ confirmUnsaved = true } = {}) => {
   if (confirmUnsaved && state.minutesEditorDirty

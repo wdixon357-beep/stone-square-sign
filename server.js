@@ -1092,6 +1092,11 @@ const transcriptFromUpload = async (file) => {
 
 const minutesForResponse = (row) => ({
   createdByUserId: row.created_by_user_id,
+  sourceUploadedByUserId: row.source_uploaded_by_user_id || row.created_by_user_id,
+  sourceUploadedBy: row.source_uploaded_by_name || row.created_by_name,
+  preparerUserId: row.preparer_user_id,
+  preparer: row.preparer_name,
+  claimedAt: row.claimed_at,
   masterChanges: row.master_changes_json ? JSON.parse(row.master_changes_json) : [],
   submittedDraft: row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null,
   id: row.id,
@@ -1119,6 +1124,7 @@ const minutesForResponse = (row) => ({
 const getMinutesRow = (id) => dbGet(
   `SELECT m.*,
      creator.name AS created_by_name, creator.role AS created_by_role, updater.name AS updated_by_name,
+     source_uploader.name AS source_uploaded_by_name, preparer.name AS preparer_name,
      authorizer.name AS authorized_by_name, distributor.name AS distributed_by_name
      , master.name AS master_attested_by_name,
      EXISTS (SELECT 1 FROM meeting_minutes_attestations att
@@ -1126,6 +1132,8 @@ const getMinutesRow = (id) => dbGet(
    FROM meeting_minutes m
    JOIN users creator ON creator.id = m.created_by_user_id
    JOIN users updater ON updater.id = m.updated_by_user_id
+   LEFT JOIN users source_uploader ON source_uploader.id = m.source_uploaded_by_user_id
+   LEFT JOIN users preparer ON preparer.id = m.preparer_user_id
    LEFT JOIN users authorizer ON authorizer.id = m.authorized_by_user_id
    LEFT JOIN users distributor ON distributor.id = m.distributed_by_user_id
    LEFT JOIN users master ON master.id = m.master_attested_by_user_id
@@ -1899,12 +1907,44 @@ app.post('/api/minutes/:id/completion-alert-seen', requireAuth, requireMinutesVi
 
 const finalMinutes = row => ['ready_for_distribution','distributed','approved_by_lodge'].includes(row.status)
   && Boolean(row.master_attested_at) && Boolean(row.has_master_attestation);
-const canOpenWorkingMinutes = (user, row) => user.role === 'owner' || row.created_by_user_id === user.id;
+const canOpenWorkingMinutes = (user, row) => user.role === 'owner'
+  || row.preparer_user_id === user.id
+  || (!row.preparer_user_id && row.created_by_user_id === user.id);
+const MINUTES_CLAIM_STALE_MS = 10 * 60 * 1000;
+const releaseMinutesClaim = async (id, preparerUserId = null, reason = 'claim_released') => {
+  const time = nowIso();
+  const params = [time, id];
+  const preparerClause = preparerUserId == null ? '' : ' AND preparer_user_id = ?';
+  if (preparerUserId != null) params.push(preparerUserId);
+  const released = await dbRun(
+    `UPDATE meeting_minutes SET status = 'awaiting_preparer', preparer_user_id = NULL,
+     claimed_at = NULL, created_by_user_id = COALESCE(source_uploaded_by_user_id, created_by_user_id),
+     updated_by_user_id = COALESCE(source_uploaded_by_user_id, updated_by_user_id), updated_at = ?
+     WHERE id = ? AND status = 'organizing'${preparerClause}`,
+    params,
+  );
+  if (released.changes) {
+    await addAudit({ action: 'minutes_claim_released', details: { minutesId: id, reason } });
+    broadcast('minutes_records_changed', { minutesId: id, reason });
+  }
+  return Boolean(released.changes);
+};
+const recoverStaleMinutesClaims = async () => {
+  const cutoff = new Date(Date.now() - MINUTES_CLAIM_STALE_MS).toISOString();
+  const stale = await dbAll(
+    `SELECT id FROM meeting_minutes
+     WHERE status = 'organizing' AND claimed_at IS NOT NULL AND claimed_at < ?`,
+    [cutoff],
+  );
+  for (const row of stale) await releaseMinutesClaim(row.id, null, 'stale_claim_recovered');
+};
 app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) => {
   try {
+    await recoverStaleMinutesClaims();
     const rows = await dbAll(
       `SELECT m.*,
          creator.name AS created_by_name, creator.role AS created_by_role, updater.name AS updated_by_name,
+         source_uploader.name AS source_uploaded_by_name, preparer_user.name AS preparer_name,
          authorizer.name AS authorized_by_name, distributor.name AS distributed_by_name,
          master.name AS master_attested_by_name,
          EXISTS (SELECT 1 FROM meeting_minutes_attestations att
@@ -1912,6 +1952,8 @@ app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) 
        FROM meeting_minutes m
        JOIN users creator ON creator.id = m.created_by_user_id
        JOIN users updater ON updater.id = m.updated_by_user_id
+       LEFT JOIN users source_uploader ON source_uploader.id = m.source_uploaded_by_user_id
+       LEFT JOIN users preparer_user ON preparer_user.id = m.preparer_user_id
        LEFT JOIN users authorizer ON authorizer.id = m.authorized_by_user_id
        LEFT JOIN users distributor ON distributor.id = m.distributed_by_user_id
        LEFT JOIN users master ON master.id = m.master_attested_by_user_id
@@ -1920,14 +1962,131 @@ app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) 
     );
     const preparer=hasPermission(req.user,'minutes.prepare');
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ minutes: rows.filter(row=>finalMinutes(row)||(preparer&&canOpenWorkingMinutes(req.user,row))).map(row=>{
+    res.json({ minutes: rows.filter(row=>finalMinutes(row)||(preparer&&(canOpenWorkingMinutes(req.user,row)||['awaiting_preparer','organizing'].includes(row.status)))).map(row=>{
       const record=minutesForResponse(row);
-      return preparer&&canOpenWorkingMinutes(req.user,row)?record:{...record,sourceName:null,submittedDraft:null,masterChanges:[],approvalNote:null,draft:normalizeMinutesDraft({meetingDate:row.meeting_date,meetingType:record.draft.meetingType,degree:record.draft.degree})};
+      if (preparer && (canOpenWorkingMinutes(req.user,row) || row.status === 'awaiting_preparer')) return record;
+      if (preparer && row.status === 'organizing') return {
+        ...record,
+        sourceName: null,
+        submittedDraft: null,
+        masterChanges: [],
+        approvalNote: null,
+        draft: normalizeMinutesDraft({}),
+      };
+      return {...record,sourceName:null,submittedDraft:null,masterChanges:[],approvalNote:null,draft:normalizeMinutesDraft({meetingDate:row.meeting_date,meetingType:record.draft.meetingType,degree:record.draft.degree})};
     }) });
   } catch (error) {
     next(error);
   }
 });
+
+// The Worshipful Master can place a Plaud transcript or compiled notes into the
+// Secretary's Office queue without spending a generation call. Adrian or
+// McDuffie claims the source before organization so one officer owns the draft.
+app.post('/api/minutes/handoff', requireAuth, requireOwner,
+  rateLimit({ key: 'minutes-handoff', maximum: 12, windowMs: 60 * 60 * 1000 }),
+  minutesUpload.single('transcriptFile'), async (req, res, next) => {
+    try {
+      const uploadedText = await transcriptFromUpload(req.file);
+      const transcript = uploadedText || String(req.body.transcriptText || '').trim();
+      if (!transcript) return res.status(400).json({ error: 'Choose meeting notes or a transcript, or paste the text.' });
+      if (transcript.length > 500_000) return res.status(400).json({ error: 'The meeting source is too long. Upload one meeting at a time.' });
+      const sourceType = ['auto', 'compiled_notes', 'transcript'].includes(req.body.sourceType) ? req.body.sourceType : 'auto';
+      const id = crypto.randomUUID();
+      const time = nowIso();
+      const sourceName = req.file?.originalname || (sourceType === 'compiled_notes' ? 'Pasted meeting notes' : 'Pasted transcript');
+      const placeholder = normalizeMinutesDraft({ sourceType, sections: [] });
+      await dbRun(
+        `INSERT INTO meeting_minutes
+          (id, meeting_date, source_name, transcript_text, draft_json, status,
+           created_by_user_id, source_uploaded_by_user_id, preparer_user_id,
+           updated_by_user_id, created_at, updated_at)
+         VALUES (?, NULL, ?, ?, ?, 'awaiting_preparer', ?, ?, NULL, ?, ?, ?)`,
+        [id, sourceName, transcript, JSON.stringify(placeholder), req.user.id, req.user.id, req.user.id, time, time],
+      );
+      await addAudit({
+        userId: req.user.id,
+        action: 'minutes_source_handed_off',
+        ip: req.ip,
+        userAgent: req.get('user-agent') || '',
+        details: { minutesId: id, sourceName },
+      });
+      broadcast('minutes_records_changed', { minutesId: id, reason: 'source_handed_off' });
+      const secretaries = await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND role IN ('secretary','assistant_secretary') ORDER BY role");
+      const notificationWarnings = [];
+      for (const secretary of secretaries.filter(candidate => hasPermission(candidate, 'minutes.prepare'))) {
+        try {
+          const sent = await sendEmail({
+            to: secretary.email,
+            subject: 'Meeting transcript ready for minutes preparation',
+            text: `${req.user.name} uploaded ${sourceName} to the Stone Square Dashboard. It is awaiting Adrian Reese or William McDuffie. Open Meeting Minutes to claim the source and create the organized draft. Once one officer claims it, the other officer cannot create a duplicate.\n\n${requestBaseUrl(req)}/?section=minutes`,
+          });
+          if (!sent) notificationWarnings.push(`The source is available in the Dashboard, but the email notice to ${secretary.email} could not be sent.`);
+        } catch (error) {
+          console.warn('Minutes handoff notice failed:', error.message);
+          notificationWarnings.push(`The source is available in the Dashboard, but the email notice to ${secretary.email} could not be sent.`);
+        }
+      }
+      res.status(201).json({ minutes: minutesForResponse(await getMinutesRow(id)), notificationWarnings });
+    } catch (error) { next(error); }
+  });
+
+app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
+  rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+    let claimed = false;
+    try {
+      if (!['secretary', 'assistant_secretary'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'The Secretary or Assistant Secretary claims a minutes source from this queue.' });
+      }
+      await recoverStaleMinutesClaims();
+      const row = await getMinutesRow(req.params.id);
+      if (!row) return res.status(404).json({ error: 'Meeting minutes source not found.' });
+      if (row.status !== 'awaiting_preparer' || row.preparer_user_id) {
+        return res.status(409).json({ error: row.preparer_name ? `This source has already been claimed by ${row.preparer_name}.` : 'This source is no longer awaiting a preparer.' });
+      }
+      const time = nowIso();
+      const result = await dbRun(
+        `UPDATE meeting_minutes SET status = 'organizing', preparer_user_id = ?, claimed_at = ?,
+         created_by_user_id = ?, updated_by_user_id = ?, updated_at = ?
+         WHERE id = ? AND status = 'awaiting_preparer' AND preparer_user_id IS NULL`,
+        [req.user.id, time, req.user.id, req.user.id, time, row.id],
+      );
+      if (!result.changes) {
+        const current = await getMinutesRow(row.id);
+        return res.status(409).json({ error: current?.preparer_name ? `This source has already been claimed by ${current.preparer_name}.` : 'Another officer claimed this source first.' });
+      }
+      claimed = true;
+      broadcast('minutes_records_changed', { minutesId: row.id, reason: 'source_claimed', preparer: req.user.name });
+      const sourceType = String(JSON.parse(row.draft_json || '{}').sourceType || 'auto');
+      const draft = await generateMinutesDraft(row.transcript_text, { sourceType, generateStructured: generationFor(req.user.id) });
+      const savedAt = nowIso();
+      const saved = await dbRun(
+        `UPDATE meeting_minutes SET meeting_date = ?, draft_json = ?, status = 'draft',
+         updated_by_user_id = ?, updated_at = ?
+         WHERE id = ? AND status = 'organizing' AND preparer_user_id = ?`,
+        [draft.meetingDate, JSON.stringify(draft), req.user.id, savedAt, row.id, req.user.id],
+      );
+      if (!saved.changes) throw Object.assign(new Error('The source changed while it was being organized. Refresh before trying again.'), { statusCode: 409 });
+      await addAudit({
+        userId: req.user.id,
+        action: 'minutes_source_claimed',
+        ip: req.ip,
+        userAgent: req.get('user-agent') || '',
+        details: { minutesId: row.id, sourceUploadedByUserId: row.source_uploaded_by_user_id },
+      });
+      broadcast('minutes_records_changed', { minutesId: row.id, reason: 'draft_created', preparer: req.user.name });
+      res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+    } catch (error) {
+      if (claimed) {
+        try {
+          await releaseMinutesClaim(req.params.id, req.user.id, 'generation_failed');
+        } catch (releaseError) {
+          console.error('Minutes claim release failed; stale-claim recovery will retry:', releaseError);
+        }
+      }
+      next(error);
+    }
+  });
 
 app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
   rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 60 * 60 * 1000 }),
@@ -1942,10 +2101,11 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
       await dbRun(
         `INSERT INTO meeting_minutes
           (id, meeting_date, source_name, transcript_text, draft_json, status,
-           created_by_user_id, updated_by_user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+           created_by_user_id, source_uploaded_by_user_id, preparer_user_id,
+           updated_by_user_id, created_at, updated_at, claimed_at)
+         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
         [id, draft.meetingDate, req.file?.originalname || (draft.sourceType === 'compiled_notes' ? 'Pasted meeting notes' : 'Pasted transcript'), transcript,
-          JSON.stringify(draft), req.user.id, req.user.id, time, time],
+          JSON.stringify(draft), req.user.id, req.user.id, req.user.id, req.user.id, time, time, time],
       );
       await dbRun(
         `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
@@ -1971,7 +2131,7 @@ app.delete('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, re
     const removed = await withTransaction(async () => {
       const result = await dbRun(
         `UPDATE meeting_minutes SET status = 'deleted', updated_at = ?, updated_by_user_id = ?
-         WHERE id = ? AND status = 'draft' AND preparer_attested_at IS NULL
+         WHERE id = ? AND status IN ('awaiting_preparer', 'draft') AND preparer_attested_at IS NULL
            AND master_attested_at IS NULL AND authorized_at IS NULL AND approved_by_lodge_on IS NULL
            AND NOT EXISTS (SELECT 1 FROM meeting_minutes_attestations WHERE minutes_id = meeting_minutes.id)
            AND NOT EXISTS (SELECT 1 FROM audit_events WHERE action IN ('minutes_preparer_attested', 'minutes_master_attested', 'minutes_lodge_approval_recorded') AND details_json::jsonb ->> 'minutesId' = ?)`,
@@ -1983,7 +2143,7 @@ app.delete('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, re
       );
       return result.changes;
     });
-    if (!removed) return res.status(409).json({ error: 'Only an unsigned working draft can be deleted. Signed and approved records are retained.' });
+    if (!removed) return res.status(409).json({ error: 'Only an unclaimed source or unsigned working draft can be deleted. Signed and approved records are retained.' });
     res.json({ deleted: true });
   } catch (error) { next(error); }
 });

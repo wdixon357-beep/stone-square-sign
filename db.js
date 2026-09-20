@@ -491,6 +491,15 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'meeting_minutes', 'preparer_signature_bytes', 'BYTEA');
   await addColumn(exec, 'meeting_minutes', 'master_signature_bytes', 'BYTEA');
   await addColumn(exec, 'meeting_minutes', 'master_changes_json', 'TEXT');
+  await addColumn(exec, 'meeting_minutes', 'source_uploaded_by_user_id', 'INTEGER REFERENCES users(id)');
+  await addColumn(exec, 'meeting_minutes', 'preparer_user_id', 'INTEGER REFERENCES users(id)');
+  await addColumn(exec, 'meeting_minutes', 'claimed_at', 'TEXT');
+  await exec(`UPDATE meeting_minutes SET source_uploaded_by_user_id = created_by_user_id
+    WHERE source_uploaded_by_user_id IS NULL`);
+  await exec(`UPDATE meeting_minutes SET preparer_user_id = created_by_user_id
+    WHERE preparer_user_id IS NULL AND status <> 'awaiting_preparer'`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_meeting_minutes_handoff
+    ON meeting_minutes(status, preparer_user_id, created_at DESC)`);
 
   /* Seed signed-minutes notices for every active Dashboard account. The API still
    * enforces minutes.view before returning a notice or the signed record. */
