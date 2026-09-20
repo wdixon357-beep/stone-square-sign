@@ -26,6 +26,143 @@ enum ClientError: LocalizedError {
     }
 }
 
+struct ReliabilityNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let recovered: Bool
+}
+
+@MainActor
+final class ReliabilityCenter: ObservableObject {
+    static let shared = ReliabilityCenter()
+    @Published var notice: ReliabilityNotice?
+    private var dismissal: Task<Void, Never>?
+
+    func retrying(reference: String) {
+        dismissal?.cancel()
+        notice = ReliabilityNotice(title: "Oops, something went wrong.", message: "The dashboard is reconnecting now. Incident \(reference).", recovered: false)
+    }
+
+    func failed(reference: String, queued: Bool = false) {
+        dismissal?.cancel()
+        let detail = queued
+            ? "The incident is saved on this Mac and will be reported when the connection returns."
+            : "The incident was recorded. The hosted monitor checks the service again within 30 minutes."
+        notice = ReliabilityNotice(title: "This action could not be completed.", message: "Incident \(reference). \(detail)", recovered: false)
+    }
+
+    func recovered(reference: String) {
+        dismissal?.cancel()
+        notice = ReliabilityNotice(title: "The dashboard is back online.", message: "You can continue. Incident \(reference) recovered automatically.", recovered: true)
+        dismissal = Task { try? await Task.sleep(for: .seconds(6)); if !Task.isCancelled { self.notice = nil } }
+    }
+
+    func dismiss() { dismissal?.cancel(); notice = nil }
+}
+
+@MainActor
+enum ReliableTransport {
+    private struct PendingIncident: Codable {
+        let reference: String
+        let path: String
+        let method: String
+        let status: Int
+        let state: String
+        let category: String
+    }
+    private static let pendingKey = "ss22-pending-incidents-v1"
+
+    static func perform(session: URLSession, request: URLRequest, path: String, token: String?) async throws -> (Data, HTTPURLResponse) {
+        let method = request.httpMethod ?? "GET"
+        let mayRetry = method == "GET" || method == "HEAD"
+        let productionService = request.url?.host == URL(string: defaultServerAddress)?.host
+        var reference: String?
+        for attempt in 1...(mayRetry ? 2 : 1) {
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
+                if (200..<300).contains(http.statusCode) {
+                    if productionService { await flushQueuedReports(session: session, request: request, token: token) }
+                    if let reference {
+                        ReliabilityCenter.shared.recovered(reference: reference)
+                        if productionService { await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "recovered", category: "temporary_connection") }
+                    }
+                    return (data, http)
+                }
+                let payload = try? JSONDecoder().decode(APIError.self, from: data)
+                let retryable = http.statusCode >= 500 || http.statusCode == 408 || http.statusCode == 429 || payload?.retryable == true
+                reference = reference ?? payload?.incidentReference ?? newReference()
+                if mayRetry && retryable && attempt == 1 {
+                    ReliabilityCenter.shared.retrying(reference: reference!)
+                    try? await Task.sleep(for: .seconds(2))
+                    continue
+                }
+                if retryable, let reference {
+                    ReliabilityCenter.shared.failed(reference: reference)
+                    if productionService { await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "open", category: "service_response") }
+                }
+                return (data, http)
+            } catch let client as ClientError {
+                throw client
+            } catch {
+                reference = reference ?? newReference()
+                if mayRetry && attempt == 1 {
+                    ReliabilityCenter.shared.retrying(reference: reference!)
+                    try? await Task.sleep(for: .seconds(2))
+                    continue
+                }
+                ReliabilityCenter.shared.failed(reference: reference!, queued: productionService)
+                if productionService { queue(PendingIncident(reference: reference!, path: path, method: method, status: 0, state: "open", category: "network_error")) }
+                throw ClientError.server("The dashboard could not connect. Incident \(reference!).")
+            }
+        }
+        throw ClientError.invalidResponse
+    }
+
+    private static func newReference() -> String {
+        "SS22-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).uppercased()
+    }
+
+    private static func report(session: URLSession, request: URLRequest, token: String?, reference: String, path: String, status: Int, state: String, category: String) async {
+        let incident = PendingIncident(reference: reference, path: path, method: request.httpMethod ?? "GET", status: status, state: state, category: category)
+        if !(await send(session: session, request: request, token: token, incident: incident)) { queue(incident) }
+    }
+
+    private static func send(session: URLSession, request: URLRequest, token: String?, incident: PendingIncident) async -> Bool {
+        guard let token, let base = request.url, let url = URL(string: "/api/activity/incidents", relativeTo: base) else { return false }
+        var report = URLRequest(url: url)
+        report.httpMethod = "POST"
+        report.timeoutInterval = 12
+        report.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        report.setValue("mac", forHTTPHeaderField: "X-Stone-Square-Client")
+        report.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        report.httpBody = try? JSONSerialization.data(withJSONObject: ["reference": incident.reference, "path": incident.path.split(separator: "?").first.map(String.init) ?? incident.path, "method": incident.method, "status": incident.status, "category": incident.category, "state": incident.state, "area": "Dashboard"])
+        guard let (_, response) = try? await session.data(for: report), let http = response as? HTTPURLResponse else { return false }
+        return (200..<300).contains(http.statusCode)
+    }
+
+    private static func queue(_ incident: PendingIncident) {
+        var pending = queued().filter { $0.reference != incident.reference || $0.state != incident.state }
+        pending.append(incident)
+        if pending.count > 20 { pending.removeFirst(pending.count - 20) }
+        if let data = try? JSONEncoder().encode(pending) { UserDefaults.standard.set(data, forKey: pendingKey) }
+    }
+
+    private static func queued() -> [PendingIncident] {
+        guard let data = UserDefaults.standard.data(forKey: pendingKey) else { return [] }
+        return (try? JSONDecoder().decode([PendingIncident].self, from: data)) ?? []
+    }
+
+    private static func flushQueuedReports(session: URLSession, request: URLRequest, token: String?) async {
+        var remaining: [PendingIncident] = []
+        for incident in queued() {
+            if !(await send(session: session, request: request, token: token, incident: incident)) { remaining.append(incident) }
+        }
+        if let data = try? JSONEncoder().encode(remaining) { UserDefaults.standard.set(data, forKey: pendingKey) }
+    }
+}
+
 private struct TrackerHandoffResponse: Decodable {
     let url: String
 }
@@ -288,11 +425,10 @@ final class AppModel: ObservableObject {
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("mac", forHTTPHeaderField: "X-Stone-Square-Client")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
+        let (data, http) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token)
         guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIError.self, from: data).error)
-                ?? "Request failed with status \(http.statusCode)."
+            let payload = try? decoder.decode(APIError.self, from: data)
+            let message = [payload?.error ?? "Request failed with status \(http.statusCode).", payload?.incidentReference.map { "Incident \($0)." }].compactMap { $0 }.joined(separator: " ")
             if http.statusCode == 400 || http.statusCode == 422 { throw ClientError.rejected(message) }
             if http.statusCode == 409 { throw ClientError.conflict(message) }
             if http.statusCode == 401 || http.statusCode == 403 { throw ClientError.unauthorized(message) }

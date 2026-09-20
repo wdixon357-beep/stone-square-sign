@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
 
 export const WORK_AREAS={home:'Home',building:'Building Requests',lodgeCalendar:'Lodge Calendar',calendar:'Lodge Calendar',treasury:'Treasurer Reports',minutes:'Meeting Minutes',agenda:'Agenda Creator',reports:'Report Generator',reportGenerator:'Report Generator',receivedReports:'Received Reports',queue:'Live Queue',documents:'Live Queue',builder:'Create Dispensation',createDispensation:'Create Dispensation',approvals:'Approvals',proposals:'My Dispensation Proposals',proposalReview:'Warden Proposals',dues:'Dues Ledger',myDues:'My Dues',suggestions:'Suggestion Box',profile:'Signature Profile',settings:'My Settings',access:'Officer Access',memberAccess:'Member Access',activity:'Dashboard Activity',candidateTracker:'Candidate Tracker'};
@@ -10,6 +11,42 @@ export async function initActivitySchema(){
  await dbRun(`CREATE TABLE IF NOT EXISTS activity_area_time (session_id INTEGER NOT NULL REFERENCES activity_sessions(id) ON DELETE CASCADE,area TEXT NOT NULL,active_seconds INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_id,area))`);
  await dbRun('CREATE INDEX IF NOT EXISTS activity_sessions_user_time ON activity_sessions(user_id,last_seen_at)');
  await dbRun('CREATE INDEX IF NOT EXISTS audit_events_user_time ON audit_events(user_id,created_at)');
+ await dbRun(`CREATE TABLE IF NOT EXISTS app_incidents (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  reference TEXT NOT NULL UNIQUE,
+  user_id INTEGER REFERENCES users(id),
+  client TEXT NOT NULL,
+  area TEXT,
+  request_path TEXT NOT NULL,
+  request_method TEXT NOT NULL,
+  status_code INTEGER,
+  category TEXT NOT NULL,
+  state TEXT NOT NULL,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  recovered_at TEXT
+ )`);
+ await dbRun('CREATE INDEX IF NOT EXISTS app_incidents_time ON app_incidents(last_seen_at)');
+ await dbRun('CREATE INDEX IF NOT EXISTS app_incidents_user_time ON app_incidents(user_id,last_seen_at)');
+}
+
+const incidentReference=()=>`SS22-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+const safeIncidentPath=value=>{
+ const path=String(value||'/').split('?')[0].slice(0,240);
+ return path.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/ig,':record').replace(/\/\d+(?=\/|$)/g,'/:record');
+};
+const safeIncidentArea=value=>Object.hasOwn(WORK_AREAS,value)?WORK_AREAS[value]:String(value||'Dashboard').replace(/[^a-z0-9 ._-]/ig,'').slice(0,80)||'Dashboard';
+export async function recordAppIncident({reference,userId,client,area,path,method,status,category,state}){
+ const ref=/^SS22-[A-Z0-9]{6,16}$/.test(String(reference||''))?String(reference):incidentReference();
+ const now=iso(),nextState=state==='recovered'?'recovered':'open';
+ const existing=await dbGet('SELECT id FROM app_incidents WHERE reference=?',[ref]);
+ if(existing){
+  await dbRun('UPDATE app_incidents SET state=?,last_seen_at=?,recovered_at=CASE WHEN ? = \'recovered\' THEN ? ELSE recovered_at END WHERE reference=?',[nextState,now,nextState,now,ref]);
+ }else{
+  await dbRun(`INSERT INTO app_incidents (reference,user_id,client,area,request_path,request_method,status_code,category,state,first_seen_at,last_seen_at,recovered_at)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,userId||null,String(client||'Unknown client').slice(0,60),safeIncidentArea(area),safeIncidentPath(path),String(method||'GET').toUpperCase().slice(0,10),Number.isInteger(Number(status))?Number(status):null,String(category||'request_failed').replace(/[^a-z0-9_-]/ig,'').slice(0,60)||'request_failed',nextState,now,now,nextState==='recovered'?now:null]);
+ }
+ return ref;
 }
 export async function startActivitySession(userId,hash,req){const now=iso();await dbRun('INSERT INTO activity_sessions (user_id,auth_hash,started_at,first_seen_at,last_seen_at,client) VALUES (?,?,?,?,?,?) ON CONFLICT(auth_hash) DO NOTHING',[userId,hash,now,now,now,clientName(req)]);}
 export async function endActivitySession(hash,reason){await dbRun('UPDATE activity_sessions SET ended_at=?,end_reason=?,was_active=FALSE WHERE auth_hash=? AND ended_at IS NULL',[iso(),reason,hash]);}
@@ -42,6 +79,10 @@ export function mountActivityRoutes(app,{requireAuth,requireOwner,rateLimit}){
   await dbRun('INSERT INTO audit_events (user_id,action,details_json,created_at) VALUES (?,?,?,?)',[req.user.id,'dashboard_interaction',JSON.stringify({kind,area,target:kind==='activate'?target:''}),iso()]);
   res.json({ok:true});
  }));
+ app.post('/api/activity/incidents',requireAuth,rateLimit({key:'activity-incidents',maximum:120,windowMs:3600000}),route(async(req,res)=>{
+  const reference=await recordAppIncident({reference:req.body?.reference,userId:req.user.id,client:clientName(req),area:req.body?.area,path:req.body?.path,method:req.body?.method,status:req.body?.status,category:req.body?.category,state:req.body?.state});
+  res.status(201).json({reference});
+ }));
  app.get('/api/admin/activity',requireAuth,requireOwner,route(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
   const days=[1,7,30,90].includes(Number(req.query.days))?Number(req.query.days):30;
@@ -51,6 +92,7 @@ export function mountActivityRoutes(app,{requireAuth,requireOwner,rateLimit}){
   const clauses=' AND (?::integer IS NULL OR a.user_id=?)';
   const events=await dbAll(`SELECT a.id,a.user_id,a.action,a.created_at,a.document_id,a.details_json,u.name AS actor_name FROM audit_events a LEFT JOIN users u ON u.id=a.user_id WHERE a.created_at>=?${clauses} AND (?::integer IS NULL OR a.id<?) ORDER BY a.id DESC LIMIT 101`,[cutoff,userId,userId,eventBefore,eventBefore]);
   const sessions=await dbAll(`SELECT a.id,a.user_id,a.started_at,a.first_seen_at,a.last_seen_at,a.last_heartbeat_at,a.was_active,a.active_seconds,a.client,a.last_area,a.ended_at,a.end_reason,u.name AS actor_name FROM activity_sessions a JOIN users u ON u.id=a.user_id WHERE a.last_seen_at>=?${clauses} AND (?::integer IS NULL OR a.id<?) ORDER BY a.id DESC LIMIT 101`,[cutoff,userId,userId,sessionBefore,sessionBefore]);
+  const incidents=await dbAll(`SELECT i.id,i.reference,i.user_id,i.client,i.area,i.request_path,i.request_method,i.status_code,i.category,i.state,i.first_seen_at,i.last_seen_at,i.recovered_at,u.name AS actor_name FROM app_incidents i LEFT JOIN users u ON u.id=i.user_id WHERE i.last_seen_at>=? AND (?::integer IS NULL OR i.user_id=?) ORDER BY CASE WHEN i.state='open' THEN 0 ELSE 1 END,i.last_seen_at DESC LIMIT 200`,[cutoff,userId,userId]);
   const detailFor=a=>{try{return JSON.parse(a.details_json||'{}')}catch{return {}}};
   const refs=[...new Set(events.flatMap(a=>{const d=detailFor(a);return [a.document_id,d.reportId,d.minutesId,d.archiveId].filter(v=>typeof v==='string'&&v.length<200)}))];
   const titles=new Map();
@@ -77,6 +119,6 @@ export function mountActivityRoutes(app,{requireAuth,requireOwner,rateLimit}){
   };
   const visibleSessions=sessions.slice(0,100),sessionIds=visibleSessions.map(a=>a.id),areaTimes=new Map();
   if(sessionIds.length){const placeholders=sessionIds.map(()=>'?').join(',');for(const row of await dbAll(`SELECT session_id,area,active_seconds FROM activity_area_time WHERE session_id IN (${placeholders}) ORDER BY active_seconds DESC`,sessionIds)){if(!areaTimes.has(row.session_id))areaTimes.set(row.session_id,[]);areaTimes.get(row.session_id).push({area:WORK_AREAS[row.area]||row.area,seconds:row.active_seconds});}}
-  res.json({users:users.map(u=>({id:u.id,name:u.name,role:u.role,rosterLinked:Boolean(u.roster_id),revoked:Boolean(u.access_revoked_at)})),events:events.slice(0,100).map(safeEvent),eventNext:events.length>100?events[99].id:null,sessions:visibleSessions.map(a=>({id:a.id,userId:a.user_id,actor:a.actor_name,startedAt:a.started_at,firstSeenAt:a.first_seen_at,lastSeenAt:a.last_seen_at,endedAt:a.ended_at,endReason:a.end_reason,activeSeconds:a.active_seconds,measured:Boolean(a.last_heartbeat_at),client:a.client,area:WORK_AREAS[a.last_area]||'',areas:areaTimes.get(a.id)||[],status:a.ended_at?'Ended':Date.now()-Date.parse(a.last_heartbeat_at||a.last_seen_at)>90000?'Away':a.was_active?'Active recently':'Idle'})),sessionNext:sessions.length>100?sessions[99].id:null,measuredFrom:(await dbGet('SELECT MIN(first_seen_at) AS first FROM activity_sessions'))?.first||null});
+  res.json({users:users.map(u=>({id:u.id,name:u.name,role:u.role,rosterLinked:Boolean(u.roster_id),revoked:Boolean(u.access_revoked_at)})),events:events.slice(0,100).map(safeEvent),eventNext:events.length>100?events[99].id:null,sessions:visibleSessions.map(a=>({id:a.id,userId:a.user_id,actor:a.actor_name,startedAt:a.started_at,firstSeenAt:a.first_seen_at,lastSeenAt:a.last_seen_at,endedAt:a.ended_at,endReason:a.end_reason,activeSeconds:a.active_seconds,measured:Boolean(a.last_heartbeat_at),client:a.client,area:WORK_AREAS[a.last_area]||'',areas:areaTimes.get(a.id)||[],status:a.ended_at?'Ended':Date.now()-Date.parse(a.last_heartbeat_at||a.last_seen_at)>90000?'Away':a.was_active?'Active recently':'Idle'})),sessionNext:sessions.length>100?sessions[99].id:null,incidents:incidents.map(i=>({id:i.id,reference:i.reference,userId:i.user_id,actor:i.actor_name||'Unknown account',client:i.client,area:i.area||'Dashboard',path:i.request_path,method:i.request_method,status:i.status_code,state:i.state,category:i.category,firstSeenAt:i.first_seen_at,lastSeenAt:i.last_seen_at,recoveredAt:i.recovered_at})),measuredFrom:(await dbGet('SELECT MIN(first_seen_at) AS first FROM activity_sessions'))?.first||null});
  }));
 }

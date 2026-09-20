@@ -239,25 +239,122 @@ $('applyWebUpdate').addEventListener('click', () => {
 window.setTimeout(checkForWebUpdate, 1500);
 window.setInterval(checkForWebUpdate, 30000);
 
+const newIncidentReference = () => `SS22-${Array.from(crypto.getRandomValues(new Uint8Array(4)), value => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+let reliabilityNoticeTimer;
+const showReliabilityNotice = ({ title, message, recovered = false, dismissAfter = 0 }) => {
+  window.clearTimeout(reliabilityNoticeTimer);
+  $('reliabilityNoticeTitle').textContent = title;
+  $('reliabilityNoticeMessage').textContent = message;
+  $('reliabilityNoticeIcon').textContent = recovered ? '✓' : '!';
+  $('reliabilityNotice').classList.toggle('recovered', recovered);
+  show($('reliabilityNotice'));
+  if (dismissAfter) reliabilityNoticeTimer = window.setTimeout(() => hide($('reliabilityNotice')), dismissAfter);
+};
+$('dismissReliabilityNotice')?.addEventListener?.('click', () => hide($('reliabilityNotice')));
+const incidentQueueKey = 'ss22-pending-incidents-v1';
+const queuedIncidents = () => { try { return JSON.parse(localStorage.getItem(incidentQueueKey) || '[]'); } catch { return []; } };
+const queueIncident = incident => {
+  try { localStorage.setItem(incidentQueueKey, JSON.stringify([...queuedIncidents().filter(item => item.reference !== incident.reference), incident].slice(-20))); } catch {}
+};
+const sendIncident = async incident => {
+  if (!state.user) { queueIncident(incident); return false; }
+  try {
+    const response = await fetch('/api/activity/incidents', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-Stone-Square-Client': 'web', ...(state.legacyToken ? { Authorization: `Bearer ${state.legacyToken}` } : {}) },
+      body: JSON.stringify(incident),
+    });
+    return response.ok;
+  } catch { return false; }
+};
+let flushingIncidents = false;
+const flushQueuedIncidents = async () => {
+  if (flushingIncidents || !state.user) return;
+  flushingIncidents = true;
+  try {
+    const pending = queuedIncidents(), remaining = [];
+    for (const incident of pending) if (!await sendIncident(incident)) remaining.push(incident);
+    localStorage.setItem(incidentQueueKey, JSON.stringify(remaining));
+  } catch {} finally { flushingIncidents = false; }
+};
+const incidentPayload = ({ reference, path, method, status, category, state: incidentState }) => ({
+  reference, path: String(path || location.pathname).split('?')[0], method, status: Number(status) || 0,
+  category, state: incidentState, area: state.activeSection || 'home',
+});
+
 const apiFetch = async (path, init = {}) => {
   webUpdateRequests += 1;
   try {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      'X-Stone-Square-Client': 'web',
-      ...(state.legacyToken ? { Authorization: `Bearer ${state.legacyToken}` } : {}),
-      ...(init.headers || {}),
-    },
-  });
-  const type = response.headers.get('content-type') || '';
-  const payload = type.includes('application/json') ? await response.json() : await response.blob();
-  if (!response.ok) throw Object.assign(new Error(payload.error || 'The request could not be completed.'), { status: response.status });
-  return payload;
+  const method = String(init.method || 'GET').toUpperCase();
+  const mayRetry = method === 'GET' || method === 'HEAD';
+  let incidentReference = '';
+  for (let attempt = 1; attempt <= (mayRetry ? 2 : 1); attempt += 1) {
+    try {
+      const response = await fetch(path, {
+        ...init,
+        credentials: 'same-origin',
+        headers: {
+          ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+          'X-Stone-Square-Client': 'web',
+          ...(state.legacyToken ? { Authorization: `Bearer ${state.legacyToken}` } : {}),
+          ...(init.headers || {}),
+        },
+      });
+      const type = response.headers.get('content-type') || '';
+      const payload = type.includes('application/json') ? await response.json() : await response.blob();
+      if (response.ok) {
+        if (incidentReference) {
+          const recovered = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'temporary_connection', state: 'recovered' });
+          queueIncident(recovered); void flushQueuedIncidents();
+          showReliabilityNotice({ title: 'The dashboard is back online.', message: `You can continue. Incident ${incidentReference} recovered automatically.`, recovered: true, dismissAfter: 6000 });
+        } else void flushQueuedIncidents();
+        return payload;
+      }
+      const retryable = response.status >= 500 || response.status === 408 || response.status === 429 || payload?.retryable === true;
+      incidentReference ||= payload?.incidentReference || newIncidentReference();
+      if (mayRetry && retryable && attempt === 1) {
+        showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is retrying now. Incident ${incidentReference}.` });
+        await delay(Math.min(3000, Math.max(1000, Number(payload?.retryAfterSeconds || 2) * 1000)));
+        continue;
+      }
+      if (retryable) {
+        const open = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'service_response', state: 'open' });
+        queueIncident(open); void flushQueuedIncidents();
+        showReliabilityNotice({ title: 'This action could not be completed.', message: `Incident ${incidentReference} was recorded. The hosted monitor checks the service again within 30 minutes.` });
+      }
+      throw Object.assign(new Error(payload?.error || 'The request could not be completed.'), { status: response.status, incidentReference });
+    } catch (error) {
+      if (Number.isInteger(error?.status)) throw error;
+      incidentReference ||= newIncidentReference();
+      if (mayRetry && attempt === 1) {
+        showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is reconnecting now. Incident ${incidentReference}.` });
+        await delay(1800);
+        continue;
+      }
+      const open = incidentPayload({ reference: incidentReference, path, method, status: 0, category: navigator.onLine ? 'network_error' : 'offline', state: 'open' });
+      queueIncident(open);
+      showReliabilityNotice({ title: navigator.onLine ? 'This action could not be completed.' : 'This device is offline.', message: `Incident ${incidentReference} is saved. The dashboard will report it when the connection returns; the hosted monitor checks again within 30 minutes.` });
+      throw Object.assign(new Error(`The dashboard could not connect. Incident ${incidentReference}.`), { incidentReference });
+    }
+  }
   } finally { webUpdateRequests -= 1; }
 };
+
+window.addEventListener('online', () => { void flushQueuedIncidents(); });
+window.addEventListener('error', event => {
+  if (!state.user) return;
+  const reference = newIncidentReference();
+  queueIncident(incidentPayload({ reference, path: location.pathname, method: 'UI', status: 0, category: 'interface_error', state: 'open' }));
+  void flushQueuedIncidents();
+  showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The problem was recorded as ${reference}. You can keep working or refresh this screen.` });
+});
+window.addEventListener('unhandledrejection', () => {
+  if (!state.user) return;
+  const reference = newIncidentReference();
+  queueIncident(incidentPayload({ reference, path: location.pathname, method: 'UI', status: 0, category: 'interface_task_error', state: 'open' }));
+  void flushQueuedIncidents();
+  showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The problem was recorded as ${reference}. You can keep working or refresh this screen.` });
+});
 
 const setActiveTab = (which) => {
   const mapping = {

@@ -5,7 +5,8 @@ struct ActivityPerson: Decodable, Identifiable {var id:Int;var name:String;var r
 struct OfficerEvent: Decodable, Identifiable {var id:Int;var userId:Int?;var actor:String;var action:String;var label:String;var at:String;var detail:String}
 struct ActivityArea: Decodable {var area:String;var seconds:Int}
 struct OfficerSession: Decodable, Identifiable {var id:Int;var userId:Int;var actor:String;var startedAt:String?;var firstSeenAt:String;var lastSeenAt:String;var endedAt:String?;var endReason:String?;var activeSeconds:Int;var measured:Bool;var client:String;var area:String;var areas:[ActivityArea];var status:String}
-struct ActivityPayload: Decodable {var users:[ActivityPerson];var events:[OfficerEvent];var eventNext:Int?;var sessions:[OfficerSession];var sessionNext:Int?;var measuredFrom:String?}
+struct AppIncident: Decodable, Identifiable {var id:Int;var reference:String;var userId:Int?;var actor:String;var client:String;var area:String;var path:String;var method:String;var status:Int?;var state:String;var category:String;var firstSeenAt:String;var lastSeenAt:String;var recoveredAt:String?}
+struct ActivityPayload: Decodable {var users:[ActivityPerson];var events:[OfficerEvent];var eventNext:Int?;var sessions:[OfficerSession];var sessionNext:Int?;var incidents:[AppIncident];var measuredFrom:String?}
 private func activityDate(_ value:String?) -> String {
  guard let value else{return "Not recorded"};let parser=ISO8601DateFormatter();parser.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
  guard let date=parser.date(from:value) else{return value};let formatter=DateFormatter();formatter.timeZone=TimeZone(identifier:"America/New_York");formatter.dateFormat="EEE, MMM d, yyyy h:mm a z";return formatter.string(from:date)
@@ -57,7 +58,7 @@ struct OfficerActivityView:View {
     Picker("Sessions seen", selection: $workspace.days) { ForEach([1,7,30,90], id: \.self) { days in Text("Past \(days) day\(days == 1 ? "" : "s")").tag(days) } }
     Spacer()
    }.padding(16)
-   Picker("Activity section", selection: $section) { Text("Sign-ins").tag(0); Text("Actions").tag(1); Text("Account roles").tag(2) }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 12)
+   Picker("Activity section", selection: $section) { Text("Sign-ins").tag(0); Text("Actions").tag(1); Text("Errors").tag(2); Text("Account roles").tag(3) }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 12)
    Divider()
    List {
     if !workspace.message.isEmpty { Text(workspace.message).foregroundStyle(.red) }
@@ -88,6 +89,19 @@ struct OfficerActivityView:View {
       }
       if workspace.data?.events.isEmpty != false { Text("No recorded actions in this period.").foregroundStyle(.secondary) }
       if workspace.data?.eventNext != nil { Button("More actions") { Task { await workspace.load("events") } } }
+     }
+    } else if section == 2 {
+     Section("Error log") {
+      if let incidents = workspace.data?.incidents, !incidents.isEmpty {
+       ForEach(incidents) { incident in
+        VStack(alignment: .leading, spacing: 6) {
+         HStack { Text(incident.reference).font(.headline); Spacer(); Text(incident.state == "recovered" ? "Recovered automatically" : "Needs attention").foregroundStyle(incident.state == "recovered" ? .green : .orange) }
+         Text("\(incident.actor) · \(incident.client) · \(incident.area)").font(.callout)
+         Text("\(incident.method) \(incident.path)" + (incident.status.map { " · Status \($0)" } ?? "")).font(.caption).textSelection(.enabled)
+         Text(incident.recoveredAt.map { "Recovered \(activityDate($0))" } ?? "Last seen \(activityDate(incident.lastSeenAt))").font(.caption).foregroundStyle(.secondary)
+        }.padding(.vertical, 8)
+       }
+      } else { Text("No errors were recorded in this period.").foregroundStyle(.secondary) }
      }
     } else {
      Section("Manage account roles") {

@@ -39,6 +39,11 @@
       <div class="update-banner-copy"><strong>Stone Square Dashboard update available</strong><span>A newer version is ready.</span></div>
       <div class="update-banner-actions"><button id="deferWebUpdate" class="secondary compact" type="button">Later</button><button id="applyWebUpdate" class="primary compact" type="button">Update now</button></div>
     </aside>
+    <aside id="reliabilityNotice" class="reliability-notice hidden" role="status" aria-live="assertive" aria-atomic="true">
+      <span id="reliabilityNoticeIcon" aria-hidden="true">!</span>
+      <div><strong id="reliabilityNoticeTitle">Oops, something went wrong.</strong><p id="reliabilityNoticeMessage"></p></div>
+      <button id="dismissReliabilityNotice" class="secondary compact" type="button" aria-label="Dismiss service notice">Dismiss</button>
+    </aside>
     <main class="shell">
       <header class="masthead">
         <a class="brand" href="/" aria-label="Stone Square Dashboard home">

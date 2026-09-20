@@ -39,6 +39,15 @@ try{
  activity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
  check('WM sees a named dashboard interaction',activity.events.some(e=>e.action==='dashboard_interaction'&&e.detail.includes('Clicked Treasurer Reports')&&e.detail.includes('View finalized report')));
  check('Invalid interaction areas are rejected',(await api('/api/activity/interaction',treasurer.token,'POST',{kind:'activate',area:'passwords',target:'Secret'})).status===400);
+ const incidentReference='SS22-A1B2C3D4';
+ check('Officer can record a safe dashboard incident',(await api('/api/activity/incidents',treasurer.token,'POST',{reference:incidentReference,area:'minutes',path:'/api/minutes/123e4567-e89b-12d3-a456-426614174000?private=never-store-this',method:'GET',status:503,category:'service_response',state:'open',sourceText:'private transcript must be ignored'})).status===201);
+ let incidentActivity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
+ const openIncident=incidentActivity.incidents.find(item=>item.reference===incidentReference);
+ check('WM error log identifies the user, area and safe route',openIncident?.actor==='QA treasurer'&&openIncident.area==='Meeting Minutes'&&openIncident.path==='/api/minutes/:record'&&openIncident.state==='open');
+ check('Error log excludes query strings and submitted record content',!JSON.stringify(incidentActivity).includes('never-store-this')&&!JSON.stringify(incidentActivity).includes('private transcript'));
+ await api('/api/activity/incidents',treasurer.token,'POST',{reference:incidentReference,area:'minutes',path:'/api/minutes/123e4567-e89b-12d3-a456-426614174000',method:'GET',status:200,category:'temporary_connection',state:'recovered'});
+ incidentActivity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
+ check('Recovered incidents close instead of creating a duplicate',incidentActivity.incidents.filter(item=>item.reference===incidentReference).length===1&&incidentActivity.incidents.find(item=>item.reference===incidentReference).state==='recovered'&&Boolean(incidentActivity.incidents.find(item=>item.reference===incidentReference).recoveredAt));
  const banking=new FormData();banking.set('intent','save');banking.set('sourceText','Period: August 2026\nChecking\nBeginning balance: $100.00\nEnding balance: $100.00\nNo receipts or payments.');
  const created=await api('/api/treasury/generate',treasurer.token,'POST',banking);check('Report activity fixture saves',created.status===201);
  const named=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;

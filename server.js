@@ -1,7 +1,7 @@
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
 import { hasPermission, resolvePermissions, permissionsForStorage, mountAccessRoutes, ensureBrotherSelfServiceAccess } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
-import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity } from './activity.js';
+import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity, recordAppIncident, clientName } from './activity.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -3691,7 +3691,7 @@ mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: reques
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 
-app.use((error, _req, res, _next) => {
+app.use((error, req, res, _next) => {
   console.error(error);
   if (error instanceof multer.MulterError) {
     return res.status(400).json({
@@ -3707,7 +3707,9 @@ app.use((error, _req, res, _next) => {
   if (Number.isInteger(error.statusCode)) {
     return res.status(error.statusCode).json({ error: error.message });
   }
-  res.status(500).json({ error: 'The signing service could not complete that request.' });
+  const reference = `SS22-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  void recordAppIncident({reference,userId:req.user?.id,client:clientName(req),area:'Dashboard',path:req.path,method:req.method,status:500,category:error?.name||'server_error',state:'open'}).catch(incidentError=>console.error('Could not record incident',incidentError));
+  res.status(500).json({ error: 'The dashboard could not complete that request.', incidentReference: reference, retryable: true, retryAfterSeconds: 10 });
 });
 
 validateProductionConfiguration();

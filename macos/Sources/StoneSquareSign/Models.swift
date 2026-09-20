@@ -179,7 +179,12 @@ struct UploadResponse: Codable {
     var notificationWarnings: [String]? = nil
 }
 struct UploadedDocument: Codable { let id: String }
-struct APIError: Codable { let error: String }
+struct APIError: Codable {
+    let error: String
+    var incidentReference: String? = nil
+    var retryable: Bool? = nil
+    var retryAfterSeconds: Int? = nil
+}
 struct VersionResponse: Codable { let version: String }
 
 struct CandidateRecord: Codable, Identifiable, Equatable {

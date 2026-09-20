@@ -1,50 +1,88 @@
-# Keeps the app awake during the hours officers actually use it.
+# Monitors the hosted dashboard without relying on William's Mac.
 #
-# A free Render web service sleeps after 15 minutes idle and takes roughly 50 seconds
-# to wake, which is a poor first impression when the Secretary taps a link. This pings
-# the health endpoint often enough that it never sleeps while anyone is likely to open
-# it, and lets it sleep overnight. The health endpoint checks the web process only, so
-# these pings do not keep the Neon database awake or consume its compute allowance.
+# During normal Lodge hours the ten minute checks also keep Render responsive. Overnight,
+# a thirty minute check lets the free service sleep between checks while still providing
+# continuous monitoring and leaves headroom in Render's monthly free allowance.
 #
-# The hours are deliberate, not lazy. Render allows 750 instance hours a month per
-# workspace and a 31 day month is 744, so keeping it awake around the clock would eat
-# nearly the entire allowance and leave nothing for any other service. 6am to midnight
-# Eastern is about 558 hours a month, which leaves real headroom.
-#
-# Note this is best effort. GitHub delays or drops scheduled runs when it is busy, and
-# it disables schedules on a repository with no commits for 60 days. If the app feels
-# slow again, check here first.
+# A failed process check triggers one restart of the current production release. A healthy
+# process with an unavailable database is reported without redeploying, because restarting
+# the web process cannot repair an upstream database outage.
 
-name: Keep awake
+name: Monitor and recover production
 
 on:
   schedule:
-    # Every 10 minutes, 10:00 to 03:59 UTC, which is 6am to just before midnight
-    # Eastern Daylight Time. Cron here is always UTC; it does not follow the clocks.
+    # 6am to midnight Eastern Daylight Time: check every ten minutes.
     - cron: "*/10 10-23,0-3 * * *"
-  workflow_dispatch:        # so it can be run by hand to warm the app before a meeting
+    # Midnight to 6am Eastern Daylight Time: check every thirty minutes.
+    - cron: "0,30 4-9 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: production-health-monitor
+  cancel-in-progress: false
+
 jobs:
-  ping:
+  monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      - name: Wake the dashboard
+      - name: Check the dashboard and recover a stopped web process
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
-          URL="https://stone-square-sign.onrender.com/api/health"
+          BASE="https://stone-square-sign.onrender.com"
+          check() {
+            curl -fsS --max-time 90 "$BASE/api/health" -o /tmp/health
+          }
+
+          healthy=false
           for attempt in 1 2 3; do
-            code=$(curl -s -o /tmp/body -w "%{http_code}" --max-time 90 "$URL" || echo "000")
-            if [ "$code" = "200" ]; then
-              echo "awake on attempt $attempt: $(cat /tmp/body)"
-              exit 0
+            if check; then
+              echo "Web process healthy on attempt $attempt: $(cat /tmp/health)"
+              healthy=true
+              break
             fi
-            echo "attempt $attempt returned $code, waiting for the instance to boot"
-            sleep 20
+            if [ "$attempt" -lt 3 ]; then sleep 20; fi
           done
-          # A failure here means the app is down, not merely asleep. Fail loudly so it
-          # shows up in the Actions tab rather than passing quietly.
-          echo "health check never returned 200"
-          exit 1
+
+          if [ "$healthy" != "true" ]; then
+            if [ -z "$HOOK" ]; then
+              echo "::error::The dashboard web process is unavailable and RENDER_DEPLOY_HOOK is not configured for automatic recovery."
+              exit 1
+            fi
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$HOOK")
+            if [ "$code" != "200" ] && [ "$code" != "201" ] && [ "$code" != "202" ]; then
+              echo "::error::The dashboard was unavailable and Render refused the recovery request with HTTP $code."
+              exit 1
+            fi
+            echo "Render accepted the automatic recovery request."
+            for attempt in $(seq 1 16); do
+              sleep 30
+              if check; then
+                echo "The dashboard recovered after the production restart: $(cat /tmp/health)"
+                healthy=true
+                break
+              fi
+              if [ "$attempt" -eq 16 ]; then
+                echo "::error::The dashboard did not recover within eight minutes."
+                exit 1
+              fi
+            done
+          fi
+
+          # Check the database once an hour. Testing it every ten minutes would keep
+          # Neon's compute awake continuously and create avoidable usage.
+          if [ "$(date -u +%M)" != "00" ]; then
+            echo "Web process check complete. The hourly database readiness check is not due on this run."
+            exit 0
+          fi
+          ready=$(curl -s -o /tmp/ready -w '%{http_code}' --max-time 90 "$BASE/api/ready" || echo 000)
+          if [ "$ready" != "200" ]; then
+            echo "::error::The web process is running, but a required service is unavailable. Readiness returned HTTP $ready: $(cat /tmp/ready 2>/dev/null || true)"
+            exit 1
+          fi
+          echo "Dashboard and database are ready: $(cat /tmp/ready)"

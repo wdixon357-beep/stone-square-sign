@@ -532,9 +532,28 @@ struct WorkspaceView: View {
 struct WorkspaceNotices: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var reliability = ReliabilityCenter.shared
 
     var body: some View {
         VStack(spacing: 0) {
+            if let notice = reliability.notice {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: notice.recovered ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(notice.recovered ? .green : SignTheme.gold)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(notice.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                        Text(notice.message).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Dismiss") { reliability.dismiss() }.fixedSize()
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background((notice.recovered ? Color.green : SignTheme.gold).opacity(0.10))
+                Divider()
+            }
             if model.showSignInNotice, let session = model.signInSession {
                 HStack(alignment: .top, spacing: 14) {
                     Image(systemName: "checkmark.shield.fill")

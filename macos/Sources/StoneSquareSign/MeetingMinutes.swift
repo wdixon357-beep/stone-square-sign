@@ -195,14 +195,15 @@ final class MinutesWorkspace: ObservableObject {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("mac",forHTTPHeaderField:"X-Stone-Square-Client")
-        let (data, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
+        let (data, response) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token)
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 404 && path == "/api/treasury" {
                 throw ClientError.serviceUpdateRequired("Treasurer Reports is installed on this Mac. The shared Lodge service must be updated before banking records and reports can be opened here.")
             }
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            throw ClientError.server(object?["error"] as? String ?? "The request could not be completed. Try again.")
+            let reference = object?["incidentReference"] as? String
+            let message = [object?["error"] as? String ?? "The request could not be completed. Try again.", reference.map { "Incident \($0)." }].compactMap { $0 }.joined(separator: " ")
+            throw ClientError.server(message)
         }
         return data
     }
