@@ -686,19 +686,11 @@ const secureCandidateTrackerUrl = value => {
 
 const openCandidateTracker = async () => {
   const message = $('candidateTrackerMessage');
-  const popup = window.open('about:blank', 'stone-square-candidate-tracker');
-  if (!popup) {
-    setMessage(message, 'Your browser blocked the Candidate Tracker window. Allow pop-ups for this website, then try again.', true);
-    return;
-  }
-  popup.opener = null;
   setMessage(message, 'Opening the Candidate Tracker securely…');
   try {
     const { url } = await apiFetch('/api/tracker/handoff', { method: 'POST' });
-    popup.location.replace(secureCandidateTrackerUrl(url));
-    setMessage(message, 'Candidate Tracker opened securely.');
+    window.location.assign(secureCandidateTrackerUrl(url));
   } catch (error) {
-    popup.close();
     setMessage(message, error.message || 'The Candidate Tracker could not be opened.', true);
   }
 };

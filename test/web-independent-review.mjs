@@ -6,49 +6,35 @@ const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 const candidateSource = app.slice(app.indexOf('const CANDIDATE_TRACKER_ORIGIN'), app.indexOf('const showWorkspaceSection'));
-const candidateSetup = ({ returnedUrl = 'https://tracker.stonesquare22pha.org/api/sso?assertion=signed', blocked = false } = {}) => {
+const candidateSetup = ({ returnedUrl = 'https://tracker.stonesquare22pha.org/api/sso?assertion=signed' } = {}) => {
   const messages = [];
   const calls = [];
-  const popup = {
-    opener: {},
-    closed: false,
-    location: { replace: url => calls.push(['replace', url]) },
-    close() { this.closed = true; },
-  };
   const context = {
     URL,
     apiFetch: async (...args) => { calls.push(['api', ...args]); return { url: returnedUrl }; },
     setMessage: (_element, text, error = false) => messages.push({ text, error }),
     $: () => ({}),
-    window: { open: () => blocked ? null : popup },
+    window: { location: { assign: url => calls.push(['assign', url]) } },
   };
   vm.createContext(context);
   vm.runInContext(`${candidateSource}\nthis.openCandidateTrackerForTest = openCandidateTracker;`, context);
-  return { context, calls, messages, popup };
+  return { context, calls, messages };
 };
 
 let candidate = candidateSetup();
 await candidate.context.openCandidateTrackerForTest();
 assert.equal(candidate.calls.filter(call => call[0] === 'api').length, 1);
 assert.deepEqual(JSON.parse(JSON.stringify(candidate.calls.find(call => call[0] === 'api').slice(1))), ['/api/tracker/handoff', { method: 'POST' }]);
-assert.equal(candidate.calls.find(call => call[0] === 'replace')[1], 'https://tracker.stonesquare22pha.org/api/sso?assertion=signed');
-assert.equal(candidate.popup.opener, null);
+assert.equal(candidate.calls.find(call => call[0] === 'assign')[1], 'https://tracker.stonesquare22pha.org/api/sso?assertion=signed');
 
 candidate = candidateSetup({ returnedUrl: 'https://evil.example/steal' });
 await candidate.context.openCandidateTrackerForTest();
-assert.equal(candidate.popup.closed, true);
-assert.equal(candidate.calls.some(call => call[0] === 'replace'), false);
+assert.equal(candidate.calls.some(call => call[0] === 'assign'), false);
 assert.equal(candidate.messages.at(-1).error, true);
 
 candidate = candidateSetup({ returnedUrl: 'https://tracker.stonesquare22pha.org/unrelated' });
 await candidate.context.openCandidateTrackerForTest();
-assert.equal(candidate.popup.closed, true);
-assert.equal(candidate.calls.some(call => call[0] === 'replace'), false);
-
-candidate = candidateSetup({ blocked: true });
-await candidate.context.openCandidateTrackerForTest();
-assert.equal(candidate.calls.length, 0);
-assert.match(candidate.messages.at(-1).text, /blocked/);
+assert.equal(candidate.calls.some(call => call[0] === 'assign'), false);
 
 const dirtySource = app.slice(app.indexOf('const hasUnsavedWorkspace'), app.indexOf("document.addEventListener('keydown'"));
 const accessControls = { dirtyAccessKeys: new Set(['officer-4']) };
