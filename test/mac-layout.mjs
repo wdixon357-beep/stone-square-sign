@@ -38,5 +38,9 @@ for (const [name, source] of Object.entries({ treasury, minutes, agenda, reportG
 }
 assert.match(minutes, /AdaptiveControlBar[\s\S]*recordSummary\(record\)[\s\S]*recordActions\(record\)/, 'minutes handoff rows must reflow at compact widths');
 assert.match(minutes, /recordActions[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*recordActionControls/, 'minutes status and claim controls must stack before they clip');
+assert.match(views, /treasuryAlertButtons[\s\S]*HStack\(alignment: \.top[\s\S]*xmark\.circle\.fill/, 'Mac banking alerts must keep a compact dismiss control beside wrapped alert text');
+assert.match(treasury, /Text\("Transactions"\)\.tag\(2\)/, 'the Mac treasurer editor must label its banking-history page clearly');
+assert.ok(treasury.includes('Text("Transaction \\(i + 1)")'), 'each Mac transaction row must have a numbered heading');
+assert.match(treasury, /LodgeCalendarDates\.displayDate[\s\S]*"Date not found"/, 'each Mac transaction row must show a readable bank date or a clear missing-date label');
 
 console.log('PASS: every Mac split workspace remains on-screen, bounded, and usable at compact widths.');

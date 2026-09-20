@@ -123,11 +123,14 @@ try{
 	const waitingAlerts=(await api('/api/treasury/alerts',assistant.token)).data.alerts;
 	check('Authorized preparers receive a persistent waiting alert',waitingAlerts.some(a=>a.id===available.id&&a.title==='Banking information is awaiting report preparation'&&a.uploadedBy==='Test secretary'));
 	check('Upload-only officers cannot read preparer alerts',(await api('/api/treasury/alerts',member.token)).status===403);
+	const dismissed=await api(`/api/treasury/alerts/${available.id}/dismiss`,assistant.token,'POST');
+	check('A preparer can dismiss a seen banking reminder without deleting the report',dismissed.status===200&&!(await api('/api/treasury/alerts',assistant.token)).data.alerts.some(a=>a.id===available.id)&&(await api('/api/treasury',assistant.token)).data.reports.some(r=>r.id===available.id));
+	check('One preparer dismissing a reminder does not hide it from another preparer',(await api('/api/treasury/alerts',treasurer.token)).data.alerts.some(a=>a.id===available.id));
 	check('Other preparing officers can find saved information',(await api('/api/treasury',assistant.token)).data.reports.some(r=>r.id===available.id));
  const claims=await Promise.all([treasurer,assistant].map(u=>api(`/api/treasury/${available.id}/assign`,u.token,'POST',{revision:available.revision,preparerUserId:u.user.id})));
  check('Only one preparer can start the same saved report',claims.filter(r=>r.status===200).length===1&&claims.filter(r=>r.status===404).length===1);
 	available=claims.find(r=>r.status===200).data.report;
-	check('Claiming the report clears its waiting alert',!(await api('/api/treasury/alerts',assistant.token)).data.alerts.some(a=>a.id===available.id));
+	check('Claiming the report clears its waiting alert for every preparer',!(await api('/api/treasury/alerts',assistant.token)).data.alerts.some(a=>a.id===available.id)&&!(await api('/api/treasury/alerts',treasurer.token)).data.alerts.some(a=>a.id===available.id));
 	check('Starting saved information retains its original uploader',available.status==='draft'&&available.createdByUserId===secretary.user.id&&available.preparerUserId!==secretary.user.id);
 	const other=available.preparerUserId===treasurer.user.id?assistant:treasurer;
 	check('Another preparer cannot open or take an already started report',(await api(`/api/treasury/${available.id}/assign`,other.token,'POST',{revision:available.revision,preparerUserId:other.user.id})).status===404);

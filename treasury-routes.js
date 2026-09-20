@@ -90,6 +90,12 @@ export async function initTreasurySchema() {
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_sources (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), name TEXT NOT NULL, mime TEXT NOT NULL, bytes BYTEA NOT NULL)`);
   await dbRun("ALTER TABLE treasury_sources ADD COLUMN IF NOT EXISTS account_label TEXT NOT NULL DEFAULT ''");
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_attestations (id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES treasury_reports(id), phase TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), draft_json TEXT NOT NULL, signature_bytes BYTEA NOT NULL, created_at TEXT NOT NULL)`);
+  await dbRun(`CREATE TABLE IF NOT EXISTS treasury_alert_dismissals (
+    report_id TEXT NOT NULL REFERENCES treasury_reports(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY (report_id,user_id)
+  )`);
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_period_lock (id INTEGER PRIMARY KEY, updated_at TEXT NOT NULL)`);
   await dbRun("INSERT INTO treasury_period_lock (id,updated_at) VALUES (1,?) ON CONFLICT(id) DO NOTHING",[new Date().toISOString()]);
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_migrations (key TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
@@ -150,8 +156,13 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   app.get('/api/treasury/preparers',requirePrepare,route(async(_req,res)=>{
     const users=await dbAll("SELECT id,name,role,permissions_json FROM users WHERE access_revoked_at IS NULL AND email NOT LIKE '%.local' ORDER BY name");res.json({preparers:users.filter(canPrepare).map(({id,name,role})=>({id,name,role}))});
   }));
-  app.get('/api/treasury/alerts',requirePrepare,route(async(_req,res)=>{
-    const rows=await dbAll("SELECT id,uploader_name,created_at,draft_json FROM treasury_reports WHERE deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL ORDER BY created_at ASC");
+  app.get('/api/treasury/alerts',requirePrepare,route(async(req,res)=>{
+    const rows=await dbAll(`SELECT r.id,r.uploader_name,r.created_at,r.draft_json
+      FROM treasury_reports r
+      LEFT JOIN treasury_alert_dismissals dismissed ON dismissed.report_id=r.id AND dismissed.user_id=?
+      WHERE r.deleted_at IS NULL AND r.status='awaiting_preparer' AND r.preparer_user_id IS NULL
+        AND dismissed.report_id IS NULL
+      ORDER BY r.created_at ASC`,[req.user.id]);
     const completed=await dbAll("SELECT draft_json,preparer_attested_at FROM treasury_reports WHERE deleted_at IS NULL AND status IN ('ready_for_distribution','distributed') AND preparer_attested_at IS NOT NULL");
     res.json({alerts:rows.filter(row=>!completed.some(item=>item.preparer_attested_at>row.created_at&&treasuryPeriodCovered(JSON.parse(row.draft_json),[JSON.parse(item.draft_json)]))).map(row=>{
       const draft=JSON.parse(row.draft_json),period=draft.periodEnd||draft.periodStart||'';
@@ -163,6 +174,15 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
         createdAt:row.created_at,
       };
     })});
+  }));
+  app.post('/api/treasury/alerts/:id/dismiss',requirePrepare,route(async(req,res)=>{
+    const row=await dbGet("SELECT id FROM treasury_reports WHERE id=? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL",[req.params.id]);
+    if(!row)throw error(404,'That banking-information alert is no longer active.');
+    const time=new Date().toISOString();
+    await dbRun(`INSERT INTO treasury_alert_dismissals (report_id,user_id,dismissed_at)
+      VALUES (?,?,?) ON CONFLICT(report_id,user_id) DO UPDATE SET dismissed_at=excluded.dismissed_at`,[row.id,req.user.id,time]);
+    await audit(req,row.id,'alert_dismissed');
+    res.json({ok:true});
   }));
   app.get('/api/treasury',route(async(req,res)=>{
     let filter='',params=[];

@@ -900,6 +900,8 @@ const refreshTreasuryAlerts = async () => {
     const { alerts } = await apiFetch('/api/treasury/alerts');
     if (state.user?.id !== userId) return;
     container.replaceChildren(...alerts.map(alert => {
+      const row = document.createElement('div');
+      row.className = 'treasury-alert-row';
       const button = document.createElement('button');
       button.className = 'secondary';
       button.textContent = `${alert.title}. ${alert.message}`;
@@ -907,10 +909,33 @@ const refreshTreasuryAlerts = async () => {
         showWorkspaceSection('treasury', { skipLoad: true });
         await treasuryWorkspace.list();
         const record = treasuryWorkspace.records?.find(item => item.id === alert.id);
-        if (record?.status === 'awaiting_preparer' && !record.preparerUserId) treasuryWorkspace.open(record);
+        if (record?.status === 'awaiting_preparer' && !record.preparerUserId) {
+          treasuryWorkspace.open(record);
+          try { await apiFetch(`/api/treasury/alerts/${alert.id}/dismiss`, { method: 'POST' }); }
+          catch { /* The record is open. Keep the reminder if acknowledgment could not be saved. */ }
+        }
         else treasuryWorkspace.message('This banking information has already been claimed. The report list is current.');
+        await refreshTreasuryAlerts();
       });
-      return button;
+      const dismiss = document.createElement('button');
+      dismiss.className = 'treasury-alert-dismiss';
+      dismiss.type = 'button';
+      dismiss.textContent = 'Dismiss';
+      dismiss.setAttribute('aria-label', `Dismiss banking information alert from ${alert.uploadedBy || 'an authorized officer'}`);
+      dismiss.addEventListener('click', async () => {
+        dismiss.disabled = true;
+        try {
+          await apiFetch(`/api/treasury/alerts/${alert.id}/dismiss`, { method: 'POST' });
+          await refreshTreasuryAlerts();
+        } catch (error) {
+          dismiss.disabled = false;
+          dismiss.textContent = 'Try again';
+          dismiss.title = error.message;
+          dismiss.setAttribute('aria-label', `Could not dismiss this banking information alert. ${error.message}. Try again`);
+        }
+      });
+      row.append(button, dismiss);
+      return row;
     }));
     container.classList.toggle('hidden', !alerts.length);
     card.classList.toggle('awaiting', alerts.length > 0);

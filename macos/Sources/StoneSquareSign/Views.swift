@@ -430,31 +430,40 @@ struct WorkspaceView: View {
     private var treasuryAlertButtons: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(model.treasuryAlerts) { alert in
-                Button {
-                    selection = .treasury
-                    Task {
-                        treasuryWorkspace.configure(model)
-                        await treasuryWorkspace.refresh()
-                        if let record = treasuryWorkspace.records.first(where: { $0.id == alert.id && $0.status == "awaiting_preparer" && $0.preparerUserId == nil }) {
-                            treasuryWorkspace.open(record)
-                        } else {
-                            treasuryWorkspace.message = "This banking information has already been claimed. The report list is current."
-                            await model.refreshTreasuryAlerts()
+                HStack(alignment: .top, spacing: 8) {
+                    Button {
+                        selection = .treasury
+                        Task {
+                            treasuryWorkspace.configure(model)
+                            await treasuryWorkspace.refresh()
+                            if let record = treasuryWorkspace.records.first(where: { $0.id == alert.id && $0.status == "awaiting_preparer" && $0.preparerUserId == nil }) {
+                                treasuryWorkspace.open(record)
+                                await model.dismissTreasuryAlert(alert)
+                            } else {
+                                treasuryWorkspace.message = "This banking information has already been claimed. The report list is current."
+                                await model.refreshTreasuryAlerts()
+                            }
                         }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(alert.title, systemImage: "bell.badge.fill")
+                                .font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                            Text(alert.message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .frame(minHeight: 100, alignment: .topLeading)
+                        .contentShape(Rectangle())
                     }
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label(alert.title, systemImage: "bell.badge.fill")
-                            .font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-                        Text(alert.message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .buttonStyle(.plain)
+                    .help(alert.message)
+                    Button { Task { await model.dismissTreasuryAlert(alert) } } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 6)
-                    .frame(minHeight: 100, alignment: .topLeading)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .help("Dismiss this reminder. The banking information remains in Treasurer Reports.")
+                    .accessibilityLabel("Dismiss banking information alert from \(alert.uploadedBy)")
                 }
-                .buttonStyle(.plain)
-                .help(alert.message)
                 .padding(.horizontal, 22)
             }
         }

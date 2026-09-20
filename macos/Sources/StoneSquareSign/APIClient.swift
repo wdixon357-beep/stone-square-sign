@@ -462,6 +462,13 @@ final class AppModel: ObservableObject {
         } catch { /* Preserve waiting alerts if connectivity is temporarily unavailable. */ }
     }
 
+    func dismissTreasuryAlert(_ alert: TreasuryAlert) async {
+        do {
+            let _: EmptyResponse = try await request("/api/treasury/alerts/\(alert.id)/dismiss", method: "POST")
+            treasuryAlerts.removeAll { $0.id == alert.id }
+        } catch { show(error) }
+    }
+
     func refresh(silent: Bool = false) async {
         let currentToken = token
         if currentToken != nil {

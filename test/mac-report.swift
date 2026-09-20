@@ -262,6 +262,20 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         let savedServer = reportApp.serverAddress
         reportApp.serverAddress = "https://generation-fixture.invalid"
         defer { reportApp.serverAddress = savedServer }
+        let bankingAlert = TreasuryAlert(
+            id: "waiting-bank-record", title: "Banking information is awaiting report preparation",
+            message: "Uploaded by John Brown.", uploadedBy: "John Brown", createdAt: "2026-09-20T14:00:00Z"
+        )
+        reportApp.treasuryAlerts = [bankingAlert]
+        GenerationFixture.requests = []
+        GenerationFixture.routeResponses = [
+            "POST /api/treasury/alerts/waiting-bank-record/dismiss": (200, Data(#"{"ok":true}"#.utf8)),
+        ]
+        await reportApp.dismissTreasuryAlert(bankingAlert)
+        precondition(reportApp.treasuryAlerts.isEmpty)
+        precondition(GenerationFixture.requests.first?.method == "POST" && GenerationFixture.requests.first?.path == "/api/treasury/alerts/waiting-bank-record/dismiss")
+        GenerationFixture.routeResponses = [:]
+        print("PASS: native banking reminder dismissal persists through the shared service and clears the local sidebar alert")
         let report = ReportBrowserModel(persistenceURL: scratch.appendingPathComponent("organizer.json"))
         report.schema = model.schema
         report.source = "The committee met on Tuesday."

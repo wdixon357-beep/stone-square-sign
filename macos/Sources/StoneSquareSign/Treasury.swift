@@ -228,6 +228,9 @@ struct TreasuryView: View {
         .sheet(item: $readonlyReport) { report in FinalReportBrowserView(kind: .treasury, initialSelection: report.id, onClose: { readonlyReport = nil }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
         .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .treasury, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
         .onChange(of:workspace.draft) { old,new in if old != nil && new != nil { workspace.dirty = new != workspace.selected?.draft; workspace.preview() } }
+        .onChange(of: workspace.selected?.status) { _, status in
+            editorSection = status == "awaiting_preparer" || workspace.draft?.transactions.isEmpty != false ? 0 : 2
+        }
         .alert("Delete this unsigned report?",isPresented:Binding(get:{deleting != nil},set:{if !$0 { deleting = nil }})) { Button("Delete",role:.destructive) { if let record = deleting { Task { await workspace.remove(record) } } }; Button("Cancel",role:.cancel) {} }
         .alert("Leave unsaved changes?",isPresented:$leave) { Button("Leave changes",role:.destructive) { workspace.close() }; Button("Keep editing",role:.cancel) {} }
         .alert("Replace unsaved report entries?", isPresented: $confirmReorganize) {
@@ -298,7 +301,7 @@ struct TreasuryView: View {
         AdaptiveWorkspaceSplit(primaryTitle: "Report entries", secondaryTitle: "Document preview", compactPane: $editorPane) {
             VStack(spacing: 0) {
                 Picker("Report section", selection: $editorSection) {
-                    Text("Details").tag(0); Text("Accounts").tag(1); Text("Activity").tag(2); Text("Review").tag(3)
+                    Text("Details").tag(0); Text("Accounts").tag(1); Text("Transactions").tag(2); Text("Review").tag(3)
                 }.pickerStyle(.segmented).padding(16)
                 Divider()
                 Form {
@@ -437,19 +440,28 @@ struct TreasuryView: View {
     func tx(_ i:Int,_ key:WritableKeyPath<TreasuryTransaction,String>) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i][keyPath:key] ?? ""},set:{workspace.draft?.transactions[i][keyPath:key]=$0}) }
     func txAmount(_ i:Int) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i].amount ?? ""},set:{workspace.draft?.transactions[i].amount=$0}) }
     var activity: some View {
-        GroupBox("Receipts, Disbursements and Transfers") { VStack(alignment:.leading,spacing:14) {
-            Text("These entries become the Receipts, Disbursements and Account Activity sections in the September report format.").font(.callout).foregroundStyle(.secondary)
+        GroupBox { VStack(alignment:.leading,spacing:14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("BANK-POSTED HISTORY").font(.caption2).fontWeight(.bold).foregroundStyle(.secondary)
+                    Text("Transactions").font(.title3).fontWeight(.semibold)
+                }
+                Spacer()
+                Text("\(workspace.draft?.transactions.count ?? 0)").font(.headline).padding(.horizontal, 12).padding(.vertical, 7).background(Color.accentColor.opacity(0.12), in: Capsule())
+            }
+            Text("Every current-period entry organized from the uploaded PDF, screenshot, pasted activity or typed notes appears here. Confirm the account, bank-posted date, description, direction and amount. These entries become the Receipts, Disbursements and Transfers sections of the report.").font(.callout).foregroundStyle(.secondary)
             if workspace.draft?.transactions.isEmpty != false {
                 Text("No current-period transactions were found. No bank-posted activity from \(workspace.draft?.periodStart ?? "the first included date") through \(workspace.draft?.periodEnd ?? "the report preparation date") appeared in the uploaded records. Earlier statements remain available under Original banking records and notes, but their transactions are not included in this report.").font(.callout).fontWeight(.semibold).foregroundStyle(.orange)
             } else if let count=workspace.draft?.transactions.count {
                 Text("\(count) current-period \(count == 1 ? "transaction was" : "transactions were") organized from the uploaded records.").font(.callout).fontWeight(.semibold)
             }
-            ForEach((workspace.draft?.transactions ?? []).indices,id:\.self) { i in VStack(alignment:.leading) {
+            ForEach((workspace.draft?.transactions ?? []).indices,id:\.self) { i in VStack(alignment:.leading, spacing: 10) {
+                HStack { Text("Transaction \(i + 1)").font(.headline); Spacer(); Text(workspace.draft?.transactions[i].date.isEmpty == false ? LodgeCalendarDates.displayDate(workspace.draft?.transactions[i].date ?? "") : "Date not found").font(.caption).foregroundStyle(.secondary) }
                 reviewedField("Bank-posted date (YYYY-MM-DD)","transactions.\(i).date",tx(i,\.date));reviewedAccountPicker("transactions.\(i).account",tx(i,\.account))
                 HStack { Picker("Entry type",selection:reviewed("transactions.\(i).kind",tx(i,\.kind))) { Text("Needs correction").tag("review");Text("Receipt").tag("receipt");Text("Disbursement").tag("payment");Text("Transfer into this account").tag("transfer_in");Text("Transfer out of this account").tag("transfer_out") };reviewButton("transactions.\(i).kind") }
-                reviewedField("Amount","transactions.\(i).amount",txAmount(i));reviewedField("Description used on the report","transactions.\(i).description",tx(i,\.description));reviewedField("Check number or reference","transactions.\(i).reference",tx(i,\.reference));Toggle("Bank-posted date confirmed",isOn:Binding(get:{workspace.draft?.transactions[i].postedDateConfirmed == true},set:{workspace.draft?.transactions[i].postedDateConfirmed=$0}));Button("Remove entry",role:.destructive) { clearCollectionReviews("transactions");workspace.draft?.transactions.remove(at:i) };Divider()
+                reviewedField("Amount","transactions.\(i).amount",txAmount(i));reviewedField("Description used on the report","transactions.\(i).description",tx(i,\.description));reviewedField("Check number or reference","transactions.\(i).reference",tx(i,\.reference));Toggle("Bank-posted date confirmed",isOn:Binding(get:{workspace.draft?.transactions[i].postedDateConfirmed == true},set:{workspace.draft?.transactions[i].postedDateConfirmed=$0}));Button("Remove transaction",role:.destructive) { clearCollectionReviews("transactions");workspace.draft?.transactions.remove(at:i) };Divider()
             } }
-            Button("Add activity") { clearCollectionReviews("transactions");workspace.draft?.transactions.append(TreasuryTransaction(account:workspace.draft?.accounts.first?.id ?? "")) }
+            Button("Add transaction") { clearCollectionReviews("transactions");workspace.draft?.transactions.append(TreasuryTransaction(account:workspace.draft?.accounts.first?.id ?? "")) }
         }.padding(10) }
     }
     var funds: some View { GroupBox("Fenced Money") { VStack(alignment:.leading,spacing:12) {
