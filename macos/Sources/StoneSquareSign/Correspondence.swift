@@ -748,7 +748,7 @@ struct CorrespondenceView: View {
     private func statusLabel(_ record: CorrespondenceRecord) -> String {
         switch record.status {
         case "awaiting_secretary": return record.signingMode == "either"
-            ? "Waiting for McDuffie or Adrian Reese to sign"
+            ? "Waiting for William McDuffie or Adrian Reese to sign"
             : "Waiting for \(record.assignedToName ?? "the assigned officer") to sign"
         case "signed": return "Signed by \(record.signedByName ?? "the signing officer"), ready to email"
         default: return record.returnNote == nil ? "Draft" : "Draft, correction requested"

@@ -50,7 +50,7 @@ export class CorrespondenceWorkspace {
     select.replaceChildren();
     const either = document.createElement('option');
     either.value = '';
-    either.textContent = 'Either McDuffie or Adrian Reese';
+    either.textContent = 'Either William McDuffie or Adrian Reese';
     select.append(either);
     for (const signer of this.signers) {
       const option = document.createElement('option');
@@ -125,7 +125,7 @@ export class CorrespondenceWorkspace {
       const meta = document.createElement('small');
       meta.textContent = `${draft.recipientLodge} · ${draft.preparedByName} · ${new Date(draft.updatedAt).toLocaleDateString('en-US')}`;
       const status = document.createElement('small');
-      status.textContent = draft.status === 'signed' ? `Signed by ${draft.signedByName}, ready to email` : draft.status === 'awaiting_secretary' ? draft.signingMode === 'either' ? 'Waiting for McDuffie or Adrian Reese to sign' : `Waiting for ${draft.assignedToName || 'the assigned officer'} to sign` : 'Draft';
+      status.textContent = draft.status === 'signed' ? `Signed by ${draft.signedByName}, ready to email` : draft.status === 'awaiting_secretary' ? draft.signingMode === 'either' ? 'Waiting for William McDuffie or Adrian Reese to sign' : `Waiting for ${draft.assignedToName || 'the assigned officer'} to sign` : 'Draft';
       button.append(title, meta, status);
       button.addEventListener('click', () => { void this.open(draft); });
       list.append(button);
@@ -193,17 +193,17 @@ export class CorrespondenceWorkspace {
       ? `Signed by ${draft.signedByName}. Download the signed PDF and attach it to the Secretary's email. The dashboard has not sent it.`
       : draft.status === 'awaiting_secretary'
         ? draft.signingMode === 'either'
-          ? 'Waiting for McDuffie or Adrian Reese to sign. The first signature completes the letter.'
+          ? 'Waiting for William McDuffie or Adrian Reese to sign. The first signature completes the letter.'
           : `Waiting for ${draft.assignedToName || 'the assigned officer'} to sign.`
         : 'Draft only. Review the recipient, signing officer, facts, and complete PDF before assigning it.';
-    $('correspondenceSubmit').textContent = `Send to ${draft?.assignedToName || 'McDuffie or Adrian Reese'} for signature`;
+    $('correspondenceSubmit').textContent = `Send to ${draft?.assignedToName || 'William McDuffie or Adrian Reese'} for signature`;
     $('correspondenceSigner').disabled = Boolean(draft && draft.status !== 'draft');
     $('correspondenceDownload').textContent = draft?.status === 'signed' ? 'Download signed PDF for email' : 'Download draft PDF';
   }
   async submit() {
     if (!this.currentId || this.currentStatus !== 'draft' || this.dirty || this.previewRecordId !== this.currentId || this.previewRecordRevision !== this.currentUpdatedAt || !this.pdfUrl || this.savedSignerUserId !== (Number($('correspondenceSigner').value) || null)) { message('Save and review the PDF before assigning this letter for signature.', true); return; }
     const signer = this.signers.find(item => item.id === this.savedSignerUserId);
-    const recipient = signer?.name || 'McDuffie or Adrian Reese';
+    const recipient = signer?.name || 'William McDuffie or Adrian Reese';
     if (!window.confirm(`Send this exact letter to ${recipient} for review and signature? It will be locked against further edits.`)) return;
     const button = $('correspondenceSubmit'); button.disabled = true;
     try {
