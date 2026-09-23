@@ -11,8 +11,11 @@ try{
  await initSchema();await initializeBuildingCalendar();
  async function user(label,role,permissions,email=label+'@example.org'){return(await dbRun('INSERT INTO users(email,password_hash,name,role,created_at,permissions_json) VALUES(?,?,?,?,?,?)',[email,'unused-test-password',label,role,new Date().toISOString(),JSON.stringify(permissions)])).lastID;}
  const owner=await user('building-owner','owner',[]),reader=await user('building-reader','officer',['building.view','calendar.view']),outsider=await user('building-outsider','officer',['building.view','building.decide','calendar.view']),manager=await user('calendar-manager','officer',['calendar.view','calendar.manage']),none=await user('building-none','officer',[]),designated=await user('synthetic-designated-warden','warden',['building.view','building.decide'],'designated-warden@example.org');
+ const secretary=await user('William M. McDuffie','secretary',['building.view'],'secretary-test@example.org');
+ const assistant=await user('Adrian Reese','assistant_secretary',['building.view'],'assistant-test@example.org');
  await dbRun('INSERT INTO profile_signatures (user_id,signature_bytes,signature_type,updated_at) VALUES (?,?,?,?)',[owner,Buffer.from('synthetic-signature'),'drawn',new Date().toISOString()]);
  await dbRun('INSERT INTO profile_signatures (user_id,signature_bytes,signature_type,updated_at) VALUES (?,?,?,?)',[designated,Buffer.from('synthetic-signature'),'drawn',new Date().toISOString()]);
+ for(const officer of [secretary,assistant])await dbRun('INSERT INTO profile_signatures (user_id,signature_bytes,signature_type,updated_at) VALUES (?,?,?,?)',[officer,Buffer.from('synthetic-signature'),'drawn',new Date().toISOString()]);
  let sourceMode='ok',portalRejectIdentity=false,portalConflict=false,storeAvailable=true;const remoteCalls=[];
  let busy=[{date:'2026-09-17',start:'19:30',end:'21:00',label:'Stone Square Lodge Stated Meeting',status:'approved'},{date:'2026-09-21',start:'19:00',end:'20:00',label:'Synthetic visiting Chapter',status:'approved'},{date:'2026-09-21',start:'19:00',end:'20:00',label:'Synthetic visiting Chapter',status:'approved'},{date:'2026-09-22',start:'',end:'',label:'Synthetic pending request',status:'pending',ref:'SSL-TEST'},{date:'2026-13-99',label:'Invalid source date',status:'approved'}];
  const app=express();app.use(express.json());
@@ -20,6 +23,7 @@ try{
   remoteCalls.push({url,init});assert.equal(new URL(url).origin,'https://request.stonesquare22pha.org');
   if(url.includes('/api/calendar')){if(sourceMode==='fail')throw Error('Synthetic unavailable feed');if(sourceMode==='malformed')return new Response('{}',{status:200});return Response.json({busy,warning:sourceMode==='warning'?'Calendar source reports incomplete data.':undefined});}
   if(url.includes('decide='))return portalRejectIdentity?Response.json({error:'Designated officer only'},{status:403}):portalConflict?Response.json({error:'Request changed'},{status:409}):Response.json({ok:true,request:{id:'SSL-TEST',status:'approved',revision:'next'}});
+  if(url.includes('attest='))return Response.json({ok:true,request:{id:'SSL-TEST',status:'approved',agreementStatus:'fully_executed'}});
   return Response.json({store:storeAvailable,requests:[{id:'SSL-TEST',organization:'Synthetic organization',revision:'old',status:'pending'}]});
  }});
  app.use((error,req,res,next)=>res.status(error.statusCode||500).json({error:error.message}));
@@ -40,6 +44,11 @@ try{
  check('Authorized designated officer can decide',(await api('/api/building/requests/SSL-TEST/decision',designated,'POST',{decision:'denied',revision:'old'})).status===200);
  portalRejectIdentity=true;check('Private portal identity rejection propagates for a capable warden',(await api('/api/building/requests/SSL-TEST/decision',designated,'POST',{decision:'approved',revision:'old'})).status===403);portalRejectIdentity=false;
  check('Bridge preserves requester authorization',remoteCalls.at(-1).init.headers.Authorization==='Bearer synthetic-session');
+ check('Non-Secretary officer cannot attest',(await api('/api/building/requests/SSL-TEST/attest',reader,'POST',{revision:'old'})).status===403);
+ for(const [officer,label] of [[secretary,'Secretary'],[assistant,'Assistant Secretary']]){
+  check(label+' attestation reaches the agreement portal',(await api('/api/building/requests/SSL-TEST/attest',officer,'POST',{revision:'old'})).status===200);
+  check(label+' uses that officer’s saved signature',JSON.parse(remoteCalls.at(-1).init.body).signatureData.startsWith('data:image/png;base64,'));
+ }
  const cookieRead=await fetch(origin+'/api/building/requests',{headers:{'x-test-user':String(reader),'x-cookie-session':'verified-cookie-session'}});
  check('Website cookie session is forwarded to the building portal as a verified bearer',cookieRead.status===200&&remoteCalls.at(-1).init.headers.Authorization==='Bearer verified-cookie-session');
  await dbRun('UPDATE users SET permissions_json=? WHERE id=?',[JSON.stringify(['building.view']),designated]);check('Designated identity still requires decision capability',(await api('/api/building/requests/SSL-TEST/decision',designated,'POST',{decision:'approved',revision:'old'})).status===403);

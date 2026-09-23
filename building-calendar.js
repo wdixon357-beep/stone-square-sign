@@ -81,7 +81,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch}){
   await audit(req,'building_request_decided',{id:req.params.id,decision});res.json(payload);
  }catch(e){next(e)}});
  app.post('/api/building/requests/:id/attest',requireAuth,async(req,res,next)=>{try{
-  if(req.user.role!=='secretary')throw fail(403,'This attestation is assigned to the Secretary.');
+  if(!['secretary','assistant_secretary'].includes(req.user.role))throw fail(403,'This attestation is assigned to a Secretary officer.');
   const {revision}=req.body||{};if(typeof revision!=='string'||!revision)throw fail(400,'Review the current agreement before attesting.');
   const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=?',[req.user.id]);if(!signature?.signature_bytes)throw fail(409,'Save your signature profile before attesting.');
   const payload=await remote('/api/reservation?dashboard=1&attest='+encodeURIComponent(req.params.id),req,{revision,signatureData:'data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64')});

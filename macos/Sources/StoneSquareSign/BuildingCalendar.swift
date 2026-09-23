@@ -22,13 +22,21 @@ struct BuildingRequest: Decodable, Identifiable {
     let decidedAt: String?; let decidedBy: String?; let revision: BuildingRevision
     let requesterNotified: Bool
     let ownerOnly: Bool?; let agreementStatus: String?; let agreementText: String?; let coordinator: BuildingCoordinator?
+    let attestationRoles: [String]?; let attestedBy: BuildingAttestedBy?
+    var eligibleAttestationRoles: [String] { attestationRoles ?? ["secretary"] }
+    func mayAttest(role: String?) -> Bool { role.map { ["secretary", "assistant_secretary"].contains($0) && eligibleAttestationRoles.contains($0) } ?? false }
     var statusLabel: String {
-        if agreementStatus == "awaiting_secretary_attestation" { return "Awaiting Secretary attestation" }
+        if agreementStatus == "awaiting_secretary_attestation" {
+            return eligibleAttestationRoles.contains("assistant_secretary")
+                ? "Awaiting Secretary or Assistant Secretary attestation"
+                : "Awaiting Secretary attestation"
+        }
         if agreementStatus == "fully_executed" { return "Agreement complete" }
         return ["pending": "Pending", "approved": "Approved", "denied": "Declined"][status] ?? status.capitalized
     }
 }
 struct BuildingCoordinator: Decodable { let name: String; let title: String?; let email: String }
+struct BuildingAttestedBy: Decodable { let name: String; let title: String; let at: String }
 struct BuildingRequestsResponse: Decodable { let requests: [BuildingRequest]; let canDecide: Bool }
 struct BuildingAuthorization: Encodable { let date: String; let record: String; let fee: String; let insurance: String; let conditions: String }
 private struct BuildingDecisionBody: Encodable { let decision: String; let note: String; let revision: BuildingRevision; let authorization: BuildingAuthorization? }
@@ -68,14 +76,17 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
         } catch { message = error.localizedDescription; return false }
     }
     func attest(_ request: BuildingRequest, using model: AppModel) async -> Bool {
-        guard !busy, model.user?.role == "secretary", request.status == "approved", request.agreementStatus == "awaiting_secretary_attestation",
+        guard !busy, request.mayAttest(role: model.user?.role), request.status == "approved", request.agreementStatus == "awaiting_secretary_attestation",
               requests.first(where: { $0.id == request.id })?.revision == request.revision else { return false }
         busy = true; defer { busy = false }
         do {
             let body = try JSONEncoder().encode(BuildingAttestationBody(revision: request.revision))
             let result: BuildingDecisionResponse = try await model.request("/api/building/requests/\(routeID(request.id))/attest", method: "POST", body: body)
             if let index = requests.firstIndex(where: { $0.id == result.request.id }) { requests[index] = result.request }
-            message = "Secretary attestation recorded. The organization was notified and payment access is available."
+            message = result.request.requesterNotified
+                ? "Attestation recorded. The organization was notified and payment access is available."
+                : "Attestation recorded. The organization's notification has not been confirmed."
+            messageIsWarning = !result.request.requesterNotified
             return true
         } catch ClientError.conflict {
             _ = await load(using: model); message = "This agreement changed. Review the current agreement before attesting again."; return false
@@ -137,6 +148,7 @@ struct BuildingRequestsView: View {
                         }
                         if let existing = request.note, !existing.isEmpty { Section("Recorded note") { Text(existing).textSelection(.enabled) } }
                         if let person = request.decidedBy, !person.isEmpty { LabeledContent("Decision recorded by", value: person) }
+                        if let attestedBy = request.attestedBy { LabeledContent("Attested by", value: "\(attestedBy.name), \(attestedBy.title)") }
                         if request.status == "pending", workspace.canDecide, model.user?.can("building.decide") == true {
                             Section("Decision") {
                                 TextField("Note to the requester", text: $note, axis: .vertical).lineLimit(3...8)
@@ -148,7 +160,7 @@ struct BuildingRequestsView: View {
                                     Picker("Insurance", selection: $insuranceDecision) { Text("Choose").tag(""); Text("Required").tag("required"); Text("Waived").tag("waived") }
                                     LabeledContent("Security deposit", value: "No security deposit is required")
                                     TextField("Conditions", text: $authorizationConditions, axis: .vertical).lineLimit(2...6)
-                                    Text("Approval applies your saved signature. Secretary attestation is required before payment access is released.").font(.caption).foregroundStyle(.secondary)
+                                    Text("Approval applies your saved signature. The officer designated in this agreement must attest before payment access is released.").font(.caption).foregroundStyle(.secondary)
                                 }
                                 HStack {
                                     Button("Approve") { decision = "approved" }.buttonStyle(.borderedProminent)
@@ -157,9 +169,9 @@ struct BuildingRequestsView: View {
                                 }
                             }
                         }
-                        if request.agreementStatus == "awaiting_secretary_attestation", model.user?.role == "secretary" {
-                            Section("Secretary attestation") {
-                                Text("Review the complete approved agreement before applying your saved Secretary signature.")
+                        if request.agreementStatus == "awaiting_secretary_attestation", request.mayAttest(role: model.user?.role) {
+                            Section("Officer attestation") {
+                                Text("Review the complete approved agreement before applying your own saved signature as \(model.user?.role == "assistant_secretary" ? "Assistant Secretary" : "Secretary").")
                                 Button("Attest agreement") { attestationPending = true }.buttonStyle(.borderedProminent)
                             }
                         }
@@ -192,7 +204,7 @@ struct BuildingRequestsView: View {
         .alert("Attest this Building Use Agreement?", isPresented: $attestationPending) {
             Button("Attest") { if let request = selected { Task { _ = await workspace.attest(request, using: model) } } }
             Button("Cancel", role: .cancel) { }
-        } message: { Text("Your saved Secretary signature will be applied. The organization will then receive its decision and payment access.") }
+        } message: { Text("Your saved \(model.user?.role == "assistant_secretary" ? "Assistant Secretary" : "Secretary") signature will be applied. The organization will receive its decision and payment access once the workflow confirms completion.") }
     }
 }
 
