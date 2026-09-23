@@ -41,6 +41,7 @@ const accessControls = { dirtyAccessKeys: new Set(['officer-4']) };
 const dirtyContext = {
   state: { proposalDirty: false, dispensationDirty: false, minutesSourceDirty: false },
   treasuryWorkspace: null,
+  correspondenceWorkspace: { dirty: true },
   buildingCalendarWorkspace: null,
   $: id => id === 'accessControls' ? accessControls : null,
 };
@@ -49,6 +50,7 @@ vm.runInContext(`${dirtySource}\nthis.hasUnsavedWorkspaceForTest = hasUnsavedWor
 assert.equal(dirtyContext.hasUnsavedWorkspaceForTest('queue'), true);
 accessControls.dirtyAccessKeys.clear();
 assert.equal(dirtyContext.hasUnsavedWorkspaceForTest('queue'), false);
+assert.equal(dirtyContext.hasUnsavedWorkspaceForTest('correspondence'), true);
 assert.match(app, /beforeunload[\s\S]*hasUnsavedWorkspace\(state\.activeSection\)/);
 
 const dateSource = app.slice(app.indexOf('const formatDate ='), app.indexOf('/* An event date'));

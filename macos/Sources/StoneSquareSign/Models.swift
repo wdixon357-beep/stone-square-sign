@@ -48,6 +48,7 @@ struct User: Codable, Identifiable, Equatable {
     var canReadMinutes: Bool { can("minutes.view") || can("minutes.prepare") }
     var canReadDues: Bool { can("dues.ledger") }
     var canReadApprovals: Bool { ["owner", "secretary", "assistant_secretary", "viewer"].contains(role) && can("documents.status") }
+    var canPrepareCorrespondence: Bool { ["owner", "secretary", "assistant_secretary"].contains(role) && can("reports.create") }
     var canProposeDispensation: Bool { can("proposals.create") }
     var showsPersonalProposals: Bool { role != "owner" && canProposeDispensation }
     var proposalWorkspaceTitle: String { role == "owner" ? "Warden Proposals" : "My Dispensation Proposals" }
@@ -55,6 +56,7 @@ struct User: Codable, Identifiable, Equatable {
         switch section {
         case .home, nil: return true
         case .reportGenerator: return can("reports.create")
+        case .correspondence: return canPrepareCorrespondence
         case .receivedReports: return role == "owner"
         case .minutes: return canReadMinutes
         case .agenda: return role == "owner"
@@ -247,7 +249,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, memberAccess, dues, myDues, suggestions, profile, settings }
+enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, correspondence, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, memberAccess, dues, myDues, suggestions, profile, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,

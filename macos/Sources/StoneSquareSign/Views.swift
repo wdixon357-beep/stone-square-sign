@@ -295,6 +295,7 @@ struct WorkspaceView: View {
     @StateObject private var minutesWorkspace = MinutesWorkspace()
     @StateObject private var treasuryWorkspace = TreasuryWorkspace()
     @StateObject private var agendaWorkspace = AgendaWorkspace()
+    @StateObject private var correspondenceWorkspace = CorrespondenceWorkspace()
     @StateObject private var activityPresence = ActivityPresence()
 
     var body: some View {
@@ -321,6 +322,7 @@ struct WorkspaceView: View {
                 if model.user?.canOpen(.building) == true { Label("Building Requests", systemImage: "building.2").tag(AppSection.building) }
                 if model.user?.canOpen(.lodgeCalendar) == true { Label("Lodge Calendar", systemImage: "calendar").tag(AppSection.lodgeCalendar) }
                 if model.user?.can("reports.create") == true { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
+                if model.user?.canPrepareCorrespondence == true { Label("Lodge Correspondence", systemImage: "envelope.open.fill").tag(AppSection.correspondence) }
                 if model.user?.role == "owner" { Label("Received Reports", systemImage: "tray.full.fill").tag(AppSection.receivedReports) }
                 if model.user?.canReadMinutes == true {
                     Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes)
@@ -487,6 +489,7 @@ struct WorkspaceView: View {
                 openDispensations: { selection = .documents },
                 openCandidateTracker: { selection = .candidateTracker },
                 openReports: { selection = .reportGenerator },
+                openCorrespondence: { selection = .correspondence },
                 openReceivedReports: { selection = .receivedReports },
                 openMinutes: { selection = .minutes },
                 openAgenda: { selection = .agenda },
@@ -498,6 +501,8 @@ struct WorkspaceView: View {
         case .lodgeCalendar: LodgeCalendarView()
         case .reportGenerator:
             ReportGeneratorView(browser: reportBrowser)
+        case .correspondence:
+            CorrespondenceView(workspace: correspondenceWorkspace)
         case .receivedReports:
             if model.user?.role == "owner" { ReceivedReportsView() }
         case .minutes:
@@ -1209,6 +1214,7 @@ struct LandingDashboardView: View {
     let openDispensations: () -> Void
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
+    let openCorrespondence: () -> Void
     let openReceivedReports: () -> Void
     let openMinutes: () -> Void
     let openAgenda: () -> Void
@@ -1248,6 +1254,7 @@ struct LandingDashboardView: View {
                     if model.user?.canOpen(.building) == true { homeRow("Building Requests", model.user?.can("building.view") == true ? "Submit building requests and view recorded decisions" : "Submit a request to use the Lodge building", "building.2", action: openBuilding) }
                     if model.user?.canOpen(.lodgeCalendar) == true { homeRow("Lodge Calendar", "View scheduled events", "calendar", action: openCalendar) }
                     if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports) }
+                    if model.user?.canPrepareCorrespondence == true { homeRow("Lodge Correspondence", "Prepare and preview a secretary's letter", "envelope.open.fill", action: openCorrespondence) }
                     if model.user?.role == "owner" { homeRow("Received Reports", "Review reports submitted to you", "tray.full.fill", action: openReceivedReports) }
                     if model.user?.can("documents.status") == true {
                         homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) awaiting action" : "Open the document queue", "doc.text.fill", action: openDispensations)

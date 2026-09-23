@@ -24,6 +24,7 @@ const PAIRS = {
   calendarNav: 'lodgeCalendar',
   proposalsNav: 'proposalReview',
   reportsNav: 'reportGenerator',
+  correspondenceNav: 'correspondence',
   receivedReportsNav: 'receivedReports',
   minutesNav: 'minutes',
   agendaNav: 'agenda',

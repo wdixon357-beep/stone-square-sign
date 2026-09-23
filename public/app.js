@@ -48,6 +48,7 @@ const state = {
 };
 let treasuryWorkspace;
 let agendaWorkspace;
+let correspondenceWorkspace;
 let buildingCalendarWorkspace;
 let activityWorkspace,activityTracker;
 const requestedWorkspaceSection = new URLSearchParams(window.location.search).get('section');
@@ -157,6 +158,7 @@ const hasUnsavedWorkspace = section => ({
   minutes: state.minutesSourceDirty,
   treasury: Boolean(treasuryWorkspace?.dirty),
   agenda: Boolean(typeof agendaWorkspace !== 'undefined' && agendaWorkspace?.dirty),
+  correspondence: Boolean(correspondenceWorkspace?.dirty),
   calendar: Boolean(buildingCalendarWorkspace?.calendarDirty),
   building: Boolean(buildingCalendarWorkspace?.hasUnsavedRequest?.()),
   queue: Boolean($('accessControls')?.dirtyAccessKeys?.size),
@@ -453,6 +455,8 @@ const applyWorkspacePermissions = user => {
   const maySeeTreasury = can('treasury.view', user) || can('treasury.prepare', user) || can('treasury.upload', user);
   document.querySelectorAll('.treasury-only').forEach(el => el.classList.toggle('hidden', !maySeeTreasury));
   ['reportsNav','reportsMenuCard'].forEach(id => $(id).classList.toggle('hidden', !can('reports.create', user)));
+  const mayPrepareCorrespondence = ['owner', 'secretary', 'assistant_secretary'].includes(user.role) && can('reports.create', user);
+  ['correspondenceNav','correspondenceMenuCard'].forEach(id => $(id).classList.toggle('hidden', !mayPrepareCorrespondence));
   $('settingsNav').classList.toggle('hidden', !can('settings.manage', user));
   $('settingsName').textContent = user.name; $('settingsEmail').textContent = user.email;
   $('settingsSignature').classList.toggle('hidden', !can('signature.manage', user));
@@ -510,13 +514,17 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   if (!buildingCalendarWorkspace) { const { BuildingCalendarWorkspace } = await import('/building-calendar.js'); buildingCalendarWorkspace = new BuildingCalendarWorkspace({api: apiFetch, user: () => state.user}); }
   if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
   if (!agendaWorkspace && user.role === 'owner') { const { AgendaWorkspace } = await import('/agenda.js'); agendaWorkspace = new AgendaWorkspace({ api: apiFetch, user: () => state.user }); }
+  if (!correspondenceWorkspace && ['owner', 'secretary', 'assistant_secretary'].includes(user.role) && can('reports.create', user)) {
+    const { CorrespondenceWorkspace } = await import('/correspondence.js');
+    correspondenceWorkspace = new CorrespondenceWorkspace({ api: apiFetch, user: () => state.user });
+  }
   applyWorkspacePermissions(user);
   if (user.role === 'owner' && state.emailDeliveryReady === false) {
     $('serviceHealthAlert').innerHTML = '<strong>Email delivery needs attention.</strong><p>Invitations, password reset codes, and record notifications are saved, but email cannot leave the dashboard until the mail service is connected.</p>';
     show($('serviceHealthAlert'));
   } else hide($('serviceHealthAlert'));
   restoreWebDrafts();
-  const supportedDeepLinks = new Set(['home','building','calendar','reports','minutes','treasury','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports']);
+  const supportedDeepLinks = new Set(['home','building','calendar','reports','correspondence','minutes','treasury','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports']);
   showWorkspaceSection(supportedDeepLinks.has(requestedWorkspaceSection) ? requestedWorkspaceSection : 'home');
   hide($('authCard'));
   show($('appCard'));
@@ -797,8 +805,9 @@ const openCandidateTracker = async () => {
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (state.activeSection && section !== state.activeSection && hasUnsavedWorkspace(state.activeSection)
       && !window.confirm('Leave this unfinished work? It will stay in this browser tab so you can return to it.')) return false;
-  const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.ledger'], myDues: ['dues.self'], suggestions: ['suggestions.create'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
+  const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], correspondence: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.ledger'], myDues: ['dues.self'], suggestions: ['suggestions.create'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
   if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
+  if (section === 'correspondence' && !['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role)) section = 'home';
   $('buildingSection').classList.toggle('hidden', section !== 'building');
   $('calendarSection').classList.toggle('hidden', section !== 'calendar');
   $('buildingNav').classList.toggle('active', section === 'building');
@@ -827,6 +836,10 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('reportsSection').classList.toggle('hidden', !reports);
   $('reportsNav').classList.toggle('active', reports);
   if (reports && !skipLoad) void loadReportGenerator();
+  const correspondence = section === 'correspondence';
+  $('correspondenceSection').classList.toggle('hidden', !correspondence);
+  $('correspondenceNav').classList.toggle('active', correspondence);
+  if (correspondence && !skipLoad) void correspondenceWorkspace?.load();
   const receivedReports = section === 'receivedReports';
   $('receivedReportsSection').classList.toggle('hidden', !receivedReports);
   $('receivedReportsNav').classList.toggle('active', receivedReports);
@@ -1861,6 +1874,8 @@ $('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'
 $('treasuryMenuCard').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
 $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
+$('correspondenceNav').addEventListener('click', () => showWorkspaceSection('correspondence'));
+$('correspondenceMenuCard').addEventListener('click', () => showWorkspaceSection('correspondence'));
 $('receivedReportsNav').addEventListener('click', () => showWorkspaceSection('receivedReports'));
 $('receivedReportsMenuCard').addEventListener('click', () => showWorkspaceSection('receivedReports'));
 $('receivedReportsRefresh').addEventListener('click', () => void renderReceivedReports());

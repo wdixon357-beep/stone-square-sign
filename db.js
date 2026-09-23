@@ -339,6 +339,24 @@ export const initSchema = async (exec = run) => {
   )`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_officer_reports_submitted
     ON officer_reports(submitted_at DESC, title)`);
+  /* Official correspondence is saved as a private draft. A PDF preview is
+   * generated from these fields; saving never signs or sends a letter. */
+  await exec(`CREATE TABLE IF NOT EXISTS correspondence_drafts (
+    id TEXT PRIMARY KEY,
+    matter TEXT NOT NULL,
+    recipient_lodge TEXT NOT NULL,
+    recipient_name TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    prepared_by_user_id INTEGER NOT NULL REFERENCES users(id),
+    prepared_by_name TEXT NOT NULL,
+    prepared_by_office TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  await exec(`CREATE INDEX IF NOT EXISTS idx_correspondence_drafts_updated
+    ON correspondence_drafts(updated_at DESC)`);
   /* Agendas are private working documents created only by the Lodge owner. */
   await exec(`CREATE TABLE IF NOT EXISTS agendas (
     id TEXT PRIMARY KEY,

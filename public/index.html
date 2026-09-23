@@ -132,6 +132,7 @@
             <button id="memberAccessNav" class="nav-item owner-only" type="button"><span>MEM</span> Member Access</button>
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
+            <button id="correspondenceNav" class="nav-item hidden" type="button"><span>LTR</span> Lodge Correspondence</button>
             <button id="receivedReportsNav" class="nav-item owner-only hidden" type="button"><span>IN</span> Received Reports</button>
             <button id="minutesNav" class="nav-item minutes-only" type="button"><span>MIN</span> Meeting Minutes</button>
             <button id="agendaNav" class="nav-item owner-only" type="button"><span>AG</span> Agenda Creator</button>
@@ -170,6 +171,7 @@
               <button id="buildingMenuCard" class="document-menu-card building-only" type="button"><i>BLD</i><span><strong>Building Requests</strong><small>View building requests and their status</small></span><b>›</b></button>
               <button id="calendarMenuCard" class="document-menu-card calendar-only" type="button"><i>CAL</i><span><strong>Lodge Calendar</strong><small>Building use and Lodge events</small></span><b>›</b></button>
               <button id="reportsMenuCard" class="document-menu-card" type="button"><i>RPT</i><span><strong>Report Generator</strong><small>Prepare, preview and send a Lodge report</small></span><b>›</b></button>
+              <button id="correspondenceMenuCard" class="document-menu-card hidden" type="button"><i>LTR</i><span><strong>Lodge Correspondence</strong><small>Prepare a secretary letter on Lodge letterhead</small></span><b>›</b></button>
               <button id="receivedReportsMenuCard" class="document-menu-card owner-only hidden" type="button"><i>IN</i><span><strong>Received Reports</strong><small>Review reports submitted to you</small></span><b>›</b></button>
               <button id="dispensationsMenuCard" class="document-menu-card signer-only" type="button"><i>PDF</i><span><strong>Lodge Documents</strong><small id="dispensationsMenuStatus">Open the document queue</small></span><b>›</b></button>
               <button id="duesMenuCard" class="document-menu-card dues-ledger-only" type="button"><i>$</i><span><strong>Dues Ledger</strong><small id="duesMenuStatus">Full Lodge dues record</small></span><b>›</b></button>
@@ -197,6 +199,28 @@
             <div class="content-head"><div><p class="eyebrow">REPORTS FOR THE CRAFT</p><h1>Report Generator</h1><p>Preview your report before reviewing, signing and sending it.</p></div><button id="reportSeparateTab" class="secondary" type="button">Open in a separate tab</button></div>
             <p id="reportGeneratorMessage" class="message" role="status"></p>
             <iframe id="reportGeneratorFrame" title="Report Generator" referrerpolicy="no-referrer"></iframe>
+          </section>
+          <section id="correspondenceSection" class="hidden">
+            <div class="content-head"><div><p class="eyebrow">SECRETARY'S OFFICE</p><h1>Lodge Correspondence</h1><p>Create a private letter draft on official Lodge letterhead. Saving does not sign or send it.</p></div></div>
+            <div class="correspondence-layout">
+              <section class="panel correspondence-editor" aria-label="Letter editor">
+                <div class="panel-title"><h2>Letter draft</h2><button id="correspondenceNew" class="secondary" type="button">New letter</button></div>
+                <p id="correspondenceByline" class="helper"></p>
+                <label for="correspondenceMatter">Matter</label><select id="correspondenceMatter"><option value="general">General correspondence</option><option value="demit">Demit inquiry</option></select>
+                <label for="correspondenceLodge">Receiving Lodge</label><input id="correspondenceLodge" type="text" maxlength="160" placeholder="Receiving Lodge and number" />
+                <label for="correspondenceRecipient">Recipient</label><input id="correspondenceRecipient" type="text" maxlength="160" placeholder="Secretary's verified name and title" />
+                <label for="correspondenceSubject">Subject</label><input id="correspondenceSubject" type="text" maxlength="200" placeholder="Subject of this letter" />
+                <label for="correspondenceBody">Letter</label><textarea id="correspondenceBody" rows="12" maxlength="12000" placeholder="Write the verified facts and requested next step."></textarea>
+                <p class="helper">For a demit, a dues payment alone does not certify good standing or complete the Lodge's required checks. The Worshipful Master must review the exact outgoing letter.</p>
+                <div class="row-buttons"><button id="correspondenceThomas" class="secondary" type="button">Start PM Thomas reply</button><button id="correspondenceSave" class="primary" type="button">Save draft and preview</button></div>
+                <p id="correspondenceMessage" class="message" role="status"></p>
+              </section>
+              <section class="panel correspondence-documents" aria-label="Saved letters and preview">
+                <div class="panel-title"><h2>Saved drafts</h2><button id="correspondenceRefresh" class="secondary" type="button">Refresh</button></div>
+                <div id="correspondenceList" class="correspondence-list"></div>
+                <div id="correspondencePreviewWrap" class="hidden"><div class="panel-title"><h2>Document preview</h2><button id="correspondenceOpenPdf" class="secondary" type="button">Open PDF</button></div><div id="correspondencePreview" class="minutes-pdf-pages" role="region" aria-label="Letter draft PDF preview" tabindex="0"></div></div>
+              </section>
+            </div>
           </section>
           <section id="receivedReportsSection" class="owner-only hidden">
             <div class="content-head"><div><p class="eyebrow">WORSHIPFUL MASTER ONLY</p><h1>Received Reports</h1><p>Reports submitted through the Lodge Report Generator.</p></div><button id="receivedReportsRefresh" class="secondary" type="button">Refresh</button></div>
