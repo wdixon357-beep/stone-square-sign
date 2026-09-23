@@ -6,4 +6,6 @@ signed
 signatures
 macos/.build
 macos/dist
+output
+tmp
 .DS_Store

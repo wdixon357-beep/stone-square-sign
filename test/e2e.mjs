@@ -161,7 +161,7 @@ try {
     postgresTlsOptions({ databaseUrl: 'postgresql://example.invalid/db?sslmode=require' }).rejectUnauthorized === true);
   const dockerfile = fs.readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
   check('Docker image includes database adapter and PDF assets',
-    /COPY\s+package\.json\s+server\.js\s+db\.js\s+access-control\.js\s+building-calendar\.js\s+session-policy\.js/.test(dockerfile)
+    /COPY\s+package\.json\s+\*\.js\s+\.\//.test(dockerfile)
       && /COPY\s+assets\s+\.\/assets/.test(dockerfile));
 
   const productionFailure = async (overrides) => {
@@ -432,6 +432,15 @@ try {
   check('with no Zeffy settings it says so plainly rather than erroring',
     duesOwner.status === 503 && duesOwner.payload.configured === false,
     `${duesOwner.status} ${JSON.stringify(duesOwner.payload)}`);
+  for (const format of ['pdf', 'xlsx']) {
+    const endpoint = `/api/dues/export.${format}`;
+    check(`anonymous caller cannot export the ${format} dues ledger`,
+      (await api('GET', endpoint)).status === 401);
+    check(`ordinary viewer cannot export the ${format} dues ledger`,
+      (await api('GET', endpoint, { token: viewerToken })).status === 403);
+    check(`the ${format} export reports missing Zeffy configuration accurately`,
+      (await api('GET', endpoint, { token: wmToken })).status === 503);
+  }
 
 
   console.log('\nMeeting minutes');

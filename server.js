@@ -20,6 +20,7 @@ import {
   connect, initSchema, dbRun, dbGet, dbAll, withTransaction, isUniqueViolation,
 } from './db.js';
 import { buildDuesLedger, duesConfigured } from './dues.js';
+import { buildDuesPdf, buildDuesXlsx, duesExportFileName } from './dues-export.js';
 import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
@@ -1882,6 +1883,35 @@ app.get('/api/dues', requireAuth, requireDuesAccess, async (req, res, next) => {
     next(error);
   }
 });
+
+app.get(['/api/dues/export.pdf', '/api/dues/export.xlsx'], requireAuth, requireDuesAccess,
+  rateLimit({ key: 'dues-export', maximum: 30, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+    try {
+      if (!duesConfigured()) return res.status(503).json({ error: 'Dues are not connected yet.' });
+      const format = req.path.endsWith('.xlsx') ? 'xlsx' : 'pdf';
+      const ledger = await buildDuesLedger();
+      const generatedAt = new Date();
+      const bytes = format === 'pdf'
+        ? await buildDuesPdf(ledger, generatedAt)
+        : await buildDuesXlsx(ledger, generatedAt);
+      const filename = duesExportFileName(ledger, generatedAt, format);
+      await addAudit({
+        userId: req.user.id,
+        action: 'dues_exported',
+        ip: req.ip,
+        userAgent: req.get('user-agent') || '',
+        details: { duesYear: ledger.duesYear, rows: ledger.rows.length, format, generatedAt: generatedAt.toISOString() },
+      });
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.type(format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.send(bytes);
+    } catch (error) {
+      if (/Zeffy API/.test(error.message)) return res.status(502).json({ error: 'Zeffy did not answer. Try again shortly.' });
+      next(error);
+    }
+  });
 
 /* Meeting minutes stay inside the same officer sign in as the signing queue. Uploading a
  * Plaud transcript creates private working material. The Worshipful Master's signature

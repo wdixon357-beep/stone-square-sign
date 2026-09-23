@@ -2248,6 +2248,16 @@ func signatureDataURL(image: NSImage) -> String? {
 struct DuesView: View {
     @EnvironmentObject var model: AppModel
     @State private var showingAdjustment = false
+    @State private var exporting: DuesExportFormat?
+    @State private var exportNotice: String?
+    @State private var exportFailed = false
+
+    private enum DuesExportFormat: String {
+        case pdf, xlsx
+
+        var label: String { self == .pdf ? "PDF" : "Excel" }
+        var contentType: UTType { self == .pdf ? .pdf : (UTType(filenameExtension: "xlsx") ?? .data) }
+    }
 
     private func tint(_ status: String) -> Color {
         switch status {
@@ -2263,8 +2273,21 @@ struct DuesView: View {
                 NativeWorkspaceHeader(title: "Dues", subtitle: "Payments, balances and reconciliation", symbol: "dollarsign.circle") {
                     if model.user?.can("dues.manage") == true { Button("Record activity", systemImage: "plus") { showingAdjustment = true } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadDues() } }.disabled(model.duesLoading)
+                    Menu {
+                        Button("Save PDF", systemImage: "doc.richtext") { Task { await export(.pdf) } }
+                        Button("Save Excel", systemImage: "tablecells") { Task { await export(.xlsx) } }
+                    } label: { Label("Export", systemImage: "square.and.arrow.down") }
+                        .disabled(model.dues == nil || exporting != nil)
                 }.padding(.horizontal, -22)
                 if let ledger = model.dues { Text("\(ledger.duesYear) dues, \(lodgeMoney(ledger.rateCents)) each, reconciled against both Zeffy campaigns.").font(.callout).foregroundStyle(.secondary) }
+                if exporting != nil { ProgressView("Preparing dues snapshot…") }
+                if let exportNotice {
+                    Text(exportNotice)
+                        .foregroundStyle(exportFailed ? .red : .secondary)
+                        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                        .background((exportFailed ? Color.red : Color.primary).opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
                 if model.duesLoading && model.dues == nil {
                     ProgressView("Reading payments from Zeffy…").frame(maxWidth: .infinity)
                 }
@@ -2345,6 +2368,38 @@ struct DuesView: View {
             }
         }
         .sheet(isPresented: $showingAdjustment) { DuesAdjustmentView(rows: model.dues?.rows ?? []) { await model.loadDues() } }
+    }
+
+    @MainActor
+    private func export(_ format: DuesExportFormat) async {
+        guard exporting == nil, model.dues != nil else { return }
+        exporting = format
+        exportNotice = nil
+        defer { exporting = nil }
+        do {
+            let workspace = MinutesWorkspace()
+            workspace.configure(model)
+            let data = try await workspace.request("/api/dues/export.\(format.rawValue)")
+            let valid = format == .pdf ? data.starts(with: Data("%PDF-".utf8)) : data.starts(with: [0x50, 0x4b])
+            guard valid else { throw ClientError.invalidResponse }
+
+            let stamp = DateFormatter()
+            stamp.locale = Locale(identifier: "en_US_POSIX")
+            stamp.timeZone = TimeZone(identifier: "America/New_York")
+            stamp.dateFormat = "yyyy-MM-dd_HH-mm-ssZ"
+            let filename = "Stone-Square-Dues-Snapshot-\(stamp.string(from: Date())).\(format.rawValue)"
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [format.contentType]
+            panel.nameFieldStringValue = filename
+            panel.title = "Save dues snapshot as \(format.label)"
+            guard panel.runModal() == .OK, let destination = panel.url else { return }
+            try data.write(to: destination, options: .atomic)
+            exportFailed = false
+            exportNotice = "Saved dues snapshot: \(destination.lastPathComponent)"
+        } catch {
+            exportFailed = true
+            exportNotice = "Could not save the \(format.label) snapshot. \(error.localizedDescription)"
+        }
     }
 
     private func detail(for row: DuesRow) -> String {

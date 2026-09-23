@@ -283,7 +283,7 @@ const incidentPayload = ({ reference, path, method, status, category, state: inc
   category, state: incidentState, area: state.activeSection || 'home',
 });
 
-const apiFetch = async (path, init = {}) => {
+const apiFetch = async (path, init = {}, onSuccessResponse) => {
   webUpdateRequests += 1;
   try {
   const method = String(init.method || 'GET').toUpperCase();
@@ -304,6 +304,7 @@ const apiFetch = async (path, init = {}) => {
       const type = response.headers.get('content-type') || '';
       const payload = type.includes('application/json') ? await response.json() : await response.blob();
       if (response.ok) {
+        if (onSuccessResponse) onSuccessResponse(response);
         if (incidentReference) {
           const recovered = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'temporary_connection', state: 'recovered' });
           queueIncident(recovered); void flushQueuedIncidents();
@@ -1893,6 +1894,8 @@ $('proposeMenuCard')?.addEventListener('click', () => showWorkspaceSection('prop
 $('duesNav').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesMenuCard').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesRefresh').addEventListener('click', () => renderDues(true));
+$('duesExportPdf').addEventListener('click', () => exportDuesLedger('pdf'));
+$('duesExportExcel').addEventListener('click', () => exportDuesLedger('xlsx'));
 $('myDuesNav').addEventListener('click', () => showWorkspaceSection('myDues'));
 $('myDuesMenuCard').addEventListener('click', () => showWorkspaceSection('myDues'));
 $('myDuesRefresh').addEventListener('click', () => renderMyDues());
@@ -3185,6 +3188,49 @@ initialize();
  * Rendered needs-attention-first, because the point of the page is knowing who to
  * call, not admiring a total. */
 const money = (cents) => `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+let duesExportBusy = false;
+const exportDuesLedger = async format => {
+  if (duesExportBusy || !can('dues.ledger')) return;
+  duesExportBusy = true;
+  const buttons = [$('duesExportPdf'), $('duesExportExcel')];
+  buttons.forEach(button => { button.disabled = true; });
+  const label = format === 'pdf' ? 'PDF' : 'Excel';
+  const exportMessage = $('duesExportMessage');
+  const authEpoch = state.authEpoch;
+  const userId = state.user?.id;
+  setMessage(exportMessage, `Preparing the ${label} dues ledger…`);
+  try {
+    let serverFilename = '';
+    const blob = await apiFetch(`/api/dues/export.${format}`, {}, response => {
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename\s*=\s*"?([^";]+)"?/i);
+      serverFilename = match?.[1] || '';
+    });
+    if (state.authEpoch !== authEpoch || state.user?.id !== userId) return;
+    if (!(blob instanceof Blob) || blob.size === 0) throw new Error('The export was empty. Please try again.');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = serverFilename.replace(/[^a-zA-Z0-9._-]/g, '_') || `Stone-Square-Dues-Ledger-${timestamp}.${format}`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage(exportMessage, `Timestamped current ledger snapshot downloaded: ${filename}. Refreshing the screen…`);
+    await renderDues(true);
+    if (state.authEpoch === authEpoch && state.user?.id === userId) {
+      setMessage(exportMessage, `Timestamped current ledger snapshot downloaded: ${filename}`);
+    }
+  } catch (error) {
+    if (state.authEpoch === authEpoch && state.user?.id === userId) setMessage(exportMessage, error.message, true);
+  } finally {
+    duesExportBusy = false;
+    buttons.forEach(button => { button.disabled = false; });
+  }
+};
 
 const renderDues = async (force = false) => {
   if (state.duesLoading) return;

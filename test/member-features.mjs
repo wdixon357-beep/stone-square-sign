@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import JSZip from 'jszip';
+import { PDFDocument } from 'pdf-lib';
 import os from 'node:os';import fs from 'node:fs/promises';import path from 'node:path';
 import {spawn} from 'node:child_process';import {createServer} from 'node:http';import {once} from 'node:events';
 const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'ss-member-'));
@@ -52,6 +54,22 @@ try{for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}cat
  check('Duplicate Zeffy payment identifiers count only once',mine.data.row.payments.filter(payment=>payment.externalId==='pay-1').length===1);
  check('Another Brother sees his own zero balance record',(await api('/api/dues/me',peter.token)).data.row.name.includes('Peter'));
  check('Member cannot retrieve the full Lodge ledger',(await api('/api/dues',james.token)).status===403);
+ for(const format of ['pdf','xlsx']){
+  const endpoint=`/api/dues/export.${format}`;
+  check(`Member cannot export the ${format} Lodge ledger`,(await api(endpoint,james.token)).status===403);
+  const response=await fetch(base+endpoint,{headers:{Authorization:`Bearer ${owner.token}`}});
+  const bytes=Buffer.from(await response.arrayBuffer());
+  const filename=response.headers.get('content-disposition')||'';
+  check(`Owner receives a timestamped ${format} snapshot`,response.status===200&&filename.includes('Stone-Square-Dues-Ledger-2026-2027-')&&filename.includes(`.${format}`)&&response.headers.get('cache-control')?.includes('no-store'));
+  if(format==='pdf'){
+   const document=await PDFDocument.load(bytes);
+   check('PDF snapshot is a readable document',bytes.subarray(0,5).toString()==='%PDF-'&&document.getPageCount()>=1);
+  }else{
+   const workbook=await JSZip.loadAsync(bytes);
+   const sheets=await workbook.file('xl/workbook.xml').async('string');
+   check('Excel snapshot includes ledger, payment and unmatched tabs',sheets.includes('name="Ledger"')&&sheets.includes('name="Payments"')&&sheets.includes('name="Unmatched"'));
+  }
+ }
  check('A Brother cannot use the manual-payment assistant',(await api('/api/dues/manual-assist',james.token,'POST',{text:'Brother James Member paid $25 cash today.'})).status===403);
  const assisted=await api('/api/dues/manual-assist',owner.token,'POST',{text:'Brother James Member paid $25 cash on September 15, 2026. Receipt 1.'});
  check('Owner can prepare a roster-matched manual payment with the projected balance',assisted.status===200&&assisted.data.saved===false&&assisted.data.proposal.rosterId===mine.data.row.rosterId&&assisted.data.proposal.projectedBalanceCents===10000);

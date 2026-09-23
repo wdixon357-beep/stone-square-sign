@@ -414,6 +414,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .dues-row.dues-partial { border-left-color: var(--gold); }
 .dues-row.dues-unpaid { border-left-color: #96331f; }
 .dues-row small { color: var(--muted); display: block; margin-top: 2px; }
+#duesSection .dues-head-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 8px; }
+.dues-head-actions button { min-height: 44px; }
+@media (max-width: 600px) { #duesSection .dues-head-actions { flex: 1 1 100%; width: 100%; } .dues-head-actions button { flex: 1 1 135px; } }
+@media (max-width: 430px) { .dues-head-actions button { flex-basis: 100%; } }
 .dues-adjustment-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.dues-adjustment-grid label{min-width:0}.dues-adjustment-grid .wide{grid-column:1/-1}
 .dues-assist{padding:16px;margin-bottom:18px;border:1px solid var(--line);border-radius:14px;background:var(--soft)}.dues-assist>label{display:block;font-weight:700;margin-bottom:5px}.dues-assist textarea{width:100%;min-height:88px}.dues-assist .builder-actions{margin-top:10px}.dues-assist-review{margin-top:12px;padding:14px;border-left:4px solid var(--gold);border-radius:8px;background:#fff}.dues-assist-review strong{display:block;margin-bottom:6px}.dues-assist-review p{margin:4px 0}.dues-assist-review ul{margin:8px 0 0;padding-left:20px}
 .my-dues-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}.my-dues-summary>div{padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}.my-dues-summary span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.my-dues-summary strong{display:block;margin-top:6px;font-size:clamp(18px,3vw,26px)}.payment-actions{margin:12px 0 20px}.payment-actions a{text-decoration:none;text-align:center}
