@@ -29,6 +29,7 @@ The building team was thanked for completing the repairs.
 READING OF THE MINUTES
 The previous minutes were read and approved.`);
     assert.equal(agenda.sourceType, 'compiled_notes');
+    assert.equal(agenda.organizerVersion, 5, 'new drafts use the concise bullet presentation without changing older signed snapshots');
     assert.deepEqual(agenda.present, ['Brother Example One', 'Brother Example Two']);
     const sickness = agenda.sections.filter(section => section.heading === SICKNESS_HEADING);
     assert.equal(sickness.length, 1, `one dedicated section for ${alias}`);

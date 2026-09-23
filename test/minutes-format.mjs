@@ -16,7 +16,9 @@ for (const heading of ['Opening', 'Reading of the Minutes', "Treasurer's Report"
   const blocks = sectionBlocks({heading, body:`- ${motionText}\n\nA separate topic remains a separate paragraph.`});
   assert.equal(blocks.length, 2);
   assert.equal(blocks[0].text, motionText, 'long related content stays intact');
-  assert.ok(blocks.every(item => item.bullet === false), `${heading} uses paragraphs even for old bullet-only drafts`);
+  assert.ok(blocks.every(item => !item.bullet), `${heading} preserves older signed paragraph layout`);
+  const revised = sectionBlocks({heading, body:`- ${motionText}\n- A separate topic.`, bulletStyle:true});
+  assert.ok(revised.every(item => item.bullet), `${heading} uses bullets for new minutes`);
 }
 for (const heading of ['Sickness and Distress', 'Communications', 'Upcoming Events and Reminders']) {
   const blocks = sectionBlocks({heading, body:'- First separate update.\n- Second separate update.'});
@@ -68,7 +70,7 @@ assert.equal(sections.find(s => s.heading === 'Next Meeting').body, 'Thursday, O
 const repeated = documentSections({...draft, sections:[{heading:'Sickness and Distress', body:'The WM asked the Chaplain to give a prayer for sickness and distress at the close of the meeting.\nPrayers for Brother Stone.'}, {heading:'Closing', body:'Closed at 9:30 PM.\nThe Chaplain offered the closing prayer and prayed for the sick and distressed.'}]});
 assert.equal(repeated.find(s=>s.heading==='Sickness and Distress').body, `Prayers for Brother Stone.\n${prayerRequestText}`);
 assert.equal(repeated.at(-1).body, `${closingPrayerText}\nThe Lodge was closed at 9:30 PM.`);
-const decoratedDraft = {...draft, closingTime:'10:30 PM', nextMeeting:'October 1, 2026', sections:[
+const decoratedDraft = {...draft, organizerVersion:5, closingTime:'10:30 PM', nextMeeting:'October 1, 2026', sections:[
   {heading:'Sickness and Distress', body:'- The Worshipful Master asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.'},
   {heading:'Upcoming Events and Reminders', body:'- The next meeting is scheduled for <u>October 1, 2026</u>.'},
   {heading:'Prayer and Closing', body:'- WM Dixon-Saunders asked the Chaplain to pray for the sick and distressed at the close.\n- The Chaplain gave the closing prayer and prayed for the sick and distressed.\n- The Lodge closed at <u>10:30 PM</u>.'},
@@ -76,10 +78,14 @@ const decoratedDraft = {...draft, closingTime:'10:30 PM', nextMeeting:'October 1
 const decoratedSnapshot = JSON.stringify(decoratedDraft);
 const decoratedSections = documentSections(decoratedDraft);
 assert.equal(JSON.stringify(decoratedDraft), decoratedSnapshot, 'deduplication never changes the saved draft');
-assert.equal(decoratedSections.at(-1).body, `${closingPrayerText}\nThe Lodge was closed at 10:30 PM.`, 'marked-up whole closing bullets appear once in canonical closing');
+assert.equal(decoratedSections.at(-1).body, `- ${closingPrayerText}\n- The Lodge was closed at 10:30 PM.`, 'marked-up whole closing bullets appear once in canonical closing');
+assert.ok(decoratedSections.every(section => section.bulletStyle === true), 'the new style applies to every section');
+const signedLegacy = documentSections({...decoratedDraft, organizerVersion:4});
+assert.ok(signedLegacy.every(section => section.bulletStyle !== true), 'older signed snapshots keep their original paragraph layout');
+assert.equal(signedLegacy.at(-1).body, `${closingPrayerText}\nThe Lodge was closed at 10:30 PM.`);
 assert.equal(decoratedSections.filter(s=>s.heading === 'Next Meeting').length, 1);
 assert.ok(!decoratedSections.some(s=>s.heading === 'Upcoming Events and Reminders'), 'empty duplicate-only events section is omitted');
-assert.equal(decoratedSections.find(s=>s.heading === 'Sickness and Distress').body.trim(), prayerRequestText);
+assert.equal(decoratedSections.find(s=>s.heading === 'Sickness and Distress').body.trim(), `- ${prayerRequestText}`);
 assert.match(prayerRequestText, /^WM Dixon-Saunders /, 'canonical prayer request uses the requested WM name');
 assert.equal(decoratedSections.map(s=>s.body).join('\n').split(prayerRequestText).length - 1, 1, 'standard prayer request appears once across sections');
 const extraEvents = [

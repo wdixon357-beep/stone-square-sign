@@ -142,17 +142,21 @@ export function separateFormalClosure(body) {
 
 export function documentSections(draft) {
   const sections = cleanMinutesSectionsForPresentation(draft.sections, draft);
+  // Signed snapshots retain the renderer they were prepared with. A stray
+  // bullet in a legacy section must not reformat an already attested PDF.
+  const usesBullets = Number(draft.organizerVersion) >= 5;
+  const generatedLine = text => usesBullets ? `- ${text}` : text;
   const closing = sections.filter(s => /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(s.heading.trim()));
   const result = sections.filter(s => !closing.includes(s));
   let sick = result.find(s => isSicknessHeading(s.heading));
   if (!sick) { sick = {heading: SICKNESS_HEADING, body: ''}; result.push(sick); }
   // Remove only our exact standard wording when the officer changes a control.
   if (typeof draft.prayerRequested === 'boolean') sick.body = omitWholeBullets(sick.body, isStandardPrayerRequest);
-  if (draft.prayerRequested === true) sick.body += `\n${prayerRequestText}`;
-  else if (draft.prayerRequested !== false) sick.body += '\nPrayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.';
+  if (draft.prayerRequested === true) sick.body += `\n${generatedLine(prayerRequestText)}`;
+  else if (draft.prayerRequested !== false) sick.body += `\n${generatedLine('Prayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.')}`;
   if (draft.nextMeeting) {
     for (const section of result) section.body = omitWholeBullets(section.body, text => repeatsNextMeeting(text, draft, section.heading));
-    result.push({heading: 'Next Meeting', body: formatMinutesDate(draft.nextMeeting)});
+    result.push({heading: 'Next Meeting', body: generatedLine(formatMinutesDate(draft.nextMeeting))});
   }
   let closingBody = closing.map(s => s.body).join('\n').trim();
   if (draft.nextMeeting) closingBody = omitWholeBullets(closingBody, text => repeatsNextMeeting(text, draft, 'Closing'));
@@ -163,16 +167,17 @@ export function documentSections(draft) {
   if (draft.closingTime) closingBody = omitWholeBullets(closingBody, text => /^(?:(?:the )?lodge (?:was )?)?(?:closed|adjourned)(?: at [\d: .APMapm]+)?\.?$/i.test(text));
   const formal = separateFormalClosure(closingBody);
   closingBody = formal.remaining;
-  const closure = formal.statements.length ? formal.statements.join('\n') : draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.` : 'Closing time: confirm and enter the time the Lodge was closed.';
-  const prayer = draft.closingPrayerGiven === true ? closingPrayerText : draft.closingPrayerGiven === false ? '' : 'Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.';
+  const closure = generatedLine(formal.statements.length ? formal.statements.join('\n') : draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.` : 'Closing time: confirm and enter the time the Lodge was closed.');
+  const prayer = draft.closingPrayerGiven === true ? generatedLine(closingPrayerText) : draft.closingPrayerGiven === false ? '' : generatedLine('Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.');
   result.push({heading: 'Closing of the Lodge', body: [closingBody, prayer, closure].filter(Boolean).join('\n')});
-  return result.filter(s => s.body.trim() || isSicknessHeading(s.heading));
+  return result.filter(s => s.body.trim() || isSicknessHeading(s.heading))
+    .map(section => usesBullets ? {...section, bulletStyle: true} : section);
 }
 
-// One block model controls both PDF and Word. Narrative and motions remain
-// intact paragraphs; list sections use one bullet per source-delimited item.
+// One block model controls both PDF and Word. The explicit draft version keeps
+// older signed snapshots in their original mixed paragraph and list format.
 export function sectionBlocks(section) {
-  const list = /^(?:sickness (?:and|&) distress|communications|correspondence|upcoming events(?: and reminders)?|reminders)$/i.test(String(section.heading || '').trim());
+  const list = section.bulletStyle === true || /^(?:sickness (?:and|&) distress|communications|correspondence|upcoming events(?: and reminders)?|reminders)$/i.test(String(section.heading || '').trim());
   return String(section.body || '').replace(/\r/g, '').split(/\n+|\s+[•▪]\s*/)
     .map(line => line.replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim())
     .filter(line => line && !isEmptyEntry(line) && !praiseLabel.test(plainBullet(line)))
