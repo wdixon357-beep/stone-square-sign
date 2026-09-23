@@ -366,6 +366,9 @@ export const initSchema = async (exec = run) => {
   await addColumn(exec, 'correspondence_drafts', 'signed_at', 'TEXT');
   await addColumn(exec, 'correspondence_drafts', 'signed_signature_bytes', 'BYTEA');
   await addColumn(exec, 'correspondence_drafts', 'return_note', 'TEXT');
+  await addColumn(exec, 'correspondence_drafts', 'signing_mode', "TEXT NOT NULL DEFAULT 'single'");
+  await addColumn(exec, 'correspondence_drafts', 'shared_signer_1_id', 'INTEGER REFERENCES users(id)');
+  await addColumn(exec, 'correspondence_drafts', 'shared_signer_2_id', 'INTEGER REFERENCES users(id)');
   /* Agendas are private working documents created only by the Lodge owner. */
   await exec(`CREATE TABLE IF NOT EXISTS agendas (
     id TEXT PRIMARY KEY,

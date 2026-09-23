@@ -375,7 +375,8 @@ struct WorkspaceView: View {
         } detail: {
             GeometryReader { available in
                 VStack(spacing: 0) {
-                    WorkspaceNotices()
+                    WorkspaceNotices(correspondenceCount: correspondenceWorkspace.lettersForMySignature.count,
+                                     openCorrespondence: { selection = .correspondence })
                     workspaceContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -387,7 +388,11 @@ struct WorkspaceView: View {
                 .clipped()
             }
         }
-        .task { activityPresence.start(model);await model.refresh() }
+        .task {
+            activityPresence.start(model)
+            correspondenceWorkspace.configure(model)
+            await model.refresh()
+        }
         .onAppear {
             AppUpdater.shared.setWorkspaceGuard(updateGuardID) {
                 AppUpdater.unfinishedReportWork(report: reportBrowser, minutes: minutesWorkspace, treasury: treasuryWorkspace, agenda: agendaWorkspace, operationInProgress: model.isBusy)
@@ -395,6 +400,13 @@ struct WorkspaceView: View {
         }
         .onDisappear { activityPresence.stop(); AppUpdater.shared.setWorkspaceGuard(updateGuardID, check: nil) }
         .onChange(of:selection){_,section in activityPresence.visit(section)}
+        .onChange(of: model.correspondenceRecordsRevision) { _, _ in
+            guard model.user?.canPrepareCorrespondence == true else { return }
+            Task {
+                correspondenceWorkspace.configure(model)
+                await correspondenceWorkspace.refresh()
+            }
+        }
         .onChange(of: model.requestedSection) { _, requested in
             guard let requested else { return }
             selection = requested
@@ -538,9 +550,28 @@ struct WorkspaceNotices: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var updater = AppUpdater.shared
     @ObservedObject private var reliability = ReliabilityCenter.shared
+    let correspondenceCount: Int
+    let openCorrespondence: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
+            if correspondenceCount > 0 {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "envelope.badge.fill")
+                        .foregroundStyle(SignTheme.gold)
+                    Text("\(correspondenceCount) Lodge letter\(correspondenceCount == 1 ? "" : "s") awaiting your signature")
+                        .font(.callout.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Review letters", action: openCorrespondence)
+                        .fixedSize()
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(SignTheme.gold.opacity(0.12))
+                Divider()
+            }
             if let notice = reliability.notice {
                 HStack(alignment: .top, spacing: 14) {
                     Image(systemName: notice.recovered ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")

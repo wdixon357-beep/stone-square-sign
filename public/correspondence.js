@@ -30,7 +30,7 @@ export class CorrespondenceWorkspace {
     $('correspondenceSubmit').addEventListener('click', () => { void this.submit(); });
     $('correspondenceReturn').addEventListener('click', () => { void this.returnForCorrection(); });
     $('correspondenceSign').addEventListener('click', () => { void this.sign(); });
-    $('correspondenceThomas').addEventListener('click', () => this.thomasStarter());
+    $('correspondenceThomas').addEventListener('click', () => this.demitStarter());
     $('correspondenceOpenPdf').addEventListener('click', () => { if (this.pdfUrl) window.open(this.pdfUrl, '_blank', 'noopener'); });
     $('correspondenceDownload').addEventListener('click', () => {
       if (!this.pdfUrl) return;
@@ -48,6 +48,10 @@ export class CorrespondenceWorkspace {
   renderSigners() {
     const select = $('correspondenceSigner');
     select.replaceChildren();
+    const either = document.createElement('option');
+    either.value = '';
+    either.textContent = 'Either McDuffie or Adrian Reese';
+    select.append(either);
     for (const signer of this.signers) {
       const option = document.createElement('option');
       option.value = String(signer.id);
@@ -56,10 +60,7 @@ export class CorrespondenceWorkspace {
     }
     if (this.currentSignerUserId && this.signers.some(item => item.id === this.currentSignerUserId)) {
       select.value = String(this.currentSignerUserId);
-    } else if (this.signers.length && !this.currentId) {
-      this.currentSignerUserId = this.signers[0].id;
-      select.value = String(this.currentSignerUserId);
-    } else { select.selectedIndex = -1; }
+    } else { this.currentSignerUserId = null; select.value = ''; }
     $('correspondenceSignerWrap').classList.toggle('hidden', this.user()?.role !== 'owner');
     select.disabled = this.currentStatus !== 'draft';
   }
@@ -79,7 +80,7 @@ export class CorrespondenceWorkspace {
     this.currentId = null;
     this.currentStatus = 'draft';
     this.currentUpdatedAt = null;
-    this.currentSignerUserId = this.signers[0]?.id || null;
+    this.currentSignerUserId = null;
     this.savedSignerUserId = null;
     $('correspondenceMatter').value = 'general';
     for (const id of ['correspondenceLodge', 'correspondenceRecipient', 'correspondenceSubject', 'correspondenceBody']) $(id).value = '';
@@ -93,14 +94,13 @@ export class CorrespondenceWorkspace {
     message('New draft. Fill in the verified details and save to preview.');
     return true;
   }
-  thomasStarter() {
+  demitStarter() {
     if (!this.newLetter()) return;
     $('correspondenceMatter').value = 'demit';
-    $('correspondenceLodge').value = 'Star in the East Lodge';
-    $('correspondenceSubject').value = 'PM James R. Thomas II: dues payment and pending demit request';
-    $('correspondenceBody').value = 'Brother Secretary,\n\nStone Square Lodge No. 22’s dues ledger shows that PM James R. Thomas II’s dues were paid in full as of September 23, 2026. His demit request remains under review. We will provide an update when that review is complete.\n\nPlease confirm receipt of this letter.';
+    $('correspondenceSubject').value = 'Demit inquiry concerning [Brother full name]';
+    $('correspondenceBody').value = 'Dear Brother Secretary,\n\nIn response to your correspondence concerning [Brother full name] and his demit request to [Receiving Lodge], Stone Square Lodge No. 22 confirms the following as of [record date]: [verified standing and charges statement].\n\nPlease let us know if you need any further information as the request proceeds through the appropriate channels.';
     this.dirty = true;
-    message('Starter added. Verify the Lodge name, recipient spelling, dues record, and procedural checks before saving.');
+    message('General demit reply started. Verify the incoming inquiry, financial standing, and complaint and charge records. Replace every bracketed prompt before saving.');
   }
   async load() {
     this.bind();
@@ -125,7 +125,7 @@ export class CorrespondenceWorkspace {
       const meta = document.createElement('small');
       meta.textContent = `${draft.recipientLodge} · ${draft.preparedByName} · ${new Date(draft.updatedAt).toLocaleDateString('en-US')}`;
       const status = document.createElement('small');
-      status.textContent = draft.status === 'signed' ? 'Signed, ready for Secretary to email' : draft.status === 'awaiting_secretary' ? `Awaiting ${draft.assignedToName || 'Secretary'} signature` : 'Draft';
+      status.textContent = draft.status === 'signed' ? `Signed by ${draft.signedByName}, ready to email` : draft.status === 'awaiting_secretary' ? draft.signingMode === 'either' ? 'Waiting for McDuffie or Adrian Reese to sign' : `Waiting for ${draft.assignedToName || 'the assigned officer'} to sign` : 'Draft';
       button.append(title, meta, status);
       button.addEventListener('click', () => { void this.open(draft); });
       list.append(button);
@@ -137,7 +137,8 @@ export class CorrespondenceWorkspace {
     this.currentId = draft.id;
     this.currentStatus = draft.status;
     this.currentUpdatedAt = draft.updatedAt;
-    this.currentSignerUserId = draft.assignedToUserId || this.signers.find(item => item.name === draft.assignedToName)?.id || null;
+    this.currentSignerUserId = draft.signingMode === 'either' ? null :
+      draft.assignedToUserId || this.signers.find(item => item.name === draft.assignedToName)?.id || null;
     this.savedSignerUserId = this.currentSignerUserId;
     this.renderSigners();
     $('correspondenceMatter').value = draft.matter;
@@ -181,7 +182,9 @@ export class CorrespondenceWorkspace {
   renderHandoff(draft) {
     $('correspondenceHandoff').classList.toggle('hidden', !draft);
     $('correspondenceSubmit').classList.toggle('hidden', !draft || draft.status !== 'draft' || this.user()?.role !== 'owner');
-    const canSign = draft?.status === 'awaiting_secretary' && draft.assignedToUserId === this.user()?.id && ['secretary','assistant_secretary'].includes(this.user()?.role);
+    const sharedEligible = draft?.sharedSignerUserIds?.includes(this.user()?.id);
+    const canSign = draft?.status === 'awaiting_secretary' &&
+      (draft.assignedToUserId === this.user()?.id || (draft.signingMode === 'either' && sharedEligible));
     $('correspondenceReturn').classList.toggle('hidden', !draft || draft.status !== 'awaiting_secretary' || !(canSign || this.user()?.role === 'owner'));
     $('correspondenceConsentWrap').classList.toggle('hidden', !canSign);
     $('correspondenceSign').classList.toggle('hidden', !canSign);
@@ -189,31 +192,34 @@ export class CorrespondenceWorkspace {
     $('correspondenceStatus').textContent = !draft ? '' : draft.status === 'signed'
       ? `Signed by ${draft.signedByName}. Download the signed PDF and attach it to the Secretary's email. The dashboard has not sent it.`
       : draft.status === 'awaiting_secretary'
-        ? `Assigned to ${draft.assignedToName} for review and signature. The letter is locked while awaiting signature.`
+        ? draft.signingMode === 'either'
+          ? 'Waiting for McDuffie or Adrian Reese to sign. The first signature completes the letter.'
+          : `Waiting for ${draft.assignedToName || 'the assigned officer'} to sign.`
         : 'Draft only. Review the recipient, signing officer, facts, and complete PDF before assigning it.';
-    $('correspondenceSubmit').textContent = `Send to ${draft?.assignedToName || 'selected officer'} for signature`;
+    $('correspondenceSubmit').textContent = `Send to ${draft?.assignedToName || 'McDuffie or Adrian Reese'} for signature`;
     $('correspondenceSigner').disabled = Boolean(draft && draft.status !== 'draft');
     $('correspondenceDownload').textContent = draft?.status === 'signed' ? 'Download signed PDF for email' : 'Download draft PDF';
   }
   async submit() {
-    if (!this.currentId || this.currentStatus !== 'draft' || this.dirty || this.previewRecordId !== this.currentId || this.previewRecordRevision !== this.currentUpdatedAt || !this.pdfUrl || !this.savedSignerUserId || this.savedSignerUserId !== Number($('correspondenceSigner').value)) { message('Save and review the PDF with the selected signing officer before assigning this letter.', true); return; }
+    if (!this.currentId || this.currentStatus !== 'draft' || this.dirty || this.previewRecordId !== this.currentId || this.previewRecordRevision !== this.currentUpdatedAt || !this.pdfUrl || this.savedSignerUserId !== (Number($('correspondenceSigner').value) || null)) { message('Save and review the PDF before assigning this letter for signature.', true); return; }
     const signer = this.signers.find(item => item.id === this.savedSignerUserId);
-    if (!signer || !window.confirm(`Send this exact letter to ${signer.name} for review and signature? It will be locked against further edits.`)) return;
+    const recipient = signer?.name || 'McDuffie or Adrian Reese';
+    if (!window.confirm(`Send this exact letter to ${recipient} for review and signature? It will be locked against further edits.`)) return;
     const button = $('correspondenceSubmit'); button.disabled = true;
     try {
-      const response = await this.api(`/api/correspondence/${encodeURIComponent(this.currentId)}/submit`, { method: 'POST', body: JSON.stringify({ signerUserId: signer.id, expectedUpdatedAt: this.currentUpdatedAt }) });
+      const response = await this.api(`/api/correspondence/${encodeURIComponent(this.currentId)}/submit`, { method: 'POST', body: JSON.stringify({ signerUserId: signer?.id || null, expectedUpdatedAt: this.currentUpdatedAt }) });
       this.currentStatus = response.draft.status;
       await this.load(); await this.open(response.draft);
-      message(`The letter is in ${signer.name}’s dashboard signature queue. He must review and sign it; it has not been emailed.`);
+      message(`The letter is in ${recipient}’s dashboard signature queue. The first to sign completes it; it has not been emailed.`);
     } catch (error) { message(error.message || 'The letter could not be assigned.', true); }
     finally { button.disabled = false; }
   }
   async sign() {
-    if (!this.currentId || this.previewRecordId !== this.currentId || !this.pdfUrl || !$('correspondenceConsent').checked) { message('Review this letter’s complete PDF and check the signature authorization box before signing.', true); return; }
+    if (!this.currentId || this.previewRecordId !== this.currentId || this.previewRecordRevision !== this.currentUpdatedAt || !this.pdfUrl || !$('correspondenceConsent').checked) { message('Review this letter’s current PDF and check the signature authorization box before signing.', true); return; }
     if (!window.confirm('Apply your saved signature to this exact letter? You will still need to email the signed PDF yourself.')) return;
     const button = $('correspondenceSign'); button.disabled = true;
     try {
-      const response = await this.api(`/api/correspondence/${encodeURIComponent(this.currentId)}/sign`, { method: 'POST', body: JSON.stringify({ consent: true }) });
+      const response = await this.api(`/api/correspondence/${encodeURIComponent(this.currentId)}/sign`, { method: 'POST', body: JSON.stringify({ consent: true, expectedUpdatedAt: this.previewRecordRevision }) });
       this.currentStatus = response.draft.status;
       await this.load(); await this.open(response.draft);
       message('Signed PDF ready. Download it and attach it to your email. The dashboard has not emailed the letter.');

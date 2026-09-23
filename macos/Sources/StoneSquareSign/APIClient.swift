@@ -305,6 +305,7 @@ enum BiometricCredentialStore {
 final class AppModel: ObservableObject {
     @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
     @Published var minutesRecordsRevision = 0
+    @Published var correspondenceRecordsRevision = 0
     @Published var treasuryAlerts: [TreasuryAlert] = []
     @Published var treasuryRecordsRevision = 0
     @Published var user: User?
@@ -631,6 +632,7 @@ final class AppModel: ObservableObject {
         }
         await refreshMinutesReviewAlerts()
         await refreshTreasuryAlerts()
+        if user?.canPrepareCorrespondence == true { correspondenceRecordsRevision += 1 }
         guard user?.can("documents.status") == true else {
             documents = []
             return
@@ -684,6 +686,7 @@ final class AppModel: ObservableObject {
                     self.isLive = true
                     await self.refreshMinutesReviewAlerts()
                     await self.refreshTreasuryAlerts()
+                    if self.user?.canPrepareCorrespondence == true { self.correspondenceRecordsRevision += 1 }
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
                         if line == "event: minutes_review_changed" || line == "event: minutes_completion_changed" {
@@ -695,6 +698,9 @@ final class AppModel: ObservableObject {
                         if line == "event: treasury_changed" {
                             self.treasuryRecordsRevision += 1
                             await self.refreshTreasuryAlerts()
+                        }
+                        if line == "event: correspondence_changed" {
+                            self.correspondenceRecordsRevision += 1
                         }
                         if line == "event: queue_changed" || line == "event: profile_changed" {
                             await self.refresh(silent: true)

@@ -21,10 +21,13 @@ struct CorrespondenceRecord: Decodable, Identifiable {
     let preparedByName: String
     let preparedByOffice: String
     let preparedByUserId: Int?
+    let signingMode: String?
+    let sharedSignerUserIds: [Int]?
     let assignedToUserId: Int?
     let assignedToName: String?
     let assignedToOffice: String?
     let signedByName: String?
+    let signedByUserId: Int?
     let signedAt: String?
     let returnNote: String?
     let updatedAt: String
@@ -41,6 +44,7 @@ private struct CorrespondenceSigner: Decodable, Identifiable {
     let id: Int
     let name: String
     let office: String
+    let role: String
 }
 struct CorrespondenceSignerChoice: Identifiable {
     let id: Int
@@ -53,6 +57,7 @@ private struct CorrespondenceSavePayload: Encodable {
     let subject: String
     let body: String
     let matter: String
+    let signingMode: String
     let signerUserId: Int?
 
     init(_ fields: CorrespondenceFields, signerUserId: Int?) {
@@ -61,11 +66,43 @@ private struct CorrespondenceSavePayload: Encodable {
         subject = fields.subject
         body = fields.body
         matter = fields.matter
+        signingMode = signerUserId == nil ? "either" : "single"
         self.signerUserId = signerUserId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case recipientLodge, recipientName, subject, body, matter, signingMode, signerUserId
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(recipientLodge, forKey: .recipientLodge)
+        try values.encode(recipientName, forKey: .recipientName)
+        try values.encode(subject, forKey: .subject)
+        try values.encode(body, forKey: .body)
+        try values.encode(matter, forKey: .matter)
+        try values.encode(signingMode, forKey: .signingMode)
+        if let signerUserId { try values.encode(signerUserId, forKey: .signerUserId) }
+        else { try values.encodeNil(forKey: .signerUserId) }
     }
 }
 private struct CorrespondenceSubmitPayload: Encodable {
-    let signerUserId: Int
+    let signingMode: String
+    let signerUserId: Int?
+    let expectedUpdatedAt: String
+
+    private enum CodingKeys: String, CodingKey { case signingMode, signerUserId, expectedUpdatedAt }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(signingMode, forKey: .signingMode)
+        try values.encode(expectedUpdatedAt, forKey: .expectedUpdatedAt)
+        if let signerUserId { try values.encode(signerUserId, forKey: .signerUserId) }
+        else { try values.encodeNil(forKey: .signerUserId) }
+    }
+}
+private struct CorrespondenceSignPayload: Encodable {
+    let consent: Bool
     let expectedUpdatedAt: String
 }
 
@@ -86,7 +123,25 @@ private struct CorrespondenceSubmitPayload: Encodable {
     private var selectedSigner: CorrespondenceSigner? {
         signers.first { $0.id == selectedSignerUserId }
     }
-    var selectedSignerName: String { selectedSigner?.name ?? "a signing officer" }
+    private var sharedSignerNames: String {
+        let names = sharedSigners.map(\.name)
+        return names.count == 2 ? names.joined(separator: " or ") : "William McDuffie or Adrian Reese"
+    }
+    private func normalizedName(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+    private var sharedSigners: [CorrespondenceSigner] {
+        let secretary = signers.filter { $0.role == "secretary" &&
+            normalizedName($0.name) == "william mcduffie" }
+        let assistant = signers.filter { $0.role == "assistant_secretary" &&
+            normalizedName($0.name) == "adrian reese" }
+        guard secretary.count == 1, assistant.count == 1 else { return [] }
+        return [secretary[0], assistant[0]]
+    }
+    private var isSharedSigning: Bool { selectedSignerUserId == nil }
+    var selectedSignerName: String { isSharedSigning ? sharedSignerNames : (selectedSigner?.name ?? "a signing officer") }
     var selectedSignerOffice: String { selectedSigner?.office ?? "Secretary or Assistant Secretary" }
     var signerChoices: [CorrespondenceSignerChoice] {
         signers.map { CorrespondenceSignerChoice(id: $0.id, title: "\($0.name), \($0.office)") }
@@ -97,13 +152,16 @@ private struct CorrespondenceSubmitPayload: Encodable {
     private var isAssignedSigner: Bool {
         guard let currentUser else { return false }
         return ["secretary", "assistant_secretary"].contains(currentUser.role) &&
-            currentUser.can("reports.create") && selected?.assignedToUserId == currentUser.id
+            currentUser.can("reports.create") &&
+            ((selected?.signingMode == "either" && selected?.sharedSignerUserIds?.contains(currentUser.id) == true) ||
+             selected?.assignedToUserId == currentUser.id)
     }
 
     var hasChanges: Bool {
         editing && (selected == nil || fields != selected?.fields ||
                     (currentUser?.role == "owner" && selected?.status == "draft" &&
-                     selectedSignerUserId != selected?.assignedToUserId))
+                     (selectedSignerUserId != selected?.assignedToUserId ||
+                      selected?.signingMode != (isSharedSigning ? "either" : "single"))))
     }
     var canEdit: Bool {
         guard let selected else { return true }
@@ -115,12 +173,15 @@ private struct CorrespondenceSubmitPayload: Encodable {
     }
     var canSubmit: Bool {
         currentUser?.role == "owner" && selected?.status == "draft" && !hasChanges &&
-            selectedSigner != nil && pdf != nil && previewSignerUserId == selectedSignerUserId &&
+            (isSharedSigning ? sharedSigners.count == 2 : selectedSigner != nil) &&
+            pdf != nil && previewSignerUserId == selectedSignerUserId &&
             previewUpdatedAt == selected?.updatedAt &&
-            selected?.assignedToUserId == selectedSignerUserId && !busy
+            selected?.assignedToUserId == selectedSignerUserId &&
+            selected?.signingMode == (isSharedSigning ? "either" : "single") && !busy
     }
     var canSign: Bool {
-        isAssignedSigner && selected?.status == "awaiting_secretary" && pdf != nil && !busy
+        isAssignedSigner && selected?.status == "awaiting_secretary" && pdf != nil &&
+            previewUpdatedAt == selected?.updatedAt && !busy
     }
     var canReturnForCorrection: Bool {
         guard let currentUser, selected?.status == "awaiting_secretary", !busy else { return false }
@@ -128,11 +189,13 @@ private struct CorrespondenceSubmitPayload: Encodable {
     }
     var lettersForMySignature: [CorrespondenceRecord] {
         guard ["secretary", "assistant_secretary"].contains(currentUser?.role ?? "") else { return [] }
-        return records.filter { $0.status == "awaiting_secretary" && $0.assignedToUserId == currentUser?.id }
+        return records.filter { $0.status == "awaiting_secretary" &&
+            (($0.signingMode == "either" && $0.sharedSignerUserIds?.contains(currentUser?.id ?? -1) == true) ||
+             $0.assignedToUserId == currentUser?.id) }
     }
     var signedLettersForMe: [CorrespondenceRecord] {
         guard ["secretary", "assistant_secretary"].contains(currentUser?.role ?? "") else { return [] }
-        return records.filter { $0.status == "signed" && $0.assignedToUserId == currentUser?.id }
+        return records.filter { $0.status == "signed" && $0.signedByUserId == currentUser?.id }
     }
     var otherLetters: [CorrespondenceRecord] {
         let highlighted = Set((lettersForMySignature + signedLettersForMe).map(\.id))
@@ -147,7 +210,7 @@ private struct CorrespondenceSubmitPayload: Encodable {
 
     func refresh() async {
         do {
-            if currentUser?.role == "owner" { await loadSigners() }
+            await loadSigners()
             let data = try await transport.request("/api/correspondence")
             records = try JSONDecoder().decode(CorrespondenceListResponse.self, from: data).drafts
             if let id = selected?.id, let updated = records.first(where: { $0.id == id }), !hasChanges {
@@ -156,7 +219,7 @@ private struct CorrespondenceSubmitPayload: Encodable {
                 selected = updated
                 fields = updated.fields
                 if currentUser?.role == "owner", updated.status == "draft" {
-                    selectedSignerUserId = updated.assignedToUserId ?? preferredSignerID
+                    selectedSignerUserId = updated.signingMode == "either" ? nil : (updated.assignedToUserId ?? signers.first?.id)
                 }
                 if previewChanged { await loadPreview() }
             }
@@ -169,9 +232,24 @@ private struct CorrespondenceSubmitPayload: Encodable {
         pdf = nil
         previewSignerUserId = nil
         previewUpdatedAt = nil
-        selectedSignerUserId = preferredSignerID
+        selectedSignerUserId = nil
         editing = true
         message = "Draft only. Verify the facts and Lodge authority before any correspondence is issued."
+    }
+
+    func startDemitInquiryReply() {
+        guard selected == nil, canEdit, !busy else { return }
+        fields.matter = "demit"
+        fields.subject = "Demit inquiry concerning [Brother full name]"
+        fields.body = """
+            Dear Brother Secretary,
+
+            In response to your correspondence concerning [Brother full name] and his demit request to [Receiving Lodge], Stone Square Lodge No. 22 confirms the following as of [record date]: [verified standing and charges statement].
+
+            Please let us know if you need any further information as the request proceeds through the appropriate channels.
+            """
+        changed()
+        message = "General demit reply started. Verify the incoming inquiry, financial standing, and complaint and charge records. Replace every bracketed prompt before saving."
     }
 
     func open(_ record: CorrespondenceRecord) async {
@@ -184,7 +262,7 @@ private struct CorrespondenceSubmitPayload: Encodable {
            !signers.contains(where: { $0.id == assignedID }) {
             selectedSignerUserId = nil
         } else {
-            selectedSignerUserId = record.assignedToUserId ?? preferredSignerID
+            selectedSignerUserId = record.signingMode == "either" ? nil : (record.assignedToUserId ?? signers.first?.id)
         }
         editing = true
         message = record.status == "signed" ? "Signed by \(record.signedByName ?? "the signing officer"). Save the PDF for that officer to email." :
@@ -212,10 +290,6 @@ private struct CorrespondenceSubmitPayload: Encodable {
         if hasChanges { message = "Unsaved changes. Save the draft to update its letterhead preview." }
     }
 
-    private var preferredSignerID: Int? {
-        signers.first { $0.name.localizedCaseInsensitiveContains("McDuffie") }?.id ?? signers.first?.id
-    }
-
     private func loadSigners() async {
         do {
             let data = try await transport.request("/api/correspondence/signers")
@@ -223,14 +297,13 @@ private struct CorrespondenceSubmitPayload: Encodable {
             let previousID = selectedSignerUserId
             signers = available
             if let selected, selected.status != "draft" { return }
-            if let previousID, available.contains(where: { $0.id == previousID }) { return }
-            selectedSignerUserId = previousID == nil ? preferredSignerID : nil
+            guard let previousID else { return }
+            if available.contains(where: { $0.id == previousID }) { return }
+            selectedSignerUserId = nil
             pdf = nil
             previewSignerUserId = nil
             previewUpdatedAt = nil
-            if previousID != nil {
-                message = "The previously selected signing officer is unavailable. Choose an available officer before sending."
-            }
+            message = "The previously selected signing officer is unavailable. Choose either secretary or another available officer before submission."
         } catch {
             signers = []
             if selected == nil || selected?.status == "draft" {
@@ -243,13 +316,16 @@ private struct CorrespondenceSubmitPayload: Encodable {
         }
     }
 
-    func chooseSigner(_ id: Int) async {
-        guard canChooseSigner, signers.contains(where: { $0.id == id }), selectedSignerUserId != id else { return }
+    func chooseSigner(_ id: Int?) async {
+        guard canChooseSigner, id == nil || signers.contains(where: { $0.id == id }),
+              selectedSignerUserId != id || selected?.signingMode != (id == nil ? "either" : "single") else { return }
         selectedSignerUserId = id
         pdf = nil
         previewSignerUserId = nil
         previewUpdatedAt = nil
-        message = "Save the draft to preview the letter with \(selectedSignerName) as the signing officer."
+        message = isSharedSigning
+            ? "Save the draft to offer it to both secretaries. The first to sign will appear on the signed letter."
+            : "Save the draft to preview the letter with \(selectedSignerName) as the signing officer."
     }
 
     func save() async {
@@ -293,7 +369,8 @@ private struct CorrespondenceSubmitPayload: Encodable {
             message = "Save the signing officer choice to update the letterhead preview."
             return
         }
-        if currentUser?.role == "owner" && record.status == "draft" && signerID == nil {
+        if currentUser?.role == "owner" && record.status == "draft" &&
+            record.signingMode != "either" && signerID == nil {
             pdf = nil
             previewUpdatedAt = nil
             message = "Choose an available signing officer to preview this letter."
@@ -319,30 +396,34 @@ private struct CorrespondenceSubmitPayload: Encodable {
     }
 
     func submitToSecretary() async {
-        guard canSubmit, let record = selected, let signer = selectedSigner else { return }
+        guard canSubmit, let record = selected else { return }
         busy = true
         defer { busy = false }
         do {
-            let body = try JSONEncoder().encode(CorrespondenceSubmitPayload(signerUserId: signer.id,
-                                                                            expectedUpdatedAt: record.updatedAt))
+            let body = try JSONEncoder().encode(CorrespondenceSubmitPayload(
+                signingMode: isSharedSigning ? "either" : "single", signerUserId: selectedSignerUserId,
+                expectedUpdatedAt: record.updatedAt))
             let data = try await transport.request("/api/correspondence/\(record.id)/submit", method: "POST", body: body)
             let record = try JSONDecoder().decode(CorrespondenceSaveResponse.self, from: data).draft
             pdf = nil
             selected = record
             fields = record.fields
-            message = "Submitted to \(signer.name), \(signer.office), for review and signature. No email has been sent."
+            message = isSharedSigning
+                ? "Submitted to both secretaries. The first to sign will be named on the final letter. No email has been sent."
+                : "Submitted to \(selectedSignerName), \(selectedSignerOffice), for review and signature. No email has been sent."
             await refresh()
             await loadPreview()
         } catch { message = "Could not submit this letter. \(error.localizedDescription)" }
     }
 
     func sign() async {
-        guard canSign, let id = selected?.id else { return }
+        guard canSign, let record = selected, previewUpdatedAt == record.updatedAt else { return }
         busy = true
         defer { busy = false }
         do {
-            let data = try await transport.request("/api/correspondence/\(id)/sign", method: "POST",
-                                                   body: Data("{\"consent\":true}".utf8))
+            let body = try JSONEncoder().encode(CorrespondenceSignPayload(
+                consent: true, expectedUpdatedAt: record.updatedAt))
+            let data = try await transport.request("/api/correspondence/\(record.id)/sign", method: "POST", body: body)
             let record = try JSONDecoder().decode(CorrespondenceSaveResponse.self, from: data).draft
             pdf = nil
             selected = record
@@ -350,7 +431,14 @@ private struct CorrespondenceSubmitPayload: Encodable {
             message = "Signature applied. Save the signed PDF and email it to the receiving Secretary."
             await refresh()
             await loadPreview()
-        } catch { message = "Could not sign this letter. \(error.localizedDescription)" }
+        } catch {
+            await refresh()
+            if let selected, selected.status == "signed" {
+                message = "This letter was already signed by \(selected.signedByName ?? "another officer"). The signed PDF is ready to review."
+            } else {
+                message = "Could not sign this letter. \(error.localizedDescription)"
+            }
+        }
     }
 
     func returnForCorrection(_ reason: String) async {
@@ -396,7 +484,7 @@ struct CorrespondenceView: View {
                 if workspace.editing {
                     Button("All Drafts") { leaveEditor() }
                     if workspace.canSubmit {
-                        Button("Send to \(workspace.selectedSignerName) for Signature") { showingSubmitConfirmation = true }
+                        Button("Send for Secretary Signature") { showingSubmitConfirmation = true }
                     }
                     if workspace.canSign {
                         Button("Review and Sign") {
@@ -418,6 +506,15 @@ struct CorrespondenceView: View {
                         .buttonStyle(.borderedProminent)
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await workspace.refresh() } }
                 }
+            }
+            if !workspace.lettersForMySignature.isEmpty {
+                Label("\(workspace.lettersForMySignature.count) letter\(workspace.lettersForMySignature.count == 1 ? "" : "s") awaiting your review and signature", systemImage: "bell.badge.fill")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(SignTheme.navy)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 11)
+                    .background(SignTheme.gold.opacity(0.14))
             }
             if workspace.editing { editor } else { draftList }
             if !workspace.message.isEmpty {
@@ -448,7 +545,7 @@ struct CorrespondenceView: View {
             Button("Send for Signature") { Task { await workspace.submitToSecretary() } }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("\(workspace.selectedSignerName) will review and sign the letter in the dashboard, then email the signed PDF. This action does not email the receiving Lodge.")
+            Text("The assigned secretary will review and sign the letter in the dashboard, then email the signed PDF. When offered to both, the first to sign completes it. This action does not email the receiving Lodge.")
         }
         .sheet(isPresented: $showingSignSheet) { signSheet }
         .sheet(isPresented: $showingReturnSheet) { returnSheet }
@@ -529,7 +626,9 @@ struct CorrespondenceView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if record.status == "awaiting_secretary" {
-                            Text("\(record.assignedToName ?? "The assigned officer") reviews and signs this letter before emailing it.")
+                            Text(record.signingMode == "either"
+                                 ? "Either secretary may review and sign this letter. The first signature completes it and determines the signing name and office."
+                                 : "\(record.assignedToName ?? "The assigned officer") reviews and signs this letter before emailing it.")
                                 .font(.callout).foregroundStyle(.secondary)
                             if workspace.canReturnForCorrection {
                                 Button("Return for Correction") {
@@ -560,19 +659,21 @@ struct CorrespondenceView: View {
                         if workspace.canChooseSigner {
                             Picker("Choose who signs and sends", selection: Binding(
                                 get: { workspace.selectedSignerUserId },
-                                set: { newValue in if let newValue { Task { await workspace.chooseSigner(newValue) } } }
+                                set: { newValue in Task { await workspace.chooseSigner(newValue) } }
                             )) {
-                                Text("Select an officer").tag(Optional<Int>.none)
+                                Text("Either Secretary (first to sign)").tag(Optional<Int>.none)
                                 ForEach(workspace.signerChoices) { choice in
                                     Text(choice.title).tag(Optional(choice.id))
                                 }
                             }
                             .disabled(workspace.signerChoices.isEmpty)
                             if workspace.signerChoices.isEmpty {
-                                Text("No signing officer is available. Refresh after access is restored; this letter cannot be sent yet.")
+                                Text("No signing officer is available. Refresh after access is restored; this letter cannot be submitted yet.")
                                     .font(.callout).foregroundStyle(.secondary)
                             } else {
-                                Text("The selected officer's name and office appear on the saved letter. Review the PDF before sending it for signature.")
+                                Text(workspace.selectedSignerUserId == nil
+                                     ? "Both secretaries may review this letter. The first to sign will appear on the signed PDF."
+                                     : "The selected officer's name and office appear on the saved letter. Review the PDF before submission.")
                                     .font(.callout).foregroundStyle(.secondary)
                             }
                         } else if let record = workspace.selected {
@@ -582,6 +683,9 @@ struct CorrespondenceView: View {
                     }
                 }
                 Section("Letter") {
+                    if workspace.selected == nil && workspace.canEdit {
+                        Button("Start demit inquiry reply") { workspace.startDemitInquiryReply() }
+                    }
                     Text("Use verified facts. A dues payment alone does not establish eligibility for a demit or authorize its issuance.")
                         .font(.callout).foregroundStyle(.secondary)
                     TextEditor(text: field(\.body))
@@ -643,8 +747,10 @@ struct CorrespondenceView: View {
 
     private func statusLabel(_ record: CorrespondenceRecord) -> String {
         switch record.status {
-        case "awaiting_secretary": return "Awaiting \(record.assignedToName ?? "officer")'s signature"
-        case "signed": return "Signed, ready for \(record.assignedToName ?? "the signing officer") to email"
+        case "awaiting_secretary": return record.signingMode == "either"
+            ? "Waiting for McDuffie or Adrian Reese to sign"
+            : "Waiting for \(record.assignedToName ?? "the assigned officer") to sign"
+        case "signed": return "Signed by \(record.signedByName ?? "the signing officer"), ready to email"
         default: return record.returnNote == nil ? "Draft" : "Draft, correction requested"
         }
     }

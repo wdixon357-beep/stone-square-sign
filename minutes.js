@@ -159,6 +159,39 @@ function checkedGeneratedDraft(response, source, localDraft) {
     if (noVote.test(quote) && approved.test(body) && !approved.test(quote)) {
       throw generationError('The generated decision conflicts with its source reference. Review the recorded motion outcome and try again.');
     }
+    const proceduralFacts = [
+      {label: 'second', stated: /\b(?:seconded|seconder|seconding|second by|a second was (?:made|offered))\b/i, supported: /\b(?:seconded|seconder|seconding|second by|a second was (?:made|offered))\b/i},
+      {label: 'unanimous vote', stated: /\bunanimous(?:ly)?\b/i, supported: /\bunanimous(?:ly)?\b|\ball (?:in favor|ayes?)\b[^.!?]*\b(?:none|no one|zero) opposed\b/i},
+      {label: 'approval', stated: /\b(?:approved|adopted|passed|carried)\b/i, supported: /\b(?:approved|adopted|passed|carried|all in favor)\b/i},
+      {label: 'rejection', stated: /\b(?:rejected|defeated|failed)\b/i, supported: /\b(?:rejected|defeated|failed)\b/i},
+      {label: 'tabling', stated: /\btabled\b/i, supported: /\btabled\b/i},
+      {label: 'withdrawal', stated: /\bwithdrawn|withdrew\b/i, supported: /\bwithdrawn|withdrew\b/i},
+    ];
+    if (/\b(?:motion|moved|seconded)\b/i.test(`${body}\n${quote}`)) {
+      for (const fact of proceduralFacts) {
+        if (fact.stated.test(body) && !fact.supported.test(quote)) {
+          throw generationError(`The generated motion claims an unsupported ${fact.label}. Review the cited transcript and try again.`);
+        }
+      }
+      if (proceduralFacts[0].supported.test(quote) && !proceduralFacts[0].stated.test(body)) {
+        warnings.push(`Confirm ${section.heading}: a second appears in the cited source but is absent from the draft motion.`);
+      }
+      if (proceduralFacts.slice(1).some(fact => fact.supported.test(quote))
+        && !proceduralFacts.slice(1).some(fact => fact.stated.test(body))) {
+        warnings.push(`Confirm ${section.heading}: the cited source records a motion outcome that is absent from the draft.`);
+      }
+      if (noVote.test(quote) && !noVote.test(body)) {
+        warnings.push(`Confirm ${section.heading}: the cited source says no vote or decision was recorded, but the draft omits that distinction.`);
+      }
+    }
+  });
+  const motionLine = /\b(?:motion|moved|seconded|vote(?:d)?|carried|adopted|unanimous(?:ly)?)\b/i;
+  const sectionCoverage = new Set([...references].filter(([field]) => /^sections\[\d+\]\.body$/.test(field))
+    .flatMap(([, entries]) => entries.flatMap(entry => Array.from({length: entry.lastLine - entry.firstLine + 1}, (_, offset) => entry.firstLine + offset))));
+  source.split('\n').forEach((line, index) => {
+    if (motionLine.test(line) && !sectionCoverage.has(index + 1)) {
+      warnings.push(`Motion source review: line ${index + 1} mentions a motion or vote but is not linked to a minutes section.`);
+    }
   });
   const normalized = normalizeMinutesDraft({...generated, sourceType: localDraft.sourceType, organizerVersion: localDraft.organizerVersion});
   const comparable = value => String(value || '').toLowerCase().replace(/[.\s]/g, '');
