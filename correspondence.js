@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { dbAll, dbGet, dbRun } from './db.js';
+import { AGENDA_OFFICERS } from './agenda.js';
 
 const eligible = user => ['owner', 'secretary', 'assistant_secretary'].includes(user?.role)
   && (user.role === 'owner' || user.permissions?.includes('reports.create'));
@@ -48,35 +49,64 @@ const wrap = (value, font, size, width) => {
 
 export async function buildCorrespondencePdf(row) {
   const pdf = await PDFDocument.create();
-  const regular = await pdf.embedFont(StandardFonts.Helvetica);
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const navy = rgb(0.07, 0.15, 0.25), gold = rgb(0.70, 0.49, 0.17), gray = rgb(0.33, 0.38, 0.44);
+  const regular = await pdf.embedFont(StandardFonts.TimesRoman);
+  const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
+  const italic = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+  const navy = rgb(19 / 255, 47 / 255, 88 / 255);
+  const gold = rgb(183 / 255, 139 / 255, 48 / 255);
+  const gray = rgb(89 / 255, 89 / 255, 89 / 255);
   const seal = await pdf.embedPng(await readFile(new URL('./assets/lodge-seal.png', import.meta.url)));
+  const bodyLeft = 120, bodyWidth = 446;
   let page, y;
+  const centered = (value, atY, font, size, color = navy) => {
+    const label = printable(value);
+    page.drawText(label, { x: 32 + (548 - font.widthOfTextAtSize(label, size)) / 2, y: atY, size, font, color });
+  };
   const nextPage = () => {
     page = pdf.addPage([612, 792]);
-    page.drawRectangle({ x: 0, y: 747, width: 612, height: 45, color: navy });
-    page.drawImage(seal, { x: 50, y: 686, width: 54, height: 54 });
-    page.drawText('STONE SQUARE LODGE NO. 22', { x: 120, y: 712, size: 17, font: bold, color: navy });
-    page.drawText('Free and Accepted Masons, Prince Hall Affiliated  |  Delaware', { x: 121, y: 693, size: 9, font: regular, color: gray });
-    page.drawLine({ start: { x: 50, y: 672 }, end: { x: 562, y: 672 }, thickness: 1, color: gold });
-    page.drawText('DRAFT  •  NOT SIGNED OR SENT', { x: 50, y: 36, size: 8, font: bold, color: gray });
-    page.drawText(`Page ${pdf.getPageCount()}`, { x: 530, y: 36, size: 8, font: regular, color: gray });
-    y = 646;
+    page.drawImage(seal, { x: 35, y: 705, width: 43, height: 43 });
+    page.drawImage(seal, { x: 534, y: 705, width: 43, height: 43 });
+    centered('Stone Square Lodge No. 22', 729, bold, 19);
+    centered('Free and Accepted Masons, Prince Hall Affiliation', 715, regular, 9.2);
+    centered('208 East Lake Street', 703, regular, 7.5);
+    centered('Middletown, DE 19709', 693, regular, 7.5);
+    centered('Telephone (302) 304-6123', 683, regular, 7.5);
+    centered('Stated Meetings: 1st & 3rd Thursdays, 7:30 PM', 672, regular, 7.5);
+    page.drawLine({ start: { x: 32, y: 662 }, end: { x: 580, y: 662 }, thickness: 1.6, color: navy });
+    centered('O F F I C I A L   C O R R E S P O N D E N C E', 646, bold, 9.2);
+    centered(`${row.prepared_by_office} ${row.prepared_by_name}`, 635, italic, 7.6);
+    page.drawLine({ start: { x: 32, y: 626 }, end: { x: 580, y: 626 }, thickness: 1.6, color: navy });
+    page.drawText('OFFICERS', { x: 32, y: 608, size: 8.3, font: bold, color: navy });
+    page.drawText('2026     2027', { x: 32, y: 598, size: 6.5, font: regular, color: gold });
+    let railY = 584;
+    for (const officer of AGENDA_OFFICERS) {
+      if (railY < 70) break;
+      page.drawText(printable(officer.office), { x: 32, y: railY, size: 5.5, font: bold, color: gold }); railY -= 8;
+      for (const nameLine of wrap(officer.name, bold, 6.6, 78)) {
+        page.drawText(nameLine, { x: 32, y: railY, size: 6.6, font: bold, color: navy }); railY -= 7.3;
+      }
+      page.drawText('208 East Lake Street', { x: 32, y: railY, size: 4.8, font: regular, color: gray }); railY -= 6;
+      page.drawText('Middletown, DE 19709', { x: 32, y: railY, size: 4.8, font: regular, color: gray }); railY -= 10;
+    }
+    page.drawLine({ start: { x: 108, y: 614 }, end: { x: 108, y: 58 }, thickness: .45, color: gold });
+    page.drawText('DRAFT - NOT SIGNED OR SENT', { x: bodyLeft, y: 30, size: 6.6, font: bold, color: gray });
+    page.drawText(`Page ${pdf.getPageCount()}`, { x: 538, y: 30, size: 6.6, font: regular, color: gray });
+    centered('Returning to the Fundamentals, 2026 to 2027', 18, italic, 6.6, gray);
+    y = 608;
   };
-  const line = (value, font = regular, size = 10.5, gap = 16) => {
-    for (const part of wrap(value, font, size, 505)) {
-      if (y < 84) nextPage();
-      if (part) page.drawText(part, { x: 53, y, size, font, color: navy });
+  const line = (value, font = regular, size = 9.5, gap = 15) => {
+    for (const part of wrap(value, font, size, bodyWidth)) {
+      if (y < 58) nextPage();
+      if (part) page.drawText(part, { x: bodyLeft, y, size, font, color: navy });
       y -= gap;
     }
   };
   nextPage();
   const date = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' }).format(new Date(row.updated_at || Date.now()));
-  line(date); y -= 10;
-  line(row.recipient_name, bold); line(row.recipient_lodge); y -= 9;
-  line(`Re: ${row.subject}`, bold); y -= 18;
-  line(row.body, regular, 10.5, 17); y -= 24;
+  line(date); y -= 8;
+  line(row.recipient_name, bold); line(row.recipient_lodge); y -= 8;
+  line(`Re: ${row.subject}`, bold); y -= 16;
+  line(row.body, regular, 9.5, 15); y -= 20;
   line('Fraternally,'); y -= 18;
   line(row.prepared_by_name, bold); line(row.prepared_by_office);
   return Buffer.from(await pdf.save());

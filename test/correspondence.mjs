@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
 const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
@@ -47,6 +48,14 @@ try {
   const pdf = await api(`/api/correspondence/${id}/pdf`, assistant.token);
   assert.equal(pdf.status, 200); assert.match(pdf.cache, /no-store/);
   assert.equal(pdf.data.subarray(0, 5).toString(), '%PDF-');
+  const rendered = await getDocument({ data: new Uint8Array(pdf.data), useSystemFonts: true }).promise;
+  const page = await rendered.getPage(1);
+  const printed = (await page.getTextContent()).items.map(item => item.str).join(' ');
+  assert.match(printed, /Stone Square Lodge No\. 22/);
+  assert.match(printed, /OFFICERS/);
+  assert.match(printed, /Secretary William McDuffie/);
+  assert.match(printed, /DRAFT - NOT SIGNED OR SENT/);
+  await rendered.destroy();
   const edited = await api(`/api/correspondence/${id}`, owner.token, 'PUT', { ...letter, subject: 'Dues payment acknowledged' });
   assert.equal(edited.status, 200); assert.equal(edited.data.draft.subject, 'Dues payment acknowledged');
   assert.equal(edited.data.draft.preparedByName, 'William McDuffie');
