@@ -1991,14 +1991,19 @@ const submitMinutesSource = async ({ handoff = false } = {}) => {
   setMessage($('minutesMessage'), handoff
     ? 'Saving the source privately for Adrian Reese or William McDuffie to claim.'
     : 'Organizing the meeting source into the Lodge minutes template.');
+  let sourceSaved = false;
   try {
     const payload = await apiFetch(handoff ? '/api/minutes/handoff' : '/api/minutes/generate', { method: 'POST', body: data });
+    sourceSaved = true;
     $('minutesTranscriptFile').value = '';
     $('minutesSelectedFile').textContent = 'No file selected';
     $('minutesTranscriptText').value = '';
     state.minutesSourceDirty = false;
     clearSessionDraft('minutes-source');
-    await renderMinutes();
+    if (!await renderMinutes()) {
+      setMessage($('minutesMessage'), 'The source was saved, but the minutes list could not refresh. Refresh the list before trying again.', true);
+      return;
+    }
     if (handoff) {
       const warnings = payload.notificationWarnings?.length ? ` ${payload.notificationWarnings.join(' ')}` : '';
       setMessage($('minutesMessage'), `Transcript sent to Adrian Reese and William McDuffie. It is waiting for one of them to claim it.${warnings}`, Boolean(payload.notificationWarnings?.length));
@@ -2007,7 +2012,9 @@ const submitMinutesSource = async ({ handoff = false } = {}) => {
       openMinutesEditor(payload.minutes.id);
     }
   } catch (error) {
-    setMessage($('minutesMessage'), error.message, true);
+    setMessage($('minutesMessage'), sourceSaved
+      ? `${error.message} The source was saved. Refresh the minutes list before trying again.`
+      : handoff ? error.message : `${error.message} Your source remains in this form. Check the minutes list before trying again.`, true);
   } finally {
     button.disabled = false;
     button.textContent = handoff ? 'Send to Adrian and McDuffie' : 'Create draft minutes';

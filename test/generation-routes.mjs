@@ -200,6 +200,13 @@ try {
   check('Treasury attestation makes no provider call', await providerCalls() === beforeSigning);
   check('Signed treasury reports cannot be organized', (await api(`/api/treasury/${report.id}/organize`, owner.token, 'POST', {revision: report.revision})).status === 403 && await providerCalls() === beforeSigning);
 
+  const minutesBeforeFailure = (await api('/api/minutes', owner.token)).data.minutes.length;
+  const callsBeforeMinutesFailure = await providerCalls();
+  await control({mode: 'error'});
+  result = await api('/api/minutes/generate', owner.token, 'POST', minutesForm());
+  check('Paid minutes generation reports a provider failure instead of saving a local substitute',
+    result.status >= 500 && (await api('/api/minutes', owner.token)).data.minutes.length === minutesBeforeFailure
+      && await providerCalls() === callsBeforeMinutesFailure + 1);
   await control({mode: 'success'});
   result = await api('/api/minutes/generate', owner.token, 'POST', minutesForm());
   assert.equal(result.status, 201); let minutes = result.data.minutes;
@@ -209,6 +216,12 @@ try {
   check('Missing minutes revision blocks reorganization before a provider call', (await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {})).status === 409 && await providerCalls() === count);
   check('Stale minutes revision blocks reorganization before a provider call', (await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: 'stale'})).status === 409 && await providerCalls() === count);
   check('Minutes PDF preview makes no provider call', (await api(`/api/minutes/${minutes.id}/preview`, owner.token, 'POST', {draft: minutes.draft})).status === 200 && await providerCalls() === count);
+  await control({mode: 'error'});
+  result = await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: minutes.updatedAt, sourceType: 'compiled_notes'});
+  check('Paid reorganization failure preserves the existing saved minutes draft',
+    result.status >= 500 && (await api('/api/minutes', owner.token)).data.minutes.find(item => item.id === minutes.id).updatedAt === minutes.updatedAt
+      && await providerCalls() === count + 1);
+  count = await providerCalls();
   await control({mode: 'wait'});
   const pending = api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: minutes.updatedAt, sourceType: 'compiled_notes'});
   for (let attempt = 0; attempt < 150 && await providerCalls() === count; attempt++) await pause(25);
