@@ -99,7 +99,7 @@ const fetchImpl = async (url, options) => {
   let result;
   if (body.text.format.name === 'stone_square_officer_report') {
     const title=input.source.includes('Source note mentions OpenAI')?'Source note mentions OpenAI':'Synthetic report notes';
-    result={suggestions:[{field:'title',value:title,quote:title}],warnings:['GPT-5.6 Terra organized the report. Review each suggestion.']};
+    result={suggestions:[{field:'title',value:title,quote:title}],warnings:['GPT-5.6 Luna organized the report. Review each suggestion.', 'Historical GPT-5.6 Terra notice.']};
   } else if (body.text.format.name === 'stone_square_meeting_minutes') {
     const local = await generateMinutesDraft(input.source, {sourceType:input.sourceType});
     const draft = Object.fromEntries(Object.keys(MINUTES_SCHEMA.properties).map(key=>[key,local[key]]));
@@ -115,7 +115,7 @@ const fetchImpl = async (url, options) => {
     const empty=()=>({value:null,evidence:''});
     result={periodStart:empty(),periodEnd:empty(),presentedOn:empty(),bankName:empty(),accounts:[],transactions:[],funds:[],obligations:[],remarks:empty()};
   }
-  return new Response(JSON.stringify({id:'resp_route_test',model:'gpt-5.6-terra',status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}],usage:{input_tokens:1000,output_tokens:100}}), {status:200,headers:{'Content-Type':'application/json'}});
+  return new Response(JSON.stringify({id:'resp_route_test',model:'gpt-5.6-luna',status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}],usage:{input_tokens:1000,output_tokens:100}}), {status:200,headers:{'Content-Type':'application/json'}});
 };
 const generator=createGenerator({apiKey:'test-only-secret-that-must-not-leak',fetchImpl});
 setGenerationForTests({...generator,forUser:userId=>async request=>{
@@ -149,7 +149,7 @@ try {
   check('Generation status requires sign-in', (await api('/api/generation/status')).status === 401);
   const status = await api('/api/generation/status', owner.token);
   check('Owner can inspect generation status without a key leak', status.status === 200 && !JSON.stringify(status.data).includes('test-only-secret'));
-  check('Only the owner receives administrator generation details, model and shared monthly allowance', status.data.administratorDetails === true && status.data.model === 'gpt-5.6-terra' && status.data.monthlyLimitDollars === 5 && ['committedDollars','reservedDollars','remainingDollars'].every(key => typeof status.data[key] === 'number'));
+  check('Only the owner receives administrator generation details, model and shared monthly allowance', status.data.administratorDetails === true && status.data.model === 'gpt-5.6-luna' && status.data.monthlyLimitDollars === 5 && ['committedDollars','reservedDollars','remainingDollars'].every(key => typeof status.data[key] === 'number'));
   check('Generation status is never cached', /no-store/.test(status.headers.get('cache-control')));
   for (const [role, account] of [['preparer', preparer], ['upload-only officer', uploadOnly], ['warden', warden], ['secretary', secretary]]) {
     const publicStatus = await api('/api/generation/status', account.token);
@@ -168,7 +168,7 @@ try {
   check('Invalid treasury revision is rejected before another paid call', (await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: String(report.revision)})).status === 409 && await providerCalls() === 1);
   result = await api(`/api/treasury/${report.id}/organize`, preparer.token, 'POST', {revision: report.revision});
   check('Assigned preparer can deliberately request a fresh reorganization of the shared source', result.status === 200 && await providerCalls() === 2);
-  check('Preparer generation notices do not disclose provider details', !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(result.data.draft.extractionNotes)));
+  check('Preparer generation notices do not disclose provider details', !/GPT|Terra|Luna|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(result.data.draft.extractionNotes)));
   check('Organization returns an unsaved replacement', (await api('/api/treasury', preparer.token)).data.reports.find(item => item.id === report.id).revision === report.revision);
   const beforeEditing = await providerCalls();
   check('Treasury PDF preview makes no provider call', (await api(`/api/treasury/${report.id}/preview`, preparer.token, 'POST', {draft: completeTreasuryFixture})).status === 200 && await providerCalls() === beforeEditing);
@@ -204,7 +204,7 @@ try {
   result = await api('/api/minutes/generate', owner.token, 'POST', minutesForm());
   assert.equal(result.status, 201); let minutes = result.data.minutes;
   let count = await providerCalls();
-  check('WM can generate minutes through the model adapter', minutes.draft.warnings.some(warning => warning.includes('GPT-5.6 Terra')));
+  check('WM can generate minutes through the model adapter', minutes.draft.warnings.some(warning => warning.includes('GPT-5.6 Luna')));
   check('Treasury-only preparer cannot invoke minutes generation', (await api('/api/minutes/generate', preparer.token, 'POST', minutesForm())).status === 403 && await providerCalls() === count);
   check('Missing minutes revision blocks reorganization before a provider call', (await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {})).status === 409 && await providerCalls() === count);
   check('Stale minutes revision blocks reorganization before a provider call', (await api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: 'stale'})).status === 409 && await providerCalls() === count);
@@ -236,32 +236,32 @@ try {
   check('Report assistance requires sign-in', (await api('/api/reports/organize',null,'POST',reportInput)).status===401);
   const memberReport = await api('/api/reports/organize',uploadOnly.token,'POST',reportInput);
   check('Every Brother can organize a Lodge report through his assigned Report Generator', memberReport.status===200);
-  check('Member report assistance does not disclose provider or allowance details', !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(memberReport.data.warnings)));
+  check('Member report assistance does not disclose provider or allowance details', !/GPT|Terra|Luna|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(memberReport.data.warnings)));
   countBeforeReport=await providerCalls();
   check('WM report organization requires owner role', (await api('/api/reports/organize',preparer.token,'POST',{...reportInput,master:true})).status===403);
   check('Invalid report fields are rejected before paid generation', (await api('/api/reports/organize',owner.token,'POST',{...reportInput,fields:{signatureName:'x'}})).status===400 && await providerCalls()===countBeforeReport);
   const organized=await api('/api/reports/organize',owner.token,'POST',reportInput);
   check('Owner receives supported report suggestions', organized.status===200 && organized.data.fields.title==='Synthetic report notes');
-  check('The owner retains detailed generation notices', organized.data.warnings.some(warning => warning.includes('GPT-5.6 Terra')));
+  check('The owner retains detailed generation notices', organized.data.warnings.some(warning => warning.includes('GPT-5.6 Luna')));
   check('Report suggestions do not include identity or signature approval', !Object.hasOwn(organized.data.fields,'signatureName') && !Object.hasOwn(organized.data.fields,'reviewed'));
   const afterReport=await providerCalls();
   await api('/api/reports/organize',owner.token,'POST',reportInput);
   check('Repeated identical organization uses the shared cache', await providerCalls()===afterReport);
   const wardenReport = await api('/api/reports/organize',warden.token,'POST',{...reportInput,source:'Source note mentions OpenAI'});
   check('Wardens can organize their own report fields', wardenReport.status === 200 && wardenReport.data.fields.title === 'Source note mentions OpenAI');
-  check('Warden suggestions preserve source content but omit provider notices', wardenReport.data.fields.title.includes('OpenAI') && !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(wardenReport.data.warnings)));
+  check('Warden suggestions preserve source content but omit provider notices', wardenReport.data.fields.title.includes('OpenAI') && !/GPT|Terra|Luna|OpenAI|monthly|allowance|\$5/i.test(JSON.stringify(wardenReport.data.warnings)));
   const wardenCalls = await providerCalls();
   check('Wardens cannot organize a Worshipful Master report', (await api('/api/reports/organize',warden.token,'POST',{...reportInput,master:true})).status===403 && await providerCalls()===wardenCalls);
   await control({mode:'budget'});
   const wardenBudget = await api('/api/reports/organize',warden.token,'POST',reportInput);
   const ownerBudget = await api('/api/reports/organize',owner.token,'POST',reportInput);
-  check('Warden limit errors omit spending and provider details', wardenBudget.status === 429 && /Worshipful Master/.test(wardenBudget.data.error) && !/GPT|Terra|OpenAI|monthly|allowance|\$5/i.test(wardenBudget.data.error));
+  check('Warden limit errors omit spending and provider details', wardenBudget.status === 429 && /Worshipful Master/.test(wardenBudget.data.error) && !/GPT|Terra|Luna|OpenAI|monthly|allowance|\$5/i.test(wardenBudget.data.error));
   check('The owner can inspect the actual monthly-limit error', ownerBudget.status === 429 && ownerBudget.data.error.includes('$5 monthly'));
   await control({mode:'unknown'});
   const unknownInput = {...reportInput,source:'Synthetic report notes for an uncertain request'};
   const unknownResult = await api('/api/reports/organize',warden.token,'POST',unknownInput);
   const duplicateResult = await api('/api/reports/organize',warden.token,'POST',unknownInput);
-  check('Unconfirmed and duplicate Warden requests hide charge and allowance details', unknownResult.status >= 500 && duplicateResult.status === 409 && [unknownResult, duplicateResult].every(item => !/GPT|Terra|OpenAI|charge|monthly|allowance|\$5/i.test(item.data.error)));
+  check('Unconfirmed and duplicate Warden requests hide charge and allowance details', unknownResult.status >= 500 && duplicateResult.status === 409 && [unknownResult, duplicateResult].every(item => !/GPT|Terra|Luna|OpenAI|charge|monthly|allowance|\$5/i.test(item.data.error)));
   console.log(`${passed} generation route checks passed with an isolated mocked provider.`);
 } finally {
   await stop();

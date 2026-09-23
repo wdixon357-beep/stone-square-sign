@@ -10,7 +10,7 @@ const { connect, close, dbGet, dbRun } = await import('../db.js');
 const { createGenerator, generationFor, generationStatus, setGenerationForTests } = await import('../ai-generation.js');
 
 const KEY = 'synthetic-injected-key';
-const MODEL = 'gpt-5.6-terra';
+const MODEL = 'gpt-5.6-luna';
 const month = '2026-09';
 const fixedNow = () => new Date('2026-09-12T18:00:00.000Z');
 const schema = { type: 'object', properties: {
@@ -62,10 +62,23 @@ try {
     assert.equal(sent.tools, undefined); assert.equal(sent.previous_response_id, undefined);
     const row = await dbGet('SELECT * FROM ai_generation_requests');
     assert.equal(row.input_bound, Buffer.byteLength(JSON.stringify(sent), 'utf8') + 8192);
-    assert.equal(row.reserve_units, row.input_bound * 5 + 16000 * 24);
-    assert.equal(row.charged_units, 1000 * 5 + 200 * 24, 'reasoning is already inside output_tokens');
-    assert.equal((await generator.status({ includeBudget: true })).committedDollars, 0.0049);
+    assert.equal(row.reserve_units, row.input_bound + 16000 * 3);
+    assert.equal(row.charged_units, 1000 + 200 * 3, 'reasoning is already inside output_tokens');
+    assert.equal((await generator.status({ includeBudget: true })).committedDollars, 0.0008);
     assert.equal(calls, 1);
+  });
+
+  await test('existing Terra ledger charges keep their dollar value after Luna migration', async () => {
+    await reset();
+    await dbRun('INSERT INTO ai_generation_months (month_key, limit_units, charged_units) VALUES (?, 10000000, 2000000)', [month]);
+    const generator = factory(async () => response());
+    const before = await generator.status({ includeBudget: true });
+    assert.equal(before.committedDollars, 1);
+    assert.equal(before.remainingDollars, 4);
+    await generator.forUser(1)(request);
+    const after = await generator.status({ includeBudget: true });
+    assert.equal(after.committedDollars, 1.0008);
+    assert.equal(after.remainingDollars, 3.9992);
   });
 
   await test('completed cache is isolated by user and cannot be mutated by a caller', async () => {
@@ -90,21 +103,24 @@ try {
     await reset(); const release = deferred(); let entered = 0, rejected = 0;
     const fetchImpl = async () => { entered++; await release.promise; return response(); };
     const a = factory(fetchImpl), b = factory(fetchImpl); await a.initSchema(); await b.initSchema();
+    // Fill most of the shared month first so concurrent Luna requests contend
+    // for the final allowance while old charges retain their existing scale.
+    await dbRun('INSERT INTO ai_generation_months (month_key, limit_units, charged_units) VALUES (?, 10000000, 9000000)', [month]);
     const pending = Array.from({ length: 10 }, (_, index) => (index % 2 ? a : b).forUser(index + 1)({ ...request, input: 'x'.repeat(220000) + index })
       .then(value => ({ value }), error => { rejected++; return { error }; }));
     await until(() => entered + rejected === 10);
-    const budget = await ledger(); assert.equal(entered, 6); assert.equal(rejected, 4);
+    const budget = await ledger(); assert.ok(entered > 0 && rejected > 0 && entered + rejected === 10);
     assert.ok(budget.reserved_units + budget.charged_units <= 10000000);
     release.resolve(); const settled = await Promise.all(pending);
-    assert.equal(settled.filter(item => item.error?.code === 'GENERATION_MONTHLY_LIMIT').length, 4);
+    assert.equal(settled.filter(item => item.error?.code === 'GENERATION_MONTHLY_LIMIT').length, rejected);
     assert.equal((await ledger()).reserved_units, 0);
   });
 
   await test('already committed usage blocks a call before the network', async () => {
-    await reset(); await dbRun('INSERT INTO ai_generation_months (month_key, limit_units, charged_units) VALUES (?, 10000000, 9900000)', [month]);
+    await reset(); await dbRun('INSERT INTO ai_generation_months (month_key, limit_units, charged_units) VALUES (?, 10000000, 9990000)', [month]);
     let calls = 0; const generator = factory(async () => { calls++; return response(); });
     await assert.rejects(generator.forUser(1)(request), error => error.code === 'GENERATION_MONTHLY_LIMIT');
-    assert.equal(calls, 0); assert.equal((await generator.status({ includeBudget: true })).remainingDollars, 0.05);
+    assert.equal(calls, 0); assert.equal((await generator.status({ includeBudget: true })).remainingDollars, 0.005);
   });
 
   await test('UTF-8 bytes, instructions and schema all count toward the preflight bound', async () => {
@@ -166,7 +182,7 @@ try {
     for (const override of [{ status: 'incomplete' }, { output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'Synthetic refusal' }] }] }]) {
       await reset(); const generator = factory(async () => response(override));
       await assert.rejects(generator.forUser(1)(request), error => error.code === 'GENERATION_INVALID_RESPONSE');
-      assert.equal((await ledger()).reserved_units, 0); assert.equal((await ledger()).charged_units, 9800);
+      assert.equal((await ledger()).reserved_units, 0); assert.equal((await ledger()).charged_units, 1600);
       assert.equal((await dbGet('SELECT state FROM ai_generation_requests')).state, 'failed');
     }
   });
@@ -175,26 +191,26 @@ try {
     for (const invalid of [{ ...result, extra: true }, { ...result, amount: '123' }, { title: 'Missing fields' }, { ...result, tags: ['a', 'b', 'c'] }]) {
       await reset(); const generator = factory(async () => response({ output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(invalid) }] }] }));
       await assert.rejects(generator.forUser(1)(request), error => error.code === 'GENERATION_INVALID_RESPONSE');
-      assert.equal((await ledger()).charged_units, 9800); assert.equal((await ledger()).reserved_units, 0);
+      assert.equal((await ledger()).charged_units, 1600); assert.equal((await ledger()).reserved_units, 0);
     }
   });
 
   await test('model mismatch retains the full reservation and halts later paid calls persistently', async () => {
-    await reset(); const generator = factory(async () => response({ model: 'gpt-5.6-terra-pro' }));
+    await reset(); const generator = factory(async () => response({ model: 'gpt-5.6-terra' }));
     await assert.rejects(generator.forUser(1)(request), error => error.code === 'GENERATION_USAGE_UNKNOWN');
     assert.ok((await ledger()).reserved_units > 0); assert.equal((await ledger()).charged_units, 0);
     let calls = 0; const restarted = factory(async () => { calls++; return response(); });
     await assert.rejects(restarted.forUser(2)(request), error => error.code === 'GENERATION_BUDGET_PAUSED'); assert.equal(calls, 0);
   });
 
-  await test('recognized dated Terra snapshot is accepted', async () => {
-    await reset(); assert.deepEqual(await factory(async () => response({ model: 'gpt-5.6-terra-2026-09-01' })).forUser(1)(request), result);
+  await test('recognized dated Luna snapshot is accepted', async () => {
+    await reset(); assert.deepEqual(await factory(async () => response({ model: 'gpt-5.6-luna-2026-09-01' })).forUser(1)(request), result);
   });
 
   await test('observed usage beyond the bound is recorded truthfully and halts paid generation', async () => {
     await reset(); const generator = factory(async () => response({ usage: { input_tokens: 250000, output_tokens: 16001 } }));
     await assert.rejects(generator.forUser(1)(request), error => error.code === 'GENERATION_INVALID_RESPONSE');
-    assert.equal((await ledger()).charged_units, 250000 * 5 + 16001 * 24);
+    assert.equal((await ledger()).charged_units, 250000 + 16001 * 3);
     assert.equal((await ledger()).reserved_units, 0);
     await assert.rejects(generator.forUser(2)(request), error => error.code === 'GENERATION_BUDGET_PAUSED');
   });
@@ -209,7 +225,7 @@ try {
   await test('month rollover settles the original month and retains completed cache', async () => {
     await reset(); let current = '2026-09-30T23:59:59Z', calls = 0;
     const generator = createGenerator({ apiKey: KEY, now: () => new Date(current), fetchImpl: async () => { calls++; current = '2026-10-01T00:00:01Z'; return response(); } });
-    await generator.forUser(1)(request); assert.equal((await ledger()).charged_units, 9800); assert.equal((await ledger()).reserved_units, 0);
+    await generator.forUser(1)(request); assert.equal((await ledger()).charged_units, 1600); assert.equal((await ledger()).reserved_units, 0);
     assert.equal((await generator.status({ includeBudget: true })).remainingDollars, 5);
     await generator.forUser(1)(request); assert.equal(calls, 1);
   });

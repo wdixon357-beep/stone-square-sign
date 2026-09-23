@@ -282,7 +282,7 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
     funds: response.funds.map(row => ({ name: text(row.name), account: accountReference(row.account, row), amount: amount(row.amount), restriction: text(row.restriction) })),
     obligations: response.obligations.map(row => ({ name: text(row.name), dueDate: date(row.dueDate), amount: amount(row.amount), note: text(row.note) })),
     remarks: text(response.remarks), sourceReviewed: false, fundsReviewed: false, obligationsReviewed: false,
-    sourceNames, extractionNotes: [...sourceNotes, 'Terra (GPT-5.6) organized this draft; source verification is required.', 'Terra retained the imported source text for a complete officer review.'], unmappedLines: retainedSource(source),
+    sourceNames, extractionNotes: [...sourceNotes, 'Luna (GPT-5.6) organized this draft; source verification is required.', 'Luna retained the imported source text for a complete officer review.'], unmappedLines: retainedSource(source),
   };
   const sourceWindowMatches = meetingCycle && draft.periodStart === meetingCycle.periodStart && draft.periodEnd === meetingCycle.periodEnd;
   const boundaryKinds = {
@@ -308,7 +308,7 @@ export async function generateTreasuryDraft(sourceText, { generateStructured, so
       if (supported) validatedWindowFields.add(`accounts.${match[1]}.${match[2]}`);
     }
   }
-  if (rejected) draft.extractionNotes.push(`Terra: ${rejected} extracted ${rejected === 1 ? 'entry did' : 'entries did'} not match the cited source and need review.`);
+  if (rejected) draft.extractionNotes.push(`Luna: ${rejected} extracted ${rejected === 1 ? 'entry did' : 'entries did'} not match the cited source and need review.`);
   // Keep field-level references with the saved draft. The full original source
   // stays above; review notes contain locations rather than repeated bank data.
   // A quote repeated in the source points explicitly to its first occurrence.

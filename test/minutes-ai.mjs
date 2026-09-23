@@ -98,7 +98,7 @@ try {
   assert.ok(draft.warnings.some(warning => /Source reference: New Business and Motions, lines 7 to 8/.test(warning)));
   assert.ok(draft.warnings.some(warning => /Source coverage review: 2 nonempty source lines/.test(warning)));
   assert.ok(draft.warnings.includes('Confirm the unassigned scheduling note before attestation.'));
-  assert.ok(draft.warnings.includes('Organized with GPT-5.6 Terra; source verification is required.'));
+  assert.ok(draft.warnings.includes('Organized with GPT-5.6 Luna; source verification is required.'));
   assert.ok(!draft.warnings.some(warning => warning.includes('Prayers were requested for the families.')), 'references expose line numbers rather than repeating source details');
 
   const visitorSource = `${source}\nVisitors: Bro. Alex Example, Example Lodge No. 99\nNone reported.`;
@@ -220,10 +220,10 @@ try {
   const fallback = await generateMinutesDraft(source, {generateStructured: async () => {throw providerFailure;}});
   assert.ok(fallback.sections.length);
   assert.ok(fallback.warnings.some(warning => /local draft was created/i.test(warning)));
-  assert.ok(!fallback.warnings.some(warning => warning.includes('GPT-5.6 Terra')));
+  assert.ok(!fallback.warnings.some(warning => warning.includes('GPT-5.6 Luna')));
   const local = await generateMinutesDraft(source);
   assert.ok(local.sections.length);
-  assert.ok(!local.warnings.some(warning => warning.includes('GPT-5.6 Terra')));
+  assert.ok(!local.warnings.some(warning => warning.includes('GPT-5.6 Luna')));
   assert.equal(calls, 1, 'no callback or model charge is triggered by local generation');
   console.log('Structured minutes callback, strict schema, source references, uncertainty, factual checks and local fallback passed without a network call.');
 } finally {

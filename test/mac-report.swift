@@ -111,7 +111,7 @@ final class GenerationFixture: URLProtocol {
             let route = "\(request.httpMethod ?? "GET") \(request.url!.path)"
             let configured = Self.routeResponses[route]
             let payload = configured?.data ?? (request.url!.path == "/api/generation/status"
-                ? Data(#"{"configured":true,"administratorDetails":true,"model":"gpt-5.6-terra","monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8)
+                ? Data(#"{"configured":true,"administratorDetails":true,"model":"gpt-5.6-luna","monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8)
                 : Self.response)
             let response = HTTPURLResponse(url: request.url!, statusCode: configured?.status ?? Self.statusCode, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -375,11 +375,11 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         print("PASS: native claim conflict refreshes the queue and explains that another Secretary claimed it")
         GenerationFixture.routeResponses = [:]
         let status = await GenerationStatus.load(using: organizing)
-        precondition(status?.explanation(forOwner: true).hasPrefix("Terra enabled.") == true && status?.allowance(forOwner: true)?.contains("$4.75 remaining of $5.00") == true)
+        precondition(status?.explanation(forOwner: true).hasPrefix("Luna enabled.") == true && status?.allowance(forOwner: true)?.contains("$4.75 remaining of $5.00") == true)
         precondition(status?.allowance(forOwner: false) == nil)
         print("PASS: native generation status discloses enabled processing and shows allowance only to the owner")
         let localStatus = try JSONDecoder().decode(GenerationStatus.self, from: Data(#"{"configured":false,"administratorDetails":true,"monthlyLimitDollars":5}"#.utf8))
-        precondition(localStatus.explanation(forOwner: true) == "Local organizer active. Terra setup is pending." && localStatus.allowance(forOwner: true) == nil)
+        precondition(localStatus.explanation(forOwner: true) == "Local organizer active. Luna setup is pending." && localStatus.allowance(forOwner: true) == nil)
         let unavailableStatus = await GenerationStatus.load(using: minutes)
         precondition(unavailableStatus == nil)
         print("PASS: unconfigured and unavailable generation states remain distinct without inventing an allowance")
@@ -526,7 +526,7 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         print("PASS: upload-only accounts cannot open unsigned treasury rows but can open finalized reports")
         let redactedStatus = try JSONDecoder().decode(GenerationStatus.self, from: Data(#"{"configured":true}"#.utf8))
         precondition(redactedStatus.allowance(forOwner: false) == nil)
-        precondition(!redactedStatus.explanation(forOwner: false).contains("Terra"))
+        precondition(!redactedStatus.explanation(forOwner: false).contains("Luna"))
         precondition(!redactedStatus.explanation(forOwner: false).contains("OpenAI"))
         precondition(LodgeCalendarDates.displayDate("2026-09-19") == "Sep 19, 2026")
         precondition(LodgeCalendarDates.displayTime("19:30") == "7:30 PM")

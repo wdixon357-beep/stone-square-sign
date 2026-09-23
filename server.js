@@ -368,7 +368,7 @@ const requireAuth = async (req, res, next) => {
     if (row.role !== 'owner') {
       const originalJson = res.json.bind(res);
       const neutralNotice = value => String(value)
-        .replace(/Terra\s*\(GPT-5\.6\)|GPT-5\.6[ -]Terra|gpt-5\.6-terra|\bTerra\b|\bOpenAI\b/gi, 'Report assistance')
+        .replace(/(?:Terra|Luna)\s*\(GPT-5\.6\)|GPT-5\.6[ -](?:Terra|Luna)|gpt-5\.6-(?:terra|luna)|\b(?:Terra|Luna)\b|\bOpenAI\b/gi, 'Report assistance')
         .replace(/The \$5 monthly report allowance is fully used or reserved\./g, 'Report assistance is temporarily unavailable. Contact the Worshipful Master.')
         .replace(/Paid report generation is paused because reported usage needs review\./g, 'Report assistance needs administrator review. Contact the Worshipful Master.')
         .replace(/This source is too large for one report within the monthly allowance\./g, 'This source is too large for one report.')

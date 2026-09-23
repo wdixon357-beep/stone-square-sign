@@ -35,11 +35,11 @@ preview stay together in the app workspace.
 The Worshipful Master and the Secretaries can paste compiled meeting notes or a
 corrected transcript, or upload TXT, DOCX or PDF. Source detection preserves agenda
 blocks and topic context. With `OPENAI_API_KEY` configured on the shared server,
-GPT-5.6 Terra organizes minutes and treasury source text into structured drafts.
+GPT-5.6 Luna organizes minutes and treasury source text into structured drafts.
 Without the key, the existing local organizer remains available and both clients
-show that Terra setup is pending. Missing details remain marked for review.
+show that Luna setup is pending. Missing details remain marked for review.
 
-### Terra setup and usage
+### Luna setup and usage
 
 1. Sign in to OpenAI Platform, enable API billing and create a project API key.
    API billing is separate from a ChatGPT subscription. For an initial trial,
@@ -50,12 +50,12 @@ show that Terra setup is pending. Missing details remain marked for review.
 3. Refresh Meeting Minutes or Treasurer Reports. Both clients show the connection
    state. Validate one synthetic example before using real Lodge records.
 
-The server fixes the model to `gpt-5.6-terra`, uses the default service tier,
+The server fixes the model to `gpt-5.6-luna`, uses the default service tier,
 sets `store:false`, and has no autonomous tools or conversation history. Only
 creating or explicitly reorganizing drafts calls OpenAI. Banking information
 saved for a later preparer, document previews, edits, signatures and downloads
 make no paid generation calls. PDFs and screenshots use the existing local text
-extraction/OCR first; Terra receives the extracted text, not the original files.
+extraction/OCR first; Luna receives the extracted text, not the original files.
 
 A database ledger enforces a shared $5 allowance per UTC calendar month. It
 reserves conservative input and maximum output costs before each request;
@@ -64,6 +64,9 @@ request from the same account reuses its result. Reported usage is estimated at
 conservative rates, not a billing statement. The allowance covers this app only;
 it cannot limit other uses of the key or changes in provider pricing. Configure
 an OpenAI project budget as an additional alert, not a substitute for this limit.
+The ledger retains existing Terra charges in the current month. Luna estimates
+round up to $0.50 per million input tokens and $1.50 per million output tokens
+at the ledger's existing integer scale, above the published Luna rates.
 
 Structured output and exact source quotes help reviewers trace extracted content.
 They do not prove every interpretation is correct. Missing or contradictory facts

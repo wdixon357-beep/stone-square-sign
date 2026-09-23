@@ -1,15 +1,18 @@
 import crypto from 'node:crypto';
 import { dbGet, dbRun, withTransaction } from './db.js';
 
-const MODEL = 'gpt-5.6-terra';
+const MODEL = 'gpt-5.6-luna';
 const ENDPOINT = 'https://api.openai.com/v1/responses';
 const UNITS_PER_DOLLAR = 2_000_000;
 const MONTHLY_LIMIT = 5 * UNITS_PER_DOLLAR;
 const MAX_OUTPUT_TOKENS = 16_000;
 const MAX_INPUT_BOUND = 240_000;
 const INPUT_FRAMING_ALLOWANCE = 8_192;
-const INPUT_UNITS = 5; // $2.50/M includes the conservative cache-write rate.
-const OUTPUT_UNITS = 24; // $12/M; output_tokens already includes reasoning.
+// Keep the existing ledger scale so Terra charges already recorded this month
+// retain their dollar value. Luna's $0.20/M input ($0.25/M cache writes) and
+// $1.20/M output are rounded up to integer units at this scale.
+const INPUT_UNITS = 1; // Conservative $0.50/M input.
+const OUTPUT_UNITS = 3; // Conservative $1.50/M output, including reasoning.
 const ACTIVE_STATES = "('pending', 'unknown', 'completed')";
 const fail = (code, message, statusCode = 502) => Object.assign(new Error(message), { code, statusCode });
 const invalidResult = () => fail('GENERATION_INVALID_RESPONSE', 'The report response was incomplete or invalid. Your source has not been changed.');
@@ -199,7 +202,7 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
       if (!response.ok) {
         await markUnknown(reservation); throw uncertain();
       }
-      if (typeof payload?.model !== 'string' || !/^gpt-5\.6-terra(?:-\d{4}-\d{2}-\d{2})?$/.test(payload.model)) {
+      if (typeof payload?.model !== 'string' || !/^gpt-5\.6-luna(?:-\d{4}-\d{2}-\d{2})?$/.test(payload.model)) {
         try { await haltUnconfirmed(reservation, 'unconfirmed_response_model'); } catch { await markUnknown(reservation); }
         throw uncertain();
       }

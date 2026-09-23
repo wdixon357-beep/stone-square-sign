@@ -248,7 +248,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(row.status==='awaiting_preparer'&&row.source_text.trim()&&!alreadyOrganized){
       try{
         const meetingCycle=treasuryWindowForDraft(draft)||await reportingWindow();
-        const organized=await generateTreasuryDraft(row.source_text,{sourceNames:draft.sourceNames,sourceNotes:draft.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(preparer.id)});
+        const organized=await generateTreasuryDraft(row.source_text,{sourceNames:draft.sourceNames,sourceNotes:draft.extractionNotes?.filter(note=>!/^(?:Terra|Luna)|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(preparer.id)});
         const current=await fetchRecord(row.id);
         if(current?.status==='draft'&&current.preparer_user_id===preparer.id&&current.revision===row.revision+1){
           const changed=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND preparer_user_id=?',[JSON.stringify(organized),new Date().toISOString(),row.id,current.revision,preparer.id]);
@@ -267,7 +267,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(!row.source_text.trim())throw error(400,'This manually entered report has no uploaded source to organize. Continue editing its report fields.');
     const previous=JSON.parse(row.draft_json);
     const meetingCycle=treasuryWindowForDraft(previous)||await reportingWindow();
-    const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^Terra|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(req.user.id)});
+    const draft=await generateTreasuryDraft(row.source_text,{sourceNames:previous.sourceNames,sourceNotes:previous.extractionNotes?.filter(note=>!/^(?:Terra|Luna)|^Source evidence|^Reporting window fixed|^\d+ source entr(?:y|ies)|^Full-statement balances|^Only balances and totals|^Balances and totals|^Figures retained/i.test(note)),meetingCycle,generateStructured:generationFor(req.user.id)});
     const current=await record(req);revision(req,current);
     if(!editable(current,req.user))throw error(409,'This report changed while its source was being organized. Reopen it before continuing.');
     await audit(req,row.id,'source_organized');

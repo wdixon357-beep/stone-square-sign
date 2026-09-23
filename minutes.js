@@ -144,7 +144,7 @@ function checkedGeneratedDraft(response, source, localDraft) {
   if ([...requiredFields].some(field => !references.has(field))) {
     throw generationError('Minutes generation did not supply source references for all extracted content. Please try again.');
   }
-  const warnings = ['Organized with GPT-5.6 Terra; source verification is required.', ...generated.warnings];
+  const warnings = ['Organized with GPT-5.6 Luna; source verification is required.', ...generated.warnings];
   const quotesFor = field => (references.get(field) || []).map(entry => entry.quote).join('\n');
   // Exact quotes alone do not establish that a paraphrase is faithful. Reject
   // these recognizable violations rather than silently publishing bad prose.

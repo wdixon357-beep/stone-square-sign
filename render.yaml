@@ -33,7 +33,7 @@ services:
       - key: DATABASE_URL
         sync: false
 
-      # Optional Terra connection. Enter the value only in Render Environment.
+      # Optional Luna connection. Enter the value only in Render Environment.
       # The application enforces a shared $5 monthly generation allowance.
       - key: OPENAI_API_KEY
         sync: false

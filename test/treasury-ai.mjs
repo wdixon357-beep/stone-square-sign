@@ -109,7 +109,7 @@ check('explicit reporting month and cited statement year are resolved determinis
 check('missing balances remain unknown and officer confirmations remain unset', output.accounts[0].bankHold === null && output.accounts[0].bookBalance === null && !output.accounts[0].activityComplete && !output.sourceReviewed && !output.fundsReviewed && !output.obligationsReviewed);
 check('unmapped source content is retained for officer review', output.unmappedLines.join('\n').includes('Bank hold is unknown.') && output.unmappedLines.join('\n').includes('Keep the receipt with the report.'));
 check('original source names and OCR review notes survive extraction', output.sourceNames[0] === 'synthetic.png' && output.extractionNotes.includes('Synthetic screenshot was read with OCR. Check every amount.'));
-check('Terra provenance is identifiable when reorganizing original source', output.extractionNotes.some(note => note.startsWith('Terra (GPT-5.6)')));
+check('Luna provenance is identifiable when reorganizing original source', output.extractionNotes.some(note => note.startsWith('Luna (GPT-5.6)')));
 check('accepted fields retain exact source line references for review', output.extractionNotes.join('\n').includes('Source evidence: accounts[0].openingBalance → line 4.') && output.extractionNotes.join('\n').includes('Source evidence: transactions[0].date → lines 1 through 7.'));
 check('existing reconciliation still requires review and missing data', !calculateTreasury(output).ready && calculateTreasury(output).accounts[0].calculated === null);
 

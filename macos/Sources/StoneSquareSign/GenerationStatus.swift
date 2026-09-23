@@ -12,8 +12,8 @@ struct GenerationStatus: Decodable, Equatable {
 
     private var administratorExplanation: String {
         configured
-            ? "Terra enabled. Creating or reorganizing a draft sends the source text to OpenAI for your review."
-            : "Local organizer active. Terra setup is pending."
+            ? "Luna enabled. Creating or reorganizing a draft sends the source text to OpenAI for your review."
+            : "Local organizer active. Luna setup is pending."
     }
 
     func explanation(forOwner: Bool) -> String {
