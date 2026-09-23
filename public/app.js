@@ -3188,6 +3188,12 @@ initialize();
  * Rendered needs-attention-first, because the point of the page is knowing who to
  * call, not admiring a total. */
 const money = (cents) => `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const duesDate = value => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return '—';
+  const [year, month, day] = value.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, month - 1, day)));
+};
 
 let duesExportBusy = false;
 const exportDuesLedger = async format => {
@@ -3263,18 +3269,20 @@ const renderDues = async (force = false) => {
       brotherSelect.value = selected;
     }
     for (const r of led.rows) {
-      const el = document.createElement('div');
-      el.className = `item dues-row dues-${r.status}`;
-      const paid = r.status === 'paid'
-        ? `Paid in full${r.lastPaymentISO ? ` on ${r.lastPaymentISO}` : ''}`
-        : r.status === 'partial'
-          ? `${money(r.paidCents)} of ${money(r.assessedCents)}, ${money(r.remainingCents)} outstanding`
-          : 'Nothing received';
-      const credit = r.creditCents ? ` · ${money(r.creditCents)} credit` : '';
-      const how = r.payments.length
-        ? ` · matched by ${[...new Set(r.payments.map((p) => p.matchedVia))].join(', ')}`
-        : '';
-      el.innerHTML = `<div class="grow"><div class="name">${escapeMarkup(r.name)}</div><small>${escapeMarkup(paid + credit + how)}</small></div><span class="pill">${escapeMarkup(r.status)}</span>`;
+      const el = document.createElement('tr');
+      const status = ['paid', 'partial', 'unpaid'].includes(r.status) ? r.status : 'unknown';
+      el.className = `dues-ledger-row dues-${status}`;
+      el.setAttribute('role', 'row');
+      const paymentCount = r.payments?.length || 0;
+      const paymentNote = paymentCount ? `${paymentCount} ${paymentCount === 1 ? 'entry' : 'entries'} recorded` : 'No activity recorded';
+      const balanceNote = r.creditCents ? `<span class="dues-cell-note">${escapeMarkup(money(r.creditCents))} credit</span>` : '';
+      const statusLabel = { paid: 'Paid in full', partial: 'Partially paid', unpaid: 'Unpaid', unknown: 'Check status' }[status];
+      el.innerHTML = `<td role="cell" data-label="Brother" class="dues-member-cell"><strong>${escapeMarkup(r.name)}</strong><span class="dues-cell-note">${paymentNote}</span></td>
+        <td role="cell" data-label="Assessed" class="dues-money">${escapeMarkup(money(r.assessedCents))}</td>
+        <td role="cell" data-label="Paid" class="dues-money">${escapeMarkup(money(r.paidCents))}</td>
+        <td role="cell" data-label="Balance" class="dues-money dues-balance">${escapeMarkup(money(r.remainingCents))}${balanceNote}</td>
+        <td role="cell" data-label="Status"><span class="dues-status dues-status-${status}">${statusLabel}</span></td>
+        <td role="cell" data-label="Last activity" class="dues-last-payment">${escapeMarkup(duesDate(r.lastPaymentISO))}</td>`;
       rows.append(el);
     }
 

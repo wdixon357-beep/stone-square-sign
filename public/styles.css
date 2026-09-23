@@ -406,14 +406,51 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; }
 }
 
-/* Dues. Status is carried by a left rule as well as the pill, so it reads at a
-   glance on a phone and does not rely on colour alone. */
-.dues-rows { display: flex; flex-direction: column; gap: 8px; }
-.dues-row { border-left: 3px solid var(--muted); }
-.dues-row.dues-paid { border-left-color: var(--green); }
-.dues-row.dues-partial { border-left-color: var(--gold); }
-.dues-row.dues-unpaid { border-left-color: #96331f; }
-.dues-row small { color: var(--muted); display: block; margin-top: 2px; }
+/* The full dues ledger is a financial table on desktop and paired columns on smaller screens. */
+.dues-ledger-frame { overflow: hidden; border: 1px solid #d7dfe3; border-radius: 15px; background: #fff; box-shadow: 0 10px 28px rgba(7,27,47,.06); }
+.dues-ledger-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-variant-numeric: tabular-nums; }
+.dues-ledger-table th { padding: 16px 13px; background: linear-gradient(110deg, var(--navy), var(--navy-2)); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .11em; text-align: left; text-transform: uppercase; }
+.dues-ledger-table th:first-child { width: 28%; padding-left: 19px; }
+.dues-ledger-table th:nth-child(2), .dues-ledger-table th:nth-child(3), .dues-ledger-table th:nth-child(4) { width: 14%; text-align: right; }
+.dues-ledger-table th:nth-child(5) { width: 15%; }
+.dues-ledger-table th:nth-child(6) { width: 15%; }
+.dues-ledger-table td { padding: 17px 13px; border-bottom: 1px solid #e8ecee; color: var(--ink); font-size: 12px; vertical-align: middle; overflow-wrap: anywhere; }
+.dues-ledger-table td:first-child { padding-left: 15px; border-left: 4px solid var(--muted); }
+.dues-ledger-table .dues-paid td:first-child { border-left-color: var(--green); }
+.dues-ledger-table .dues-partial td:first-child { border-left-color: var(--gold); }
+.dues-ledger-table .dues-unpaid td:first-child { border-left-color: var(--red); }
+.dues-ledger-table tbody tr:nth-child(even) { background: #f8fafb; }
+.dues-ledger-table tbody tr:hover { background: #f1f6f8; }
+.dues-ledger-table tbody tr:last-child td { border-bottom: 0; }
+.dues-ledger-table .dues-member-cell strong { display: block; color: var(--navy); font-size: 13px; line-height: 1.35; }
+.dues-cell-note { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; font-weight: 500; line-height: 1.4; }
+.dues-ledger-table .dues-money { text-align: right; white-space: nowrap; }
+.dues-ledger-table .dues-balance { color: var(--navy); font-weight: 800; }
+.dues-ledger-table .dues-last-payment { color: var(--muted); white-space: nowrap; }
+.dues-status { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border-radius: 999px; font-size: 10px; font-weight: 800; line-height: 1.25; white-space: normal; }
+.dues-status::before { content: ''; width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: currentColor; }
+.dues-status-paid { color: #176449; background: #e7f4eb; }
+.dues-status-partial { color: #80510d; background: #fbf1d8; }
+.dues-status-unpaid { color: #96362c; background: #fbeae6; }
+.dues-status-unknown { color: #505d67; background: #eaf0f3; }
+@media (max-width: 1100px) {
+  .dues-ledger-table, .dues-ledger-table tbody { display: block; }
+  .dues-ledger-table thead { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  .dues-ledger-table tbody { display: grid; gap: 12px; padding: 12px; }
+  .dues-ledger-table tbody tr { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border: 1px solid #dfe5e8; border-left: 4px solid var(--muted); border-radius: 11px; background: #fff; overflow: hidden; }
+  .dues-ledger-table tbody tr.dues-paid { border-left-color: var(--green); }
+  .dues-ledger-table tbody tr.dues-partial { border-left-color: var(--gold); }
+  .dues-ledger-table tbody tr.dues-unpaid { border-left-color: var(--red); }
+  .dues-ledger-table tbody tr:nth-child(even) { background: #fff; }
+  .dues-ledger-table td, .dues-ledger-table td:first-child { display: block; min-width: 0; padding: 10px 13px; border: 0; text-align: left; white-space: normal; }
+  .dues-ledger-table td:first-child { grid-column: 1 / -1; padding: 15px 13px 12px; border-bottom: 1px solid #e8ecee; }
+  .dues-ledger-table td:last-child { grid-column: 1 / -1; border-top: 1px solid #e8ecee; }
+  .dues-ledger-table td:not(:first-child)::before { content: attr(data-label); display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+  .dues-ledger-table .dues-money { text-align: left; }
+}
+@media (min-width: 600px) and (max-width: 1100px) {
+  .dues-ledger-table tbody { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
 #duesSection .dues-head-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 8px; }
 .dues-head-actions button { min-height: 44px; }
 @media (max-width: 600px) { #duesSection .dues-head-actions { flex: 1 1 100%; width: 100%; } .dues-head-actions button { flex: 1 1 135px; } }
