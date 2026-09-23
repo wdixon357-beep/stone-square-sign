@@ -533,6 +533,7 @@ const broadcast = (type, data = {}) => {
     if (type === 'queue_changed' && !client.permissions?.includes('documents.status')) continue;
     if (type === 'proposals_changed' && client.role !== 'owner' && !client.permissions?.includes('proposals.create')) continue;
     if (type === 'treasury_changed' && !client.permissions?.includes('treasury.view')) continue;
+    if (type === 'correspondence_changed' && client.role !== 'owner' && !client.permissions?.includes('reports.create')) continue;
     if (type === 'minutes_review_changed' && client.role !== 'owner') continue;
     if (type === 'minutes_completion_changed' && client.role !== 'owner' && !client.permissions?.includes('minutes.prepare')) continue;
     if (type === 'minutes_records_changed' && !client.permissions?.includes('minutes.view')) continue;
@@ -3720,7 +3721,7 @@ mountBuildingCalendar(app,{requireAuth});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
 mountOfficerReportRoutes(app, { requireAuth, requireOwner });
-mountCorrespondenceRoutes(app, { requireAuth });
+mountCorrespondenceRoutes(app, { requireAuth, broadcast });
 mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: requestBaseUrl, generateToken, hashSecret, generationFor, rateLimit });
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });

@@ -162,6 +162,7 @@
           </section>
           <p id="permissionRefreshNotice" class="helper hidden" role="status"></p>
           <section id="minutesReviewAlerts" class="workflow-alerts hidden" role="status" aria-live="polite" aria-label="Meeting minutes alerts"></section>
+          <section id="correspondenceAlerts" class="workflow-alerts hidden" role="status" aria-live="polite" aria-label="Lodge correspondence alerts"></section>
           <section id="treasuryAlerts" class="workflow-alerts hidden" role="status" aria-live="polite" aria-label="Treasurer report alerts"></section>
           <section id="serviceHealthAlert" class="workflow-alerts hidden owner-only" role="status" aria-live="polite" aria-label="Dashboard service status"></section>
           <section id="landingSection" class="landing-section">
@@ -213,12 +214,13 @@
                 <label for="correspondenceBody">Letter</label><textarea id="correspondenceBody" rows="12" maxlength="12000" placeholder="Write the verified facts and requested next step."></textarea>
                 <p class="helper">For a demit, a dues payment alone does not certify good standing or complete the Lodge's required checks. The Worshipful Master must review the exact outgoing letter.</p>
                 <div class="row-buttons"><button id="correspondenceThomas" class="secondary" type="button">Start PM Thomas reply</button><button id="correspondenceSave" class="primary" type="button">Save draft and preview</button></div>
+                <div id="correspondenceHandoff" class="hidden"><p id="correspondenceStatus" class="helper"></p><button id="correspondenceSubmit" class="primary hidden" type="button">Send to McDuffie for signature</button><button id="correspondenceReturn" class="secondary hidden" type="button">Return for correction</button><label id="correspondenceConsentWrap" class="hidden"><input id="correspondenceConsent" type="checkbox" /> I reviewed the complete letter and authorize my saved signature on this version.</label><button id="correspondenceSign" class="primary hidden" type="button">Sign this letter</button></div>
                 <p id="correspondenceMessage" class="message" role="status"></p>
               </section>
               <section class="panel correspondence-documents" aria-label="Saved letters and preview">
                 <div class="panel-title"><h2>Saved drafts</h2><button id="correspondenceRefresh" class="secondary" type="button">Refresh</button></div>
                 <div id="correspondenceList" class="correspondence-list"></div>
-                <div id="correspondencePreviewWrap" class="hidden"><div class="panel-title"><h2>Document preview</h2><button id="correspondenceOpenPdf" class="secondary" type="button">Open PDF</button></div><div id="correspondencePreview" class="minutes-pdf-pages" role="region" aria-label="Letter draft PDF preview" tabindex="0"></div></div>
+                <div id="correspondencePreviewWrap" class="hidden"><div class="panel-title"><h2>Document preview</h2><div class="row-buttons"><button id="correspondenceOpenPdf" class="secondary" type="button">Open PDF</button><button id="correspondenceDownload" class="secondary" type="button">Download PDF</button></div></div><div id="correspondencePreview" class="minutes-pdf-pages" role="region" aria-label="Letter PDF preview" tabindex="0"></div></div>
               </section>
             </div>
           </section>

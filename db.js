@@ -357,6 +357,14 @@ export const initSchema = async (exec = run) => {
   )`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_correspondence_drafts_updated
     ON correspondence_drafts(updated_at DESC)`);
+  await addColumn(exec, 'correspondence_drafts', 'assigned_to_user_id', 'INTEGER REFERENCES users(id)');
+  await addColumn(exec, 'correspondence_drafts', 'assigned_to_name', 'TEXT');
+  await addColumn(exec, 'correspondence_drafts', 'submitted_at', 'TEXT');
+  await addColumn(exec, 'correspondence_drafts', 'signed_by_user_id', 'INTEGER REFERENCES users(id)');
+  await addColumn(exec, 'correspondence_drafts', 'signed_by_name', 'TEXT');
+  await addColumn(exec, 'correspondence_drafts', 'signed_at', 'TEXT');
+  await addColumn(exec, 'correspondence_drafts', 'signed_signature_bytes', 'BYTEA');
+  await addColumn(exec, 'correspondence_drafts', 'return_note', 'TEXT');
   /* Agendas are private working documents created only by the Lodge owner. */
   await exec(`CREATE TABLE IF NOT EXISTS agendas (
     id TEXT PRIMARY KEY,

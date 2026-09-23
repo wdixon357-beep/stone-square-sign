@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { readFile } from 'node:fs/promises';
 
 const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
 const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
@@ -60,5 +61,58 @@ try {
   assert.equal(edited.status, 200); assert.equal(edited.data.draft.subject, 'Dues payment acknowledged');
   assert.equal(edited.data.draft.preparedByName, 'William McDuffie');
   assert.equal((await api('/api/correspondence', owner.token)).data.drafts[0].status, 'draft');
-  console.log('PASS: private secretary correspondence can be drafted, revised by its preparer or WM, and previewed without signing or sending.');
+  const wmDraft = await api('/api/correspondence', owner.token, 'POST', { ...letter, subject: 'WM prepared for Secretary signature' });
+  assert.equal(wmDraft.status, 201);
+  assert.equal(wmDraft.data.draft.assignedToName, 'William McDuffie');
+  const wmId = wmDraft.data.draft.id;
+  const access = await api('/api/admin/access', owner.token);
+  const mcduffie = access.data.accounts.find(account => account.id === secretary.user.id && !account.pending);
+  assert.ok(mcduffie);
+  assert.equal((await api('/api/admin/access', owner.token, 'PUT', {
+    key: mcduffie.key, permissions: mcduffie.permissions.filter(permission => permission !== 'reports.create'),
+  })).status, 200);
+  assert.equal((await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST')).status, 409);
+  assert.equal((await api('/api/admin/access', owner.token, 'PUT', {
+    key: mcduffie.key, permissions: mcduffie.permissions,
+  })).status, 200);
+  assert.equal((await api(`/api/correspondence/${wmId}/submit`, assistant.token, 'POST')).status, 403);
+  assert.equal((await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: true })).status, 403);
+  const submitted = await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST');
+  assert.equal(submitted.status, 200);
+  assert.equal(submitted.data.draft.status, 'awaiting_secretary');
+  assert.equal(submitted.data.draft.assignedToUserId, secretary.user.id);
+  const secretaryAlerts = await api('/api/correspondence/alerts', secretary.token);
+  assert.equal(secretaryAlerts.status, 200);
+  assert.match(secretaryAlerts.cache, /no-store/);
+  assert.equal(secretaryAlerts.data.alerts[0].id, wmId);
+  assert.equal((await api(`/api/correspondence/${wmId}/return`, assistant.token, 'POST', { reason: 'Correction' })).status, 403);
+  assert.equal((await api(`/api/correspondence/${wmId}/return`, secretary.token, 'POST', { reason: '' })).status, 400);
+  const returned = await api(`/api/correspondence/${wmId}/return`, secretary.token, 'POST', { reason: 'Check the date.' });
+  assert.equal(returned.status, 200);
+  assert.equal(returned.data.draft.status, 'draft');
+  assert.equal(returned.data.draft.returnNote, 'Check the date.');
+  assert.equal((await api('/api/correspondence/alerts', owner.token)).data.alerts[0].id, wmId);
+  assert.equal((await api('/api/correspondence/alerts', secretary.token)).data.alerts.length, 0);
+  const resubmitted = await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST');
+  assert.equal(resubmitted.status, 200);
+  assert.equal(resubmitted.data.draft.returnNote, null);
+  assert.equal((await api(`/api/correspondence/${wmId}`, owner.token, 'PUT', letter)).status, 409);
+  assert.equal((await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST')).status, 409);
+  assert.equal((await api(`/api/correspondence/${wmId}/sign`, assistant.token, 'POST', { consent: true })).status, 403);
+  assert.equal((await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: false })).status, 400);
+  assert.equal((await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: true })).status, 409);
+  const signatureData = `data:image/png;base64,${(await readFile(new URL('./signature.b64', import.meta.url), 'utf8')).trim()}`;
+  assert.equal((await api('/api/profile/signature', secretary.token, 'PUT', { signatureData, signatureType: 'drawn' })).status, 200);
+  const signed = await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: true });
+  assert.equal(signed.status, 200);
+  assert.equal(signed.data.draft.status, 'signed');
+  assert.equal(signed.data.draft.signedByName, 'William McDuffie');
+  assert.equal((await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: true })).status, 403);
+  const signedPdf = await api(`/api/correspondence/${wmId}/pdf`, secretary.token);
+  const signedDocument = await getDocument({ data: new Uint8Array(signedPdf.data), useSystemFonts: true }).promise;
+  const signedText = (await (await signedDocument.getPage(1)).getTextContent()).items.map(item => item.str).join(' ');
+  assert.match(signedText, /SIGNED - DELIVERY BY THE SECRETARY PENDING/);
+  assert.match(signedText, /Secretary William McDuffie/);
+  await signedDocument.destroy();
+  console.log('PASS: WM can assign a private letter to McDuffie; only he can consent, sign with his saved signature, and download the signed PDF for manual email.');
 } finally { server.kill('SIGTERM'); }

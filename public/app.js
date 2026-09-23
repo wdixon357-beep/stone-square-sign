@@ -530,6 +530,7 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   show($('appCard'));
   if (freshLogin) showMemberWelcome(user);
   await refreshMinutesReviewAlerts();
+  await refreshCorrespondenceAlerts();
   await refreshTreasuryAlerts();
   const [documents] = await Promise.all([
     renderDocuments(),
@@ -1020,6 +1021,31 @@ const refreshMinutesReviewAlerts = async () => {
   } catch { /* Keep existing alerts visible until the next successful refresh. */ }
 };
 setInterval(() => { if (can('minutes.view')) refreshMinutesReviewAlerts(); }, 20000);
+
+const refreshCorrespondenceAlerts = async () => {
+  const container = $('correspondenceAlerts');
+  if (!correspondenceWorkspace || !state.user) { container.replaceChildren(); hide(container); return; }
+  const userId = state.user.id;
+  try {
+    const { alerts } = await apiFetch('/api/correspondence/alerts');
+    if (state.user?.id !== userId) return;
+    container.replaceChildren(...(alerts || []).map(alert => {
+      const button = document.createElement('button');
+      button.className = 'secondary';
+      button.textContent = `${alert.title}. ${alert.message}`;
+      button.addEventListener('click', async () => {
+        showWorkspaceSection('correspondence', { skipLoad: true });
+        await correspondenceWorkspace.load();
+        const letter = correspondenceWorkspace.drafts.find(item => item.id === alert.id);
+        if (letter) await correspondenceWorkspace.open(letter);
+      });
+      return button;
+    }));
+    container.classList.toggle('hidden', !alerts?.length);
+    $('correspondenceMenuCard').classList.toggle('awaiting', Boolean(alerts?.length));
+  } catch { /* Keep the existing assignment alert until a refresh succeeds. */ }
+};
+setInterval(() => { if (correspondenceWorkspace) refreshCorrespondenceAlerts(); }, 20000);
 
 const refreshTreasuryAlerts = async () => {
   const container = $('treasuryAlerts');
@@ -2174,6 +2200,7 @@ const startRealtime = async () => {
       if (!response.ok || !response.body) throw new Error('Live connection unavailable.');
       setLiveState(true);
       await refreshMinutesReviewAlerts();
+      await refreshCorrespondenceAlerts();
       await refreshTreasuryAlerts();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -2186,6 +2213,10 @@ const startRealtime = async () => {
         buffer = events.pop() || '';
         events.forEach((event) => {
           if (event.includes('event: minutes_review_changed') || event.includes('event: minutes_completion_changed')) refreshMinutesReviewAlerts();
+          if (event.includes('event: correspondence_changed')) {
+            refreshCorrespondenceAlerts();
+            if (state.activeSection === 'correspondence' && !correspondenceWorkspace?.dirty) correspondenceWorkspace?.load();
+          }
           if (event.includes('event: minutes_records_changed') && state.activeSection === 'minutes') {
             if (state.minutesEditorDirty) state.minutesRecordsRefreshPending = true;
             else renderMinutes();
