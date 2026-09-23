@@ -44,6 +44,7 @@ const state = {
   dispensationDirty: false,
   minutesSourceDirty: false,
   emailDeliveryReady: null,
+  duesLedger: null,
 };
 let treasuryWorkspace;
 let agendaWorkspace;
@@ -911,6 +912,11 @@ const collectMinutesDraft = () => ({
   present: $('minutesPresent').value.split('\n').map((name) => name.trim()).filter(Boolean),
   excused: $('minutesExcused').value.split('\n').map((name) => name.trim()).filter(Boolean),
   visitors: $('minutesVisitors').value.split('\n').map((name) => name.trim()).filter(Boolean),
+  attendanceReview: {
+    officerRoll: $('minutesOfficerRollConfirmed').checked,
+    otherPresent: $('minutesOtherPresentConfirmed').checked,
+    otherExcused: $('minutesOtherExcusedConfirmed').checked,
+  },
   officerAttendance: [...$('minutesOfficerAttendance').querySelectorAll('.minutes-officer-row')].map((row) => ({
     name: row.querySelector('[data-field="name"]').value.trim(),
     title: row.querySelector('[data-field="title"]').value.trim(),
@@ -1275,7 +1281,7 @@ const officerAttendanceEditor = (entry) => {
   title.placeholder = 'Office or pro tem role';
   title.value = entry.title || '';
   const select = document.createElement('select');
-  [['present', 'Present'], ['absent', 'Absent'], ['excused', 'Excused'], ['not_recorded', 'Not recorded']]
+  [['not_recorded', 'Needs confirmation'], ['present', 'Present'], ['excused', 'Excused'], ['absent', 'Absent']]
     .forEach(([value, text]) => {
       const option = document.createElement('option');
       option.value = value;
@@ -1283,9 +1289,20 @@ const officerAttendanceEditor = (entry) => {
       option.selected = value === entry.status;
       select.append(option);
     });
+  [name, title, select].forEach((field) => field.addEventListener(field === select ? 'change' : 'input', () => {
+    $('minutesOfficerRollConfirmed').checked = false;
+  }));
   row.append(name, title, select);
   return row;
 };
+
+const minutesAttendanceIssues = (draft = collectMinutesDraft()) => [
+  !draft.attendanceReview?.officerRoll && 'Confirm that you reviewed the complete officer roll.',
+  draft.officerAttendance?.some((officer) => officer.status === 'not_recorded')
+    && 'Choose Present, Excused, or Absent for every officer.',
+  !draft.attendanceReview?.otherPresent && 'Confirm the Other Brothers Present list, including when it is blank.',
+  !draft.attendanceReview?.otherExcused && 'Confirm the Other Brothers Excused list, including when it is blank.',
+].filter(Boolean);
 
 const financeEditor = (entry = {}) => {
   const row = document.createElement('div');
@@ -1417,6 +1434,9 @@ const openMinutesEditor = (id) => {
   $('minutesPresent').value = (draft.present || []).join('\n');
   $('minutesExcused').value = (draft.excused || []).join('\n');
   $('minutesVisitors').value = (draft.visitors || []).join('\n');
+  $('minutesOfficerRollConfirmed').checked = draft.attendanceReview?.officerRoll === true;
+  $('minutesOtherPresentConfirmed').checked = draft.attendanceReview?.otherPresent === true;
+  $('minutesOtherExcusedConfirmed').checked = draft.attendanceReview?.otherExcused === true;
   $('minutesOfficerAttendance').replaceChildren(...(draft.officerAttendance || []).map(officerAttendanceEditor));
   fillFinanceEditor('minutesIncome', draft.income || []);
   fillFinanceEditor('minutesExpenses', draft.expenses || []);
@@ -1991,8 +2011,11 @@ $('minutesPreviewFrame').addEventListener('previewerror', event => { $('minutesP
 $('refreshMinutesPreview').addEventListener('click', refreshMinutesPreview);
 $('addMinutesOfficer').addEventListener('click', () => {
   $('minutesOfficerAttendance').append(officerAttendanceEditor({ status: 'not_recorded' }));
+  $('minutesOfficerRollConfirmed').checked = false;
   state.minutesEditorDirty = true;
 });
+$('minutesPresent').addEventListener('input', () => { $('minutesOtherPresentConfirmed').checked = false; });
+$('minutesExcused').addEventListener('input', () => { $('minutesOtherExcusedConfirmed').checked = false; });
 $('addMinutesIncome').addEventListener('click', () => { $('minutesIncome').append(financeEditor()); state.minutesEditorDirty = true; });
 $('addMinutesExpense').addEventListener('click', () => { $('minutesExpenses').append(financeEditor()); state.minutesEditorDirty = true; });
 $('addMinutesSection').addEventListener('click', () => {
@@ -2053,6 +2076,12 @@ $('minutesEditorForm').addEventListener('submit', async (event) => {
 });
 $('submitMinutesReview').addEventListener('click', async () => {
   try {
+    const attendanceIssues = minutesAttendanceIssues();
+    if (attendanceIssues.length) {
+      setMessage($('minutesEditorMessage'), `Complete the required attendance review before submitting. ${attendanceIssues.join(' ')}`, true);
+      $('minutesAttendanceReview').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     await saveMinutesCorrections();
     await minutesAction('preparer-attest', null,
       'Your corrections and attestation are recorded. The draft is ready for the Worshipful Master.');
@@ -3164,6 +3193,7 @@ const renderDues = async (force = false) => {
   setMessage($('duesMessage'), 'Reading payments from Zeffy…');
   try {
     const led = await apiFetch('/api/dues');
+    state.duesLedger = led;
     $('duesYearLine').textContent =
       `${led.duesYear} dues, ${money(led.rateCents)} each, reconciled live against both Zeffy campaigns.`;
     $('duesCollected').textContent = money(led.totals.collectedCents);
@@ -3280,10 +3310,60 @@ const renderMemberAccess = async () => {
   }catch(error){setMessage($('memberAccessMessage'),error.message,true);}
 };
 
-$('duesAdjustmentDate').value = new Date().toISOString().slice(0,10);
+const duesTodayEastern = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+$('duesAdjustmentDate').value = duesTodayEastern();
+let duesAssistProposal = null;
+const updateDuesAssistReview = () => {
+  if (!duesAssistProposal) return;
+  const review = $('duesAssistReview'); review.replaceChildren();
+  const row = state.duesLedger?.rows.find(item => String(item.rosterId) === $('duesAdjustmentBrother').value);
+  const amount = $('duesAdjustmentAmount').value.trim();
+  const cents = /^\d{1,6}(?:\.\d{1,2})?$/.test(amount) ? Math.round(Number(amount) * 100) : null;
+  const heading = document.createElement('strong'); heading.textContent = 'Review before recording'; review.append(heading);
+  const details = document.createElement('p');
+  details.textContent = `${row?.name || 'Select the Brother'} · ${cents ? money(cents) : 'Confirm amount'} · ${$('duesAdjustmentDate').value || 'Select date'} · ${$('duesAdjustmentMethod').value || 'Choose method'}`;
+  review.append(details);
+  if (row && cents) {
+    const direction = ['refund','chargeback'].includes($('duesAdjustmentType').value) ? -1 : 1;
+    const balance = document.createElement('p');
+    balance.textContent = `Current dues balance ${money(row.remainingCents)} → projected balance ${money(Math.max(0, row.assessedCents - row.paidCents - direction * cents))}`;
+    review.append(balance);
+  }
+  if (duesAssistProposal.warnings.length) {
+    const label = document.createElement('p'); label.textContent = 'Check the original note:'; review.append(label);
+    const list = document.createElement('ul'); duesAssistProposal.warnings.forEach(warning => { const item = document.createElement('li'); item.textContent = warning; list.append(item); }); review.append(list);
+  }
+  review.classList.remove('hidden');
+};
+for (const id of ['duesAdjustmentBrother','duesAdjustmentType','duesAdjustmentAmount','duesAdjustmentDate','duesAdjustmentMethod','duesAdjustmentReference','duesAdjustmentNote']) {
+  $(id).addEventListener('input', updateDuesAssistReview);
+  $(id).addEventListener('change', updateDuesAssistReview);
+}
+$('duesAssistPrepare').addEventListener('click', async event => {
+  const button = event.currentTarget; button.disabled = true;
+  const review = $('duesAssistReview'); review.classList.add('hidden'); review.replaceChildren();
+  duesAssistProposal = null;
+  setMessage($('duesAssistMessage'), 'Reading the payment note…');
+  try {
+    const result = await apiFetch('/api/dues/manual-assist', { method: 'POST', body: JSON.stringify({ text: $('duesAssistText').value }) });
+    const p = result.proposal;
+    $('duesAdjustmentBrother').value = p.rosterId == null ? '' : String(p.rosterId);
+    $('duesAdjustmentType').value = 'payment';
+    $('duesAdjustmentAmount').value = p.amount || '';
+    $('duesAdjustmentDate').value = p.effectiveDate || '';
+    $('duesAdjustmentMethod').value = p.paymentMethod || '';
+    $('duesAdjustmentReference').value = p.sourceReference || '';
+    $('duesAdjustmentNote').value = p.note || '';
+    duesAssistProposal = p;
+    updateDuesAssistReview();
+    setMessage($('duesAssistMessage'), 'Payment details prepared. Check the fields below, then confirm and record.');
+    review.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (error) { setMessage($('duesAssistMessage'), error.message, true); }
+  finally { button.disabled = false; }
+});
 $('duesAdjustmentForm').addEventListener('submit', async event => {
   event.preventDefault(); const button=event.submitter;button.disabled=true;
-  try { await apiFetch('/api/dues/adjustments',{method:'POST',body:JSON.stringify({rosterId:Number($('duesAdjustmentBrother').value),transactionType:$('duesAdjustmentType').value,amount:$('duesAdjustmentAmount').value,effectiveDate:$('duesAdjustmentDate').value,paymentMethod:$('duesAdjustmentMethod').value,sourceReference:$('duesAdjustmentReference').value,note:$('duesAdjustmentNote').value})});event.currentTarget.reset();$('duesAdjustmentDate').value=new Date().toISOString().slice(0,10);state.duesLoaded=false;await renderDues(true);setMessage($('duesAdjustmentMessage'),'The activity was recorded and the balance was recalculated.'); }
+  try { await apiFetch('/api/dues/adjustments',{method:'POST',body:JSON.stringify({rosterId:Number($('duesAdjustmentBrother').value),transactionType:$('duesAdjustmentType').value,amount:$('duesAdjustmentAmount').value,effectiveDate:$('duesAdjustmentDate').value,paymentMethod:$('duesAdjustmentMethod').value,sourceReference:$('duesAdjustmentReference').value,note:$('duesAdjustmentNote').value})});event.currentTarget.reset();duesAssistProposal=null;$('duesAssistText').value='';$('duesAssistReview').classList.add('hidden');$('duesAssistReview').replaceChildren();setMessage($('duesAssistMessage'),'');$('duesAdjustmentDate').value=duesTodayEastern();state.duesLoaded=false;await renderDues(true);setMessage($('duesAdjustmentMessage'),'The activity was recorded and the balance was recalculated.'); }
   catch(error){setMessage($('duesAdjustmentMessage'),error.message,true);}finally{button.disabled=false;}
 });
 

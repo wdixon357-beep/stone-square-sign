@@ -182,7 +182,7 @@ The Lodge closed at 9:18 PM.`;
   assert.equal(draft.quorum, 'Yes');
   assert.equal(draft.openingTime, '7:30 PM');
   assert.equal(draft.closingTime, '9:18 PM');
-  assert.equal(draft.excused.length, 3);
+  assert.deepEqual(draft.excused, ['Brother Marcus Green'], 'the Other Brothers Excused list excludes Lodge officers');
   assert.equal(draft.officerAttendance.find(r => r.title === 'Treasurer').status, 'excused');
   assert.equal(draft.officerAttendance.find(r => r.title === 'Assistant Treasurer').status, 'excused');
   assert.equal(draft.officerAttendance.find(r => r.name === 'Adrian Reese').status, 'present');
@@ -223,6 +223,6 @@ The Lodge closed at 9:18 PM.`;
   assert.equal(old.sections.find(section => section.heading === 'Opening').body, 'The Lodge opened.');
   assert.equal(old.sections.find(section => section.body === 'An official visitation was announced.').heading, 'Communications');
   const corrected = structuredClone(draft); corrected.officerAttendance.find(r=>r.title==='Treasurer').status='not_recorded';
-  assert.equal(officerAttendanceRows(corrected).find(r=>r.title==='Treasurer').status,'excused');
+  assert.equal(officerAttendanceRows(corrected).find(r=>r.title==='Treasurer').status,'not_recorded', 'the officer roll stays incomplete instead of falling back to an Other Brothers list');
   console.log('Minutes content, context, attendance, dates and compact PDF passed without a network call.');
 } finally { globalThis.fetch = originalFetch; }

@@ -262,8 +262,10 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
     status: attendance.excused.some(name => namesMatch(name, officer.name)) ? 'excused'
       : attendance.present.some(name => namesMatch(name, officer.name)) ? 'present'
         : attendance.absent.some(name => namesMatch(name, officer.name)) ? 'absent' : 'not_recorded'}));
+  const otherPresent = attendance.present.filter((name) => !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name)));
+  const otherExcused = attendance.excused.filter((name) => !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name)));
   return {
-    organizerVersion: 3, sourceType: type, meetingDate: day,
+    organizerVersion: 4, sourceType: type, meetingDate: day,
     ...detectPrayerFacts(source),
     meetingType: /\bmeeting type\s*:\s*([^\n.]+)/i.exec(source)?.[1]?.trim() || 'Stated Communication',
     degree, openingTime, closingTime,
@@ -271,7 +273,10 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
     quorum: /\b(?:no quorum|quorum\s*:\s*no|quorum (?:was |is )?not (?:present|established))\b/i.test(source) ? 'No'
       : /\bquorum(?:\s*:\s*yes| (?:was |is )?(?:present|established|declared))\b/i.test(source) ? 'Yes' : null,
     nextMeeting: /\bnext (?:meeting|stated communication)\s*:\s*([^\n]+)/i.exec(source)?.[1]?.trim() || null,
-    ...attendance, officerAttendance, income: [], expenses: [], sections: finalSections,
+    present: otherPresent, excused: otherExcused, absent: attendance.absent, visitors: attendance.visitors,
+    officerAttendance,
+    attendanceReview: { officerRoll: false, otherPresent: false, otherExcused: false },
+    income: [], expenses: [], sections: finalSections,
     warnings, sensitiveReview, actionItems: [],
   };
 }

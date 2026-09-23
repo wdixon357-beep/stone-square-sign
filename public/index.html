@@ -307,15 +307,22 @@
 
             <section class="panel dues-manage-only">
               <div class="panel-title"><div><p class="eyebrow">NON-ZEFFY ACTIVITY</p><h2>Record a payment or adjustment</h2></div></div>
+              <div class="dues-assist">
+                <label for="duesAssistText">Describe one manual payment</label>
+                <p class="helper">For example: Bro. James Smith paid $175 by check 1042 today. Review the Brother, amount, date and balance before recording.</p>
+                <textarea id="duesAssistText" rows="3" maxlength="2000" placeholder="Brother, amount, date and how it was paid"></textarea>
+                <div class="builder-actions"><button id="duesAssistPrepare" class="secondary" type="button">Prepare payment details</button><p id="duesAssistMessage" class="message" role="status"></p></div>
+                <div id="duesAssistReview" class="dues-assist-review hidden" role="status"></div>
+              </div>
               <form id="duesAdjustmentForm" class="dues-adjustment-grid">
                 <label>Brother<select id="duesAdjustmentBrother" required><option value="">Choose a Brother</option></select></label>
                 <label>Type<select id="duesAdjustmentType" required><option value="payment">Payment</option><option value="credit">Credit</option><option value="refund">Refund</option><option value="chargeback">Chargeback</option><option value="correction">Correction</option></select></label>
                 <label>Amount<input id="duesAdjustmentAmount" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
                 <label>Date<input id="duesAdjustmentDate" type="date" required></label>
-                <label>Method<select id="duesAdjustmentMethod" required><option>Cash</option><option>Check</option><option>Money order</option><option>Bank transfer</option><option>Other</option></select></label>
+                <label>Method<select id="duesAdjustmentMethod" required><option value="">Choose a method</option><option>Cash</option><option>Check</option><option>Money order</option><option>Bank transfer</option><option>Other</option></select></label>
                 <label>Reference<input id="duesAdjustmentReference" maxlength="160" placeholder="Receipt, check number, or source"></label>
                 <label class="wide">Note<textarea id="duesAdjustmentNote" rows="2" maxlength="500"></textarea></label>
-                <div class="wide builder-actions"><p id="duesAdjustmentMessage" class="message" role="status"></p><button class="primary" type="submit">Record activity</button></div>
+                <div class="wide builder-actions"><p id="duesAdjustmentMessage" class="message" role="status"></p><button class="primary" type="submit">Confirm and record activity</button></div>
               </form>
             </section>
 
@@ -503,16 +510,27 @@
               </div>
               <div><label for="minutesNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesNextMeeting" type="text" placeholder="Thursday, October 1, 2026" /><input id="minutesNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
             </div>
-            <div class="minutes-attendance-grid">
-              <div><label for="minutesPresent">Present</label><textarea id="minutesPresent" rows="4"></textarea></div>
-              <div><label for="minutesExcused">Excused</label><textarea id="minutesExcused" rows="4"></textarea></div>
-              <div><label for="minutesVisitors">Visitors</label><textarea id="minutesVisitors" rows="4"></textarea></div>
-            </div>
-            <section class="minutes-detail-section">
-              <h3>Officer roll</h3>
-              <p>Correct a name or title when needed, and record any officer serving pro tem.</p>
+            <section id="minutesAttendanceReview" class="minutes-detail-section minutes-required-review">
+              <div class="minutes-required-heading"><div><p class="eyebrow">REQUIRED BEFORE SUBMISSION</p><h3>Attendance review</h3></div><span>Secretary confirmation</span></div>
+              <p>Review every officer and both other-Brother lists. These minutes cannot be sent to the Worshipful Master until this section is complete.</p>
+              <h4>Officers present, excused and absent</h4>
+              <p>Choose Present, Excused or Absent for every Lodge officer. Correct a name or title when needed, and record anyone serving pro tem.</p>
               <div id="minutesOfficerAttendance" class="minutes-officer-attendance"></div>
               <button id="addMinutesOfficer" class="secondary small minutes-add-row" type="button">Add officer or pro tem</button>
+              <label class="minutes-confirmation"><input id="minutesOfficerRollConfirmed" type="checkbox" /> I reviewed the complete officer roll and confirmed every status.</label>
+              <div class="minutes-attendance-grid minutes-other-attendance">
+                <div>
+                  <label for="minutesPresent">Other Brothers present</label>
+                  <textarea id="minutesPresent" rows="4" placeholder="Enter one Brother per line. Leave blank only when none were present."></textarea>
+                  <label class="minutes-confirmation"><input id="minutesOtherPresentConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were present.</label>
+                </div>
+                <div>
+                  <label for="minutesExcused">Other Brothers excused</label>
+                  <textarea id="minutesExcused" rows="4" placeholder="Enter one Brother per line. Leave blank only when none were excused."></textarea>
+                  <label class="minutes-confirmation"><input id="minutesOtherExcusedConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were excused.</label>
+                </div>
+              </div>
+              <div class="minutes-visitors-field"><label for="minutesVisitors">Visitors, if any</label><textarea id="minutesVisitors" rows="3" placeholder="Enter one visitor per line only when visitors attended."></textarea></div>
             </section>
             <div id="minutesSections" class="minutes-sections"></div>
             <button id="addMinutesSection" class="secondary small minutes-add-row hidden" type="button" disabled>Add section</button>

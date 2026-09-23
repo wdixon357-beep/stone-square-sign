@@ -213,7 +213,13 @@ try {
   const pending = api(`/api/minutes/${minutes.id}/reorganize`, owner.token, 'POST', {expectedUpdatedAt: minutes.updatedAt, sourceType: 'compiled_notes'});
   for (let attempt = 0; attempt < 150 && await providerCalls() === count; attempt++) await pause(25);
   assert.ok(await providerCalls() > count, 'a fresh reorganization reached the held provider mock');
-  result = await api(`/api/minutes/${minutes.id}`, owner.token, 'PUT', {expectedUpdatedAt: minutes.updatedAt, draft: {...minutes.draft, prayerRequested: false, closingPrayerGiven: false}});
+  result = await api(`/api/minutes/${minutes.id}`, owner.token, 'PUT', {expectedUpdatedAt: minutes.updatedAt, draft: {
+    ...minutes.draft,
+    prayerRequested: false,
+    closingPrayerGiven: false,
+    officerAttendance: minutes.draft.officerAttendance.map(officer => ({...officer,status:'present'})),
+    attendanceReview: {officerRoll:true,otherPresent:true,otherExcused:true},
+  }});
   assert.equal(result.status, 200); minutes = result.data.minutes;
   await writeFile(releaseFile, 'continue');
   check('Minutes changed during generation reject the stale replacement', (await pending).status === 409);

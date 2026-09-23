@@ -203,6 +203,8 @@ function checkedGeneratedDraft(response, source, localDraft) {
       if (!attendanceEstablished(quote, name, field)) throw generationError(`An extracted ${field} entry is not established by its source reference. Please try again.`);
     });
   }
+  const sameOfficer = (left, right) => namesMatch(left.name, right.name)
+    || left.title && right.title && left.title.toLowerCase() === right.title.toLowerCase();
   for (const [index, entry] of generated.officerAttendance.entries()) {
     if (entry.status === 'not_recorded') continue;
     const quote = quotesFor(`officerAttendance[${index}].status`);
@@ -212,10 +214,13 @@ function checkedGeneratedDraft(response, source, localDraft) {
       // discard an otherwise usable minutes draft. Keep the officer on the roster,
       // reset only the unsupported status, and make the required review explicit.
       entry.status = 'not_recorded';
-      const normalizedEntry = normalized.officerAttendance[index];
-      if (normalizedEntry) normalizedEntry.status = 'not_recorded';
       warnings.push(`Confirm attendance for ${entry.name}: the source mentions the officer but does not establish an attendance status.`);
     }
+  }
+  for (const normalizedEntry of normalized.officerAttendance) {
+    const generatedEntries = generated.officerAttendance.filter((entry) => sameOfficer(entry, normalizedEntry));
+    if (!generatedEntries.length) continue;
+    normalizedEntry.status = generatedEntries.find((entry) => entry.status !== 'not_recorded')?.status || 'not_recorded';
   }
   generated.sensitiveReview.forEach((detail, index) => {
     if (!source.includes(detail) || !quotesFor(`sensitiveReview[${index}]`).includes(detail)) {
@@ -279,7 +284,34 @@ const normalizeSections = (value, draft = {}) => {
   return sections;
 };
 
-export const normalizeMinutesDraft = (value = {}) => ({
+export const normalizeMinutesDraft = (value = {}) => {
+  const rawPresent = Array.isArray(value.present) ? value.present.map(item => String(item).trim()).filter(Boolean) : [];
+  const rawExcused = Array.isArray(value.excused) ? value.excused.map(item => String(item).trim()).filter(Boolean) : [];
+  const statedRows = Array.isArray(value.officerAttendance) ? value.officerAttendance.map((entry) => ({
+    name: String(entry?.name || '').trim(),
+    title: String(entry?.title || '').trim(),
+    status: ['present', 'absent', 'excused', 'not_recorded'].includes(entry?.status)
+      ? entry.status : 'not_recorded',
+  })).filter((entry) => entry.name) : [];
+  const sameOfficer = (entry, officer) => namesMatch(entry.name, officer.name)
+    || entry.title && officer.title && entry.title.toLowerCase() === officer.title.toLowerCase();
+  const officerAttendance = CURRENT_OFFICERS.map((officer) => {
+    const stated = statedRows.find((entry) => sameOfficer(entry, officer));
+    const inferred = rawPresent.some((name) => namesMatch(name, officer.name)) ? 'present'
+      : rawExcused.some((name) => namesMatch(name, officer.name)) ? 'excused' : 'not_recorded';
+    return {
+      name: stated?.name || officer.name,
+      title: stated?.title || officer.title,
+      status: stated?.status && stated.status !== 'not_recorded' ? stated.status : inferred,
+    };
+  });
+  officerAttendance.push(...statedRows.filter((entry) => (
+    !CURRENT_OFFICERS.some((officer) => sameOfficer(entry, officer))
+  )));
+  const otherNames = list => list.filter((name) => (
+    !officerAttendance.some((officer) => namesMatch(name, officer.name))
+  ));
+  return {
   organizerVersion: value.organizerVersion || 1,
   sourceType: value.sourceType === 'compiled_notes' ? 'compiled_notes' : 'transcript',
   meetingDate: minutesDateValue(value.meetingDate) || null,
@@ -293,17 +325,15 @@ export const normalizeMinutesDraft = (value = {}) => ({
   presiding: value.presiding ? String(value.presiding).trim() : null,
   quorum: canonicalQuorum(value.quorum),
   nextMeeting: value.nextMeeting ? String(value.nextMeeting).trim() : null,
-  present: Array.isArray(value.present) ? value.present.map(String).filter(Boolean) : [],
-  excused: Array.isArray(value.excused) ? value.excused.map(String).filter(Boolean) : [],
+  present: otherNames(rawPresent),
+  excused: otherNames(rawExcused),
   visitors: normalizeVisitors(value.visitors),
-  officerAttendance: Array.isArray(value.officerAttendance) && value.officerAttendance.length
-    ? value.officerAttendance.map((entry) => ({
-    name: String(entry?.name || '').trim(),
-    title: String(entry?.title || '').trim(),
-    status: ['present', 'absent', 'excused', 'not_recorded'].includes(entry?.status)
-      ? entry.status : 'not_recorded',
-    })).filter((entry) => entry.name)
-    : CURRENT_OFFICERS.map((officer) => ({ ...officer, status: 'not_recorded' })),
+  officerAttendance,
+  attendanceReview: {
+    officerRoll: value.attendanceReview?.officerRoll === true,
+    otherPresent: value.attendanceReview?.otherPresent === true,
+    otherExcused: value.attendanceReview?.otherExcused === true,
+  },
   income: Array.isArray(value.income) ? value.income.map((entry) => ({
     date: entry?.date ? String(entry.date).trim() : null,
     reference: entry?.reference ? String(entry.reference).trim() : null,
@@ -323,7 +353,8 @@ export const normalizeMinutesDraft = (value = {}) => ({
   sensitiveReview: Array.isArray(value.sensitiveReview)
     ? value.sensitiveReview.map(String).filter(Boolean) : [],
   actionItems: Array.isArray(value.actionItems) ? value.actionItems.map(String).filter(Boolean) : [],
-});
+  };
+};
 
 export const generateMinutesDraft = async (transcript, {
   testResponse = process.env.NODE_ENV === 'test' ? process.env.MINUTES_TEST_RESPONSE : '',

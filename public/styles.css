@@ -229,7 +229,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-editor-exit-bar span { flex: 1 1 240px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .minutes-detail-section { display: grid; gap: 10px; }
 .minutes-detail-section h3, .minutes-document-preview h3 { margin: 0; color: var(--navy); font: 22px Georgia, serif; }
+.minutes-detail-section h4 { margin: 8px 0 0; color: var(--navy); font-size: 15px; }
 .minutes-detail-section > p, .minutes-document-preview > p { margin: 0; color: var(--muted); font-size: 11px; }
+.minutes-required-review { padding: 18px; border: 2px solid var(--gold-soft); border-radius: 12px; background: #fffdf7; }
+.minutes-required-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.minutes-required-heading .eyebrow { margin: 0 0 3px; color: #8a621e; font-size: 10px; font-weight: 800; letter-spacing: .09em; }
+.minutes-required-heading > span { padding: 6px 9px; border-radius: 999px; background: #f4dfaa; color: #68480d; font-size: 11px; font-weight: 800; }
+.minutes-other-attendance { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 6px; }
+.minutes-confirmation { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; color: var(--navy); font-size: 12px; font-weight: 650; line-height: 1.45; }
+.minutes-confirmation input { width: 17px; height: 17px; min-width: 17px; margin: 1px 0 0; }
+.minutes-visitors-field { margin-top: 4px; }
 .minutes-officer-attendance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .minutes-officer-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 135px; align-items: center; gap: 7px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: white; }
 .minutes-officer-row input { margin: 0; padding: 8px 9px; }
@@ -406,6 +415,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .dues-row.dues-unpaid { border-left-color: #96331f; }
 .dues-row small { color: var(--muted); display: block; margin-top: 2px; }
 .dues-adjustment-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.dues-adjustment-grid label{min-width:0}.dues-adjustment-grid .wide{grid-column:1/-1}
+.dues-assist{padding:16px;margin-bottom:18px;border:1px solid var(--line);border-radius:14px;background:var(--soft)}.dues-assist>label{display:block;font-weight:700;margin-bottom:5px}.dues-assist textarea{width:100%;min-height:88px}.dues-assist .builder-actions{margin-top:10px}.dues-assist-review{margin-top:12px;padding:14px;border-left:4px solid var(--gold);border-radius:8px;background:#fff}.dues-assist-review strong{display:block;margin-bottom:6px}.dues-assist-review p{margin:4px 0}.dues-assist-review ul{margin:8px 0 0;padding-left:20px}
 .my-dues-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}.my-dues-summary>div{padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}.my-dues-summary span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.my-dues-summary strong{display:block;margin-top:6px;font-size:clamp(18px,3vw,26px)}.payment-actions{margin:12px 0 20px}.payment-actions a{text-decoration:none;text-align:center}
 .suggestion-row{align-items:flex-start}.suggestion-row p{margin:8px 0 0;white-space:pre-wrap}.suggestion-controls{display:grid;gap:8px;min-width:min(100%,320px)}.suggestion-controls textarea{min-width:0}
 @media(max-width:700px){.dues-adjustment-grid,.my-dues-summary{grid-template-columns:1fr}.dues-adjustment-grid .wide{grid-column:auto}.payment-actions{display:grid}.payment-actions a{width:100%}.suggestion-row{display:grid}.suggestion-controls{width:100%}}

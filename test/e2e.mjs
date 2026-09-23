@@ -591,6 +591,14 @@ try {
   const incompleteClosing = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token: asstToken});
   check('unconfirmed closing details cannot be signed as a complete record', incompleteClosing.status === 409 && /closing time/.test(incompleteClosing.payload.error) && /Chaplain/.test(incompleteClosing.payload.error));
   revisedDraft.sections[0].body += ' The officers were examined in their stations and duties.';
+  await api('PUT', `/api/minutes/${minutesId}`, { token: asstToken, body: { draft: revisedDraft } });
+  const incompleteAttendance = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
+  check('the secretary must review officers and both other-Brother lists before submission', incompleteAttendance.status === 409
+    && /officer roll/i.test(incompleteAttendance.payload.error)
+    && /Other Brothers Present/.test(incompleteAttendance.payload.error)
+    && /Other Brothers Excused/.test(incompleteAttendance.payload.error));
+  revisedDraft.officerAttendance = revisedDraft.officerAttendance.map((officer) => ({...officer, status:'present'}));
+  revisedDraft.attendanceReview = {officerRoll:true, otherPresent:true, otherExcused:true};
   const savedMinutes = await api('PUT', `/api/minutes/${minutesId}`, {
     token: asstToken, body: { draft: revisedDraft },
   });
@@ -746,6 +754,10 @@ try {
   secretarySource.append('transcriptText', 'The Lodge opened in due form with a quorum present. The Secretary recorded the business of the meeting, the motion and its disposition. The Lodge closed in due form after completing its business.');
   const secretaryDraft = await api('POST', '/api/minutes/generate', { token: secToken, body: secretarySource, raw: true });
   const secretaryMinutesId = secretaryDraft.payload.minutes?.id;
+  const secretaryReadyDraft = structuredClone(secretaryDraft.payload.minutes.draft);
+  secretaryReadyDraft.officerAttendance = secretaryReadyDraft.officerAttendance.map((officer) => ({...officer, status:'present'}));
+  secretaryReadyDraft.attendanceReview = {officerRoll:true, otherPresent:true, otherExcused:true};
+  await api('PUT', `/api/minutes/${secretaryMinutesId}`, { token: secToken, body: { draft: secretaryReadyDraft } });
   const beforeSecretaryNotice = deliveredMail.length;
   const secretarySubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
   const secretaryPending = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
@@ -803,6 +815,10 @@ try {
   ownSource.append('transcriptText', 'Meeting date: 2026-09-03. The Lodge opened at 7:30 PM. The committee reported. The Lodge closed at 9:00 PM.');
   const ownMinutes = await api('POST', '/api/minutes/generate', { token: wmToken, body: ownSource, raw: true });
   const ownId = ownMinutes.payload.minutes?.id;
+  const ownReadyDraft = structuredClone(ownMinutes.payload.minutes.draft);
+  ownReadyDraft.officerAttendance = ownReadyDraft.officerAttendance.map((officer) => ({...officer, status:'present'}));
+  ownReadyDraft.attendanceReview = {officerRoll:true, otherPresent:true, otherExcused:true};
+  await api('PUT', `/api/minutes/${ownId}`, { token: wmToken, body: { draft: ownReadyDraft } });
   const ownAttestation = await api('POST', `/api/minutes/${ownId}/preparer-attest`, { token: wmToken });
   check('the Master can prepare and attest to his own minutes', ownAttestation.status === 200 && ownAttestation.payload.minutes.preparerAttestedAt);
   const ownApproval = await api('POST', `/api/minutes/${ownId}/master-attest`, { token: wmToken });

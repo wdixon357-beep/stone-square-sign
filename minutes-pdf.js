@@ -258,12 +258,12 @@ export const buildMinutesPdf = async ({
     ['Presiding Officer', clean(draft.presiding) || 'Needs review'],
     ['Quorum', clean(draft.quorum) || 'Needs review'],
   ], [155, 367], { size: 9 });
-  ruleHeading('Attendance');
+  ruleHeading('Officers Present, Excused and Absent');
   table(['Officer', 'Office', 'Attendance'], officerAttendanceRows(draft).map(officer => [
     officer.name, officer.title, ({present: 'Present', absent: 'Absent', excused: 'Excused'})[officer.status] || 'Not recorded',
   ]), [220, 200, 102], { size: 8 });
   const additional = additionalPresent(draft);
-  if (additional.length) { ruleHeading('Additional Brothers Present'); bullets(additional.join('\n')); }
+  if (additional.length) { ruleHeading('Other Brothers Present'); bullets(additional.join('\n')); }
   const excused = nonOfficerExcused(draft);
   if (excused.length) { ruleHeading('Other Brothers Excused'); bullets(excused.join('\n')); }
   if (draft.visitors?.length) { ruleHeading('Visitors'); bullets(draft.visitors.join('\n')); }

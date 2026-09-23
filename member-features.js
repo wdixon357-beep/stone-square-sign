@@ -1,6 +1,7 @@
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
 import { buildDuesLedger, duesConfigured, duesPaymentLinks } from './dues.js';
 import { hasPermission } from './access-control.js';
+import { prepareManualDuesPayment } from './dues-assistant.js';
 
 const nowIso = () => new Date().toISOString();
 const STATUSES = new Set(['Received', 'Under Review', 'Responded', 'Closed']);
@@ -8,13 +9,21 @@ const TRANSACTION_SIGNS = { payment: 1, credit: 1, refund: -1, chargeback: -1, c
 const METHODS = new Set(['Cash', 'Check', 'Money order', 'Bank transfer', 'Other']);
 const clean = (value, max = 1000) => String(value || '').trim().slice(0, max);
 const moneyCents = value => {
-  const amount = Number(value);
-  return Number.isFinite(amount) && amount > 0 && amount <= 100000 ? Math.round(amount * 100) : null;
+  const raw = String(value ?? '').trim();
+  if (!/^\d{1,6}(?:\.\d{1,2})?$/.test(raw)) return null;
+  const [whole, fraction = ''] = raw.split('.');
+  const amount = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+  return amount > 0 && amount <= 10_000_000 ? amount : null;
+};
+const validDate = value => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
+  const date = new Date(`${value}T12:00:00Z`);
+  return Number.isFinite(date.valueOf()) && date.toISOString().slice(0, 10) === value;
 };
 const failure = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 
 export function mountMemberFeatures(app, {
-  requireAuth, requireOwner, sendEmail, baseUrl, generateToken, hashSecret,
+  requireAuth, requireOwner, sendEmail, baseUrl, generateToken, hashSecret, generationFor, rateLimit,
 }) {
   app.get('/api/dues/me', requireAuth, async (req, res, next) => {
     try {
@@ -27,6 +36,21 @@ export function mountMemberFeatures(app, {
       if (!row) throw failure(404, 'Your dues record was not found.');
       res.setHeader('Cache-Control', 'private, no-store');
       res.json({ duesYear: ledger.duesYear, rateCents: ledger.rateCents, row, paymentLinks: duesPaymentLinks(), updatedAt: nowIso() });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/dues/manual-assist', requireAuth, rateLimit({key:'dues-manual-assist',maximum:12,windowMs:3600000}), async (req, res, next) => {
+    try {
+      if (!hasPermission(req.user, 'dues.manage') || !['owner', 'secretary', 'assistant_secretary'].includes(req.user.role)) {
+        throw failure(403, 'Only the Worshipful Master and the Secretary offices may prepare manual dues entries.');
+      }
+      const source = clean(req.body?.text, 2001);
+      if (source.length < 12 || source.length > 2000) throw failure(400, 'Describe one payment in 12 to 2,000 characters.');
+      if (!duesConfigured()) throw failure(503, 'Dues are not connected yet.');
+      const ledger = await buildDuesLedger();
+      const proposal = await prepareManualDuesPayment(source, ledger, generationFor(req.user.id));
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json({ proposal, saved: false });
     } catch (error) { next(error); }
   });
 
@@ -43,7 +67,7 @@ export function mountMemberFeatures(app, {
       const source = clean(req.body?.sourceReference, 160);
       const note = clean(req.body?.note, 500);
       if (!Number.isSafeInteger(rosterId) || rosterId < 1 || !Object.hasOwn(TRANSACTION_SIGNS, type) || !cents
-          || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate) || !METHODS.has(method)) {
+          || !validDate(effectiveDate) || !METHODS.has(method)) {
         throw failure(400, 'Choose a Brother, transaction type, amount, date, and payment method.');
       }
       if (type === 'reversal') throw failure(400, 'Use the reverse action on the original entry.');
@@ -52,6 +76,20 @@ export function mountMemberFeatures(app, {
       await withTransaction(async () => {
         const brother = await dbGet('SELECT id,first_name,last_name FROM roster WHERE id=? FOR UPDATE', [rosterId]);
         if (!brother) throw failure(404, 'That Brother was not found on the Lodge roster.');
+        if (source && await dbGet(`SELECT 1 FROM dues_adjustments a
+          WHERE a.roster_id=? AND a.dues_year=? AND LOWER(a.source_reference)=LOWER(?)
+            AND a.transaction_type=? AND a.amount_cents=?
+            AND NOT EXISTS (SELECT 1 FROM dues_adjustments r WHERE r.reverses_adjustment_id=a.id)`,
+          [rosterId, process.env.DUES_YEAR || '2026-2027', source, type, signed])) {
+          throw failure(409, 'That payment reference has already been recorded for this Brother.');
+        }
+        if (!source && await dbGet(`SELECT 1 FROM dues_adjustments a
+          WHERE a.roster_id=? AND a.dues_year=? AND a.source_reference IS NULL
+            AND a.transaction_type=? AND a.amount_cents=? AND a.effective_date=? AND a.payment_method=?
+            AND a.created_at>? AND NOT EXISTS (SELECT 1 FROM dues_adjustments r WHERE r.reverses_adjustment_id=a.id)`,
+          [rosterId, process.env.DUES_YEAR || '2026-2027', type, signed, effectiveDate, method, new Date(Date.now() - 10 * 60 * 1000).toISOString()])) {
+          throw failure(409, 'An identical payment was just recorded. Check the ledger before trying again, or enter its distinct receipt reference.');
+        }
         const inserted = await dbRun(`INSERT INTO dues_adjustments
           (roster_id,dues_year,transaction_type,amount_cents,effective_date,payment_method,source_reference,note,entered_by_user_id,created_at)
           VALUES (?,?,?,?,?,?,?,?,?,?)`, [rosterId, process.env.DUES_YEAR || '2026-2027', type, signed, effectiveDate, method, source || null, note || null, req.user.id, nowIso()]);

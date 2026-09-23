@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
+import { attendanceReviewIssues, sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
 import { normalizeMinutesDraft } from '../minutes.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { buildMinutesDocx, minutesFileName } from '../minutes-document.js';
@@ -102,6 +102,13 @@ assert.ok(unconfirmedClosing.at(-1).body.includes('The Lodge closed at <u>10:30 
 assert.equal(detectPrayerFacts('The Worshipful Master asked the Chaplain to pray for the sick and distressed during the discussion.').prayerRequested, null);
 assert.deepEqual(closingReviewIssues(draft), []);
 assert.equal(closingReviewIssues({}).length, 3);
+const incompleteAttendance = normalizeMinutesDraft({});
+assert.ok(attendanceReviewIssues(incompleteAttendance).length >= 4, 'an unreviewed officer roll and both other-Brother lists block submission');
+const completeAttendance = normalizeMinutesDraft({
+  officerAttendance: incompleteAttendance.officerAttendance.map((officer) => ({...officer, status:'present'})),
+  attendanceReview: {officerRoll:true, otherPresent:true, otherExcused:true},
+});
+assert.deepEqual(attendanceReviewIssues(completeAttendance), [], 'all attendance groups can be explicitly completed');
 const missing = documentSections(normalizeMinutesDraft({})).map(s => s.body).join('\n');
 assert.doesNotMatch(missing, /The Chaplain gave|The Worshipful Master asked|Lodge was closed at/);
 const declined = documentSections({...draft, prayerRequested:false, closingPrayerGiven:false}).map(s=>s.body).join('\n');

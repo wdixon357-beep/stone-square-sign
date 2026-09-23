@@ -2671,6 +2671,21 @@ struct OwnerSuggestionCard: View {
 private struct DuesAdjustmentDraft: Encodable {
     let rosterId:Int; let transactionType:String; let amount:String; let effectiveDate:String; let paymentMethod:String; let sourceReference:String; let note:String
 }
+private struct DuesAssistRequest: Encodable { let text: String }
+private struct DuesAssistResponse: Decodable { let proposal: DuesAssistProposal; let saved: Bool }
+private struct DuesAssistProposal: Decodable {
+    let brotherName: String
+    let rosterId: Int?
+    let rosterName: String?
+    let amount: String
+    let effectiveDate: String
+    let paymentMethod: String
+    let sourceReference: String
+    let note: String
+    let currentBalanceCents: Int?
+    let projectedBalanceCents: Int?
+    let warnings: [String]
+}
 
 struct DuesAdjustmentView: View {
     @EnvironmentObject var model: AppModel
@@ -2681,17 +2696,69 @@ struct DuesAdjustmentView: View {
     @State private var type="payment"
     @State private var amount=""
     @State private var date=Date()
-    @State private var method="Cash"
+    @State private var method=""
     @State private var reference=""
     @State private var note=""
     @State private var message=""
     @State private var working=false
-    var body: some View { VStack(alignment:.leading,spacing:16){
-        HStack{VStack(alignment:.leading){Text("Record non-Zeffy dues activity").font(.title2.weight(.semibold));Text("The original entry remains in the audit record.").foregroundStyle(.secondary)};Spacer();Button("Cancel"){dismiss()}}
-        Form { Picker("Brother",selection:$rosterId){Text("Choose a Brother").tag(Int?.none);ForEach(rows.sorted{$0.name<$1.name}){row in if let id=row.rosterId{Text(row.name).tag(Int?.some(id))}}};Picker("Type",selection:$type){ForEach(["payment","credit","refund","chargeback","correction"],id:\.self){Text($0.capitalized)}};TextField("Amount",text:$amount);DatePicker("Date",selection:$date,displayedComponents:.date);Picker("Method",selection:$method){ForEach(["Cash","Check","Money order","Bank transfer","Other"],id:\.self){Text($0)}};TextField("Reference",text:$reference);TextField("Note",text:$note,axis:.vertical).lineLimit(2...5) }
-        Text(message).font(.caption).foregroundStyle(.red)
-        HStack{Spacer();Button("Record activity"){Task{await save()}}.buttonStyle(.borderedProminent).disabled(working||rosterId==nil||Double(amount)==nil)}
-    }.padding(24).frame(minWidth:460,idealWidth:560,minHeight:500,idealHeight:520) }
+    @State private var assistText=""
+    @State private var assistWarnings:[String]=[]
+    @State private var assistReady=false
+    @State private var assisting=false
+    @State private var assistMessage=""
+    @State private var dateConfirmed=true
+    private var selectedRow:DuesRow? { rows.first { $0.rosterId == rosterId } }
+    private var projectedBalance:Int? {
+        guard let row=selectedRow, let dollars=Double(amount), dollars > 0 else { return nil }
+        let direction = ["refund","chargeback"].contains(type) ? -1 : 1
+        return max(0,row.assessedCents-row.paidCents-direction*Int((dollars*100).rounded()))
+    }
+    var body: some View { VStack(alignment:.leading,spacing:12){
+        HStack{VStack(alignment:.leading){Text("Record non-Zeffy dues activity").font(.title2.weight(.semibold));Text("Review the details before recording a payment.").foregroundStyle(.secondary)};Spacer();Button("Cancel"){dismiss()}}
+        ScrollView { VStack(alignment:.leading,spacing:14){
+            VStack(alignment:.leading,spacing:8){
+                Text("Describe one manual payment").font(.headline)
+                Text("For example: Bro. James Smith paid $175 by check 1042 today.").font(.caption).foregroundStyle(.secondary)
+                TextEditor(text:$assistText).frame(minHeight:76).padding(5).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:8))
+                HStack{Button("Prepare payment details"){Task{await prepare()}}.disabled(assisting || assistText.trimmingCharacters(in:.whitespacesAndNewlines).count < 12);if assisting{ProgressView()};Text(assistMessage).font(.caption).foregroundStyle(.secondary)}
+            }.padding(14).background(SignTheme.gold.opacity(0.10)).clipShape(RoundedRectangle(cornerRadius:12))
+            if assistReady {
+                VStack(alignment:.leading,spacing:6){
+                    Text("Review before recording").font(.headline)
+                    Text("\(selectedRow?.name ?? "Select the Brother") · \(amount.isEmpty ? "Confirm amount" : "$\(amount)") · \(dateConfirmed ? date.formatted(date:.abbreviated,time:.omitted) : "Confirm date") · \(method.isEmpty ? "Choose method" : method)")
+                    if let row=selectedRow,let projectedBalance { Text("Current balance \(lodgeMoney(row.remainingCents)) → projected balance \(lodgeMoney(projectedBalance))") }
+                    ForEach(assistWarnings,id:\.self){ Text("• \($0)").font(.caption).foregroundStyle(.secondary) }
+                }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:10))
+            }
+            Form {
+                Picker("Brother",selection:$rosterId){Text("Choose a Brother").tag(Int?.none);ForEach(rows.sorted{$0.name<$1.name}){row in if let id=row.rosterId{Text(row.name).tag(Int?.some(id))}}}
+                Picker("Type",selection:$type){ForEach(["payment","credit","refund","chargeback","correction"],id:\.self){Text($0.capitalized)}}
+                TextField("Amount",text:$amount)
+                DatePicker("Date",selection:$date,displayedComponents:.date).onChange(of:date){_,_ in dateConfirmed=true}
+                if !dateConfirmed { Button("Confirm the displayed date") { dateConfirmed=true } }
+                Picker("Method",selection:$method){Text("Choose a method").tag("");ForEach(["Cash","Check","Money order","Bank transfer","Other"],id:\.self){Text($0)}}
+                TextField("Reference",text:$reference)
+                TextField("Note",text:$note,axis:.vertical).lineLimit(2...5)
+            }.frame(minHeight:300)
+        }}
+        if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
+        HStack{Spacer();Button("Confirm and record activity"){Task{await save()}}.buttonStyle(.borderedProminent).disabled(working || rosterId == nil || Double(amount) == nil || method.isEmpty || !dateConfirmed)}
+    }.padding(24).frame(minWidth:520,idealWidth:650,minHeight:580,idealHeight:680) }
+    @MainActor private func prepare() async {
+        assisting=true;defer{assisting=false};assistReady=false;assistMessage="Reading the payment note…"
+        do {
+            let data=try JSONEncoder().encode(DuesAssistRequest(text:assistText))
+            let response:DuesAssistResponse=try await model.request("/api/dues/manual-assist",method:"POST",body:data)
+            let proposal=response.proposal
+            rosterId=proposal.rosterId;type="payment";amount=proposal.amount;method=proposal.paymentMethod;reference=proposal.sourceReference;note=proposal.note
+            dateConfirmed=false
+            if !proposal.effectiveDate.isEmpty {
+                let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.dateFormat="yyyy-MM-dd"
+                if let parsed=formatter.date(from:proposal.effectiveDate){date=parsed;dateConfirmed=true}
+            }
+            assistWarnings=proposal.warnings;assistReady=true;assistMessage="Check the fields and confirm when correct."
+        } catch { assistMessage=error.localizedDescription }
+    }
     @MainActor private func save() async { guard let rosterId else{return};working=true;defer{working=false};let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.dateFormat="yyyy-MM-dd";do{let data=try JSONEncoder().encode(DuesAdjustmentDraft(rosterId:rosterId,transactionType:type,amount:amount,effectiveDate:formatter.string(from:date),paymentMethod:method,sourceReference:reference,note:note));let _:MessageResponse=try await model.request("/api/dues/adjustments",method:"POST",body:data);await saved();dismiss()}catch{message=error.localizedDescription}}
 }
 

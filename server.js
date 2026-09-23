@@ -26,7 +26,7 @@ import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
 import { minutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
-import { closingReviewIssues } from './minutes-format.js';
+import { attendanceReviewIssues, closingReviewIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
@@ -2228,8 +2228,9 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     if (row.created_by_user_id !== req.user.id) {
       return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
     }
-    const closingIssues = closingReviewIssues(JSON.parse(row.draft_json));
-    if (closingIssues.length) return res.status(409).json({ error: closingIssues.join(' ') });
+    const draft = JSON.parse(row.draft_json);
+    const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
+    if (reviewIssues.length) return res.status(409).json({ error: reviewIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     const time = nowIso();
@@ -2277,8 +2278,9 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'awaiting_master_attestation') return res.status(409).json({ error: 'The preparing officer must attest to the draft first.' });
-    const closingIssues = closingReviewIssues(JSON.parse(row.draft_json));
-    if (closingIssues.length) return res.status(409).json({ error: closingIssues.join(' ') });
+    const draft = JSON.parse(row.draft_json);
+    const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
+    if (reviewIssues.length) return res.status(409).json({ error: `The preparing officer must complete the required attendance review before these minutes can be signed. ${reviewIssues.join(' ')}` });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     const time = nowIso();
@@ -3687,7 +3689,7 @@ mountBuildingCalendar(app,{requireAuth});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
 mountOfficerReportRoutes(app, { requireAuth, requireOwner });
-mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: requestBaseUrl, generateToken, hashSecret });
+mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: requestBaseUrl, generateToken, hashSecret, generationFor, rateLimit });
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 

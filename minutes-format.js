@@ -1,5 +1,6 @@
 import { formatMinutesDate, minutesDateParts } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
+import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 
 // One presentation model for the live PDF and Word record. Formatting never
 // supplies a motion, an outcome, a name, or a time missing from the record.
@@ -97,6 +98,25 @@ export function closingReviewIssues(draft) {
     !String(draft.closingTime || '').trim() && 'Enter the closing time.',
     typeof draft.prayerRequested !== 'boolean' && 'Confirm whether the Worshipful Master requested prayer for the sick and distressed.',
     typeof draft.closingPrayerGiven !== 'boolean' && 'Confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.',
+  ].filter(Boolean);
+}
+
+export function attendanceReviewIssues(draft = {}) {
+  const review = draft.attendanceReview || {};
+  const rows = Array.isArray(draft.officerAttendance) ? draft.officerAttendance : [];
+  const unresolved = CURRENT_OFFICERS.filter((officer) => {
+    const row = rows.find((entry) => namesMatch(entry?.name, officer.name));
+    return !row || !['present', 'excused', 'absent'].includes(row.status);
+  });
+  const unresolvedAdditional = rows.filter((entry) => entry?.name
+    && !CURRENT_OFFICERS.some((officer) => namesMatch(entry.name, officer.name))
+    && !['present', 'excused', 'absent'].includes(entry.status));
+  return [
+    !review.officerRoll && 'Confirm that you reviewed the complete officer roll.',
+    unresolved.length && `Record Present, Excused, or Absent for every Lodge officer. Still incomplete: ${unresolved.map((officer) => officer.name).join(', ')}.`,
+    unresolvedAdditional.length && `Record Present, Excused, or Absent for each added officer or pro tem entry. Still incomplete: ${unresolvedAdditional.map((entry) => entry.name).join(', ')}.`,
+    !review.otherPresent && 'Confirm the Other Brothers Present list, including when no other Brothers were present.',
+    !review.otherExcused && 'Confirm the Other Brothers Excused list, including when no other Brothers were excused.',
   ].filter(Boolean);
 }
 

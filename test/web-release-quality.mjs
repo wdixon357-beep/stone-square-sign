@@ -44,6 +44,14 @@ assert.match(server, /recoverStaleMinutesClaims/, 'interrupted minutes generatio
 assert.match(server, /releaseMinutesClaim\(req\.params\.id, req\.user\.id, 'generation_failed'\)/, 'failed minutes generation must immediately release the claim');
 assert.match(nativeMinutes, /func handoff\(\) async/, 'the Mac app must submit a meeting source handoff');
 assert.match(nativeMinutes, /func claim\(_ record: MinutesRecord\) async/, 'the Mac app must claim a waiting meeting source');
+assert.match(html, /id="minutesAttendanceReview"[\s\S]*Officers present, excused and absent[\s\S]*Other Brothers present[\s\S]*Other Brothers excused/, 'the website must show the required separated attendance review');
+for (const id of ['minutesOfficerRollConfirmed', 'minutesOtherPresentConfirmed', 'minutesOtherExcusedConfirmed']) {
+  assert.match(html, new RegExp(`id="${id}"`), `the website must include ${id}`);
+}
+assert.match(app, /Complete the required attendance review before submitting/, 'the website must stop submission before the attendance review is complete');
+assert.match(server, /attendanceReviewIssues\(draft\)/, 'the service must enforce attendance review independently of either client');
+assert.match(nativeMinutes, /GroupBox\("Required attendance review"\)[\s\S]*Other Brothers present[\s\S]*Other Brothers excused/, 'the native Mac editor must provide the same required attendance review');
+assert.match(nativeMinutes, /workspace\.dirty \|\| !attendanceReady/, 'the native Mac app must keep preparer attestation unavailable until attendance is complete');
 assert.match(app, /\/api\/minutes\/completion-alerts/, 'every officer with minutes access must receive a signed-minutes alert');
 assert.match(app, /completion-alert-seen/, 'opening signed minutes must acknowledge only that officer alert');
 assert.match(html, /id="minutesReviewAlerts"[^>]+workflow-alerts/, 'minutes alerts must be prominent at the top of the Dashboard');
