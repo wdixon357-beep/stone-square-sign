@@ -22,6 +22,7 @@ const dto = row => ({
   status: row.status, preparedByName: row.prepared_by_name,
   preparedByOffice: row.prepared_by_office, preparedByUserId: row.prepared_by_user_id,
   assignedToUserId: row.assigned_to_user_id, assignedToName: row.assigned_to_name,
+  assignedToOffice: row.assigned_to_office,
   signedByName: row.signed_by_name, signedAt: row.signed_at,
   returnNote: row.return_note,
   updatedAt: row.updated_at,
@@ -62,7 +63,7 @@ export async function buildCorrespondencePdf(row) {
   const seal = await pdf.embedPng(await readFile(new URL('./assets/lodge-seal.png', import.meta.url)));
   const bodyLeft = 120, bodyWidth = 446;
   const outgoingName = row.assigned_to_name || row.prepared_by_name;
-  const outgoingOffice = row.assigned_to_name ? 'Secretary' : row.prepared_by_office;
+  const outgoingOffice = row.assigned_to_name ? (row.assigned_to_office || 'Secretary') : row.prepared_by_office;
   let page, y;
   const centered = (value, atY, font, size, color = navy) => {
     const label = printable(value);
@@ -95,12 +96,12 @@ export async function buildCorrespondencePdf(row) {
       page.drawText('Middletown, DE 19709', { x: 32, y: railY, size: 4.8, font: regular, color: gray }); railY -= 10;
     }
     page.drawLine({ start: { x: 108, y: 614 }, end: { x: 108, y: 58 }, thickness: .45, color: gold });
-    page.drawText(row.status === 'signed' ? 'SIGNED - DELIVERY BY THE SECRETARY PENDING' : 'DRAFT - NOT SIGNED OR SENT', { x: bodyLeft, y: 30, size: 6.6, font: bold, color: gray });
+    page.drawText(row.status === 'signed' ? 'SIGNED - DELIVERY BY THE SIGNING OFFICER PENDING' : 'DRAFT - NOT SIGNED OR SENT', { x: bodyLeft, y: 30, size: 6.6, font: bold, color: gray });
     page.drawText(`Page ${pdf.getPageCount()}`, { x: 538, y: 30, size: 6.6, font: regular, color: gray });
     centered('Returning to the Fundamentals, 2026 to 2027', 18, italic, 6.6, gray);
     y = 608;
   };
-  const line = (value, font = regular, size = 9.5, gap = 15) => {
+  const line = (value, font = regular, size = 10.5, gap = 17) => {
     for (const part of wrap(value, font, size, bodyWidth)) {
       if (y < 58) nextPage();
       if (part) page.drawText(part, { x: bodyLeft, y, size, font, color: navy });
@@ -108,33 +109,58 @@ export async function buildCorrespondencePdf(row) {
     }
   };
   nextPage();
-  const date = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' }).format(new Date(row.updated_at || Date.now()));
-  line(date); y -= 8;
-  line(row.recipient_name, bold); line(row.recipient_lodge); y -= 8;
-  line(`Re: ${row.subject}`, bold); y -= 16;
-  line(row.body, regular, 9.5, 15); y -= 20;
-  if (y < (row.status === 'signed' ? 195 : 145)) nextPage();
-  line('Fraternally,'); y -= 18;
+  const date = new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' }).format(new Date(row.submitted_at || row.updated_at || Date.now()));
+  line(date); y -= 10;
+  line(row.recipient_name, bold); line(row.recipient_lodge); y -= 13;
+  line(`Re: ${row.subject}`, bold); y -= 20;
+  const bodyLines = wrap(row.body, regular, 10.5, bodyWidth);
+  const lastParagraphStart = bodyLines.lastIndexOf('') + 1;
+  const keepLastParagraph = bodyLines.length - lastParagraphStart <= 10;
+  for (let index = 0; index < bodyLines.length; index++) {
+    const remaining = bodyLines.length - index;
+    // Carry the final paragraph (or at least its final four lines) with the
+    // signature block so the last page never contains a signature alone.
+    if (keepLastParagraph && index === lastParagraphStart && y - remaining * 17 - 25 < 210) nextPage();
+    if ((!keepLastParagraph || index >= lastParagraphStart) && remaining <= 4 && y - remaining * 17 - 25 < 210) nextPage();
+    if (y < 58) nextPage();
+    if (bodyLines[index]) page.drawText(bodyLines[index], { x: bodyLeft, y, size: 10.5, font: regular, color: navy });
+    y -= 17;
+  }
+  y -= 25;
+  // Keep the complete signature block together and reserve the same space in
+  // both draft and signed PDFs so signing never shifts the officer's name.
+  if (y < 210) nextPage();
+  line('Fraternally,');
+  const signatureLineY = y - 54;
   if (row.status === 'signed' && row.signed_signature_bytes) {
     const signature = await pdf.embedPng(row.signed_signature_bytes);
     const natural = signature.scale(1);
-    const scale = Math.min(170 / natural.width, 45 / natural.height);
-    page.drawImage(signature, { x: bodyLeft + 3, y: y - 46, width: natural.width * scale, height: natural.height * scale });
-    y -= 50;
-    page.drawLine({ start: { x: bodyLeft, y }, end: { x: bodyLeft + 214, y }, thickness: .55, color: navy });
-    y -= 13;
+    const scale = Math.min(195 / natural.width, 43 / natural.height);
+    page.drawImage(signature, { x: bodyLeft + 3, y: signatureLineY + 4, width: natural.width * scale, height: natural.height * scale });
   }
-  line(outgoingName, bold); line(outgoingOffice);
+  page.drawLine({ start: { x: bodyLeft, y: signatureLineY }, end: { x: bodyLeft + 215, y: signatureLineY }, thickness: .55, color: navy });
+  y = signatureLineY - 19;
+  line(outgoingName, bold);
+  line(outgoingOffice, italic, 9.5, 15);
   if (row.status === 'signed') line(`Signed ${new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' }).format(new Date(row.signed_at))}`, italic, 8.3);
   return Buffer.from(await pdf.save());
 }
 
-const secretaryAccount = async () => {
-  const users = await dbAll("SELECT id, name, role, permissions_json FROM users WHERE role = 'secretary' AND access_revoked_at IS NULL ORDER BY id");
-  return users.find(user => /mcduffie/i.test(user.name));
+const signingOfficers = async () => {
+  const users = await dbAll("SELECT id, name, role, permissions_json FROM users WHERE role IN ('secretary','assistant_secretary') AND access_revoked_at IS NULL ORDER BY CASE role WHEN 'secretary' THEN 0 ELSE 1 END, id");
+  return users.filter(user => resolvePermissions(user).includes('reports.create'))
+    .map(user => ({ id: user.id, name: user.name, office: office(user.role), role: user.role }));
 };
+const draftSigner = async (userId, signers) => signers.find(user => user.id === Number(userId));
 
 export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
+  app.get('/api/correspondence/signers', requireAuth, async (req, res, next) => {
+    try {
+      if (!eligible(req.user)) return denied(res);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json({ signers: await signingOfficers() });
+    } catch (error) { next(error); }
+  });
   app.get('/api/correspondence/alerts', requireAuth, async (req, res, next) => {
     try {
       if (!eligible(req.user)) return denied(res);
@@ -160,11 +186,15 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
       const fields = data(req.body);
       if (!validate(fields)) return res.status(400).json({ error: 'Complete the receiving Lodge, recipient, subject, and letter before saving.' });
       const id = crypto.randomUUID(), now = new Date().toISOString();
-      const intendedSecretary = req.user.role === 'owner' ? await secretaryAccount() : null;
+      const signers = req.user.role === 'owner' ? await signingOfficers() : [];
+      const signer = req.user.role === 'owner'
+        ? (req.body?.signerUserId == null ? signers[0] : await draftSigner(req.body.signerUserId, signers)) : null;
+      if (req.user.role === 'owner' && req.body?.signerUserId != null && !signer)
+        return res.status(409).json({ error: 'Choose an active Secretary or Assistant Secretary with correspondence access.' });
       await dbRun(`INSERT INTO correspondence_drafts
-        (id,matter,recipient_lodge,recipient_name,subject,body,status,prepared_by_user_id,prepared_by_name,prepared_by_office,assigned_to_name,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?)`, [id, fields.matter, fields.recipientLodge, fields.recipientName,
-        fields.subject, fields.body, req.user.id, req.user.name, office(req.user.role), intendedSecretary?.name || null, now, now]);
+        (id,matter,recipient_lodge,recipient_name,subject,body,status,prepared_by_user_id,prepared_by_name,prepared_by_office,assigned_to_user_id,assigned_to_name,assigned_to_office,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,?,?)`, [id, fields.matter, fields.recipientLodge, fields.recipientName,
+        fields.subject, fields.body, req.user.id, req.user.name, office(req.user.role), signer?.id || null, signer?.name || null, signer?.office || null, now, now]);
       await dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',
         [req.user.id, 'correspondence_draft_created', req.ip, JSON.stringify({ id, matter: fields.matter }), now]);
       res.status(201).json({ draft: dto(await dbGet('SELECT * FROM correspondence_drafts WHERE id=?', [id])) });
@@ -180,10 +210,18 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
       if (req.user.role !== 'owner' && row.prepared_by_user_id !== req.user.id) return denied(res);
       const fields = data(req.body);
       if (!validate(fields)) return res.status(400).json({ error: 'Complete the receiving Lodge, recipient, subject, and letter before saving.' });
+      const signers = req.user.role === 'owner' ? await signingOfficers() : [];
+      const signer = req.user.role === 'owner' && req.body?.signerUserId != null
+        ? await draftSigner(req.body.signerUserId, signers) : null;
+      if (req.user.role === 'owner' && req.body?.signerUserId != null && !signer)
+        return res.status(409).json({ error: 'Choose an active Secretary or Assistant Secretary with correspondence access.' });
       const now = new Date().toISOString();
-      const updated = await dbRun(`UPDATE correspondence_drafts SET matter=?,recipient_lodge=?,recipient_name=?,subject=?,body=?,updated_at=?
+      const updated = await dbRun(`UPDATE correspondence_drafts SET matter=?,recipient_lodge=?,recipient_name=?,subject=?,body=?,
+        assigned_to_user_id=?,assigned_to_name=?,assigned_to_office=?,updated_at=?
         WHERE id=? AND status='draft' AND updated_at=?`,
-        [fields.matter, fields.recipientLodge, fields.recipientName, fields.subject, fields.body, now, row.id, row.updated_at]);
+        [fields.matter, fields.recipientLodge, fields.recipientName, fields.subject, fields.body,
+          signer?.id ?? row.assigned_to_user_id, signer?.name ?? row.assigned_to_name,
+          signer?.office ?? row.assigned_to_office, now, row.id, row.updated_at]);
       if (!updated.changes) return res.status(409).json({ error: 'The letter changed. Refresh it before saving.' });
       await dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',
         [req.user.id, 'correspondence_draft_updated', req.ip, JSON.stringify({ id: row.id }), now]);
@@ -197,16 +235,22 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
       const row = await dbGet('SELECT * FROM correspondence_drafts WHERE id=?', [req.params.id]);
       if (!row) return res.status(404).json({ error: 'Letter draft not found.' });
       if (row.status !== 'draft') return res.status(409).json({ error: 'Only a draft can be sent to the Secretary.' });
-      const secretary = await secretaryAccount();
-      if (!secretary) return res.status(409).json({ error: 'McDuffie must have an active Secretary account before this letter can be assigned.' });
-      if (!resolvePermissions(secretary).includes('reports.create')) return res.status(409).json({ error: 'McDuffie’s correspondence access is disabled. Restore his Report Generator access before assigning this letter.' });
+      if (req.body?.expectedUpdatedAt !== row.updated_at)
+        return res.status(409).json({ error: 'This letter changed since the PDF was reviewed. Refresh and review the latest PDF before assigning it.' });
+      const signers = await signingOfficers();
+      const signer = row.assigned_to_user_id
+        ? await draftSigner(row.assigned_to_user_id, signers)
+        : signers.find(user => user.name === row.assigned_to_name);
+      if (!signer) return res.status(409).json({ error: 'The chosen Secretary or Assistant Secretary is unavailable. Choose an active signing officer, save, and review the updated PDF.' });
+      if (req.body?.signerUserId != null && Number(req.body.signerUserId) !== signer.id)
+        return res.status(409).json({ error: 'The signing officer changed. Save and review the updated PDF before assigning this letter.' });
       const now = new Date().toISOString();
       const updated = await dbRun(`UPDATE correspondence_drafts SET status='awaiting_secretary', assigned_to_user_id=?,
-        assigned_to_name=?,submitted_at=?,return_note=NULL,updated_at=? WHERE id=? AND status='draft' AND updated_at=?`,
-      [secretary.id, secretary.name, now, now, row.id, row.updated_at]);
+        assigned_to_name=?,assigned_to_office=?,submitted_at=?,return_note=NULL,updated_at=? WHERE id=? AND status='draft' AND updated_at=?`,
+      [signer.id, signer.name, signer.office, now, now, row.id, row.updated_at]);
       if (!updated.changes) return res.status(409).json({ error: 'The letter changed. Refresh it before sending to the Secretary.' });
       await dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',
-        [req.user.id, 'correspondence_submitted_to_secretary', req.ip, JSON.stringify({ id: row.id, secretaryId: secretary.id }), now]);
+        [req.user.id, 'correspondence_submitted_to_secretary', req.ip, JSON.stringify({ id: row.id, signerId: signer.id }), now]);
       res.json({ draft: dto(await dbGet('SELECT * FROM correspondence_drafts WHERE id=?', [row.id])) });
       broadcast?.('correspondence_changed', { id: row.id });
     } catch (error) { next(error); }
@@ -233,7 +277,7 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
   });
   app.post('/api/correspondence/:id/sign', requireAuth, async (req, res, next) => {
     try {
-      if (req.user.role !== 'secretary' || !eligible(req.user)) return denied(res);
+      if (!['secretary', 'assistant_secretary'].includes(req.user.role) || !eligible(req.user)) return denied(res);
       const row = await dbGet('SELECT * FROM correspondence_drafts WHERE id=?', [req.params.id]);
       if (!row) return res.status(404).json({ error: 'Letter draft not found.' });
       if (row.status !== 'awaiting_secretary' || row.assigned_to_user_id !== req.user.id)
@@ -261,7 +305,7 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
       const bytes = await buildCorrespondencePdf(row);
       res.setHeader('Cache-Control', 'private, no-store');
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline; filename="Stone-Square-Correspondence-Draft.pdf"');
+      res.setHeader('Content-Disposition', `inline; filename="Stone-Square-Correspondence-${row.status === 'signed' ? 'Signed' : 'Draft'}.pdf"`);
       res.send(bytes);
     } catch (error) { next(error); }
   });

@@ -359,6 +359,7 @@ export const initSchema = async (exec = run) => {
     ON correspondence_drafts(updated_at DESC)`);
   await addColumn(exec, 'correspondence_drafts', 'assigned_to_user_id', 'INTEGER REFERENCES users(id)');
   await addColumn(exec, 'correspondence_drafts', 'assigned_to_name', 'TEXT');
+  await addColumn(exec, 'correspondence_drafts', 'assigned_to_office', 'TEXT');
   await addColumn(exec, 'correspondence_drafts', 'submitted_at', 'TEXT');
   await addColumn(exec, 'correspondence_drafts', 'signed_by_user_id', 'INTEGER REFERENCES users(id)');
   await addColumn(exec, 'correspondence_drafts', 'signed_by_name', 'TEXT');

@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { readFile } from 'node:fs/promises';
+import { buildCorrespondencePdf } from '../correspondence.js';
 
 const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
 const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
@@ -64,20 +65,24 @@ try {
   const wmDraft = await api('/api/correspondence', owner.token, 'POST', { ...letter, subject: 'WM prepared for Secretary signature' });
   assert.equal(wmDraft.status, 201);
   assert.equal(wmDraft.data.draft.assignedToName, 'William McDuffie');
+  assert.equal(wmDraft.data.draft.assignedToOffice, 'Secretary');
   const wmId = wmDraft.data.draft.id;
+  const signers = await api('/api/correspondence/signers', owner.token);
+  assert.equal(signers.status, 200);
+  assert.deepEqual(signers.data.signers.map(item => item.name), ['William McDuffie', 'Adrian Reese']);
   const access = await api('/api/admin/access', owner.token);
   const mcduffie = access.data.accounts.find(account => account.id === secretary.user.id && !account.pending);
   assert.ok(mcduffie);
   assert.equal((await api('/api/admin/access', owner.token, 'PUT', {
     key: mcduffie.key, permissions: mcduffie.permissions.filter(permission => permission !== 'reports.create'),
   })).status, 200);
-  assert.equal((await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST')).status, 409);
+  assert.equal((await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST', { expectedUpdatedAt: wmDraft.data.draft.updatedAt })).status, 409);
   assert.equal((await api('/api/admin/access', owner.token, 'PUT', {
     key: mcduffie.key, permissions: mcduffie.permissions,
   })).status, 200);
-  assert.equal((await api(`/api/correspondence/${wmId}/submit`, assistant.token, 'POST')).status, 403);
+  assert.equal((await api(`/api/correspondence/${wmId}/submit`, assistant.token, 'POST', { expectedUpdatedAt: wmDraft.data.draft.updatedAt })).status, 403);
   assert.equal((await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: true })).status, 403);
-  const submitted = await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST');
+  const submitted = await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST', { expectedUpdatedAt: wmDraft.data.draft.updatedAt });
   assert.equal(submitted.status, 200);
   assert.equal(submitted.data.draft.status, 'awaiting_secretary');
   assert.equal(submitted.data.draft.assignedToUserId, secretary.user.id);
@@ -93,11 +98,11 @@ try {
   assert.equal(returned.data.draft.returnNote, 'Check the date.');
   assert.equal((await api('/api/correspondence/alerts', owner.token)).data.alerts[0].id, wmId);
   assert.equal((await api('/api/correspondence/alerts', secretary.token)).data.alerts.length, 0);
-  const resubmitted = await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST');
+  const resubmitted = await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST', { expectedUpdatedAt: returned.data.draft.updatedAt });
   assert.equal(resubmitted.status, 200);
   assert.equal(resubmitted.data.draft.returnNote, null);
   assert.equal((await api(`/api/correspondence/${wmId}`, owner.token, 'PUT', letter)).status, 409);
-  assert.equal((await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST')).status, 409);
+  assert.equal((await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST', { expectedUpdatedAt: returned.data.draft.updatedAt })).status, 409);
   assert.equal((await api(`/api/correspondence/${wmId}/sign`, assistant.token, 'POST', { consent: true })).status, 403);
   assert.equal((await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: false })).status, 400);
   assert.equal((await api(`/api/correspondence/${wmId}/sign`, secretary.token, 'POST', { consent: true })).status, 409);
@@ -111,8 +116,55 @@ try {
   const signedPdf = await api(`/api/correspondence/${wmId}/pdf`, secretary.token);
   const signedDocument = await getDocument({ data: new Uint8Array(signedPdf.data), useSystemFonts: true }).promise;
   const signedText = (await (await signedDocument.getPage(1)).getTextContent()).items.map(item => item.str).join(' ');
-  assert.match(signedText, /SIGNED - DELIVERY BY THE SECRETARY PENDING/);
+  assert.match(signedText, /SIGNED - DELIVERY BY THE SIGNING OFFICER PENDING/);
   assert.match(signedText, /Secretary William McDuffie/);
   await signedDocument.destroy();
-  console.log('PASS: WM can assign a private letter to McDuffie; only he can consent, sign with his saved signature, and download the signed PDF for manual email.');
+  const defaultDraft = await api('/api/correspondence', owner.token, 'POST', {
+    ...letter, subject: 'Assistant Secretary correspondence',
+  });
+  assert.equal(defaultDraft.status, 201);
+  const adrianDraft = await api(`/api/correspondence/${defaultDraft.data.draft.id}`, owner.token, 'PUT', {
+    ...letter, subject: 'Assistant Secretary correspondence', signerUserId: assistant.user.id,
+  });
+  assert.equal(adrianDraft.status, 200);
+  assert.equal(adrianDraft.data.draft.assignedToName, 'Adrian Reese');
+  assert.equal(adrianDraft.data.draft.assignedToOffice, 'Assistant Secretary');
+  const adrianId = adrianDraft.data.draft.id;
+  const assistantPdf = await api(`/api/correspondence/${adrianId}/pdf`, owner.token);
+  const assistantDocument = await getDocument({ data: new Uint8Array(assistantPdf.data), useSystemFonts: true }).promise;
+  const assistantPage = await assistantDocument.getPage(1);
+  const assistantItems = (await assistantPage.getTextContent()).items;
+  assert.match(assistantItems.map(item => item.str).join(' '), /Assistant Secretary Adrian Reese/);
+  const fraternally = assistantItems.find(item => item.str === 'Fraternally,');
+  const signatory = assistantItems.filter(item => item.str === 'Adrian Reese')
+    .sort((left, right) => left.transform[5] - right.transform[5])[0];
+  assert.ok(fraternally && signatory && fraternally.transform[5] - signatory.transform[5] >= 70,
+    'The unsigned PDF reserves a full signature area above the officer name.');
+  await assistantDocument.destroy();
+  assert.equal((await api(`/api/correspondence/${adrianId}/submit`, owner.token, 'POST', { signerUserId: assistant.user.id, expectedUpdatedAt: defaultDraft.data.draft.updatedAt })).status, 409,
+    'A draft changed after preview cannot be assigned using the stale revision.');
+  assert.equal((await api(`/api/correspondence/${adrianId}/submit`, owner.token, 'POST', { signerUserId: secretary.user.id, expectedUpdatedAt: adrianDraft.data.draft.updatedAt })).status, 409);
+  const adrianAssigned = await api(`/api/correspondence/${adrianId}/submit`, owner.token, 'POST', { signerUserId: assistant.user.id, expectedUpdatedAt: adrianDraft.data.draft.updatedAt });
+  assert.equal(adrianAssigned.status, 200);
+  assert.equal(adrianAssigned.data.draft.assignedToUserId, assistant.user.id);
+  assert.equal((await api('/api/correspondence/alerts', assistant.token)).data.alerts[0].id, adrianId);
+  assert.equal((await api(`/api/correspondence/${adrianId}/sign`, secretary.token, 'POST', { consent: true })).status, 403);
+  assert.equal((await api('/api/profile/signature', assistant.token, 'PUT', { signatureData, signatureType: 'drawn' })).status, 200);
+  const adrianSigned = await api(`/api/correspondence/${adrianId}/sign`, assistant.token, 'POST', { consent: true });
+  assert.equal(adrianSigned.status, 200);
+  assert.equal(adrianSigned.data.draft.signedByName, 'Adrian Reese');
+  const longBody = Array.from({ length: 18 }, (_, index) =>
+    `Paragraph ${index + 1}. This sample checks a formal letter that extends beyond one page. The final paragraph and complete signature block must stay together.`).join('\n\n');
+  const longRow = { recipient_name: 'Secretary', recipient_lodge: 'Example Lodge', subject: 'Pagination check',
+    body: longBody, assigned_to_name: 'Adrian Reese', assigned_to_office: 'Assistant Secretary',
+    submitted_at: '2026-09-23T14:29:00.000Z' };
+  const longDraft = await getDocument({ data: new Uint8Array(await buildCorrespondencePdf({ ...longRow, status: 'awaiting_secretary' })), useSystemFonts: true }).promise;
+  const longSigned = await getDocument({ data: new Uint8Array(await buildCorrespondencePdf({ ...longRow, status: 'signed', signed_signature_bytes: Buffer.from(signatureData.split(',')[1], 'base64'), signed_at: '2026-09-23T15:00:00.000Z' })), useSystemFonts: true }).promise;
+  assert.equal(longDraft.numPages, longSigned.numPages, 'Applying a signature must not change pagination.');
+  const lastPage = await longSigned.getPage(longSigned.numPages);
+  const lastText = (await lastPage.getTextContent()).items.map(item => item.str).join(' ');
+  for (const value of ['Paragraph 18.', 'Fraternally,', 'Adrian Reese', 'Assistant Secretary', 'Signed September 23, 2026'])
+    assert.ok(lastText.includes(value), `The complete closing block and final paragraph must share the last page: ${value}`);
+  await longDraft.destroy(); await longSigned.destroy();
+  console.log('PASS: WM can choose McDuffie or Reese for a private letter; only the assigned officer can sign with a reserved signature space and download the PDF for manual email.');
 } finally { server.kill('SIGTERM'); }

@@ -22,6 +22,8 @@ struct CorrespondenceRecord: Decodable, Identifiable {
     let preparedByOffice: String
     let preparedByUserId: Int?
     let assignedToUserId: Int?
+    let assignedToName: String?
+    let assignedToOffice: String?
     let signedByName: String?
     let signedAt: String?
     let returnNote: String?
@@ -35,18 +37,74 @@ struct CorrespondenceRecord: Decodable, Identifiable {
 
 private struct CorrespondenceListResponse: Decodable { let drafts: [CorrespondenceRecord] }
 private struct CorrespondenceSaveResponse: Decodable { let draft: CorrespondenceRecord }
+private struct CorrespondenceSigner: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    let office: String
+}
+struct CorrespondenceSignerChoice: Identifiable {
+    let id: Int
+    let title: String
+}
+private struct CorrespondenceSignersResponse: Decodable { let signers: [CorrespondenceSigner] }
+private struct CorrespondenceSavePayload: Encodable {
+    let recipientLodge: String
+    let recipientName: String
+    let subject: String
+    let body: String
+    let matter: String
+    let signerUserId: Int?
+
+    init(_ fields: CorrespondenceFields, signerUserId: Int?) {
+        recipientLodge = fields.recipientLodge
+        recipientName = fields.recipientName
+        subject = fields.subject
+        body = fields.body
+        matter = fields.matter
+        self.signerUserId = signerUserId
+    }
+}
+private struct CorrespondenceSubmitPayload: Encodable {
+    let signerUserId: Int
+    let expectedUpdatedAt: String
+}
 
 @MainActor final class CorrespondenceWorkspace: ObservableObject {
     @Published private(set) var records: [CorrespondenceRecord] = []
     @Published private(set) var selected: CorrespondenceRecord?
     @Published fileprivate var fields = CorrespondenceFields()
     @Published private(set) var pdf: Data?
+    @Published private var signers: [CorrespondenceSigner] = []
+    @Published private(set) var selectedSignerUserId: Int?
     @Published var message = ""
     @Published private(set) var busy = false
     @Published private(set) var editing = false
     private let transport = MinutesWorkspace()
+    private var previewSignerUserId: Int?
+    private var previewUpdatedAt: String?
 
-    var hasChanges: Bool { editing && (selected == nil || fields != selected?.fields) }
+    private var selectedSigner: CorrespondenceSigner? {
+        signers.first { $0.id == selectedSignerUserId }
+    }
+    var selectedSignerName: String { selectedSigner?.name ?? "a signing officer" }
+    var selectedSignerOffice: String { selectedSigner?.office ?? "Secretary or Assistant Secretary" }
+    var signerChoices: [CorrespondenceSignerChoice] {
+        signers.map { CorrespondenceSignerChoice(id: $0.id, title: "\($0.name), \($0.office)") }
+    }
+    var canChooseSigner: Bool {
+        currentUser?.role == "owner" && (selected == nil || selected?.status == "draft") && !busy
+    }
+    private var isAssignedSigner: Bool {
+        guard let currentUser else { return false }
+        return ["secretary", "assistant_secretary"].contains(currentUser.role) &&
+            currentUser.can("reports.create") && selected?.assignedToUserId == currentUser.id
+    }
+
+    var hasChanges: Bool {
+        editing && (selected == nil || fields != selected?.fields ||
+                    (currentUser?.role == "owner" && selected?.status == "draft" &&
+                     selectedSignerUserId != selected?.assignedToUserId))
+    }
     var canEdit: Bool {
         guard let selected else { return true }
         guard selected.status == "draft" else { return false }
@@ -56,23 +114,24 @@ private struct CorrespondenceSaveResponse: Decodable { let draft: Correspondence
         return selected.preparedByName == user.name
     }
     var canSubmit: Bool {
-        currentUser?.role == "owner" && selected?.status == "draft" && !hasChanges && pdf != nil && !busy
+        currentUser?.role == "owner" && selected?.status == "draft" && !hasChanges &&
+            selectedSigner != nil && pdf != nil && previewSignerUserId == selectedSignerUserId &&
+            previewUpdatedAt == selected?.updatedAt &&
+            selected?.assignedToUserId == selectedSignerUserId && !busy
     }
     var canSign: Bool {
-        currentUser?.role == "secretary" && selected?.status == "awaiting_secretary"
-            && selected?.assignedToUserId == currentUser?.id && pdf != nil && !busy
+        isAssignedSigner && selected?.status == "awaiting_secretary" && pdf != nil && !busy
     }
     var canReturnForCorrection: Bool {
         guard let currentUser, selected?.status == "awaiting_secretary", !busy else { return false }
-        return currentUser.role == "owner" ||
-            (currentUser.role == "secretary" && selected?.assignedToUserId == currentUser.id)
+        return currentUser.role == "owner" || isAssignedSigner
     }
     var lettersForMySignature: [CorrespondenceRecord] {
-        guard currentUser?.role == "secretary" else { return [] }
+        guard ["secretary", "assistant_secretary"].contains(currentUser?.role ?? "") else { return [] }
         return records.filter { $0.status == "awaiting_secretary" && $0.assignedToUserId == currentUser?.id }
     }
     var signedLettersForMe: [CorrespondenceRecord] {
-        guard currentUser?.role == "secretary" else { return [] }
+        guard ["secretary", "assistant_secretary"].contains(currentUser?.role ?? "") else { return [] }
         return records.filter { $0.status == "signed" && $0.assignedToUserId == currentUser?.id }
     }
     var otherLetters: [CorrespondenceRecord] {
@@ -88,13 +147,17 @@ private struct CorrespondenceSaveResponse: Decodable { let draft: Correspondence
 
     func refresh() async {
         do {
+            if currentUser?.role == "owner" { await loadSigners() }
             let data = try await transport.request("/api/correspondence")
             records = try JSONDecoder().decode(CorrespondenceListResponse.self, from: data).drafts
             if let id = selected?.id, let updated = records.first(where: { $0.id == id }), !hasChanges {
                 let previewChanged = selected?.updatedAt != updated.updatedAt || selected?.status != updated.status
-                if previewChanged { pdf = nil }
+                if previewChanged { pdf = nil; previewSignerUserId = nil; previewUpdatedAt = nil }
                 selected = updated
                 fields = updated.fields
+                if currentUser?.role == "owner", updated.status == "draft" {
+                    selectedSignerUserId = updated.assignedToUserId ?? preferredSignerID
+                }
                 if previewChanged { await loadPreview() }
             }
         } catch { message = "Could not load correspondence drafts. \(error.localizedDescription)" }
@@ -104,6 +167,9 @@ private struct CorrespondenceSaveResponse: Decodable { let draft: Correspondence
         selected = nil
         fields = CorrespondenceFields()
         pdf = nil
+        previewSignerUserId = nil
+        previewUpdatedAt = nil
+        selectedSignerUserId = preferredSignerID
         editing = true
         message = "Draft only. Verify the facts and Lodge authority before any correspondence is issued."
     }
@@ -112,10 +178,18 @@ private struct CorrespondenceSaveResponse: Decodable { let draft: Correspondence
         selected = record
         fields = record.fields
         pdf = nil
+        previewSignerUserId = nil
+        previewUpdatedAt = nil
+        if currentUser?.role == "owner", record.status == "draft", let assignedID = record.assignedToUserId,
+           !signers.contains(where: { $0.id == assignedID }) {
+            selectedSignerUserId = nil
+        } else {
+            selectedSignerUserId = record.assignedToUserId ?? preferredSignerID
+        }
         editing = true
-        message = record.status == "signed" ? "Signed by \(record.signedByName ?? "the Secretary"). Save the PDF for the Secretary to email." :
+        message = record.status == "signed" ? "Signed by \(record.signedByName ?? "the signing officer"). Save the PDF for that officer to email." :
             record.returnNote != nil ? "Returned for correction. Review the reason below before resubmitting." :
-            record.status == "awaiting_secretary" && currentUser?.role == "secretary" && record.assignedToUserId == currentUser?.id ?
+            record.status == "awaiting_secretary" && isAssignedSigner ?
                 "Review the complete letterhead PDF before applying your saved signature." :
             canEdit ? "Saved draft. Review the letter and its source records." : "This letter is read-only at its current stage."
         await loadPreview()
@@ -126,12 +200,56 @@ private struct CorrespondenceSaveResponse: Decodable { let draft: Correspondence
         selected = nil
         fields = CorrespondenceFields()
         pdf = nil
+        previewSignerUserId = nil
+        previewUpdatedAt = nil
         message = ""
     }
 
     func changed() {
         pdf = nil
+        previewSignerUserId = nil
+        previewUpdatedAt = nil
         if hasChanges { message = "Unsaved changes. Save the draft to update its letterhead preview." }
+    }
+
+    private var preferredSignerID: Int? {
+        signers.first { $0.name.localizedCaseInsensitiveContains("McDuffie") }?.id ?? signers.first?.id
+    }
+
+    private func loadSigners() async {
+        do {
+            let data = try await transport.request("/api/correspondence/signers")
+            let available = try JSONDecoder().decode(CorrespondenceSignersResponse.self, from: data).signers
+            let previousID = selectedSignerUserId
+            signers = available
+            if let selected, selected.status != "draft" { return }
+            if let previousID, available.contains(where: { $0.id == previousID }) { return }
+            selectedSignerUserId = previousID == nil ? preferredSignerID : nil
+            pdf = nil
+            previewSignerUserId = nil
+            previewUpdatedAt = nil
+            if previousID != nil {
+                message = "The previously selected signing officer is unavailable. Choose an available officer before sending."
+            }
+        } catch {
+            signers = []
+            if selected == nil || selected?.status == "draft" {
+                selectedSignerUserId = nil
+                pdf = nil
+                previewSignerUserId = nil
+                previewUpdatedAt = nil
+                message = "Could not load available signing officers. Refresh before sending this letter. \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func chooseSigner(_ id: Int) async {
+        guard canChooseSigner, signers.contains(where: { $0.id == id }), selectedSignerUserId != id else { return }
+        selectedSignerUserId = id
+        pdf = nil
+        previewSignerUserId = nil
+        previewUpdatedAt = nil
+        message = "Save the draft to preview the letter with \(selectedSignerName) as the signing officer."
     }
 
     func save() async {
@@ -152,10 +270,14 @@ private struct CorrespondenceSaveResponse: Decodable { let draft: Correspondence
         defer { busy = false }
         do {
             let path = selected.map { "/api/correspondence/\($0.id)" } ?? "/api/correspondence"
-            let data = try await transport.request(path, method: selected == nil ? "POST" : "PUT", body: JSONEncoder().encode(trimmed))
+            let payload = CorrespondenceSavePayload(trimmed, signerUserId: currentUser?.role == "owner" ? selectedSignerUserId : nil)
+            let data = try await transport.request(path, method: selected == nil ? "POST" : "PUT", body: JSONEncoder().encode(payload))
             let record = try JSONDecoder().decode(CorrespondenceSaveResponse.self, from: data).draft
             selected = record
             fields = record.fields
+            if currentUser?.role == "owner" { selectedSignerUserId = record.assignedToUserId }
+            previewSignerUserId = nil
+            previewUpdatedAt = nil
             message = "Draft saved. The letter has not been sent."
             await refresh()
             await loadPreview()
@@ -164,31 +286,51 @@ private struct CorrespondenceSaveResponse: Decodable { let draft: Correspondence
 
     func loadPreview() async {
         guard let record = selected else { return }
+        let signerID = record.assignedToUserId
+        if currentUser?.role == "owner" && record.status == "draft" && selectedSignerUserId != signerID {
+            pdf = nil
+            previewUpdatedAt = nil
+            message = "Save the signing officer choice to update the letterhead preview."
+            return
+        }
+        if currentUser?.role == "owner" && record.status == "draft" && signerID == nil {
+            pdf = nil
+            previewUpdatedAt = nil
+            message = "Choose an available signing officer to preview this letter."
+            return
+        }
         do {
             let data = try await transport.request("/api/correspondence/\(record.id)/pdf")
             guard PDFDocument(data: data) != nil else { throw ClientError.invalidResponse }
             guard selected?.id == record.id, selected?.updatedAt == record.updatedAt,
-                  selected?.status == record.status else { return }
+                  selected?.status == record.status,
+                  (currentUser?.role != "owner" || record.status != "draft" || selectedSignerUserId == signerID) else { return }
             pdf = data
+            previewSignerUserId = signerID
+            previewUpdatedAt = record.updatedAt
         } catch {
             guard selected?.id == record.id, selected?.updatedAt == record.updatedAt,
                   selected?.status == record.status else { return }
             pdf = nil
+            previewSignerUserId = nil
+            previewUpdatedAt = nil
             message = "Could not load the letterhead preview. \(error.localizedDescription)"
         }
     }
 
     func submitToSecretary() async {
-        guard canSubmit, let id = selected?.id else { return }
+        guard canSubmit, let record = selected, let signer = selectedSigner else { return }
         busy = true
         defer { busy = false }
         do {
-            let data = try await transport.request("/api/correspondence/\(id)/submit", method: "POST")
+            let body = try JSONEncoder().encode(CorrespondenceSubmitPayload(signerUserId: signer.id,
+                                                                            expectedUpdatedAt: record.updatedAt))
+            let data = try await transport.request("/api/correspondence/\(record.id)/submit", method: "POST", body: body)
             let record = try JSONDecoder().decode(CorrespondenceSaveResponse.self, from: data).draft
             pdf = nil
             selected = record
             fields = record.fields
-            message = "Submitted to Secretary McDuffie for review and signature. No email has been sent."
+            message = "Submitted to \(signer.name), \(signer.office), for review and signature. No email has been sent."
             await refresh()
             await loadPreview()
         } catch { message = "Could not submit this letter. \(error.localizedDescription)" }
@@ -254,7 +396,7 @@ struct CorrespondenceView: View {
                 if workspace.editing {
                     Button("All Drafts") { leaveEditor() }
                     if workspace.canSubmit {
-                        Button("Send to McDuffie for Signature") { showingSubmitConfirmation = true }
+                        Button("Send to \(workspace.selectedSignerName) for Signature") { showingSubmitConfirmation = true }
                     }
                     if workspace.canSign {
                         Button("Review and Sign") {
@@ -302,11 +444,11 @@ struct CorrespondenceView: View {
         } message: {
             Text("Your saved drafts remain available when you return.")
         }
-        .confirmationDialog("Send this letter to Secretary McDuffie?", isPresented: $showingSubmitConfirmation) {
-            Button("Send for Secretary Signature") { Task { await workspace.submitToSecretary() } }
+        .confirmationDialog("Send this letter to \(workspace.selectedSignerName)?", isPresented: $showingSubmitConfirmation) {
+            Button("Send for Signature") { Task { await workspace.submitToSecretary() } }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("He will review and sign the letter in the dashboard. This action does not email the recipient.")
+            Text("\(workspace.selectedSignerName) will review and sign the letter in the dashboard, then email the signed PDF. This action does not email the receiving Lodge.")
         }
         .sheet(isPresented: $showingSignSheet) { signSheet }
         .sheet(isPresented: $showingReturnSheet) { returnSheet }
@@ -335,7 +477,7 @@ struct CorrespondenceView: View {
                 }
             }
             Section("Secretary's office") {
-                Text("Prepare official correspondence for review. Saving a draft does not sign or send it.")
+                Text("Prepare official correspondence for either the Secretary or Assistant Secretary to review and sign. Saving a draft does not send it.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -387,7 +529,7 @@ struct CorrespondenceView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if record.status == "awaiting_secretary" {
-                            Text("Secretary McDuffie reviews and signs this letter before emailing it.")
+                            Text("\(record.assignedToName ?? "The assigned officer") reviews and signs this letter before emailing it.")
                                 .font(.callout).foregroundStyle(.secondary)
                             if workspace.canReturnForCorrection {
                                 Button("Return for Correction") {
@@ -413,6 +555,32 @@ struct CorrespondenceView: View {
                     TextField("Subject", text: field(\.subject))
                 }
                 .disabled(!workspace.canEdit || workspace.busy)
+                if model.user?.role == "owner" {
+                    Section("Signing officer") {
+                        if workspace.canChooseSigner {
+                            Picker("Choose who signs and sends", selection: Binding(
+                                get: { workspace.selectedSignerUserId },
+                                set: { newValue in if let newValue { Task { await workspace.chooseSigner(newValue) } } }
+                            )) {
+                                Text("Select an officer").tag(Optional<Int>.none)
+                                ForEach(workspace.signerChoices) { choice in
+                                    Text(choice.title).tag(Optional(choice.id))
+                                }
+                            }
+                            .disabled(workspace.signerChoices.isEmpty)
+                            if workspace.signerChoices.isEmpty {
+                                Text("No signing officer is available. Refresh after access is restored; this letter cannot be sent yet.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            } else {
+                                Text("The selected officer's name and office appear on the saved letter. Review the PDF before sending it for signature.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
+                        } else if let record = workspace.selected {
+                            LabeledContent("Assigned to", value: record.assignedToName ?? "Not assigned")
+                            if let office = record.assignedToOffice { LabeledContent("Office", value: office) }
+                        }
+                    }
+                }
                 Section("Letter") {
                     Text("Use verified facts. A dues payment alone does not establish eligibility for a demit or authorize its issuance.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -475,15 +643,15 @@ struct CorrespondenceView: View {
 
     private func statusLabel(_ record: CorrespondenceRecord) -> String {
         switch record.status {
-        case "awaiting_secretary": return "Awaiting McDuffie's signature"
-        case "signed": return "Signed, ready for Secretary to email"
+        case "awaiting_secretary": return "Awaiting \(record.assignedToName ?? "officer")'s signature"
+        case "signed": return "Signed, ready for \(record.assignedToName ?? "the signing officer") to email"
         default: return record.returnNote == nil ? "Draft" : "Draft, correction requested"
         }
     }
 
     private var signSheet: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("SECRETARY SIGNATURE")
+            Text("OFFICER SIGNATURE")
                 .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)
             Text("Review and sign Lodge correspondence")
                 .font(.title2.weight(.semibold))
