@@ -37,7 +37,8 @@ for (const value of ['', 'To be scheduled', 'September 3', '2026-02-30', '2026-0
 }
 assert.equal(normalizeMinutesDraft({meetingDate:'Thursday, September 3, 2026'}).meetingDate, '2026-09-03');
 assert.equal(formatMinutesDate('2028-02-29'), 'Tuesday, February 29, 2028');
-assert.equal(minutesFileName({ meetingDate: '2026-09-03' }, 'ready_for_distribution'), 'DRAFT Meeting Minutes, September 3, 2026.docx');
+assert.equal(minutesFileName({ meetingDate: '2026-09-03' }, 'ready_for_distribution'), 'SIGNED Meeting Minutes, September 3, 2026.docx');
+assert.equal(minutesFileName({ meetingDate: '2026-09-03' }, 'distributed'), 'SIGNED Meeting Minutes, September 3, 2026.docx');
 assert.equal(minutesFileName({ meetingDate: '2026-09-03' }, 'approved_by_lodge'), 'APPROVED Meeting Minutes, September 3, 2026.docx');
 
 const text = 'Grown Folks Friday, September 25. The chapter will assist.\nMOTION PASSED: Fish and two sides. Moved Bro. Stone, seconded PM Reed.\nRevenue split discussed; no decision.';
@@ -164,6 +165,12 @@ try {
   assert.doesNotMatch(renderedText, /No entry recorded\./);
 } finally {await emptyPdf.destroy();}
 const ctx = {draft, status:'draft', preparedBy:'Adrian Reese', preparerRole:'assistant_secretary'};
+const signedPdf = new PDFParse({data:await buildMinutesPdf({...ctx,status:'ready_for_distribution'})});
+try {
+  const signedText = (await signedPdf.getText()).text;
+  assert.match(signedText, /WM REVIEWED AND SIGNED/);
+  assert.doesNotMatch(signedText, /DO NOT DISTRIBUTE/);
+} finally { await signedPdf.destroy(); }
 const legacyDraft = {...draft, present:['Alex Example'],visitors,sections:legacySections};
 const legacyRecordSnapshot = JSON.stringify(legacyDraft);
 const legacyPdf = new PDFParse({data:await buildMinutesPdf({...ctx,draft:legacyDraft,status:'awaiting_master_attestation'})});

@@ -125,6 +125,7 @@ export const buildMinutesDocx = async ({
   preparerAttestedAt, masterName, masterSignature, masterAttestedAt, masterChanges = [],
 }) => {
   const isOfficial = status === 'approved_by_lodge';
+  const distributionAuthorized = ['ready_for_distribution', 'distributed'].includes(status);
   const masthead = center('STONE SQUARE LODGE NO. 22', 28, { color: '10263D', after: 150 });
   const children = [
     new Paragraph({alignment: AlignmentType.CENTER, keepNext: true, spacing: {after: 100}, children: [new ImageRun({data: await readFile(new URL('./assets/lodge-seal.png', import.meta.url)), type: 'png', transformation: {width: 66, height: 66}})]}),
@@ -133,8 +134,9 @@ export const buildMinutesDocx = async ({
     center(fullDate(draft.meetingDate), 22, { after: 70, bold: false }),
     center(isOfficial
       ? `APPROVED BY THE LODGE${approvedByLodgeOn ? ` ON ${fullDate(approvedByLodgeOn).toUpperCase()}` : ''}`
+      : distributionAuthorized ? 'WM REVIEWED AND SIGNED.'
       : 'DRAFT FOR OFFICER REVIEW. NOT YET APPROVED BY THE LODGE.', 20,
-    { after: 170, color: isOfficial ? BLACK : RED, italics: !isOfficial }),
+    { after: 170, color: isOfficial || distributionAuthorized ? BLACK : RED, italics: !isOfficial && !distributionAuthorized }),
     detailsTable(draft),
     sectionHeading('Officers Present, Excused and Absent'),
     officerTable(draft),
@@ -171,7 +173,7 @@ export const buildMinutesDocx = async ({
   const document = new Document({
     creator: 'Stone Square Lodge No. 22',
     title: `Meeting Minutes ${fullDate(draft.meetingDate)}`,
-    description: isOfficial ? 'Official Lodge minutes' : 'Draft Lodge minutes for officer review',
+    description: isOfficial ? 'Official Lodge minutes' : distributionAuthorized ? 'Worshipful Master reviewed and signed minutes' : 'Draft Lodge minutes for officer review',
     styles: { default: { document: { run: { font: 'Calibri', size: 22, color: BLACK } } } },
     sections: [{
       properties: {
@@ -181,7 +183,7 @@ export const buildMinutesDocx = async ({
         default: new Footer({ children: [new Paragraph({
           alignment: AlignmentType.CENTER,
           children: [
-            new TextRun({ text: isOfficial ? 'OFFICIAL RECORD' : 'DRAFT. DO NOT DISTRIBUTE WITHOUT AUTHORIZATION.', bold: true, color: isOfficial ? BLACK : RED, size: 15 }),
+            new TextRun({ text: isOfficial ? 'OFFICIAL RECORD' : distributionAuthorized ? 'WM REVIEWED AND SIGNED.' : 'DRAFT. DO NOT DISTRIBUTE WITHOUT AUTHORIZATION.', bold: true, color: isOfficial || distributionAuthorized ? BLACK : RED, size: 15 }),
             new TextRun({ text: '   Page ', color: GRAY, size: 15 }),
             new TextRun({ children: [PageNumber.CURRENT], color: GRAY, size: 15 }),
           ],
@@ -198,6 +200,6 @@ export const minutesFileName = (draft, status) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
     ? new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${rawDate}T12:00:00Z`))
     : 'Date needs review';
-  const prefix = status === 'approved_by_lodge' ? 'APPROVED' : 'DRAFT';
+  const prefix = status === 'approved_by_lodge' ? 'APPROVED' : ['ready_for_distribution', 'distributed'].includes(status) ? 'SIGNED' : 'DRAFT';
   return `${prefix} Meeting Minutes, ${date}.docx`;
 };

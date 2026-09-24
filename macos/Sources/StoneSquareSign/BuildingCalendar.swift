@@ -23,9 +23,12 @@ struct BuildingRequest: Decodable, Identifiable {
     let requesterNotified: Bool
     let ownerOnly: Bool?; let agreementStatus: String?; let agreementText: String?; let coordinator: BuildingCoordinator?
     let attestationRoles: [String]?; let attestedBy: BuildingAttestedBy?
+    let statusOnly: Bool?
+    let filedCompletedAt: String?; let filedCompletedBy: String?
     var eligibleAttestationRoles: [String] { attestationRoles ?? ["secretary"] }
     func mayAttest(role: String?) -> Bool { role.map { ["secretary", "assistant_secretary"].contains($0) && eligibleAttestationRoles.contains($0) } ?? false }
     var statusLabel: String {
+        if filedCompletedAt != nil { return "Filed as completed" }
         if agreementStatus == "awaiting_secretary_attestation" {
             return eligibleAttestationRoles.contains("assistant_secretary")
                 ? "Awaiting Secretary or Assistant Secretary attestation"
@@ -41,6 +44,7 @@ struct BuildingRequestsResponse: Decodable { let requests: [BuildingRequest]; le
 struct BuildingAuthorization: Encodable { let date: String; let record: String; let fee: String; let insurance: String; let conditions: String }
 private struct BuildingDecisionBody: Encodable { let decision: String; let note: String; let revision: BuildingRevision; let authorization: BuildingAuthorization? }
 private struct BuildingAttestationBody: Encodable { let revision: BuildingRevision }
+private struct BuildingFileCompletedBody: Encodable { let revision: BuildingRevision }
 private struct BuildingDecisionResponse: Decodable { let request: BuildingRequest }
 
 @MainActor final class BuildingRequestsWorkspace: ObservableObject {
@@ -68,6 +72,7 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
             if let index = requests.firstIndex(where: { $0.id == result.request.id }) { requests[index] = result.request }
             message = result.request.requesterNotified ? "Decision recorded and requester notified." : "Decision recorded. The requester notification has not been confirmed."
             messageIsWarning = !result.request.requesterNotified
+            await model.refreshBuildingAlerts()
             return true
         } catch ClientError.conflict {
             let refreshed = await load(using: model)
@@ -87,9 +92,28 @@ private struct BuildingDecisionResponse: Decodable { let request: BuildingReques
                 ? "Attestation recorded. The organization was notified and payment access is available."
                 : "Attestation recorded. The organization's notification has not been confirmed."
             messageIsWarning = !result.request.requesterNotified
+            await model.refreshBuildingAlerts()
             return true
         } catch ClientError.conflict {
             _ = await load(using: model); message = "This agreement changed. Review the current agreement before attesting again."; return false
+        } catch { message = error.localizedDescription; return false }
+    }
+    func fileCompleted(_ request: BuildingRequest, using model: AppModel) async -> Bool {
+        guard !busy, model.user?.role == "owner", request.status == "approved",
+              request.agreementStatus == "fully_executed", request.filedCompletedAt == nil,
+              requests.first(where: { $0.id == request.id })?.revision == request.revision else { return false }
+        busy = true; defer { busy = false }
+        do {
+            let body = try JSONEncoder().encode(BuildingFileCompletedBody(revision: request.revision))
+            let result: BuildingDecisionResponse = try await model.request("/api/building/requests/\(routeID(request.id))/file-completed", method: "POST", body: body)
+            if let index = requests.firstIndex(where: { $0.id == result.request.id }) { requests[index] = result.request }
+            message = "Agreement filed as completed."
+            await model.refreshBuildingAlerts()
+            return true
+        } catch ClientError.conflict {
+            _ = await load(using: model)
+            message = "This agreement changed. Review the current record before filing again."
+            return false
         } catch { message = error.localizedDescription; return false }
     }
 }
@@ -109,6 +133,7 @@ struct BuildingRequestsView: View {
     @State private var insuranceDecision = ""
     @State private var authorizationConditions = ""
     @State private var attestationPending = false
+    @State private var filingPending = false
     @State private var requestPane = 0
     private var selected: BuildingRequest? { workspace.requests.first { $0.id == selectedID } }
     private var visible: [BuildingRequest] { workspace.requests.filter { filter == "all" || $0.status == filter } }
@@ -131,15 +156,23 @@ struct BuildingRequestsView: View {
             } secondary: {
                 if let request = selected {
                     Form {
+                        if request.statusOnly == true {
+                            Section("Secretary attestation status") {
+                                Text("Secretary McDuffie is named on this signed agreement. You can follow its status here. A revised agreement accepted by the organization would be needed before the Assistant Secretary could attest.")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         Section(request.organization) {
                             LabeledContent("Status", value: request.statusLabel)
                             LabeledContent("Date", value: LodgeCalendarDates.displayDate(request.date))
+                            if request.statusOnly != true {
                             LabeledContent("Time", value: [LodgeCalendarDates.displayTime(request.start), LodgeCalendarDates.displayTime(request.end)].filter { !$0.isEmpty }.joined(separator: " to "))
                             LabeledContent("Requested spaces", value: request.spaces.joined(separator: ", "))
                             if request.spaces == ["Front yard"] { LabeledContent("Restroom access", value: request.bathroomAccess == true ? "Yes" : "No") }
                             LabeledContent("Contact", value: [request.contactName, request.contact].filter { !$0.isEmpty }.joined(separator: " · "))
                             if let coordinator = request.coordinator { LabeledContent("Request coordinator", value: "\(coordinator.name) · \(coordinator.email)") }
                             Text(request.description).textSelection(.enabled)
+                            }
                         }
                         if let agreement = request.agreementText, !agreement.isEmpty {
                             Section("Building Use Agreement") {
@@ -149,6 +182,10 @@ struct BuildingRequestsView: View {
                         if let existing = request.note, !existing.isEmpty { Section("Recorded note") { Text(existing).textSelection(.enabled) } }
                         if let person = request.decidedBy, !person.isEmpty { LabeledContent("Decision recorded by", value: person) }
                         if let attestedBy = request.attestedBy { LabeledContent("Attested by", value: "\(attestedBy.name), \(attestedBy.title)") }
+                        if let filedAt = request.filedCompletedAt {
+                            LabeledContent("Filed as completed", value: filedAt)
+                            if let filedBy = request.filedCompletedBy { LabeledContent("Filed by", value: filedBy) }
+                        }
                         if request.status == "pending", workspace.canDecide, model.user?.can("building.decide") == true {
                             Section("Decision") {
                                 TextField("Note to the requester", text: $note, axis: .vertical).lineLimit(3...8)
@@ -175,6 +212,13 @@ struct BuildingRequestsView: View {
                                 Button("Attest agreement") { attestationPending = true }.buttonStyle(.borderedProminent)
                             }
                         }
+                        if request.status == "approved", request.agreementStatus == "fully_executed",
+                           request.filedCompletedAt == nil, model.user?.role == "owner" {
+                            Section("Final filing") {
+                                Text("The agreement has the required signatures and is ready for your final filing.")
+                                Button("File as completed") { filingPending = true }.buttonStyle(.borderedProminent)
+                            }
+                        }
                     }.formStyle(.grouped)
                 } else { ContentUnavailableView(visible.isEmpty ? "No requests available" : "Choose a request", systemImage: "building.2").frame(maxWidth: .infinity, maxHeight: .infinity) }
             }.disabled(workspace.busy)
@@ -187,7 +231,11 @@ struct BuildingRequestsView: View {
                 }.font(.callout).padding(12)
             }
         }
-        .task { await workspace.load(using: model) }
+        .task {
+            _ = await workspace.load(using: model)
+            openRequestedBuildingRecord()
+        }
+        .onChange(of: model.requestedBuildingRequestID) { _, _ in openRequestedBuildingRecord() }
         .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
         .onChange(of: selectedID) { _, id in note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; authorizationConditions = ""; if id != nil { requestPane = 1 } }
         .updateDraftGuard(active: !note.isEmpty || workspace.busy || newRequest.hasUnsubmittedChanges || newRequest.busy, reason: "Finish your building request draft before updating.")
@@ -205,6 +253,17 @@ struct BuildingRequestsView: View {
             Button("Attest") { if let request = selected { Task { _ = await workspace.attest(request, using: model) } } }
             Button("Cancel", role: .cancel) { }
         } message: { Text("Your saved \(model.user?.role == "assistant_secretary" ? "Assistant Secretary" : "Secretary") signature will be applied. The organization will receive its decision and payment access once the workflow confirms completion.") }
+        .alert("File this agreement as completed?", isPresented: $filingPending) {
+            Button("File as completed") { if let request = selected { Task { _ = await workspace.fileCompleted(request, using: model) } } }
+            Button("Cancel", role: .cancel) { }
+        } message: { Text("This records the fully signed agreement as filed and removes the filing reminder.") }
+    }
+    private func openRequestedBuildingRecord() {
+        guard let id = model.requestedBuildingRequestID,
+              workspace.requests.contains(where: { $0.id == id }) else { return }
+        filter = "all"
+        selectedID = id
+        model.requestedBuildingRequestID = nil
     }
 }
 

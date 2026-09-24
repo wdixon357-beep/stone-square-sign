@@ -307,15 +307,15 @@ struct WorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(22)
-                if !model.minutesReviewAlerts.isEmpty {
+                if !model.minutesReviewAlerts.isEmpty || !model.treasuryAlerts.isEmpty || !model.buildingAlerts.isEmpty {
                     ScrollView {
-                        minutesReviewAlertButtons
+                        VStack(spacing: 0) {
+                            minutesReviewAlertButtons
+                            treasuryAlertButtons
+                            buildingAlertButtons
+                        }
                     }
-                    .frame(height: model.minutesReviewAlerts.count == 1 ? 118 : 220)
-                }
-                if !model.treasuryAlerts.isEmpty {
-                    ScrollView { treasuryAlertButtons }
-                    .frame(height: model.treasuryAlerts.count == 1 ? 118 : 220)
+                    .frame(height: model.minutesReviewAlerts.count + model.treasuryAlerts.count + model.buildingAlerts.count == 1 ? 118 : 220)
                 }
                 List(selection: $selection) {
                 Label("Home", systemImage: "square.grid.2x2.fill").tag(AppSection.home)
@@ -486,6 +486,31 @@ struct WorkspaceView: View {
                     .help("Dismiss this reminder. The banking information remains in Treasurer Reports.")
                     .accessibilityLabel("Dismiss banking information alert from \(alert.uploadedBy)")
                 }
+                .padding(.horizontal, 22)
+            }
+        }
+    }
+
+    private var buildingAlertButtons: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.buildingAlerts) { alert in
+                Button {
+                    model.requestedBuildingRequestID = alert.requestId
+                    selection = .building
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(alert.title, systemImage: "bell.badge.fill")
+                            .font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                        Text(alert.message).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                    .frame(minHeight: 100, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(alert.message)
                 .padding(.horizontal, 22)
             }
         }
@@ -1273,6 +1298,24 @@ struct LandingDashboardView: View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
             List {
+                if !model.buildingAlerts.isEmpty {
+                    Section("Building requests needing attention") {
+                        ForEach(model.buildingAlerts) { alert in
+                            Button {
+                                model.requestedBuildingRequestID = alert.requestId
+                                openBuilding()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label(alert.title, systemImage: "bell.badge.fill").font(.headline)
+                                    Text(alert.message).font(.callout).foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 6)
+                                .contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
                 if model.user?.role == "owner", model.emailDeliveryReady == false {
                     Section("Service status") {
                         Label("Email delivery needs attention", systemImage: "exclamationmark.triangle.fill")

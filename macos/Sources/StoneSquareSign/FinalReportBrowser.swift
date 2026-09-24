@@ -46,13 +46,15 @@ struct FinalReportBrowserView: View {
             NativeWorkspaceHeader(title: kind.title, subtitle: "Read finalized and historical Lodge records", symbol: "doc.text") {
                 if selectedID != nil { Button("Close report") { selectedID = nil; pdf = nil } }
                 if let onClose { Button("Done") { onClose() } }
-                Button("Refresh") { Task { await refresh() } }.disabled(loading)
-                Button(kind == .minutes ? "Save PDF for email" : "Save PDF") { if let pdf { saveDocument(pdf, name: "\(selectedCurrentRecord.map(displayLabel) ?? kind.title).pdf", type: .pdf) } }.disabled(pdf == nil)
-                if kind == .minutes {
-                    Button("Share signed PDF") { if let pdf { shareMinutesPDF(pdf, name: selectedCurrentRecord.map(displayLabel) ?? "Meeting Minutes") } }.disabled(pdf == nil)
-                }
-                if mayRecordDistribution { Button("Mark as sent to the Craft") { Task { await markDistributed() } }.disabled(loading) }
             }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    reportActions
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 10) { reportActions }
+            }
+            .padding(.horizontal, 18).padding(.vertical, 10)
             if kind == .minutes, let newest = records.first {
                 HStack(spacing: 16) {
                     Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(SignTheme.gold)
@@ -96,6 +98,14 @@ struct FinalReportBrowserView: View {
         .onChange(of: model.minutesRecordsRevision) { _, _ in if kind == .minutes { Task { await refresh() } } }
         .onChange(of: model.treasuryRecordsRevision) { _, _ in if kind == .treasury { Task { await refresh() } } }
         .onChange(of: selectedID) { _, id in pdf = nil; if let id { browserPane = 1; Task { await open(id) } } }
+    }
+    @ViewBuilder private var reportActions: some View {
+        Button("Refresh") { Task { await refresh() } }.disabled(loading)
+        Button(kind == .minutes ? "Save PDF for email" : "Save PDF") { if let pdf { saveDocument(pdf, name: "\(selectedCurrentRecord.map(displayLabel) ?? kind.title).pdf", type: .pdf) } }.disabled(pdf == nil)
+        if kind == .minutes {
+            Button("Share signed PDF") { if let pdf { shareMinutesPDF(pdf, name: selectedCurrentRecord.map(displayLabel) ?? "Meeting Minutes") } }.disabled(pdf == nil)
+        }
+        if mayRecordDistribution { Button("Mark as sent to the Craft") { Task { await markDistributed() } }.disabled(loading) }
     }
     private func refresh() async {
         loading = true; defer { loading = false }

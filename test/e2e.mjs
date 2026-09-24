@@ -727,15 +727,16 @@ try {
   const draftDocx = await api('GET', `/api/minutes/${minutesId}/docx`, { token: secToken });
   const draftText = draftDocx.status === 200
     ? (await mammoth.extractRawText({ buffer: draftDocx.payload })).value : '';
-  check('the signed distribution copy carries attendance and still says DRAFT until the Lodge acts',
-    draftDocx.status === 200 && /DRAFT/.test(draftText) && /NOT YET APPROVED BY THE LODGE/.test(draftText)
+  check('the signed distribution copy carries attendance without claiming Lodge approval',
+    draftDocx.status === 200 && /WM REVIEWED AND SIGNED/.test(draftText)
+      && !/DRAFT|APPROVED BY THE LODGE/.test(draftText)
       && /Name[\s\S]*Title[\s\S]*P[\s\S]*A[\s\S]*E[\s\S]*NR/.test(draftText)
       && /William M. McDuffie[\s\S]*Secretary[\s\S]*X/.test(draftText)
       && /Adrian Reese[\s\S]*Assistant Secretary[\s\S]*X/.test(draftText)
       && !/LODGE INCOME/.test(draftText) && !/Community Partner/.test(draftText)
       && /Adrian Reese/.test(draftText) && /Worshipful Master/.test(draftText));
   const distributedMinutes = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: asstToken });
-  check('the Assistant Secretary can mark the authorized draft as distributed',
+  check('the Assistant Secretary can mark the WM-reviewed minutes as distributed',
     distributedMinutes.status === 200 && distributedMinutes.payload.minutes.status === 'distributed'
       && distributedMinutes.payload.minutes.distributedBy === 'Adrian Reese');
   const approvedMinutes = await api('POST', `/api/minutes/${minutesId}/lodge-approval`, {

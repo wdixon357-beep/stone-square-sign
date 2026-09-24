@@ -2490,7 +2490,8 @@ app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next
   const bytes=await buildMinutesPdf(await minutesArtifactContext(row,draft,captured));
   if(finalMinutes(row))await addAudit({userId:req.user.id,action:'minutes_signed_pdf_viewed',ip:req.ip,userAgent:req.get('user-agent')||'',details:{minutesId:row.id}});
   const pdfName = minutesFileName(draft, row.status).replace(/\.docx$/i, '.pdf');
-  res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Disposition', `inline; filename="${pdfName}"`);res.type('application/pdf').send(bytes);
+  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+  res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Disposition', `${disposition}; filename="${pdfName}"`);res.type('application/pdf').send(bytes);
 }catch(e){next(e)}});
 
 app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,
@@ -3717,7 +3718,7 @@ app.get('/api/generation/status', requireAuth, async (req, res, next) => {
 });
 
 mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged:disconnectRealtimeUser});
-mountBuildingCalendar(app,{requireAuth});
+mountBuildingCalendar(app,{requireAuth,sendBuildingEmail:sendEmail});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
 mountOfficerReportRoutes(app, { requireAuth, requireOwner });

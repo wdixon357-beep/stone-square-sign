@@ -176,6 +176,10 @@ struct SignatureResponse: Codable { let message: String; let user: User }
 struct MessageResponse: Codable { let message: String; var notificationWarnings: [String]? = nil }
 struct SetupResponse: Codable { let needsOwnerSetup: Bool; let registrationMode: String; let emailDeliveryReady: Bool }
 struct EmptyResponse: Codable { let ok: Bool }
+struct BuildingAlert: Decodable, Identifiable {
+    let id: String; let requestId: String; let kind: String; let title: String; let message: String
+}
+struct BuildingAlertsResponse: Decodable { let alerts: [BuildingAlert] }
 struct UploadResponse: Codable {
     let document: UploadedDocument
     var notificationWarnings: [String]? = nil

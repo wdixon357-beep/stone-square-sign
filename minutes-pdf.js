@@ -66,6 +66,7 @@ export const buildMinutesPdf = async ({
   const dateLabel = fullDate(draft.meetingDate);
   const meetingType = clean(draft.meetingType) || 'Stated Communication';
   const isOfficial = status === 'approved_by_lodge';
+  const distributionAuthorized = ['ready_for_distribution', 'distributed'].includes(status);
   let page;
   let y;
   let currentTitle = '';
@@ -106,8 +107,8 @@ export const buildMinutesPdf = async ({
   const footer = () => {
     const label = `Stone Square Lodge No. 22 | ${meetingType} | ${dateLabel} | Page ${pdf.getPageCount()}`;
     page.drawText(fitText(label, regular, 6.5, WIDTH), { x: LEFT, y: 24, size: 6.5, font: regular, color: GRAY });
-    page.drawText(isOfficial ? 'OFFICIAL RECORD' : 'DRAFT  DO NOT DISTRIBUTE WITHOUT AUTHORIZATION', {
-      x: LEFT, y: 36, size: 6.5, font: bold, color: isOfficial ? NAVY : RED,
+    page.drawText(isOfficial ? 'OFFICIAL RECORD' : distributionAuthorized ? 'WM REVIEWED AND SIGNED' : 'DRAFT  DO NOT DISTRIBUTE WITHOUT AUTHORIZATION', {
+      x: LEFT, y: 36, size: 6.5, font: bold, color: isOfficial || distributionAuthorized ? NAVY : RED,
     });
   };
 

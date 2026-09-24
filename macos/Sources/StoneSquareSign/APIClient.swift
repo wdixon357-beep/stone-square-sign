@@ -303,6 +303,8 @@ enum BiometricCredentialStore {
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published var buildingAlerts: [BuildingAlert] = []
+    @Published var requestedBuildingRequestID: String?
     @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
     @Published var minutesRecordsRevision = 0
     @Published var correspondenceRecordsRevision = 0
@@ -611,6 +613,16 @@ final class AppModel: ObservableObject {
         } catch { /* Preserve waiting alerts if connectivity is temporarily unavailable. */ }
     }
 
+    func refreshBuildingAlerts() async {
+        guard let user, user.can("building.view") else { buildingAlerts = []; return }
+        let currentToken = token
+        do {
+            let response: BuildingAlertsResponse = try await request("/api/building/alerts")
+            guard token == currentToken, self.user?.id == user.id else { return }
+            buildingAlerts = response.alerts
+        } catch { /* Preserve action reminders during temporary connectivity loss. */ }
+    }
+
     func dismissTreasuryAlert(_ alert: TreasuryAlert) async {
         do {
             let _: EmptyResponse = try await request("/api/treasury/alerts/\(alert.id)/dismiss", method: "POST")
@@ -632,6 +644,7 @@ final class AppModel: ObservableObject {
         }
         await refreshMinutesReviewAlerts()
         await refreshTreasuryAlerts()
+        await refreshBuildingAlerts()
         if user?.canPrepareCorrespondence == true { correspondenceRecordsRevision += 1 }
         guard user?.can("documents.status") == true else {
             documents = []
@@ -686,6 +699,7 @@ final class AppModel: ObservableObject {
                     self.isLive = true
                     await self.refreshMinutesReviewAlerts()
                     await self.refreshTreasuryAlerts()
+                    await self.refreshBuildingAlerts()
                     if self.user?.canPrepareCorrespondence == true { self.correspondenceRecordsRevision += 1 }
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
@@ -1250,6 +1264,8 @@ final class AppModel: ObservableObject {
         minutesReviewAlerts = []
         requestedMinutesRecordID = nil
         treasuryAlerts = []
+        buildingAlerts = []
+        requestedBuildingRequestID = nil
         documents = []
         officers = []
         pendingInvitations = []

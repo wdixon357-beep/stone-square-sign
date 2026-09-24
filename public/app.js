@@ -530,6 +530,7 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   show($('appCard'));
   if (freshLogin) showMemberWelcome(user);
   await refreshMinutesReviewAlerts();
+  await refreshBuildingAlerts();
   await refreshCorrespondenceAlerts();
   await refreshTreasuryAlerts();
   const [documents] = await Promise.all([
@@ -951,27 +952,32 @@ const collectMinutesDraft = () => ({
 const minutesDateLabel = (item) => item.meetingDate ? monthDayYearLabel(item.meetingDate) : 'Date needs review';
 const minutesDocumentTitle = (item) => `Meeting Minutes, ${minutesDateLabel(item)}`;
 
-const shareSignedMinutes = async (item) => {
+const prepareSignedMinutesFile = async (item) => {
   const blob = await apiFetch(`/api/minutes/${item.id}/pdf`);
   const name = `${minutesDocumentTitle(item)}.pdf`;
-  const file = new File([blob], name, { type: 'application/pdf' });
-  if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
-    try {
-      await navigator.share({
-        title: minutesDocumentTitle(item),
-        text: 'WM review complete. Attached are the signed meeting minutes for distribution to the Craft.',
-        files: [file],
-      });
+  return new File([blob], name, { type: 'application/pdf' });
+};
+
+// Call navigator.share directly in the button's click task. Fetching first can expire
+// the transient user activation that mobile browsers require to open the share sheet.
+const shareSignedMinutesFile = (item, file, report = (message, isError) => setMessage($('minutesReadMessage'), message, isError)) => {
+  try {
+    if (!navigator.share || (navigator.canShare && !navigator.canShare({ files: [file] }))) {
+      report('This browser cannot share a PDF attachment. Use Download signed PDF below.');
       return;
-    } catch (error) {
-      if (error?.name === 'AbortError') return;
     }
+    Promise.resolve(navigator.share({
+      title: minutesDocumentTitle(item),
+      text: 'WM review complete. Attached are the signed meeting minutes for distribution to the Craft.',
+      files: [file],
+    })).catch((error) => {
+      report(error?.name === 'AbortError'
+        ? 'Sharing was canceled. The signed PDF is ready to share again or download below.'
+        : 'The email share did not open. Try another mail app, or download the signed PDF below and attach it manually.', error?.name !== 'AbortError');
+    });
+  } catch (error) {
+    report('The email share did not open. Download the signed PDF below and attach it manually.', true);
   }
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a'); link.href = url; link.download = name;
-  document.body.append(link); link.click(); link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  setMessage($('minutesReadMessage'), 'The signed PDF was downloaded. Attach it using your email service.');
 };
 
 const setMinutesMeetingType = (value) => {
@@ -1021,6 +1027,43 @@ const refreshMinutesReviewAlerts = async () => {
   } catch { /* Keep existing alerts visible until the next successful refresh. */ }
 };
 setInterval(() => { if (can('minutes.view')) refreshMinutesReviewAlerts(); }, 20000);
+
+const refreshBuildingAlerts = async () => {
+  const container = $('buildingAlerts');
+  if (!state.user || !can('building.view')) {
+    container.replaceChildren(); container.dataset.alerts = ''; hide(container); $('buildingMenuCard').classList.remove('awaiting');
+    return;
+  }
+  const userId = state.user.id;
+  try {
+    const { alerts } = await apiFetch('/api/building/alerts');
+    if (state.user?.id !== userId) return;
+    const nextAlerts = alerts || [];
+    const fingerprint = JSON.stringify(nextAlerts.map(({ id, title, message, requestId }) => [id, title, message, requestId]));
+    if (container.dataset.alerts === fingerprint) return;
+    const focusedRequest = container.contains(document.activeElement) ? document.activeElement.dataset.requestId : null;
+    container.replaceChildren(...nextAlerts.map(alert => {
+      const button = document.createElement('button');
+      button.className = 'secondary';
+      button.dataset.requestId = alert.requestId;
+      button.textContent = `${alert.title}. ${alert.message}`;
+      button.addEventListener('click', async () => {
+        showWorkspaceSection('building', { skipLoad: true });
+        await buildingCalendarWorkspace.building();
+        const card = [...$('buildingSection').querySelectorAll('[data-request-id]')]
+          .find(element => element.dataset.requestId === alert.requestId);
+        if (card) { card.scrollIntoView({ block: 'start', behavior: 'smooth' }); card.focus({ preventScroll: true }); }
+      });
+      return button;
+    }));
+    container.dataset.alerts = fingerprint;
+    if (focusedRequest) [...container.querySelectorAll('button')].find(button => button.dataset.requestId === focusedRequest)?.focus({ preventScroll: true });
+    container.classList.toggle('hidden', !alerts?.length);
+    $('buildingMenuCard').classList.toggle('awaiting', Boolean(alerts?.length));
+  } catch { /* Preserve the last visible alerts until the service returns. */ }
+};
+setInterval(() => { if (can('building.view')) refreshBuildingAlerts(); }, 20000);
+window.addEventListener('buildingWorkflowChanged', () => { void refreshBuildingAlerts(); });
 
 const refreshCorrespondenceAlerts = async () => {
   const container = $('correspondenceAlerts');
@@ -1213,14 +1256,37 @@ const renderMinutes = async () => {
         actions.append(open);
       }
       if (historical && item.status === 'ready_for_distribution' && ['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role)) {
+        let preparedFile = null;
+        const shareStatus = document.createElement('p');
+        shareStatus.className = 'minutes-share-feedback';
+        shareStatus.setAttribute('role', 'status');
+        main.append(shareStatus);
+        const reportShareStatus = (message, isError = false) => {
+          shareStatus.textContent = message;
+          shareStatus.classList.toggle('is-error', isError);
+          setMessage($('minutesReadMessage'), message, isError);
+        };
         const share = document.createElement('button');
         share.className = 'secondary small'; share.type = 'button'; share.textContent = 'Share signed PDF';
-        share.addEventListener('click', async () => {
+        share.addEventListener('click', () => {
+          if (preparedFile) { shareSignedMinutesFile(item, preparedFile, reportShareStatus); return; }
           share.disabled = true;
-          try { await shareSignedMinutes(item); }
-          catch (error) { setMessage($('minutesReadMessage'), error.message, true); }
-          finally { share.disabled = false; }
+          share.textContent = 'Preparing PDF…';
+          prepareSignedMinutesFile(item).then((file) => {
+            preparedFile = file;
+            share.textContent = 'Share prepared PDF';
+            reportShareStatus('PDF ready. Tap Share prepared PDF, then choose Email. You can also use Download signed PDF.');
+          }).catch((error) => {
+            share.textContent = 'Share signed PDF';
+            reportShareStatus(error.message, true);
+          }).finally(() => { share.disabled = false; });
         });
+        const download = document.createElement('a');
+        download.className = 'secondary small button-link';
+        download.href = `/api/minutes/${encodeURIComponent(item.id)}/pdf?download=1`;
+        download.download = `${minutesDocumentTitle(item)}.pdf`;
+        download.textContent = 'Download signed PDF';
+        download.addEventListener('click', () => reportShareStatus('Your browser is opening the signed PDF download. On iPhone, use Save to Files if it opens as a preview.'));
         const distributed = document.createElement('button');
         distributed.className = 'secondary small'; distributed.type = 'button'; distributed.textContent = 'Mark as sent to the Craft';
         distributed.addEventListener('click', async () => {
@@ -1232,7 +1298,7 @@ const renderMinutes = async () => {
             setMessage($('minutesMessage'), 'Distribution to the Craft has been recorded.');
           } catch (error) { setMessage($('minutesReadMessage'), error.message, true); distributed.disabled = false; }
         });
-        actions.append(share, distributed);
+        actions.append(share, download, distributed);
       }
       if (can('minutes.prepare') && ['awaiting_preparer', 'draft'].includes(item.status) && (state.user.role === 'owner' || item.preparerUserId === state.user.id || item.createdByUserId === state.user.id)) {
         const remove = document.createElement('button');
@@ -2207,6 +2273,7 @@ const startRealtime = async () => {
       if (!response.ok || !response.body) throw new Error('Live connection unavailable.');
       setLiveState(true);
       await refreshMinutesReviewAlerts();
+      await refreshBuildingAlerts();
       await refreshCorrespondenceAlerts();
       await refreshTreasuryAlerts();
       const reader = response.body.getReader();

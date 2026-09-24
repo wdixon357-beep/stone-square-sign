@@ -76,6 +76,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .primary { border: 1px solid var(--navy); background: var(--navy); color: white; box-shadow: 0 6px 18px rgba(7,27,47,.15); }
 .primary:hover { background: var(--navy-2); }
 .secondary { border: 1px solid var(--line); background: white; color: var(--navy); }
+.button-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; text-align: center; text-decoration: none; white-space: normal; overflow-wrap: anywhere; }
 .full { width: 100%; }
 .compact { min-height: 38px; padding: 8px 12px; }
 .auth-panel .primary { margin-top: 12px; }
@@ -193,6 +194,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-row h3 { margin: 0 0 5px; color: var(--navy); font-size: 14px; overflow-wrap: anywhere; }
 .minutes-row p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .minutes-row-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.minutes-row .minutes-share-feedback { margin-top: 6px; font-size: 12px; line-height: 1.4; color: var(--navy); }
+.minutes-row .minutes-share-feedback.is-error { color: #a92f39; }
 .minutes-editor-body { width: min(1040px, 100%); }
 .minutes-status-line { padding: 11px 13px; border-left: 3px solid var(--gold); background: #faf5e8; color: var(--navy) !important; }
 .minutes-review-warning { margin: 14px 0; padding: 15px; border: 1px solid #dba94b; border-radius: 9px; background: #fff8e8; color: #76500c; font-size: 11px; line-height: 1.55; }
