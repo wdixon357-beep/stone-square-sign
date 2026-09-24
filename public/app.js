@@ -3331,9 +3331,9 @@ const renderDues = async (force = false) => {
       const balanceNote = r.creditCents ? `<span class="dues-cell-note">${escapeMarkup(money(r.creditCents))} credit</span>` : '';
       const statusLabel = { paid: 'Paid in full', partial: 'Partially paid', unpaid: 'Unpaid', unknown: 'Check status' }[status];
       el.innerHTML = `<td role="cell" data-label="Brother" class="dues-member-cell"><strong>${escapeMarkup(r.name)}</strong><span class="dues-cell-note">${paymentNote}</span></td>
-        <td role="cell" data-label="Assessed" class="dues-money">${escapeMarkup(money(r.assessedCents))}</td>
-        <td role="cell" data-label="Paid" class="dues-money">${escapeMarkup(money(r.paidCents))}</td>
-        <td role="cell" data-label="Balance" class="dues-money dues-balance">${escapeMarkup(money(r.remainingCents))}${balanceNote}</td>
+        <td role="cell" data-label="Dues assessed" class="dues-money">${escapeMarkup(money(r.assessedCents))}</td>
+        <td role="cell" data-label="Paid to date" class="dues-money">${escapeMarkup(money(r.paidCents))}</td>
+        <td role="cell" data-label="Balance due" class="dues-money dues-balance">${escapeMarkup(money(r.remainingCents))}${balanceNote}</td>
         <td role="cell" data-label="Status"><span class="dues-status dues-status-${status}">${statusLabel}</span></td>
         <td role="cell" data-label="Last activity" class="dues-last-payment">${escapeMarkup(duesDate(r.lastPaymentISO))}</td>`;
       rows.append(el);

@@ -2290,6 +2290,10 @@ struct DuesView: View {
     @State private var exportNotice: String?
     @State private var exportFailed = false
 
+    private let moneyColumnWidth: CGFloat = 108
+    private let statusColumnWidth: CGFloat = 94
+    private let activityColumnWidth: CGFloat = 150
+
     private enum DuesExportFormat: String {
         case pdf, xlsx
 
@@ -2306,6 +2310,7 @@ struct DuesView: View {
     }
 
     var body: some View {
+        GeometryReader { available in
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 NativeWorkspaceHeader(title: "Dues", subtitle: "Payments, balances and reconciliation", symbol: "dollarsign.circle") {
@@ -2352,22 +2357,10 @@ struct DuesView: View {
                     }
 
                     Text("BY BROTHER").font(.caption2).tracking(1.4).foregroundStyle(.secondary)
-                    VStack(spacing: 8) {
-                        ForEach(ledger.rows) { row in
-                            HStack(alignment: .top, spacing: 12) {
-                                RoundedRectangle(cornerRadius: 2).fill(tint(row.status)).frame(width: 3)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(row.name).font(.callout.weight(.semibold))
-                                    Text(detail(for: row)).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text(row.status.uppercased())
-                                    .font(.caption2.weight(.bold)).foregroundStyle(tint(row.status))
-                            }
-                            .padding(12)
-                            .background(Color.primary.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        }
+                    if available.size.width >= 850 {
+                        duesTable(ledger.rows)
+                    } else {
+                        duesCompactRows(ledger.rows)
                     }
 
                     if !ledger.unmatched.isEmpty {
@@ -2394,6 +2387,7 @@ struct DuesView: View {
                 }
             }
             .padding(28)
+        }
         }
         .task {
             // Zeffy payments arrive from outside the app, so nothing in-app can announce
@@ -2440,20 +2434,112 @@ struct DuesView: View {
         }
     }
 
-    private func detail(for row: DuesRow) -> String {
-        var text: String
-        switch row.status {
-        case "paid":
-            text = "Paid in full" + (row.lastPaymentISO.map { " on \($0)" } ?? "")
-        case "partial":
-            text = "\(lodgeMoney(row.paidCents)) of \(lodgeMoney(row.assessedCents)), \(lodgeMoney(row.remainingCents)) outstanding"
-        default:
-            text = "Nothing received"
+    private func statusLabel(_ status: String) -> String {
+        switch status {
+        case "paid": return "Paid in full"
+        case "partial": return "Partial"
+        default: return "Unpaid"
         }
-        if row.creditCents > 0 { text += " · \(lodgeMoney(row.creditCents)) credit" }
-        let ways = Set(row.payments.map(\.matchedVia)).sorted()
-        if !ways.isEmpty { text += " · matched by " + ways.joined(separator: ", ") }
-        return text
+    }
+
+    private func lastActivity(_ row: DuesRow) -> String {
+        guard let date = row.lastPaymentISO, !date.isEmpty else { return "No activity" }
+        return LodgeCalendarDates.displayDate(String(date.prefix(10)))
+    }
+
+    private func duesTable(_ rows: [DuesRow]) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("BROTHER").frame(maxWidth: .infinity, alignment: .leading)
+                Text("DUES ASSESSED").frame(width: moneyColumnWidth, alignment: .trailing)
+                Text("PAID TO DATE").frame(width: moneyColumnWidth, alignment: .trailing)
+                Text("BALANCE DUE").frame(width: moneyColumnWidth, alignment: .trailing)
+                Text("STATUS").frame(width: statusColumnWidth, alignment: .leading)
+                Text("LAST ACTIVITY").frame(width: activityColumnWidth, alignment: .leading)
+            }
+            .font(.caption2.weight(.bold))
+            .tracking(0.7)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(SignTheme.navy.opacity(0.06))
+
+            ForEach(rows) { row in
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.name).font(.callout.weight(.semibold)).lineLimit(2)
+                        if row.creditCents > 0 {
+                            Text("\(lodgeMoney(row.creditCents)) credit")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    amountCell(row.assessedCents).frame(width: moneyColumnWidth, alignment: .trailing)
+                    amountCell(row.paidCents).frame(width: moneyColumnWidth, alignment: .trailing)
+                    amountCell(row.remainingCents).frame(width: moneyColumnWidth, alignment: .trailing)
+                    Text(statusLabel(row.status))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint(row.status))
+                        .frame(width: statusColumnWidth, alignment: .leading)
+                    Text(lastActivity(row))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .frame(width: activityColumnWidth, alignment: .leading)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(duesAccessibility(row))
+                Divider()
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(.separator.opacity(0.5)) }
+    }
+
+    private func duesCompactRows(_ rows: [DuesRow]) -> some View {
+        VStack(spacing: 8) {
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.name).font(.callout.weight(.semibold))
+                        Spacer(minLength: 4)
+                        Text(statusLabel(row.status))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(tint(row.status))
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], alignment: .leading, spacing: 8) {
+                        compactAmount("Dues assessed", row.assessedCents)
+                        compactAmount("Paid to date", row.paidCents)
+                        compactAmount("Balance due", row.remainingCents)
+                    }
+                    Text("Last activity: \(lastActivity(row))\(row.creditCents > 0 ? " · \(lodgeMoney(row.creditCents)) credit" : "")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    private func amountCell(_ cents: Int) -> some View {
+        Text(lodgeMoney(cents))
+            .font(.callout.monospacedDigit())
+            .lineLimit(1).minimumScaleFactor(0.8)
+    }
+
+    private func duesAccessibility(_ row: DuesRow) -> String {
+        let credit = row.creditCents > 0 ? ", credit \(lodgeMoney(row.creditCents))" : ""
+        return "\(row.name), dues assessed \(lodgeMoney(row.assessedCents)), paid to date \(lodgeMoney(row.paidCents)), balance due \(lodgeMoney(row.remainingCents)), \(statusLabel(row.status)), last activity \(lastActivity(row))\(credit)"
+    }
+
+    private func compactAmount(_ label: String, _ cents: Int) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            amountCell(cents)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
