@@ -858,11 +858,12 @@ struct WorkspaceView: View {
     }
 
     private func navRow(_ title: String, mark: String, active: Bool) -> some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             Text(mark)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color(red: 0.89, green: 0.74, blue: 0.46))
-                .frame(width: 25)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(width: 30, alignment: .leading)
             Text(title)
                 .font(.system(size: 13))
                 .foregroundStyle(SignTheme.sidebarInk)
@@ -1269,9 +1270,13 @@ struct NativeCandidateTrackerView: View {
         "Healing": "Healing requests, requirements, and Lodge action",
     ]
 
-    private let trackerGreen = Color.accentColor
     private let trackerGold = Color(red: 196 / 255, green: 154 / 255, blue: 67 / 255)
     private let trackerLine = Color(nsColor: .separatorColor)
+
+    private var categoryOptions: [String] {
+        let otherCategories = Set(model.candidateRecords.map(\.category)).subtracting(categories)
+        return categories + otherCategories.sorted()
+    }
 
     private var canEdit: Bool {
         model.user?.can("candidates.edit") == true
@@ -1320,6 +1325,8 @@ struct NativeCandidateTrackerView: View {
     }
 
     @State private var selectedRecordID: String?
+    @State private var viewingRecord: CandidateRecord?
+    @State private var pendingEditRecord: CandidateRecord?
     var body: some View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Candidate Tracker", subtitle: "Candidate and membership records", symbol: "person.text.rectangle") {
@@ -1343,28 +1350,53 @@ struct NativeCandidateTrackerView: View {
             }.padding(16)
             Divider()
             GeometryReader { available in
-                Group {
-                    if available.size.width < 780 {
-                        List(filteredRecords) { record in
-                            Button { selectedRecordID = record.id } label: {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    HStack { Text(record.name).font(.headline); Spacer(); Text(record.status).font(.caption.weight(.semibold)).foregroundStyle(trackerGold) }
-                                    if !record.owner.isEmpty { Text("Owner: \(record.owner)").font(.caption).foregroundStyle(.secondary) }
-                                    if !record.nextStep.isEmpty { Text(record.nextStep).font(.callout).fixedSize(horizontal: false, vertical: true) }
-                                }.padding(.vertical, 5).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
-                        }
-                    } else {
-                        Table(filteredRecords, selection: $selectedRecordID) {
-                            TableColumn("Name", value: \.name)
-                            TableColumn("Status", value: \.status)
-                            TableColumn("Owner", value: \.owner)
-                            TableColumn("Next step", value: \.nextStep)
+                ScrollView {
+                    LazyVStack(spacing: 9) {
+                        ForEach(filteredRecords) { record in
+                            Button {
+                                if available.size.width < 780 { viewingRecord = record }
+                                else { selectedRecordID = record.id }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Text(record.name)
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(.primary)
+                                        Spacer(minLength: 12)
+                                        Text(record.status)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.primary)
+                                            .multilineTextAlignment(.trailing)
+                                    }
+                                    if !record.owner.isEmpty {
+                                        Text("Owner: \(record.owner)")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    if !record.nextStep.isEmpty {
+                                        Text("Next Step: \(record.nextStep)")
+                                            .font(.callout)
+                                            .foregroundStyle(.primary)
+                                            .multilineTextAlignment(.leading)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .background(selectedRecordID == record.id ? SignTheme.page : SignTheme.surface,
+                                            in: RoundedRectangle(cornerRadius: 9))
+                                .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityValue(selectedRecordID == record.id ? "Selected Record" : "")
                         }
                     }
-                }.overlay {
+                    .padding(14)
+                }
+                .overlay {
                     if model.candidateTrackerLoading && model.candidateRecords.isEmpty { ProgressView("Loading records…") }
                     else if filteredRecords.isEmpty { ContentUnavailableView("No matching records", systemImage: "person.text.rectangle", description: Text("Choose another section or adjust the filters.")) }
+                }
+                .onChange(of: available.size.width) { _, width in
+                    if width < 780 { selectedRecordID = nil }
                 }
             }
             if let record = filteredRecords.first(where: { $0.id == selectedRecordID }) {
@@ -1389,13 +1421,33 @@ struct NativeCandidateTrackerView: View {
             }
         }
         .sheet(item: $editingRecord) { record in
-            CandidateRecordEditorView(record: record, isNew: creatingRecord, categories: categories)
+            CandidateRecordEditorView(record: record, isNew: creatingRecord, categories: categoryOptions)
                 .environmentObject(model)
+        }
+        .sheet(item: $viewingRecord, onDismiss: {
+            if let record = pendingEditRecord {
+                pendingEditRecord = nil
+                editingRecord = record
+            }
+        }) { record in
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Candidate Record")
+                        .font(.system(size: 22, weight: .medium, design: .serif))
+                    Spacer()
+                    Button("Done") { viewingRecord = nil }
+                }
+                .padding(20)
+                ScrollView { recordCard(record).padding(20) }
+            }
+            .frame(minWidth: 520, minHeight: 430)
         }
     }
 
     private var sectionPicker: some View {
-        Picker("Section", selection: $category) { ForEach(categories, id: \.self) { Text($0).tag($0) } }
+        Picker("Section", selection: $category) {
+            ForEach(categoryOptions, id: \.self) { Text($0.isEmpty ? "Unfiled Records" : $0).tag($0) }
+        }
     }
 
     private var ownerPicker: some View {
@@ -1415,7 +1467,7 @@ struct NativeCandidateTrackerView: View {
             HStack(alignment: .top, spacing: 14) {
                 ZStack {
                     Circle().fill(trackerGold.opacity(0.18))
-                    Text(initials(for: record.name)).font(.caption.weight(.bold)).foregroundStyle(trackerGreen)
+                    Text(initials(for: record.name)).font(.caption.weight(.bold)).foregroundStyle(.primary)
                 }
                 .frame(width: 42, height: 42)
                 VStack(alignment: .leading, spacing: 6) {
@@ -1431,9 +1483,14 @@ struct NativeCandidateTrackerView: View {
                 if canEdit {
                     Button("Edit") {
                         creatingRecord = false
-                        editingRecord = record
+                        if viewingRecord != nil {
+                            pendingEditRecord = record
+                            viewingRecord = nil
+                        } else {
+                            editingRecord = record
+                        }
                     }
-                    .buttonStyle(.bordered).tint(trackerGreen)
+                    .buttonStyle(.bordered)
                 } else {
                     Text("Read only").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 }
@@ -1464,7 +1521,7 @@ struct NativeCandidateTrackerView: View {
                     }
                     .padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.caption.weight(.semibold)).tint(trackerGreen)
+                .font(.caption.weight(.semibold))
             }
         }
         .padding(19)
@@ -1536,6 +1593,19 @@ struct CandidateRecordEditorView: View {
         "SD Cliff Skinner", "PM Fred Cooke",
     ]
 
+    private var statusChoices: [String] {
+        record.status.isEmpty ? [""] + statuses : (statuses.contains(record.status) ? statuses : [record.status] + statuses)
+    }
+
+    private var ownerChoices: [String] {
+        record.owner.isEmpty || owners.contains(record.owner) ? owners : owners + [record.owner]
+    }
+
+    private var categoryChoices: [String] {
+        record.category.isEmpty && !categories.contains("") ? [""] + categories :
+            (categories.contains(record.category) ? categories : [record.category] + categories)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -1553,17 +1623,17 @@ struct CandidateRecordEditorView: View {
                 Section("Candidate") {
                     TextField("Full name", text: $record.name)
                     Picker("Section", selection: $record.category) {
-                        ForEach(categories, id: \.self) { Text($0).tag($0) }
+                        ForEach(categoryChoices, id: \.self) { Text($0.isEmpty ? "Unfiled Records" : $0).tag($0) }
                     }
                     TextField("Phone", text: $record.phone)
                     TextField("Email", text: $record.email)
                 }
                 Section("Progress") {
                     Picker("Status", selection: $record.status) {
-                        ForEach(statuses, id: \.self) { Text($0).tag($0) }
+                        ForEach(statusChoices, id: \.self) { Text($0.isEmpty ? "No Status Recorded" : $0).tag($0) }
                     }
                     Picker("Owner", selection: $record.owner) {
-                        ForEach(owners, id: \.self) { Text($0.isEmpty ? "Unassigned" : $0).tag($0) }
+                        ForEach(ownerChoices, id: \.self) { Text($0.isEmpty ? "Unassigned" : $0).tag($0) }
                     }
                     TextField("Last contacted (YYYY-MM-DD)", text: $record.lastContacted)
                     TextField("Next step", text: $record.nextStep)
