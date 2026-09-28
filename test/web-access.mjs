@@ -26,7 +26,7 @@ assert.match(app, /Read finalized treasurer reports/);
 assert.doesNotMatch(app, /before opening the live document queue/);
 assert.equal(visibility('owner')['.owner-only'], true);
 assert.equal(visibility('owner')['.warden-only'], false);
-assert.equal(visibility('owner').landingCopy, 'Choose the area you want to open.');
+assert.equal(visibility('owner').landingCopy, 'Review what needs attention and open your Lodge tools.');
 assert.match(html, /id="accessNav" class="nav-item owner-only"/);
 assert.match(app, /\$\('officerPanel'\)\.focus\(\{ preventScroll: true \}\)/);
 assert.equal(visibility('viewer')['.dues-ledger-only'], false);

@@ -477,7 +477,7 @@ const applyWorkspacePermissions = user => {
     element.classList.toggle('hidden', user.role === 'owner' || !can('proposals.create', user));
   });
   const line = document.querySelector('.landing-head p:not(.eyebrow)');
-  if (line) line.textContent = user.role === 'warden' ? 'View Lodge status, prepare reports, and follow your dispensation proposals.' : 'Choose the area you want to open.';
+  if (line) line.textContent = user.role === 'warden' ? 'View Lodge status, prepare reports, and follow your dispensation proposals.' : 'Review what needs attention and open your Lodge tools.';
   document.querySelectorAll('.signer-only').forEach((element) => {
     element.classList.toggle('hidden', !can('documents.status', user));
   });
@@ -500,11 +500,13 @@ const applyWorkspacePermissions = user => {
   document.querySelectorAll('.preparer-only').forEach((element) => {
     element.classList.toggle('hidden', !can('minutes.prepare', user));
   });
+  if (typeof refreshDashboardNavigation === 'function') refreshDashboardNavigation();
   return { maySeeTreasury, maySeeMinutes };
 };
 
 const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   state.user = user;
+  homeAlertsLoaded = false;
   const sessionDays = Number(session?.lifetimeDays);
   const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
   $('sessionNotice').classList.toggle('hidden', !hasSessionPolicy);
@@ -533,6 +535,8 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   await refreshBuildingAlerts();
   await refreshCorrespondenceAlerts();
   await refreshTreasuryAlerts();
+  homeAlertsLoaded = true;
+  renderHomeAlertSummary();
   const [documents] = await Promise.all([
     renderDocuments(),
     user.role === 'owner' ? renderOfficers() : Promise.resolve(),
@@ -561,6 +565,7 @@ const refreshSessionPermissions = async () => {
     if (before === after) return;
     applyWorkspacePermissions(user);
     showWorkspaceSection(state.activeSection || 'home', { skipLoad: true });
+    if (state.activeSection === 'home') void refreshHomeCalendar();
     treasuryWorkspace?.refreshPermissions();
     buildingCalendarWorkspace?.refreshPermissions();
     if (can('documents.status')) void renderDocuments();
@@ -804,6 +809,214 @@ const openCandidateTracker = async () => {
   }
 };
 
+const dashboardGroups = {
+  home: { title: 'Home', description: 'Your Lodge work and useful links.' },
+  meetings: { title: 'Meetings And Reports', description: 'Calendar, minutes, agendas, and Lodge reports.' },
+  documents: { title: 'Documents And Approvals', description: 'Prepare, review, sign, and follow Lodge documents.' },
+  dues: { title: 'Dues And Finance', description: 'Your dues and authorized Lodge finance records.' },
+  people: { title: 'People And Lodge', description: 'Member access, candidates, suggestions, and building requests.' },
+  account: { title: 'Account', description: 'Your settings, signature, and permitted activity records.' },
+  more: { title: 'More', description: 'All the other tools available to your account.' },
+};
+
+const visibleDashboardItems = group => [...document.querySelectorAll(`.nav-group[data-group="${group}"] .nav-item`)]
+  .filter(item => !item.classList.contains('hidden'));
+
+const dashboardGroupForSection = section => ({
+  home: 'home', calendar: 'meetings', minutes: 'meetings', agenda: 'meetings', reports: 'meetings', receivedReports: 'meetings',
+  correspondence: 'documents', queue: 'documents', builder: 'documents', approvals: 'documents', proposals: 'documents', proposalReview: 'documents',
+  dues: 'dues', myDues: 'dues', treasury: 'dues',
+  access: 'people', memberAccess: 'people', suggestions: 'people', building: 'people',
+  activity: 'account', settings: 'account',
+})[section] || 'more';
+
+let dashboardGroupLanding = null;
+const setPhoneNavActive = group => {
+  const selected = ['home', 'meetings', 'documents', 'dues'].includes(group) ? group : 'more';
+  document.querySelectorAll('#phoneSections [data-phone-group]').forEach(button => {
+    const active = button.dataset.phoneGroup === selected;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+};
+
+const refreshDashboardNavigation = () => {
+  document.querySelectorAll('.nav-group').forEach(group => {
+    const visible = [...group.querySelectorAll('.nav-item')].some(item => !item.classList.contains('hidden'));
+    group.classList.toggle('hidden', !visible);
+  });
+  document.querySelectorAll('#phoneSections [data-phone-group]').forEach(button => {
+    const group = button.dataset.phoneGroup;
+    if (group === 'home' || group === 'more') return;
+    button.classList.toggle('hidden', !visibleDashboardItems(group).length);
+  });
+  if (dashboardGroupLanding) renderDashboardGroupLanding(dashboardGroupLanding);
+  renderHomeQuickLinks();
+};
+
+const renderDashboardGroupLanding = group => {
+  const groups = group === 'more' ? ['people', 'account', 'home'] : [group];
+  const links = $('groupLandingLinks');
+  links.replaceChildren();
+  for (const groupName of groups) {
+    const items = visibleDashboardItems(groupName).filter(item => item.id !== 'homeNav');
+    if (!items.length) continue;
+    const section = document.createElement('section');
+    section.className = 'group-link-section';
+    if (group === 'more') {
+      const heading = document.createElement('h2');
+      heading.textContent = groupName === 'home' ? 'Grand Lodge' : dashboardGroups[groupName].title;
+      section.append(heading);
+    }
+    for (const item of items) {
+      if (item.tagName === 'A') {
+        const link = document.createElement('a');
+        link.href = item.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.referrerPolicy = 'no-referrer';
+        link.textContent = item.textContent.trim();
+        section.append(link);
+      } else {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = item.textContent.trim();
+        button.addEventListener('click', () => item.click());
+        section.append(button);
+      }
+    }
+    links.append(section);
+  }
+  if (!links.children.length) {
+    const empty = document.createElement('p');
+    empty.textContent = 'No tools in this section are available to your account.';
+    links.append(empty);
+  }
+  $('groupLandingTitle').textContent = dashboardGroups[group].title;
+  $('groupLandingDescription').textContent = dashboardGroups[group].description;
+};
+
+const openDashboardGroup = group => {
+  if (group === 'home') { if (showWorkspaceSection('home')) dashboardGroupLanding = null; return; }
+  if (!showWorkspaceSection('home', { skipLoad: true })) return;
+  dashboardGroupLanding = group;
+  renderDashboardGroupLanding(group);
+  $('landingSection').classList.add('hidden');
+  $('groupLandingSection').classList.remove('hidden');
+  setPhoneNavActive(group);
+};
+
+const renderHomeQuickLinks = () => {
+  const links = $('homeQuickLinks');
+  if (!links) return;
+  links.replaceChildren();
+  const prioritized = ['calendarNav', 'myDuesNav', 'minutesNav', 'queueNav', 'reportsNav', 'suggestionsNav', 'duesNav', 'candidateTrackerSidebar'];
+  for (const id of prioritized) {
+    const item = $(id);
+    if (item.classList.contains('hidden')) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = item.textContent.trim();
+    button.addEventListener('click', () => item.click());
+    links.append(button);
+    if (links.children.length >= 4) break;
+  }
+  if (!links.children.length) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Browse Available Tools';
+    button.addEventListener('click', () => openDashboardGroup('more'));
+    links.append(button);
+  }
+};
+
+const homeAlertSources = [
+  ['minutesReviewAlerts', 'Meeting Minutes'], ['buildingAlerts', 'Building Requests'],
+  ['correspondenceAlerts', 'Correspondence'], ['treasuryAlerts', 'Treasurer Reports'],
+];
+let homeAlertsLoaded = false;
+const renderHomeAlertSummary = () => {
+  const list = $('homeAlertList');
+  list.replaceChildren();
+  let total = 0;
+  for (const [id, label] of homeAlertSources) {
+    const source = $(id);
+    const permitted = id === 'minutesReviewAlerts' ? can('minutes.view')
+      : id === 'buildingAlerts' ? can('building.view')
+      : id === 'correspondenceAlerts' ? ['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role) && can('reports.create')
+      : id === 'treasuryAlerts' ? can('treasury.prepare')
+      : false;
+    if (!permitted) continue;
+    if (source.classList.contains('hidden')) continue;
+    const count = id === 'treasuryAlerts'
+      ? source.querySelectorAll('.treasury-alert-row').length
+      : source.querySelectorAll('button').length || 1;
+    total += count;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `${label} · ${count} ${count === 1 ? 'notice' : 'notices'}`;
+    button.addEventListener('click', () => { source.scrollIntoView({ behavior: 'smooth', block: 'start' }); source.querySelector('button')?.focus({ preventScroll: true }); });
+    list.append(button);
+  }
+  $('homeAlertCount').textContent = `${total} ${total === 1 ? 'notice' : 'notices'}`;
+  $('homeAlertCount').classList.toggle('hidden', !total);
+  if (!total) {
+    const message = document.createElement('p');
+    message.textContent = homeAlertsLoaded ? 'No Lodge records need attention.' : 'Checking Lodge records…';
+    list.append(message);
+  }
+};
+
+const refreshHomeCalendar = async () => {
+  const list = $('homeUpcomingEvents');
+  if (!state.user || !can('calendar.view')) { list.replaceChildren(); return; }
+  const userId = state.user.id;
+  const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
+  const easternDate = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+  const until = new Date(`${easternDate}T12:00:00Z`);
+  until.setUTCDate(until.getUTCDate() + 60);
+  const endDate = until.toISOString().slice(0, 10);
+  try {
+    const { events = [], warnings = [] } = await apiFetch(`/api/lodge-calendar?from=${easternDate}&to=${endDate}`);
+    if (state.user?.id !== userId || !can('calendar.view')) return;
+    list.replaceChildren();
+    const upcoming = events.filter(event => event.endDate >= easternDate && event.status !== 'cancelled').slice(0, 3);
+    if (!upcoming.length) {
+      const message = document.createElement('p');
+      message.textContent = 'No upcoming events are listed in the next 60 days.';
+      list.append(message);
+    }
+    for (const event of upcoming) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      const title = document.createElement('strong');
+      title.textContent = event.title;
+      const details = document.createElement('small');
+      const day = new Date(`${event.startDate}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      details.textContent = [day, event.startTime ? formatClockTime(event.startTime) : '', event.location || '', event.status !== 'scheduled' ? event.status : ''].filter(Boolean).join(' · ');
+      button.append(title, details);
+      button.addEventListener('click', () => showWorkspaceSection('calendar'));
+      list.append(button);
+    }
+    if (warnings.length) {
+      const warning = document.createElement('p');
+      warning.className = 'helper';
+      warning.textContent = 'Some building calendar updates are unavailable. Open the calendar for details.';
+      list.append(warning);
+    }
+  } catch {
+    if (state.user?.id !== userId) return;
+    list.textContent = 'The calendar could not load. Open the calendar to try again.';
+  }
+};
+
+if (typeof MutationObserver !== 'undefined') {
+  for (const [id] of homeAlertSources) {
+    new MutationObserver(renderHomeAlertSummary).observe($(id), { childList: true, attributes: true, attributeFilter: ['class'] });
+  }
+}
+
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (state.activeSection && section !== state.activeSection && hasUnsavedWorkspace(state.activeSection)
       && !window.confirm('Leave this unfinished work? It will stay in this browser tab so you can return to it.')) return false;
@@ -887,6 +1100,16 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
    * officers looking at once see the same figures. */
   window.clearInterval(state.duesTimer);
   if (dues) state.duesTimer = window.setInterval(() => renderDues(true), 60000);
+  dashboardGroupLanding = null;
+  $('groupLandingSection').classList.add('hidden');
+  setPhoneNavActive(dashboardGroupForSection(section));
+  if (home && !skipLoad) void refreshHomeCalendar();
+  if (home) renderHomeAlertSummary();
+  const sidebarNav = $('workspaceSections');
+  if (window.innerWidth <= 1100) {
+    sidebarNav.classList.remove('open');
+    $('sidebarToggle').setAttribute('aria-expanded', 'false');
+  }
   return true;
 };
 
@@ -1975,6 +2198,22 @@ $('receivedReportPreviewClose').addEventListener('click', closeReceivedReport);
 $('agendaNav').addEventListener('click', () => showWorkspaceSection('agenda'));
 $('agendaMenuCard').addEventListener('click', () => showWorkspaceSection('agenda'));
 $('candidateMenuCard').addEventListener('click', () => { void openCandidateTracker(); });
+$('candidateTrackerSidebar').addEventListener('click', () => { if (showWorkspaceSection('home')) void openCandidateTracker(); });
+$('homeOpenCalendar').addEventListener('click', () => showWorkspaceSection('calendar'));
+document.querySelectorAll('#phoneSections [data-phone-group]').forEach(button => {
+  button.addEventListener('click', () => openDashboardGroup(button.dataset.phoneGroup));
+});
+$('sidebarToggle').addEventListener('click', () => {
+  const open = !$('workspaceSections').classList.contains('open');
+  $('workspaceSections').classList.toggle('open', open);
+  $('sidebarToggle').setAttribute('aria-expanded', String(open));
+});
+$('workspaceSections').addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  $('workspaceSections').classList.remove('open');
+  $('sidebarToggle').setAttribute('aria-expanded', 'false');
+  $('sidebarToggle').focus();
+});
 $('reportSeparateTab').addEventListener('click', () => { void loadReportGenerator({ separate: true }); });
 $('minutesNav').addEventListener('click', () => showWorkspaceSection('minutes'));
 $('minutesMenuCard').addEventListener('click', () => showWorkspaceSection('minutes'));

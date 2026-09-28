@@ -158,11 +158,15 @@ assert.doesNotMatch(activityLabel, /textContent|getAttribute/, 'activity trackin
 assert.match(treasury, /data-activity-name="Download banking source file"/, 'bank-source clicks must use a fixed privacy-safe activity label');
 assert.match(server, /users\.permissions_json, users\.roster_id/, 'authenticated member permissions must include the verified roster link');
 assert.match(app, /supportedDeepLinks[\s\S]*'myDues'[\s\S]*'suggestions'[\s\S]*'settings'/, 'authorized member links must open their requested work area');
-assert.match(styles, /@media \(max-width: 760px\)[\s\S]*overflow-x:\s*auto/, 'phone navigation must remain reachable without page overflow');
+assert.equal([...html.matchAll(/data-phone-group="[a-z]+"/g)].length, 5, 'phone navigation must offer five clear destinations');
+assert.match(styles, /@media \(max-width: 600px\)[\s\S]*\.phone-nav \{[^}]*position:\s*fixed;[^}]*bottom:\s*0/, 'phone navigation must stay visible at the bottom without a long horizontal rail');
 assert.match(styles, /min-height:\s*44px/, 'touch controls must include a 44px target treatment');
 assert.match(styles, /\.content > section,[^}]+min-width:\s*0/, 'every web workspace section must be allowed to shrink inside the viewport');
 assert.match(styles, /\.sidebar-foot \.text-button \{[^}]*white-space:\s*nowrap/, 'tablet account controls must remain readable instead of collapsing into vertical letters');
-assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.sidebar nav \{[^}]*grid-column:\s*1 \/ -1[^}]*grid-row:\s*2/, 'tablet navigation must use its own full-width row instead of overlapping account controls');
+assert.match(html, /id="sidebarToggle"[^>]*aria-expanded="false"[^>]*aria-controls="workspaceSections"/, 'iPad navigation must have an accessible collapsed control');
+assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.sidebar #workspaceSections \{[^}]*display:\s*none;[^}]*position:\s*absolute/, 'iPad navigation must open as a collapsible menu instead of occupying a full row');
+assert.match(styles, /\.sidebar #workspaceSections \.nav-item \{[^}]*min-height:\s*44px;[^}]*color:\s*rgba\(255,255,255,\.88\);[^}]*font-size:\s*14px/, 'grouped sidebar labels must remain readable and have comfortable touch targets');
+assert.match(app, /refreshDashboardNavigation[\s\S]*group\.classList\.toggle\('hidden', !visible\)/, 'role-gated empty dashboard groups must not appear');
 assert.match(styles, /\.panel-title > button,[^}]+flex:\s*0 0 auto/, 'panel action labels must keep their readable width on phones');
 assert.match(styles, /\.minutes-row > \* \{ min-width: 0; \}[\s\S]*\.minutes-row h3[^}]*overflow-wrap: anywhere/, 'minutes titles must wrap inside phone-width record rows');
 assert.match(buildingCalendar, /class="building-agreement-text"/, 'building agreements must use a CSP-compatible style class');

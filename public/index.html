@@ -123,29 +123,44 @@
       <section id="appCard" class="workspace hidden">
         <aside class="sidebar">
           <div class="user-block"><span id="userInitials"></span><div><strong id="whoami"></strong><small id="userRole"></small></div></div>
-          <nav>
+          <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="workspaceSections">Sections <span aria-hidden="true">☰</span></button>
+          <nav id="workspaceSections" aria-label="Dashboard sections">
+            <div class="nav-group" data-group="home"><p class="nav-group-title">Start Here</p>
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
-            <button id="accessNav" class="nav-item owner-only" type="button"><span>ACC</span> Officer Access</button>
-            <button id="buildingNav" class="nav-item building-only" type="button"><span>BLD</span> Building Requests</button>
+            <a class="nav-item" href="https://phde.grandview.systems/users/sign_in" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Open Grand View, Grand Lodge member portal, in a new tab"><span aria-hidden="true">GV</span> Grand View ↗</a>
+            </div>
+            <div class="nav-group" data-group="meetings"><p class="nav-group-title">Meetings And Reports</p>
             <button id="calendarNav" class="nav-item calendar-only" type="button"><span>CAL</span> Lodge Calendar</button>
-            <button id="activityNav" class="nav-item owner-only" type="button"><span>ACT</span> Dashboard Activity</button>
-            <button id="memberAccessNav" class="nav-item owner-only" type="button"><span>MEM</span> Member Access</button>
-            <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
-            <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
-            <button id="correspondenceNav" class="nav-item hidden" type="button"><span>LTR</span> Lodge Correspondence</button>
-            <button id="receivedReportsNav" class="nav-item owner-only hidden" type="button"><span>IN</span> Received Reports</button>
             <button id="minutesNav" class="nav-item minutes-only" type="button"><span>MIN</span> Meeting Minutes</button>
             <button id="agendaNav" class="nav-item owner-only" type="button"><span>AG</span> Agenda Creator</button>
+            <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
+            <button id="receivedReportsNav" class="nav-item owner-only hidden" type="button"><span>IN</span> Received Reports</button>
+            </div>
+            <div class="nav-group" data-group="documents"><p class="nav-group-title">Documents And Approvals</p>
+            <button id="correspondenceNav" class="nav-item hidden" type="button"><span>LTR</span> Lodge Correspondence</button>
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
             <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
             <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> My Dispensation Proposals</button>
             <button id="proposalReviewNav" class="nav-item owner-only" type="button"><span>&#9998;</span> Warden Proposals</button>
+            </div>
+            <div class="nav-group" data-group="dues"><p class="nav-group-title">Dues And Finance</p>
             <button id="duesNav" class="nav-item dues-ledger-only" type="button"><span>$</span> Dues Ledger</button>
             <button id="myDuesNav" class="nav-item dues-self-only" type="button"><span>ME</span> My Dues</button>
+            <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
+            </div>
+            <div class="nav-group" data-group="people"><p class="nav-group-title">People And Lodge</p>
+            <button id="accessNav" class="nav-item owner-only" type="button"><span>ACC</span> Officer Access</button>
+            <button id="memberAccessNav" class="nav-item owner-only" type="button"><span>MEM</span> Member Access</button>
+            <button id="candidateTrackerSidebar" class="nav-item candidate-only" type="button"><span>CT</span> Candidate Tracker</button>
             <button id="suggestionsNav" class="nav-item suggestions-only" type="button"><span>SB</span> Suggestion Box</button>
+            <button id="buildingNav" class="nav-item building-only" type="button"><span>BLD</span> Building Requests</button>
+            </div>
+            <div class="nav-group" data-group="account"><p class="nav-group-title">Account</p>
+            <button id="activityNav" class="nav-item owner-only" type="button"><span>ACT</span> Dashboard Activity</button>
             <button id="settingsNav" class="nav-item" type="button"><span>⚙</span> My Settings</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
+            </div>
           </nav>
           <div class="sidebar-foot">
             <button id="sessionDetails" class="text-button hidden" type="button">Sign-in details</button>
@@ -156,6 +171,13 @@
         </aside>
 
         <div class="content">
+          <nav id="phoneSections" class="phone-nav" aria-label="Main phone navigation">
+            <button type="button" data-phone-group="home" class="active"><span aria-hidden="true">⌂</span>Home</button>
+            <button type="button" data-phone-group="meetings"><span aria-hidden="true">▣</span>Meetings</button>
+            <button type="button" data-phone-group="documents"><span aria-hidden="true">▤</span>Documents</button>
+            <button type="button" data-phone-group="dues"><span aria-hidden="true">$</span>Dues</button>
+            <button type="button" data-phone-group="more"><span aria-hidden="true">⋯</span>More</button>
+          </nav>
           <section id="sessionNotice" class="session-notice hidden" role="status" aria-live="polite">
             <div><strong id="sessionNoticeTitle"></strong><p>Your sign-in renews automatically when you use this device near the end of that period. Sign out when you are finished on a shared device.</p></div>
             <button id="dismissSessionNotice" class="secondary" type="button" aria-label="Dismiss sign-in notice">Got it</button>
@@ -167,8 +189,20 @@
           <section id="treasuryAlerts" class="workflow-alerts hidden" role="status" aria-live="polite" aria-label="Treasurer report alerts"></section>
           <section id="serviceHealthAlert" class="workflow-alerts hidden owner-only" role="status" aria-live="polite" aria-label="Dashboard service status"></section>
           <section id="landingSection" class="landing-section">
-            <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Choose the area you want to open.</p><span id="landingRole"></span></div>
+            <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Review what needs attention and open your Lodge tools.</p><span id="landingRole"></span></div>
+            <div class="home-layout">
+              <div class="home-main">
+                <section class="home-panel home-attention"><div class="home-panel-heading"><div><p class="eyebrow">YOUR LODGE WORK</p><h2>Needs Attention</h2></div><span id="homeAlertCount" class="home-count hidden"></span></div><div id="homeAlertList" class="home-alert-list"><p>Checking Lodge records…</p></div></section>
+                <section id="homeCalendarPanel" class="home-panel calendar-only"><div class="home-panel-heading"><div><p class="eyebrow">LODGE CALENDAR</p><h2>Coming Up</h2></div><button id="homeOpenCalendar" class="home-text-action" type="button">Open Calendar</button></div><div id="homeUpcomingEvents" class="home-event-list"><p>Checking the Lodge calendar…</p></div></section>
+              </div>
+              <div class="home-side">
+                <section class="home-panel"><div class="home-panel-heading"><div><p class="eyebrow">QUICK ACCESS</p><h2>Open A Tool</h2></div></div><div id="homeQuickLinks" class="home-quick-links"></div></section>
+                <section class="home-panel home-grand-view"><div class="home-panel-heading"><div><p class="eyebrow">GRAND LODGE</p><h2>Grand View</h2></div></div><p>Open the official Delaware member portal with your Grand View account.</p><a href="https://phde.grandview.systems/users/sign_in" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open Grand View ↗</a></section>
+              </div>
+            </div>
+            <details class="all-tools"><summary>Browse All Dashboard Tools</summary>
             <div class="document-menu">
+              <a class="document-menu-card" href="https://phde.grandview.systems/users/sign_in" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Open Grand View, Grand Lodge member portal, in a new tab"><i aria-hidden="true">GV</i><span><strong>Grand View</strong><small>Open the Grand Lodge member portal with your Grand View sign-in</small></span><b aria-hidden="true">OPENS IN A NEW TAB ↗</b></a>
               <button id="proposeMenuCard" class="document-menu-card warden-only" type="button"><i>&#9998;</i><span><strong>My Dispensation Proposals</strong><small>Submit a proposal and follow its status</small></span><b>&rsaquo;</b></button>
               <button id="buildingMenuCard" class="document-menu-card building-only" type="button"><i>BLD</i><span><strong>Building Requests</strong><small>View building requests and their status</small></span><b>›</b></button>
               <button id="calendarMenuCard" class="document-menu-card calendar-only" type="button"><i>CAL</i><span><strong>Lodge Calendar</strong><small>Building use and Lodge events</small></span><b>›</b></button>
@@ -186,8 +220,10 @@
               <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small id="treasuryMenuDescription">Read finalized treasurer reports</small></span><b>›</b></button>
               <button id="candidateMenuCard" class="document-menu-card candidate-only" type="button"><i>CT</i><span><strong>Candidate Tracker</strong><small id="candidateMenuDescription">Open the Candidate Tracker</small></span><b>›</b></button>
             </div>
+            </details>
             <p id="candidateTrackerMessage" class="message" role="status"></p>
           </section>
+          <section id="groupLandingSection" class="group-landing hidden" aria-live="polite"><div class="content-head"><div><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="groupLandingTitle">Dashboard tools</h1><p id="groupLandingDescription"></p></div></div><div id="groupLandingLinks" class="group-landing-links"></div></section>
           <section id="settingsSection" class="hidden"><div class="content-head"><div><h1>My Settings</h1><p>Your account and signed-in devices.</p></div></div><div class="panel"><h2 id="settingsName"></h2><p id="settingsEmail"></p><p>You stay signed in for up to 90 days on this device. Your sign-in renews when you use it near the end of that period. Sign out when finished on a shared device.</p><div class="row-buttons"><button id="settingsSignature" class="secondary" type="button">Manage my signature</button><button id="settingsSignout" class="secondary" type="button">Sign out on this device</button></div></div><section class="panel device-sessions"><div class="panel-title"><div><p class="eyebrow">ACCOUNT SECURITY</p><h2>Signed-in devices</h2></div><button id="refreshDeviceSessions" class="secondary" type="button">Refresh</button></div><p class="helper">Review devices that can open your Lodge account. End any sign-in you do not recognize.</p><p id="deviceSessionsMessage" class="message" role="status"></p><div id="deviceSessionsList"></div><button id="revokeOtherSessions" class="secondary danger-text" type="button">Sign out all other devices</button></section></section>
           <section id="buildingSection" class="hidden"></section>
           <section id="calendarSection" class="hidden"></section>
