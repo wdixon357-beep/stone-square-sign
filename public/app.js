@@ -514,7 +514,15 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
   $('sessionNotice').classList.toggle('hidden', !hasSessionPolicy);
   $('sessionDetails').classList.toggle('hidden', !hasSessionPolicy);
-  if (hasSessionPolicy) $('sessionNoticeTitle').textContent = `You will stay signed in for ${sessionDays} days on this device.`;
+  if (hasSessionPolicy) {
+    const olderSession = session?.expiresAt?.startsWith('9999-');
+    $('sessionNoticeTitle').textContent = olderSession
+      ? 'Your older sign-in is still active on this device.'
+      : `You will stay signed in for ${sessionDays} days on this device.`;
+    $('sessionNoticeBody').textContent = olderSession
+      ? 'This sign-in follows an earlier expiration policy. Your browser may ask you to sign in again. Sign out when you are finished on a shared device.'
+      : 'Your sign-in renews automatically when you use this device near the end of that period. Sign out when you are finished on a shared device.';
+  }
   if(!activityWorkspace){const {ActivityWorkspace,ActivityTracker}=await import('/activity.js');activityWorkspace=new ActivityWorkspace({api:apiFetch,user:()=>state.user});activityTracker=new ActivityTracker({api:apiFetch,signedIn:()=>Boolean(state.user)});}
   if (!buildingCalendarWorkspace) { const { BuildingCalendarWorkspace } = await import('/building-calendar.js'); buildingCalendarWorkspace = new BuildingCalendarWorkspace({api: apiFetch, user: () => state.user}); }
   if (!treasuryWorkspace) { const { TreasuryWorkspace } = await import('/treasury.js'); treasuryWorkspace = new TreasuryWorkspace({ api: apiFetch, user: () => state.user }); }
@@ -2008,7 +2016,10 @@ const renderDeviceSessions = async () => {
       title.textContent = session.current ? `${session.label || 'This device'} · Current` : (session.label || 'Signed-in device');
       const detail = document.createElement('p');
       const lastUsed = session.lastSeenAt || session.createdAt;
-      detail.textContent = `${lastUsed ? `Last used ${formatDate(lastUsed)}` : 'Last used time unavailable'} · ${session.expiresAt ? `Expires ${formatDate(session.expiresAt)}` : 'Expiration unavailable'}`;
+      const expiration = session.expiresAt?.startsWith('9999-')
+        ? 'Older sign-in (browser sign-in may still expire)'
+        : (session.expiresAt ? `Expires ${formatDate(session.expiresAt)}` : 'Expiration unavailable');
+      detail.textContent = `${lastUsed ? `Last used ${formatDate(lastUsed)}` : 'Last used time unavailable'} · ${expiration}`;
       copy.append(title, detail); card.append(copy);
       if (!session.current) {
         const end = document.createElement('button');

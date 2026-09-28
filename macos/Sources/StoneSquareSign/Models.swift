@@ -146,8 +146,17 @@ struct Officer: Codable, Identifiable {
 struct SignInSession: Codable {
     let lifetimeDays: Int
     let expiresAt: String
-    var title: String { "You will stay signed in for \(lifetimeDays) days on this Mac." }
-    var explanation: String { "Your sign-in renews automatically when you use this Mac near the end of that period. Sign out when you are finished on a shared device." }
+    private var isOlderSession: Bool { expiresAt.hasPrefix("9999-") }
+    var title: String {
+        isOlderSession
+            ? "This older sign-in has no scheduled expiration."
+            : "You will stay signed in for \(lifetimeDays) days on this Mac."
+    }
+    var explanation: String {
+        isOlderSession
+            ? "New sign-ins follow the \(lifetimeDays)-day policy. Sign out when you are finished on a shared device."
+            : "Your sign-in renews automatically when you use this Mac near the end of that period. Sign out when you are finished on a shared device."
+    }
 }
 struct AuthResponse: Codable { let token: String; let user: User; var session: SignInSession? = nil }
 struct MeResponse: Codable { let user: User; var session: SignInSession? = nil }

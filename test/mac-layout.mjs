@@ -46,6 +46,9 @@ assert.match(minutes, /AdaptiveControlBar[\s\S]*recordSummary\(record\)[\s\S]*re
 assert.match(minutes, /recordActions[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*recordActionControls/, 'minutes status and claim controls must stack before they clip');
 assert.match(views, /treasuryAlertButtons[\s\S]*HStack\(alignment: \.top[\s\S]*xmark\.circle\.fill/, 'Mac banking alerts must keep a compact dismiss control beside wrapped alert text');
 assert.match(views, /if alertCount > 0 \{[\s\S]*minutesReviewAlertButtons[\s\S]*treasuryAlertButtons[\s\S]*buildingAlertButtons/, 'individual review alerts must remain reachable in the redesigned dashboard');
+assert.match(views, /@State private var alertsExpanded = false[\s\S]*Button \{\s*alertsExpanded\.toggle\(\)/, 'alerts must start compact and remain expandable so destination pages have room to load');
+assert.match(views, /ScrollViewReader \{ scroll in[\s\S]*scroll\.scrollTo\("allDashboardTools", anchor: \.top\)/, 'Open Lodge Tools must move the visible page to the tool list');
+assert.match(views, /allToolsExpanded = true\s*toolJump \+= 1/, 'Open Lodge Tools must reveal the list before moving to it');
 assert.match(views, /struct DocumentRow[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*compactRow/, 'Live Queue rows must switch to a compact card before signer names collapse');
 assert.match(views, /available\.size\.width < 780[\s\S]*List\(filteredRecords\)[\s\S]*Table\(filteredRecords/, 'Candidate Tracker must use readable cards in compact windows and a table when space permits');
 assert.match(views, /TextField\("What is being asked"[\s\S]*editedFields:/, 'the native Warden review must allow the Worshipful Master to correct proposal wording');

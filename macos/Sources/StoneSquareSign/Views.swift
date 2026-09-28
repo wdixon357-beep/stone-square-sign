@@ -464,7 +464,7 @@ struct WorkspaceView: View {
     @State private var financeExpanded = false
     @State private var peopleExpanded = false
     @State private var accountExpanded = false
-    @State private var alertsExpanded = true
+    @State private var alertsExpanded = false
     @State private var startExpanded = true
     @State private var compactNavigationOpen = false
     @State private var groupLanding: String?
@@ -494,20 +494,36 @@ struct WorkspaceView: View {
                             WorkspaceNotices(correspondenceCount: correspondenceWorkspace.lettersForMySignature.count,
                                              openCorrespondence: { selection = .correspondence })
                             if alertCount > 0 {
-                                ScrollView {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Needs Attention")
-                                            .font(.system(size: 17, weight: .medium, design: .serif))
-                                            .foregroundStyle(SignTheme.brandNavy)
-                                            .padding(.horizontal, 22)
-                                            .padding(.top, 10)
-                                        minutesReviewAlertButtons
-                                        treasuryAlertButtons
-                                        buildingAlertButtons
+                                VStack(spacing: 0) {
+                                    Button {
+                                        alertsExpanded.toggle()
+                                    } label: {
+                                        HStack {
+                                            Text("Needs Attention (\(alertCount))")
+                                                .font(.system(size: 14, weight: .semibold))
+                                            Spacer()
+                                            Text(alertsExpanded ? "Hide" : "Show")
+                                                .font(.system(size: 12))
+                                            Image(systemName: alertsExpanded ? "chevron.up" : "chevron.down")
+                                                .font(.system(size: 11))
+                                        }
+                                        .foregroundStyle(SignTheme.brandNavy)
+                                        .padding(.horizontal, 22)
+                                        .frame(height: 44)
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .buttonStyle(.plain)
+                                    if alertsExpanded {
+                                        ScrollView {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                minutesReviewAlertButtons
+                                                treasuryAlertButtons
+                                                buildingAlertButtons
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .frame(maxHeight: 210)
+                                    }
                                 }
-                                .frame(maxHeight: 210)
                                 .background(SignTheme.surface)
                                 .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
                             }
@@ -537,6 +553,7 @@ struct WorkspaceView: View {
         .onDisappear { activityPresence.stop(); AppUpdater.shared.setWorkspaceGuard(updateGuardID, check: nil) }
         .onChange(of:selection){_,section in
             activityPresence.visit(section)
+            alertsExpanded = false
             startExpanded = false
             meetingsExpanded = false
             documentsExpanded = false
@@ -559,7 +576,7 @@ struct WorkspaceView: View {
                 documentsExpanded = true
             case .myDues, .dues, .treasury:
                 financeExpanded = true
-            case .candidateTracker, .access, .memberAccess, .suggestions:
+            case .building, .candidateTracker, .access, .memberAccess, .suggestions:
                 peopleExpanded = true
             case .activity, .profile, .settings, .mySettings:
                 accountExpanded = true
@@ -1851,6 +1868,7 @@ struct LandingDashboardView: View {
     @State private var hasCalendarSourceWarnings = false
     @State private var homeToolSearch = ""
     @State private var allToolsExpanded = false
+    @State private var toolJump = 0
     @FocusState private var toolSearchFocused: Bool
     let correspondenceCount: Int
     let openSection: (AppSection) -> Void
@@ -1906,36 +1924,44 @@ struct LandingDashboardView: View {
             .background(.white)
             .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
             GeometryReader { available in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 15) {
-                        hero
-                        if available.size.width > 760 {
-                            HStack(alignment: .top, spacing: 15) {
-                                VStack(spacing: 15) {
-                                    attentionPanel
-                                    upcomingPanel
+                ScrollViewReader { scroll in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 15) {
+                            hero
+                            if available.size.width > 760 {
+                                HStack(alignment: .top, spacing: 15) {
+                                    VStack(spacing: 15) {
+                                        attentionPanel
+                                        upcomingPanel
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .top)
+                                    VStack(spacing: 15) {
+                                        quickAccessPanel
+                                        jurisdictionPanel
+                                    }
+                                    .frame(width: max(235, (available.size.width - 76 - 15) / 2.45), alignment: .top)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .top)
-                                VStack(spacing: 15) {
-                                    quickAccessPanel
-                                    jurisdictionPanel
-                                }
-                                .frame(width: max(235, (available.size.width - 76 - 15) / 2.45), alignment: .top)
+                            } else {
+                                attentionPanel
+                                upcomingPanel
+                                quickAccessPanel
+                                jurisdictionPanel
                             }
-                        } else {
-                            attentionPanel
-                            upcomingPanel
-                            quickAccessPanel
-                            jurisdictionPanel
+                            allToolsDisclosure
+                                .id("allDashboardTools")
                         }
-                        allToolsDisclosure
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, available.size.width > 760 ? 38 : 18)
+                        .padding(.top, 25)
+                        .padding(.bottom, 32)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, available.size.width > 760 ? 38 : 18)
-                    .padding(.top, 25)
-                    .padding(.bottom, 32)
+                    .background(SignTheme.page)
+                    .onChange(of: toolJump) { _, _ in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            scroll.scrollTo("allDashboardTools", anchor: .top)
+                        }
+                    }
                 }
-                .background(SignTheme.page)
             }
         }.background(SignTheme.page)
             .task {
@@ -2212,7 +2238,10 @@ struct LandingDashboardView: View {
     private var primaryAction: some View {
         heroButton(hasAttentionItems ? "Review What Needs Attention" : "Open Lodge Tools") {
             if hasAttentionItems { openFirstAttentionItem() }
-            else { toolSearchFocused = true }
+            else {
+                allToolsExpanded = true
+                toolJump += 1
+            }
         }
     }
 
@@ -2715,6 +2744,8 @@ struct OfficerAccessView: View {
     @State private var revokeTargetName = ""
     @State private var revokeTargetEmail = ""
     @State private var showRevokeConfirmation = false
+    @State private var permissionsExpanded = false
+    @State private var permissionsDirty = false
     private var canCreateInvitation: Bool {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2723,9 +2754,26 @@ struct OfficerAccessView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 24) {
                 NativeWorkspaceHeader(title: "Officer Access", subtitle: "Invitations and account access", symbol: "person.badge.key").padding(.horizontal, -22)
-                NativeAccountPermissionsView()
+                Button {
+                    permissionsDirty = false
+                    permissionsExpanded = true
+                } label: {
+                    HStack {
+                        Text("Individual Permissions")
+                            .font(.system(size: 20, weight: .medium, design: .serif))
+                        Spacer()
+                        Text("Manage")
+                            .font(.system(size: 13))
+                        Image(systemName: "arrow.up.right")
+                    }
+                    .foregroundStyle(SignTheme.brandNavy)
+                    .padding(18)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
+                }
+                .buttonStyle(.plain)
                 /* One card per man, in one grid, so a Lodge Viewer reads exactly the way the
                  * two Secretaries do. Viewers previously had nowhere to appear at all, which made
                  * an invited Brother invisible until he signed in. */
@@ -2740,24 +2788,30 @@ struct OfficerAccessView: View {
                         .map { ($0.name, User.roleLabel(for: $0.role), OfficerSeatState.active) }
                     + model.pendingInvitations.filter { ["viewer","member","warden","treasury_preparer","officer"].contains($0.role) }
                         .map { ($0.name, User.roleLabel(for: $0.role), OfficerSeatState.pending) }
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(seats.enumerated()), id: \.offset) { _, seat in
                         OfficerCard(name: seat.name, office: seat.office, state: seat.state)
                     }
                 }
-                Form {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Invite An Officer")
+                        .font(.system(size: 22, weight: .medium, design: .serif))
+                        .foregroundStyle(SignTheme.brandNavy)
                     Picker("Office", selection: $role) {
                         Text("Secretary").tag("secretary")
                         Text("Assistant Secretary").tag("assistant_secretary")
-                    Text("Treasurer").tag("treasurer")
-                    Text("Assistant Treasurer").tag("assistant_treasurer")
-                    Text("Treasury Report Preparer").tag("treasury_preparer")
+                        Text("Treasurer").tag("treasurer")
+                        Text("Assistant Treasurer").tag("assistant_treasurer")
+                        Text("Treasury Report Preparer").tag("treasury_preparer")
                         Text("Lodge Officer").tag("officer")
                         Text("Lodge Viewer").tag("viewer")
                         Text("Lodge Member (permissions assigned separately)").tag("member")
                     }
+                    .pickerStyle(.menu)
                     TextField("Full name", text: $name)
+                        .textFieldStyle(.roundedBorder)
                     TextField("Email address", text: $email)
+                        .textFieldStyle(.roundedBorder)
                     Button("Create private invitation") {
                         Task {
                             if let invite = await model.invite(name: name, email: email, role: role) {
@@ -2769,14 +2823,17 @@ struct OfficerAccessView: View {
                     .disabled(!canCreateInvitation)
                     if !privateLink.isEmpty {
                         TextField("Private link", text: $privateLink)
+                            .textFieldStyle(.roundedBorder)
                         Button("Copy private link") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(privateLink, forType: .string)
                         }
                     }
                 }
-                .formStyle(.grouped)
                 .frame(maxWidth: 660)
+                .padding(20)
+                .background(.white, in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
 
                 if !model.pendingInvitations.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
@@ -2857,6 +2914,24 @@ struct OfficerAccessView: View {
             }
         } message: {
             Text("This immediately signs the person out and removes all unsigned assignments. You can invite them again later.")
+        }
+        .sheet(isPresented: $permissionsExpanded) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Individual Permissions")
+                        .font(.system(size: 25, weight: .medium, design: .serif))
+                    Spacer()
+                    Button("Done") { permissionsExpanded = false }
+                        .disabled(permissionsDirty)
+                }
+                .padding(20)
+                ScrollView {
+                    NativeAccountPermissionsView(hasUnsavedChanges: $permissionsDirty)
+                        .padding(20)
+                }
+            }
+            .frame(minWidth: 680, minHeight: 520)
+            .interactiveDismissDisabled(permissionsDirty)
         }
     }
 }
@@ -2961,7 +3036,7 @@ struct MySettingsView: View {
                             .foregroundStyle(SignTheme.brandNavy)
                         Text(model.user?.email ?? "")
                             .font(.system(size: 13)).foregroundStyle(.secondary)
-                        Text("You stay signed in for up to 90 days on this device. Your sign-in renews when you use it near the end of that period. Sign out when finished on a shared device.")
+                        Text("New sign-ins last up to 90 days and renew when used near expiration. Older sign-ins may have a different expiration. Sign out when finished on a shared device.")
                             .font(.system(size: 13)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack {
@@ -3000,7 +3075,7 @@ struct MySettingsView: View {
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(session.current ? "\(session.label.isEmpty ? "This device" : session.label) · Current" : (session.label.isEmpty ? "Signed-in device" : session.label))
                                         .font(.system(size: 14, weight: .semibold))
-                                    Text("Last used \(displayDate(session.lastUsedAt)) · Expires \(displayDate(session.expiresAt))")
+                                    Text("Last used \(displayDate(session.lastUsedAt)) · \(expirationDescription(session.expiresAt))")
                                         .font(.system(size: 12)).foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -3067,10 +3142,19 @@ struct MySettingsView: View {
         guard let date else { return "unavailable" }
         return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
     }
+
+    private func expirationDescription(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "Expiration unavailable" }
+        if raw.hasPrefix("9999-") { return "No scheduled expiration (older sign-in)" }
+        return "Expires \(displayDate(raw))"
+    }
 }
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
+    @State private var checkingConnection = false
+    @State private var connectionStatus = ""
+    @State private var connectionFailed = false
     var body: some View {
         Form {
             Section("Shared signing service") {
@@ -3081,7 +3165,28 @@ struct SettingsView: View {
                 #endif
                 Text("Officer access is securely connected to the approved Lodge service.")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Test and refresh") { Task { await model.refresh() } }
+                Button("Test and refresh") {
+                    Task {
+                        checkingConnection = true
+                        connectionStatus = "Checking connection…"
+                        connectionFailed = false
+                        do {
+                            let _: MeResponse = try await model.request("/api/auth/me")
+                            await model.refresh()
+                            connectionStatus = "Connection confirmed. Updated records were requested."
+                        } catch {
+                            connectionStatus = "Connection check failed: \(error.localizedDescription)"
+                            connectionFailed = true
+                        }
+                        checkingConnection = false
+                    }
+                }
+                .disabled(checkingConnection)
+                if !connectionStatus.isEmpty {
+                    Text(connectionStatus)
+                        .font(.caption)
+                        .foregroundStyle(connectionFailed ? .red : .secondary)
+                }
             }
             Section("Automatic login") {
                 Label("This Mac opens your saved account automatically", systemImage: "desktopcomputer")
@@ -4409,11 +4514,83 @@ struct DuesAdjustmentView: View {
 }
 
 private struct MemberInviteDraft:Encodable{let email:String;let sendEmail:Bool}
-struct MemberAccessView:View{
-    @EnvironmentObject var model:AppModel
-    @State private var members:[MemberAccessRecord]=[]
-    @State private var message=""
-    var body:some View{ScrollView{VStack(alignment:.leading,spacing:16){NativeWorkspaceHeader(title:"Member Access",subtitle:"Roster-linked Brother accounts",symbol:"person.3.fill"){Button("Refresh",systemImage:"arrow.clockwise"){Task{await load()}}}.padding(.horizontal,-22);Text(message).font(.caption).foregroundStyle(.secondary);ForEach(members){member in HStack{VStack(alignment:.leading,spacing:3){Text(member.displayName).fontWeight(.semibold);Text(member.userId != nil ? "Active account · \(member.accountEmail ?? "")" : member.invitationId != nil ? "Invitation pending · \(member.invitationEmail ?? "")" : member.emails.isEmpty ? "Email review needed" : member.emails.joined(separator:", ")).font(.caption).foregroundStyle(.secondary)};Spacer();if member.userId==nil && member.invitationId==nil && !member.emails.isEmpty{Button("Create invitation"){Task{await invite(member)}}}}.padding(14).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:10))}}.padding(28)}.task{await load()}}
-    @MainActor private func load()async{do{let result:MemberAccessResponse=try await model.request("/api/admin/member-access");members=result.members;message="\(members.count) roster records checked. Invitations are not emailed until you distribute them."}catch{message=error.localizedDescription}}
-    @MainActor private func invite(_ member:MemberAccessRecord)async{guard let email=member.emails.first else{return};do{let data=try JSONEncoder().encode(MemberInviteDraft(email:email,sendEmail:false));let result:InviteResponse=try await model.request("/api/admin/member-access/\(member.id)/invite",method:"POST",body:data);NSPasteboard.general.clearContents();NSPasteboard.general.setString(result.inviteUrl,forType:.string);message="Invitation created for \(member.displayName). The private link was copied.";await load()}catch{message=error.localizedDescription}}
+struct MemberAccessView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var members: [MemberAccessRecord] = []
+    @State private var message = ""
+    @State private var loading = true
+    @State private var invitingMemberID: Int?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                NativeWorkspaceHeader(title: "Member Access", subtitle: "Roster-linked Brother accounts", symbol: "person.3.fill") {
+                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await load() } }
+                        .disabled(loading)
+                }
+                .padding(.horizontal, -22)
+                if loading { ProgressView("Checking roster links and account status…") }
+                if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
+                if !loading && members.isEmpty && message.isEmpty {
+                    Text("No roster records are available.").foregroundStyle(.secondary)
+                }
+                ForEach(members) { member in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(member.displayName).fontWeight(.semibold)
+                            Text(member.userId != nil
+                                 ? "Active account · \(member.accountEmail ?? "")"
+                                 : member.invitationId != nil
+                                    ? "Invitation pending · \(member.invitationEmail ?? "")"
+                                    : member.emails.isEmpty
+                                        ? "Email review needed"
+                                        : member.emails.joined(separator: ", "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if member.userId == nil && member.invitationId == nil && !member.emails.isEmpty {
+                            Button("Create invitation") { Task { await invite(member) } }
+                                .disabled(loading || invitingMemberID != nil)
+                        }
+                    }
+                    .padding(14)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            .padding(28)
+        }
+        .task { await load() }
+    }
+
+    @MainActor private func load() async {
+        loading = true
+        message = "Checking roster links and account status…"
+        defer { loading = false }
+        do {
+            let result: MemberAccessResponse = try await model.request("/api/admin/member-access")
+            members = result.members
+            message = "\(members.count) roster records checked. Invitations are not emailed until you distribute them."
+        } catch {
+            members = []
+            message = "Member access could not load: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor private func invite(_ member: MemberAccessRecord) async {
+        guard invitingMemberID == nil, let email = member.emails.first else { return }
+        invitingMemberID = member.id
+        defer { invitingMemberID = nil }
+        do {
+            let data = try JSONEncoder().encode(MemberInviteDraft(email: email, sendEmail: false))
+            let result: InviteResponse = try await model.request("/api/admin/member-access/\(member.id)/invite", method: "POST", body: data)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(result.inviteUrl, forType: .string)
+            await load()
+            message = "Invitation created for \(member.displayName). The private link was copied."
+        } catch {
+            message = "Invitation could not be created: \(error.localizedDescription)"
+        }
+    }
 }

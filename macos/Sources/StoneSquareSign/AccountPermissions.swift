@@ -28,47 +28,115 @@ struct AccountAccessResponse: Decodable { let capabilities: [AccessCapability]; 
 
 struct NativeAccountPermissionsView: View {
     @EnvironmentObject private var model: AppModel
+    @Binding var hasUnsavedChanges: Bool
     @State private var accounts: [AccessAccount] = []
     @State private var capabilities: [AccessCapability] = []
     @State private var drafts: [String: Set<String>] = [:]
     @State private var busy = false
+    @State private var loading = true
     @State private var message = ""
+    @State private var selectedAccountKey = ""
+    @State private var selectedWorkArea = ""
+
+    private func workArea(for capability: AccessCapability) -> String {
+        String(capability.id.split(separator: ".", maxSplits: 1).first ?? "other")
+    }
+
+    private var workAreas: [String] {
+        Array(Set(capabilities.map(workArea))).sorted()
+    }
+
+    private func workAreaTitle(_ key: String) -> String {
+        switch key {
+        case "minutes": return "Meeting Minutes"
+        case "treasury": return "Treasurer Reports"
+        case "dues": return "Dues And Finance"
+        case "documents": return "Documents And Approvals"
+        case "building": return "Building Requests"
+        case "calendar": return "Lodge Calendar"
+        case "candidates": return "Candidate Tracker"
+        default: return key.capitalized
+        }
+    }
+    private func capabilityTitle(_ label: String) -> String {
+        label.capitalized
+    }
     var body: some View {
-        GroupBox("Individual Permissions") {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Choose the workspaces and actions assigned to each person, then save their permissions. Preparation, upload and signing access also enable the related record view.").font(.callout).foregroundStyle(.secondary)
-                ForEach(accounts) { account in
-                    DisclosureGroup("\(account.name) · \(account.pending ? "Invited" : account.revoked ? "Revoked" : User.roleLabel(for: account.role))") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(account.email).font(.caption).foregroundStyle(.secondary)
-                            if account.role == "owner" { Text("The Worshipful Master retains full access.").font(.callout) }
-                            else {
-                                ForEach(capabilities.filter { $0.id != "dues.manage" || AccessPermissions.duesManagerRoles.contains(account.role) || account.permissions.contains("dues.manage") }) { capability in
-                                    Toggle(capability.label, isOn: Binding(get: { (drafts[account.key] ?? Set(account.permissions)).contains(capability.id) }, set: { enabled in
-                                        var values = drafts[account.key] ?? Set(account.permissions)
-                                        if enabled && (capability.id != "dues.manage" || AccessPermissions.duesManagerRoles.contains(account.role)) { values.insert(capability.id) }
-                                        else { values.remove(capability.id) }
-                                        drafts[account.key] = values == Set(account.permissions) ? nil : values
-                                    })).toggleStyle(.checkbox).disabled((!["owner", "secretary", "assistant_secretary", "treasurer", "assistant_treasurer"].contains(account.role) && capability.id == "dues.manage" && !(drafts[account.key] ?? Set(account.permissions)).contains("dues.manage")) || (["secretary", "assistant_secretary", "treasurer", "assistant_treasurer", "treasury_preparer", "warden", "officer"].contains(account.role) && ["minutes.view", "treasury.view"].contains(capability.id)))
-                                }
-                                Button("Save Permissions") { Task { await save(account) } }
-                                    .disabled(drafts[account.key] == nil || drafts[account.key] == Set(account.permissions))
-                            }
-                        }.padding(12)
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Choose An Account And Work Area To Review Access. Save Any Changes Before Closing This Window.")
+                .font(.callout).foregroundStyle(.secondary)
+            if loading { ProgressView("Loading Account Permissions…") }
+            if !loading && accounts.isEmpty && message.isEmpty {
+                Text("No Accounts Are Available To Manage.").foregroundStyle(.secondary)
+            }
+            if !accounts.isEmpty {
+                Picker("Account", selection: $selectedAccountKey) {
+                    ForEach(accounts) { account in
+                        Text("\(account.name) · \(account.email)\(account.pending ? " · Invited" : account.revoked ? " · Revoked" : "")").tag(account.key)
                     }
                 }
-                if busy { ProgressView() }
-                if !message.isEmpty { Text(message).font(.callout) }
-            }.padding(12).disabled(busy)
+                .pickerStyle(.menu)
+            }
+            if let account = accounts.first(where: { $0.key == selectedAccountKey }) {
+                Text("\(User.roleLabel(for: account.role)) · \(account.email)")
+                    .font(.callout).foregroundStyle(.secondary)
+                Divider()
+                if account.role == "owner" {
+                    Text("The Worshipful Master Retains Full Access.")
+                } else {
+                    Picker("Work Area", selection: $selectedWorkArea) {
+                        Text("Choose A Work Area").tag("")
+                        ForEach(workAreas, id: \.self) { key in
+                            Text(workAreaTitle(key)).tag(key)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    if selectedWorkArea.isEmpty {
+                        Text("Choose A Work Area To Review Its Permissions.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(capabilities.filter { workArea(for: $0) == selectedWorkArea && ($0.id != "dues.manage" || AccessPermissions.duesManagerRoles.contains(account.role) || account.permissions.contains("dues.manage")) }) { capability in
+                            Toggle(capabilityTitle(capability.label), isOn: Binding(get: { (drafts[account.key] ?? Set(account.permissions)).contains(capability.id) }, set: { enabled in
+                                var values = drafts[account.key] ?? Set(account.permissions)
+                                if enabled && (capability.id != "dues.manage" || AccessPermissions.duesManagerRoles.contains(account.role)) { values.insert(capability.id) }
+                                else { values.remove(capability.id) }
+                                drafts[account.key] = values == Set(account.permissions) ? nil : values
+                            }))
+                            .toggleStyle(.checkbox)
+                            .disabled((!["owner", "secretary", "assistant_secretary", "treasurer", "assistant_treasurer"].contains(account.role) && capability.id == "dues.manage" && !(drafts[account.key] ?? Set(account.permissions)).contains("dues.manage")) || (["secretary", "assistant_secretary", "treasurer", "assistant_treasurer", "treasury_preparer", "warden", "officer"].contains(account.role) && ["minutes.view", "treasury.view"].contains(capability.id)))
+                        }
+                    }
+                    Button("Save Permissions") { Task { await save(account) } }
+                        .disabled(drafts[account.key] == nil || drafts[account.key] == Set(account.permissions))
+                }
+            }
+            if hasUnsavedChanges {
+                Button("Discard Changes") { drafts = [:] }
+            }
+            if busy { ProgressView() }
+            if !message.isEmpty { Text(message) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .disabled(busy)
         .task { await refresh() }
+        .onChange(of: drafts) { _, newValue in hasUnsavedChanges = !newValue.isEmpty }
         .updateDraftGuard(active: !drafts.isEmpty || busy, reason: "Save your permission changes before updating.")
     }
     private func refresh() async {
+        loading = true
+        message = ""
+        defer { loading = false }
         do {
             let response: AccountAccessResponse = try await model.request("/api/admin/access")
             accounts = response.accounts; capabilities = response.capabilities
-        } catch { message = error.localizedDescription }
+            if !accounts.contains(where: { $0.key == selectedAccountKey }) {
+                selectedAccountKey = accounts.first(where: { $0.role != "owner" && !$0.revoked })?.key ?? accounts.first?.key ?? ""
+            }
+        } catch {
+            accounts = []
+            capabilities = []
+            message = "Account permissions could not load: \(error.localizedDescription)"
+        }
     }
     private func save(_ account: AccessAccount) async {
         guard !busy, account.role != "owner", let values = drafts[account.key] else { return }
