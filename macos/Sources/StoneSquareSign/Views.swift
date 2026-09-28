@@ -36,35 +36,48 @@ struct NativeWorkspaceHeader<Actions: View>: View {
     init(title: String, subtitle: String, symbol: String, @ViewBuilder actions: () -> Actions) {
         self.title = title; self.subtitle = subtitle; self.symbol = symbol; self.actions = actions()
     }
+    private var eyebrow: String {
+        switch title {
+        case "Dues Ledger": return "LODGE DUES RECORD"
+        case "My Dues": return "YOUR DUES"
+        default: return "STONE SQUARE LODGE NO. 22"
+        }
+    }
+    private var heading: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(eyebrow)
+                .font(.system(size: 10, weight: .bold))
+                .tracking(1.5)
+                .foregroundStyle(SignTheme.gold)
+            Text(title)
+                .font(.system(size: 34, weight: .medium, design: .serif))
+                .foregroundStyle(Color(red: 0.33, green: 0.44, blue: 0.53))
+                .fixedSize(horizontal: false, vertical: true)
+            Text(subtitle)
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
     var body: some View {
-        VStack(spacing: 0) {
-            ViewThatFits(in: .horizontal) {
-              HStack(spacing: 14) {
-                Image(systemName: symbol).font(.title3).foregroundStyle(SignTheme.gold)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.system(size: 25, weight: .medium, design: .serif)).fixedSize(horizontal: false, vertical: true)
-                    Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
+        ViewThatFits(in: .horizontal) {
+              HStack(alignment: .center, spacing: 14) {
+                heading
                 Spacer()
                 HStack(spacing: 8) { actions }.fixedSize(horizontal: true, vertical: false)
               }
               VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 14) {
-                    Image(systemName: symbol).font(.title3).foregroundStyle(SignTheme.gold)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(title).font(.system(size: 25, weight: .medium, design: .serif)).fixedSize(horizontal: false, vertical: true)
-                        Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                heading
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) { actions }
                         .fixedSize(horizontal: true, vertical: false)
                 }
               }
-            }.padding(.horizontal, 24).padding(.vertical, 18)
-            Rectangle().fill(SignTheme.cardLine).frame(height: 1)
         }
-        .background(SignTheme.surface)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SignTheme.page)
     }
 }
 extension NativeWorkspaceHeader where Actions == EmptyView {
@@ -248,49 +261,184 @@ struct AuthenticationView: View {
     @State private var code = ""
 
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "building.columns.circle.fill").font(.system(size: 52)).foregroundStyle(SignTheme.gold)
-            Text("Stone Square Lodge Dashboard").font(.title2.weight(.semibold))
-            Text("Sign in to your Lodge workspace").foregroundStyle(.secondary)
-            Picker("Access", selection: $mode) {
-                Text("Sign in").tag(0); Text("Owner setup").tag(1); Text("Reset password").tag(2)
-            }.pickerStyle(.segmented)
-            Form {
-                Section {
-                    if mode == 1 { TextField("Full name", text: $name).textContentType(.name) }
-                    TextField("Email address", text: $email).textContentType(.emailAddress)
-                    if mode == 2 { TextField("Six digit code", text: $code) }
-                    SecureField(mode == 2 ? "New password" : mode == 1 ? "Create password" : "Password", text: $password)
-                    if mode == 2 {
-                        Button("Send reset code") { Task { await model.requestReset(email: email) } }
-                            .disabled(model.emailDeliveryReady == false)
-                        if model.emailDeliveryReady == false {
-                            Text("Email recovery is temporarily unavailable. Ask the Worshipful Master to reset your account access.")
-                                .font(.caption).foregroundStyle(.orange)
-                        }
+        GeometryReader { available in
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("22")
+                        .font(.system(size: 18, weight: .bold, design: .serif))
+                        .foregroundStyle(SignTheme.gold)
+                        .frame(width: 46, height: 46)
+                        .overlay(Circle().stroke(SignTheme.gold))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("STONE SQUARE").font(.system(size: 14, weight: .bold)).tracking(1)
+                        Text("LODGE DASHBOARD").font(.system(size: 9)).tracking(1.5)
                     }
+                    .foregroundStyle(SignTheme.brandNavy)
+                    Spacer()
+                    Label("Private Lodge records", systemImage: "circle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(SignTheme.brandNavy)
                 }
-                #if DEBUG
-                Section {
-                    DisclosureGroup("Debug connection settings") {
-                        TextField("Signing service address", text: $model.serverAddress)
-                        Text("Release builds always use the approved Lodge service.").font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 24)
+                .frame(height: 72)
+
+                HStack(spacing: 0) {
+                    if available.size.width >= 900 { authStory.frame(maxWidth: .infinity, maxHeight: .infinity) }
+                    ScrollView {
+                        authForm
+                            .frame(maxWidth: 470)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 30)
+                            .padding(.vertical, 40)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.white)
                 }
-                #endif
-            }.formStyle(.grouped).textFieldStyle(.roundedBorder).frame(height: mode == 2 ? 250 : 230)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+                .overlay(RoundedRectangle(cornerRadius: 24).stroke(SignTheme.cardLine))
+            }
+            .padding(22)
+            .frame(width: available.size.width, height: available.size.height)
+        }
+        .background(Color(red: 0.96, green: 0.94, blue: 0.90))
+        .environment(\.colorScheme, .light)
+        .task { await model.loadServiceSetup() }
+    }
+
+    private var authStory: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("PRIVATE LODGE DASHBOARD")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(2)
+                .foregroundStyle(SignTheme.gold)
+                .padding(.bottom, 12)
+            Text("Stone Square")
+                .font(.system(size: 60, weight: .medium, design: .serif))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text("Lodge Dashboard")
+                .font(.system(size: 56, weight: .medium, design: .serif))
+                .foregroundStyle(Color(red: 0.92, green: 0.84, blue: 0.68))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.bottom, 24)
+            Text("Read Lodge records, prepare reports, review your dues, and use the private tools available to your account.")
+                .font(.system(size: 17))
+                .foregroundStyle(.white.opacity(0.75))
+                .lineSpacing(5)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 25)
+            HStack(alignment: .top, spacing: 20) {
+                authStep("01", "Document uploaded")
+                authStep("02", "Officers identified")
+                authStep("03", "Signed copies delivered")
+            }
+        }
+        .padding(60)
+        .background(LinearGradient(
+            colors: [Color(red: 0.027, green: 0.106, blue: 0.184), Color(red: 0.051, green: 0.204, blue: 0.341)],
+            startPoint: .topLeading, endPoint: .bottomTrailing))
+    }
+
+    private func authStep(_ number: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Rectangle().fill(.white.opacity(0.2)).frame(height: 1)
+            Text(number).font(.system(size: 14, design: .serif)).foregroundStyle(SignTheme.gold)
+            Text(label).font(.system(size: 11)).foregroundStyle(.white.opacity(0.65))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var authForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 0) {
+                authTab("Sign In", mode: 0)
+                authTab("Owner Setup", mode: 1)
+                authTab("Reset", mode: 2)
+            }
+            .padding(.bottom, 28)
+            Text(mode == 2 ? "ACCOUNT RECOVERY" : mode == 1 ? "PRIVATE LODGE DASHBOARD" : "WELCOME BACK")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(2)
+                .foregroundStyle(Color(red: 0.50, green: 0.34, blue: 0.07))
+            Text(mode == 2 ? "Reset your password" : mode == 1 ? "Create owner account" : "Sign in to continue")
+                .font(.system(size: 31, weight: .medium, design: .serif))
+                .foregroundStyle(SignTheme.brandNavy)
+                .padding(.bottom, 18)
+            if mode == 1 {
+                authLabel("Full Name")
+                authTextField(TextField("Full name", text: $name).textContentType(.name))
+            }
+            authLabel("Email Address")
+            authTextField(TextField("name@example.com", text: $email).textContentType(.emailAddress))
+            if mode == 2 {
+                Button("Send A Six-Digit Code") { Task { await model.requestReset(email: email) } }
+                    .disabled(model.emailDeliveryReady == false || model.isBusy)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(SignTheme.brandNavy)
+                if model.emailDeliveryReady == false {
+                    Text("Email recovery is temporarily unavailable. Ask the Worshipful Master to reset your account access.")
+                        .font(.system(size: 12)).foregroundStyle(.orange)
+                }
+                authLabel("Reset Code")
+                authTextField(TextField("Six digit code", text: $code))
+            }
+            authLabel(mode == 2 ? "New Password" : mode == 1 ? "Create Password" : "Password")
+            authTextField(SecureField(mode == 2 ? "New password" : mode == 1 ? "Create password" : "Your password", text: $password))
+            Button(buttonTitle, action: submit)
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(SignTheme.brandNavy, in: RoundedRectangle(cornerRadius: 8))
+                .keyboardShortcut(.defaultAction)
+                .padding(.top, 13)
+                .disabled(model.isBusy)
             if mode == 0 && model.biometricLoginEnabled {
                 Button("Sign in with Touch ID", systemImage: "touchid") { Task { await model.signInWithBiometrics() } }
+                    .disabled(model.isBusy)
             }
-            HStack {
-                if model.isBusy { ProgressView().controlSize(.small) }
-                Spacer()
-                Button(buttonTitle, action: submit).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+            if model.isBusy { ProgressView().controlSize(.small) }
+            #if DEBUG
+            DisclosureGroup("Debug connection settings") {
+                TextField("Signing service address", text: $model.serverAddress)
+                Text("Release builds always use the approved Lodge service.").font(.caption).foregroundStyle(.secondary)
             }
-        }.padding(32).frame(width: 470).disabled(model.isBusy)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .task { await model.loadServiceSetup() }
+            #endif
+        }
+    }
+
+    private func authTab(_ title: String, mode tab: Int) -> some View {
+        Button { mode = tab } label: {
+            Text(title)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(mode == tab ? SignTheme.brandNavy : Color.gray)
+                .frame(maxWidth: .infinity)
+                .frame(height: 45)
+                .overlay(alignment: .bottom) { if mode == tab { SignTheme.gold.frame(height: 2) } }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func authLabel(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 11, weight: .bold))
+            .tracking(0.4)
+            .foregroundStyle(Color(red: 0.09, green: 0.14, blue: 0.20))
+    }
+
+    private func authTextField<Field: View>(_ field: Field) -> some View {
+        field
+            .textFieldStyle(.plain)
+            .font(.system(size: 14))
+            .padding(.horizontal, 14)
+            .frame(height: 46)
+            .background(.white, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
     }
 
     private var buttonTitle: String {
@@ -317,6 +465,9 @@ struct WorkspaceView: View {
     @State private var peopleExpanded = false
     @State private var accountExpanded = false
     @State private var alertsExpanded = true
+    @State private var startExpanded = true
+    @State private var compactNavigationOpen = false
+    @State private var groupLanding: String?
     @State private var updateGuardID = UUID()
     @StateObject private var reportBrowser = ReportBrowserModel()
     @StateObject private var minutesWorkspace = MinutesWorkspace()
@@ -326,163 +477,52 @@ struct WorkspaceView: View {
     @StateObject private var activityPresence = ActivityPresence()
 
     var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 0) {
-                HStack(spacing: 11) {
-                    Text("22")
-                        .font(.system(size: 21, weight: .medium, design: .serif))
-                        .foregroundStyle(SignTheme.gold)
-                        .frame(width: 43, height: 43)
-                        .overlay(Circle().stroke(SignTheme.gold, lineWidth: 2))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Stone Square")
-                            .font(.system(size: 19, weight: .medium, design: .serif))
-                            .foregroundStyle(SignTheme.sidebarInk)
-                        Text("Lodge Dashboard")
-                            .font(.caption)
-                            .foregroundStyle(SignTheme.sidebarInk.opacity(0.78))
-                    }
+        GeometryReader { window in
+            HStack(spacing: 0) {
+                if window.size.width >= 1100 {
+                    sidebar.frame(width: 260)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 18)
-                .padding(.top, 23)
-                .padding(.bottom, 19)
-                Rectangle().fill(SignTheme.sidebarInk.opacity(0.22)).frame(height: 1).padding(.horizontal, 18)
-                if alertCount > 0 {
-                    DisclosureGroup(isExpanded: $alertsExpanded) {
-                        ScrollView {
-                            VStack(spacing: 0) {
-                                minutesReviewAlertButtons
-                                treasuryAlertButtons
-                                buildingAlertButtons
-                            }
-                        }
-                        .frame(maxHeight: 220)
-                    } label: {
-                        Label("Needs Attention (\(alertCount))", systemImage: "bell.badge.fill")
-                            .font(.callout.weight(.semibold))
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 8)
-                }
-                TextField("", text: $toolSearch,
-                          prompt: Text("Find A Tool").foregroundStyle(SignTheme.sidebarInk.opacity(0.78)))
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(SignTheme.sidebarInk)
-                    .padding(.horizontal, 11)
-                    .frame(height: 36)
-                    .background(SignTheme.sidebarInk.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 10)
-                List(selection: $selection) {
-                    if !toolSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        ForEach(searchResults) { tool in
-                            Label(tool.title, systemImage: tool.symbol).tag(tool.section)
-                        }
-                        if "Grand View".localizedCaseInsensitiveContains(toolSearch) {
-                            Link(destination: GrandViewPortal.url) {
-                                Label("Grand View", systemImage: "arrow.up.right.square")
-                            }
-                        }
-                        if searchResults.isEmpty && !"Grand View".localizedCaseInsensitiveContains(toolSearch) {
-                            Text("No Matching Tools").foregroundStyle(.secondary)
-                        }
-                    } else {
-                    Label("Home", systemImage: "house.fill").tag(AppSection.home)
-                    if model.user?.canOpen(.lodgeCalendar) == true || model.user?.canReadMinutes == true || model.user?.can("reports.create") == true || model.user?.role == "owner" {
-                        DisclosureGroup("Meetings", isExpanded: $meetingsExpanded) {
-                            if model.user?.canOpen(.lodgeCalendar) == true { Label("Lodge Calendar", systemImage: "calendar").tag(AppSection.lodgeCalendar) }
-                            if model.user?.role == "owner" { Label("Agenda Creator", systemImage: "list.number").tag(AppSection.agenda) }
-                            if model.user?.canReadMinutes == true { Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes) }
-                            if model.user?.can("reports.create") == true { Label("Report Generator", systemImage: "doc.text").tag(AppSection.reportGenerator) }
-                            if model.user?.role == "owner" { Label("Received Reports", systemImage: "tray.full.fill").tag(AppSection.receivedReports) }
-                        }
-                    }
-                    if model.user?.canPrepareCorrespondence == true || model.user?.can("documents.status") == true || model.user?.canReadApprovals == true || model.user?.canProposeDispensation == true || model.user?.role == "owner" {
-                        DisclosureGroup("Documents", isExpanded: $documentsExpanded) {
-                            if model.user?.canPrepareCorrespondence == true { Label("Lodge Correspondence", systemImage: "envelope.open.fill").tag(AppSection.correspondence) }
-                            if model.user?.can("documents.status") == true { Label("Live Queue", systemImage: "list.number").tag(AppSection.documents) }
-                            if model.user?.canReadApprovals == true { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
-                            if model.user?.role == "owner" {
-                                Label("Create Dispensation", systemImage: "doc.badge.plus").tag(AppSection.createDispensation)
-                                Label("Warden Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
-                            } else if model.user?.showsPersonalProposals == true {
-                                Label("My Dispensation Proposals", systemImage: "square.and.pencil").tag(AppSection.proposalReview)
-                            }
-                        }
-                    }
-                    if model.user?.canReadDues == true || model.user?.can("dues.self") == true || model.user?.canUseTreasury == true {
-                        DisclosureGroup("Dues", isExpanded: $financeExpanded) {
-                            if model.user?.can("dues.self") == true { Label("My Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.myDues) }
-                            if model.user?.canReadDues == true { Label("Dues Ledger", systemImage: "list.bullet.rectangle.portrait.fill").tag(AppSection.dues) }
-                            if model.user?.canUseTreasury == true { Label("Treasurer Reports", systemImage: "chart.bar.doc.horizontal.fill").tag(AppSection.treasury) }
-                        }
-                    }
-                    if model.user?.can("candidates.view") == true || model.user?.role == "owner" || model.user?.can("suggestions.create") == true {
-                        DisclosureGroup("People", isExpanded: $peopleExpanded) {
-                            if model.user?.can("candidates.view") == true { Label("Candidate Tracker", systemImage: "person.text.rectangle.fill").tag(AppSection.candidateTracker) }
-                            if model.user?.role == "owner" {
-                                Label("Officer Access", systemImage: "person.badge.key.fill").tag(AppSection.access)
-                                Label("Member Access", systemImage: "person.3.fill").tag(AppSection.memberAccess)
-                            }
-                            if model.user?.can("suggestions.create") == true { Label("Suggestion Box", systemImage: "text.bubble.fill").tag(AppSection.suggestions) }
-                        }
-                    }
-                    if model.user?.canOpen(.building) == true { Label("Building Requests", systemImage: "building.2").tag(AppSection.building) }
-                    Link(destination: GrandViewPortal.url) {
-                        Label("Grand View", systemImage: "arrow.up.right.square")
-                    }
-                    if model.user?.role == "owner" || model.user?.canSign == true || model.user?.can("settings.manage") == true {
-                        DisclosureGroup("More", isExpanded: $accountExpanded) {
-                            if model.user?.role == "owner" { Label("Dashboard Activity", systemImage: "clock.arrow.circlepath").tag(AppSection.activity) }
-                            if model.user?.canSign == true { Label("Signature Profile", systemImage: "signature").tag(AppSection.profile) }
-                            if model.user?.can("settings.manage") == true { Label("Service Settings", systemImage: "network").tag(AppSection.settings) }
-                        }
-                    }
-                    }
-                }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
-                .foregroundStyle(SignTheme.sidebarInk)
-                .tint(SignTheme.gold)
-                .environment(\.defaultMinListRowHeight, 42)
-                .frame(minHeight: 0, maxHeight: .infinity)
-                VStack(alignment: .leading, spacing: 5) {
-                    Label(
-                        model.isLive ? "Live Queue Connected" : "Reconnecting",
-                        systemImage: model.isLive ? "circle.fill" : "circle.dotted"
-                    )
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(model.isLive ? SignTheme.gold : SignTheme.sidebarInk.opacity(0.7))
-                    Divider().padding(.vertical, 5)
-                    Text(model.user?.name ?? "").font(.callout.weight(.semibold)).foregroundStyle(SignTheme.sidebarInk)
-                    Text(model.user?.roleLabel ?? "").font(.caption).foregroundStyle(SignTheme.sidebarInk.opacity(0.74))
-                    Text("Automatic Login On This Mac").font(.caption2).foregroundStyle(SignTheme.sidebarInk.opacity(0.74)).padding(.top, 5)
-                    Text("Sign-ins and actions are recorded for Lodge administration. Active time is estimated.").font(.caption2).foregroundStyle(SignTheme.sidebarInk.opacity(0.66))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
-            }
-            .background(SignTheme.brandNavy)
-            .environment(\.colorScheme, .dark)
-            .navigationSplitViewColumnWidth(min: 210, ideal: 232, max: 280)
-        } detail: {
-            GeometryReader { available in
                 VStack(spacing: 0) {
-                    WorkspaceNotices(correspondenceCount: correspondenceWorkspace.lettersForMySignature.count,
-                                     openCorrespondence: { selection = .correspondence })
-                    workspaceContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(reduceMotion ? .identity : .opacity)
+                    if window.size.width < 1100 {
+                        compactHeader
+                    }
+                    GeometryReader { available in
+                        VStack(spacing: 0) {
+                            if selection != .home && selection != .mySettings {
+                                standardHeader
+                            }
+                            WorkspaceNotices(correspondenceCount: correspondenceWorkspace.lettersForMySignature.count,
+                                             openCorrespondence: { selection = .correspondence })
+                            if alertCount > 0 {
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Needs Attention")
+                                            .font(.system(size: 17, weight: .medium, design: .serif))
+                                            .foregroundStyle(SignTheme.brandNavy)
+                                            .padding(.horizontal, 22)
+                                            .padding(.top, 10)
+                                        minutesReviewAlertButtons
+                                        treasuryAlertButtons
+                                        buildingAlertButtons
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .frame(maxHeight: 210)
+                                .background(SignTheme.surface)
+                                .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
+                            }
+                            workspaceContent
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .transition(reduceMotion ? .identity : .opacity)
+                        }
+                        .frame(width: available.size.width, height: available.size.height, alignment: .topLeading)
+                        .clipped()
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
+                    }
                 }
-                .frame(
-                    width: available.size.width,
-                    height: available.size.height,
-                    alignment: .topLeading
-                )
-                .clipped()
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .background(SignTheme.page)
         }
         .task {
             activityPresence.start(model)
@@ -497,7 +537,22 @@ struct WorkspaceView: View {
         .onDisappear { activityPresence.stop(); AppUpdater.shared.setWorkspaceGuard(updateGuardID, check: nil) }
         .onChange(of:selection){_,section in
             activityPresence.visit(section)
+            startExpanded = false
+            meetingsExpanded = false
+            documentsExpanded = false
+            financeExpanded = false
+            peopleExpanded = false
+            accountExpanded = false
             switch section {
+            case .home:
+                startExpanded = groupLanding == nil
+                if let groupLanding {
+                    meetingsExpanded = groupLanding == "Meetings And Reports"
+                    documentsExpanded = groupLanding == "Documents And Approvals"
+                    financeExpanded = groupLanding == "Dues And Finance"
+                    peopleExpanded = groupLanding == "People And Lodge"
+                    accountExpanded = groupLanding == "Account"
+                }
             case .lodgeCalendar, .agenda, .minutes, .reportGenerator, .receivedReports:
                 meetingsExpanded = true
             case .correspondence, .documents, .approvals, .createDispensation, .proposalReview:
@@ -506,7 +561,7 @@ struct WorkspaceView: View {
                 financeExpanded = true
             case .candidateTracker, .access, .memberAccess, .suggestions:
                 peopleExpanded = true
-            case .activity, .profile, .settings:
+            case .activity, .profile, .settings, .mySettings:
                 accountExpanded = true
             default: break
             }
@@ -525,6 +580,284 @@ struct WorkspaceView: View {
         }
     }
 
+    private var standardHeader: some View {
+        HStack {
+            Text(sectionHeaderTitle)
+                .font(.system(size: 30, weight: .medium, design: .serif))
+                .foregroundStyle(SignTheme.brandNavy)
+            Spacer()
+            Text("Stone Square Lodge No. 22")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 38)
+        .frame(height: 72)
+        .background(.white)
+        .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
+    }
+
+    private var sectionHeaderTitle: String {
+        switch selection {
+        case .building: return "Building Requests"
+        case .lodgeCalendar: return "Lodge Calendar"
+        case .reportGenerator: return "Report Generator"
+        case .correspondence: return "Lodge Correspondence"
+        case .receivedReports: return "Received Reports"
+        case .minutes: return "Meeting Minutes"
+        case .agenda: return "Agenda Creator"
+        case .treasury: return "Treasurer Reports"
+        case .candidateTracker: return "Candidate Tracker"
+        case .createDispensation: return "Create Dispensation"
+        case .access: return "Officer Access"
+        case .memberAccess: return "Member Access"
+        case .activity: return "Dashboard Activity"
+        case .dues: return "Dues Ledger"
+        case .myDues: return "My Dues"
+        case .suggestions: return "Suggestion Box"
+        case .approvals: return "Approvals"
+        case .proposalReview: return model.user?.role == "owner" ? "Warden Proposals" : "My Dispensation Proposals"
+        case .profile: return "Signature Profile"
+        case .settings: return "Service Settings"
+        case .documents: return "Live Queue"
+        case .home, .mySettings, nil: return "Home"
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 11) {
+                Text("22")
+                    .font(.system(size: 21, weight: .medium, design: .serif))
+                    .foregroundStyle(SignTheme.gold)
+                    .frame(width: 42, height: 42)
+                    .overlay(Circle().stroke(SignTheme.gold, lineWidth: 2))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Stone Square")
+                        .font(.system(size: 19, weight: .medium, design: .serif))
+                        .foregroundStyle(.white)
+                    Text("Lodge Dashboard")
+                        .font(.system(size: 11))
+                        .foregroundStyle(SignTheme.sidebarInk.opacity(0.85))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, 18)
+            .overlay(alignment: .bottom) { SignTheme.sidebarInk.opacity(0.20).frame(height: 1) }
+
+            HStack(spacing: 10) {
+                Text(userInitials)
+                    .font(.system(size: 12, weight: .semibold, design: .serif))
+                    .foregroundStyle(SignTheme.brandNavy)
+                    .frame(width: 34, height: 34)
+                    .background(Color(red: 0.84, green: 0.90, blue: 0.92), in: Circle())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.user?.name ?? "")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(model.user?.roleLabel ?? "")
+                        .font(.system(size: 10))
+                        .foregroundStyle(SignTheme.sidebarInk.opacity(0.8))
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+            .overlay(alignment: .bottom) { SignTheme.sidebarInk.opacity(0.14).frame(height: 1) }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    navGroup("Start Here", expanded: $startExpanded) {
+                        navItem("Home", mark: "▦", section: .home)
+                        Link(destination: GrandViewPortal.url) {
+                            navRow("Grand View ↗", mark: "GV", active: false)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if hasMeetingsTools {
+                        navGroup("Meetings And Reports", expanded: $meetingsExpanded) {
+                            if model.user?.canOpen(.lodgeCalendar) == true { navItem("Lodge Calendar", mark: "CAL", section: .lodgeCalendar) }
+                            if model.user?.canReadMinutes == true { navItem("Meeting Minutes", mark: "MIN", section: .minutes) }
+                            if model.user?.role == "owner" { navItem("Agenda Creator", mark: "AG", section: .agenda) }
+                            if model.user?.can("reports.create") == true { navItem("Report Generator", mark: "✎", section: .reportGenerator) }
+                            if model.user?.role == "owner" { navItem("Received Reports", mark: "IN", section: .receivedReports) }
+                        }
+                    }
+                    if hasDocumentsTools {
+                        navGroup("Documents And Approvals", expanded: $documentsExpanded) {
+                            if model.user?.canPrepareCorrespondence == true { navItem("Lodge Correspondence", mark: "LTR", section: .correspondence) }
+                            if model.user?.can("documents.status") == true { navItem("Live Queue", mark: "◫", section: .documents) }
+                            if model.user?.role == "owner" { navItem("Create Dispensation", mark: "+", section: .createDispensation) }
+                            if model.user?.canReadApprovals == true { navItem("Approvals", mark: "✓", section: .approvals) }
+                            if model.user?.canProposeDispensation == true || model.user?.role == "owner" {
+                                navItem(model.user?.role == "owner" ? "Warden Proposals" : "My Dispensation Proposals", mark: "✎", section: .proposalReview)
+                            }
+                        }
+                    }
+                    if hasFinanceTools {
+                        navGroup("Dues And Finance", expanded: $financeExpanded) {
+                            if model.user?.canReadDues == true { navItem("Dues Ledger", mark: "$", section: .dues) }
+                            if model.user?.can("dues.self") == true { navItem("My Dues", mark: "ME", section: .myDues) }
+                            if model.user?.canUseTreasury == true { navItem("Treasurer Reports", mark: "TR", section: .treasury) }
+                        }
+                    }
+                    if hasPeopleTools {
+                        navGroup("People And Lodge", expanded: $peopleExpanded) {
+                            if model.user?.role == "owner" {
+                                navItem("Officer Access", mark: "ACC", section: .access)
+                                navItem("Member Access", mark: "MEM", section: .memberAccess)
+                            }
+                            if model.user?.can("candidates.view") == true { navItem("Candidate Tracker", mark: "CT", section: .candidateTracker) }
+                            if model.user?.can("suggestions.create") == true { navItem("Suggestion Box", mark: "SB", section: .suggestions) }
+                            if model.user?.canOpen(.building) == true { navItem("Building Requests", mark: "BLD", section: .building) }
+                        }
+                    }
+                    if hasAccountTools {
+                        navGroup("Account", expanded: $accountExpanded) {
+                            if model.user?.role == "owner" { navItem("Dashboard Activity", mark: "ACT", section: .activity) }
+                            if model.user?.canOpen(.mySettings) == true { navItem("My Settings", mark: "⚙", section: .mySettings) }
+                            if model.user?.canOpen(.settings) == true { navItem("Service Settings", mark: "NET", section: .settings) }
+                            if model.user?.canSign == true { navItem("Signature Profile", mark: "✎", section: .profile) }
+                        }
+                    }
+                }
+                .padding(.top, 6)
+            }
+            .scrollIndicators(.hidden)
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Sign-ins and actions are recorded for Lodge administration. Active time is estimated.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(SignTheme.sidebarInk.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+                Label(model.isLive ? "Live Queue Connected" : "Reconnecting",
+                      systemImage: model.isLive ? "circle.fill" : "circle.dotted")
+                    .font(.system(size: 10))
+                    .foregroundStyle(SignTheme.sidebarInk.opacity(0.83))
+                Button("Sign Out") { model.signOut() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 13)
+            .overlay(alignment: .top) { SignTheme.sidebarInk.opacity(0.14).frame(height: 1) }
+        }
+        .padding(.horizontal, 17)
+        .padding(.top, 21)
+        .padding(.bottom, 16)
+        .background(SignTheme.brandNavy)
+    }
+
+    private var compactHeader: some View {
+        HStack(spacing: 12) {
+            Text("22")
+                .font(.system(size: 18, design: .serif))
+                .foregroundStyle(SignTheme.gold)
+                .frame(width: 38, height: 38)
+                .overlay(Circle().stroke(SignTheme.gold, lineWidth: 2))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Stone Square").font(.system(size: 16, design: .serif))
+                Text("Lodge Dashboard").font(.system(size: 10))
+            }
+            .foregroundStyle(.white)
+            Spacer()
+            Button { compactNavigationOpen.toggle() } label: {
+                Label("Sections", systemImage: "line.3.horizontal")
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(10)
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(.white.opacity(0.3)))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .popover(isPresented: $compactNavigationOpen, arrowEdge: .bottom) {
+                sidebar.frame(width: 260, height: 600)
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 62)
+        .background(SignTheme.brandNavy)
+    }
+
+    private var userInitials: String {
+        (model.user?.name ?? "")
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+            .joined()
+            .uppercased()
+    }
+
+    private var hasMeetingsTools: Bool { [.lodgeCalendar, .minutes, .agenda, .reportGenerator, .receivedReports].contains { model.user?.canOpen($0) == true } }
+    private var hasDocumentsTools: Bool { [.correspondence, .documents, .createDispensation, .approvals, .proposalReview].contains { model.user?.canOpen($0) == true } }
+    private var hasFinanceTools: Bool { [.dues, .myDues, .treasury].contains { model.user?.canOpen($0) == true } }
+    private var hasPeopleTools: Bool { [.access, .memberAccess, .candidateTracker, .suggestions, .building].contains { model.user?.canOpen($0) == true } }
+    private var hasAccountTools: Bool { [.activity, .mySettings, .settings, .profile].contains { model.user?.canOpen($0) == true } }
+
+    private func navGroup<Content: View>(_ title: String, expanded: Binding<Bool>, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Button { openNavigationGroup(title) } label: {
+                HStack {
+                    Text(title.uppercased())
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(0.4)
+                    Spacer()
+                    Image(systemName: expanded.wrappedValue ? "chevron.up" : "chevron.down")
+                        .foregroundStyle(Color(red: 0.89, green: 0.74, blue: 0.46))
+                }
+                .foregroundStyle(SignTheme.sidebarInk)
+                .padding(.horizontal, 11)
+                .frame(height: 41)
+                .background(expanded.wrappedValue ? Color.white.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            if expanded.wrappedValue { content() }
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func navItem(_ title: String, mark: String, section: AppSection) -> some View {
+        Button {
+            selection = section
+            groupLanding = nil
+            compactNavigationOpen = false
+        } label: {
+            navRow(title, mark: mark, active: selection == section)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func openNavigationGroup(_ title: String) {
+        startExpanded = title == "Start Here"
+        meetingsExpanded = title == "Meetings And Reports"
+        documentsExpanded = title == "Documents And Approvals"
+        financeExpanded = title == "Dues And Finance"
+        peopleExpanded = title == "People And Lodge"
+        accountExpanded = title == "Account"
+        groupLanding = title == "Start Here" ? nil : title
+        selection = .home
+        compactNavigationOpen = false
+    }
+
+    private func navRow(_ title: String, mark: String, active: Bool) -> some View {
+        HStack(spacing: 0) {
+            Text(mark)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color(red: 0.89, green: 0.74, blue: 0.46))
+                .frame(width: 25)
+            Text(title)
+                .font(.system(size: 13))
+                .foregroundStyle(SignTheme.sidebarInk)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: 43, alignment: .leading)
+        .background(active ? Color.white.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(alignment: .leading) { if active { SignTheme.gold.frame(width: 3) } }
+    }
+
     private var alertCount: Int {
         model.minutesReviewAlerts.count + model.treasuryAlerts.count + model.buildingAlerts.count
     }
@@ -536,7 +869,7 @@ struct WorkspaceView: View {
         var id: AppSection { section }
     }
 
-    private var searchResults: [SearchTool] {
+    private var navigationTools: [SearchTool] {
         let all: [SearchTool] = [
             .init(section: .home, title: "Home", symbol: "house.fill"),
             .init(section: .lodgeCalendar, title: "Lodge Calendar", symbol: "calendar"),
@@ -559,9 +892,14 @@ struct WorkspaceView: View {
             .init(section: .building, title: "Building Requests", symbol: "building.2"),
             .init(section: .activity, title: "Dashboard Activity", symbol: "clock.arrow.circlepath"),
             .init(section: .profile, title: "Signature Profile", symbol: "signature"),
+            .init(section: .mySettings, title: "My Settings", symbol: "gearshape"),
             .init(section: .settings, title: "Service Settings", symbol: "network")
         ]
-        return all.filter { model.user?.canOpen($0.section) == true && $0.title.localizedCaseInsensitiveContains(toolSearch) }
+        return all.filter { model.user?.canOpen($0.section) == true }
+    }
+
+    private var searchResults: [SearchTool] {
+        navigationTools.filter { $0.title.localizedCaseInsensitiveContains(toolSearch) }
     }
 
     private var minutesReviewAlertButtons: some View {
@@ -666,13 +1004,95 @@ struct WorkspaceView: View {
         }
     }
 
+    private func groupLandingView(_ group: String) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(group)
+                    .font(.system(size: 30, weight: .medium, design: .serif))
+                    .foregroundStyle(SignTheme.brandNavy)
+                Spacer()
+                Text("Stone Square Lodge No. 22")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 38)
+            .frame(height: 72)
+            .background(.white)
+            .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("STONE SQUARE LODGE NO. 22")
+                        .font(.system(size: 10, weight: .bold)).tracking(1.5)
+                        .foregroundStyle(SignTheme.gold)
+                    Text(group)
+                        .font(.system(size: 34, weight: .medium, design: .serif))
+                        .foregroundStyle(SignTheme.brandNavy)
+                    Text(groupDescription(group))
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(navigationTools.filter { toolBelongsToGroup($0.section, group: group) }) { tool in
+                            Button {
+                                selection = tool.section
+                                groupLanding = nil
+                            } label: {
+                                HStack {
+                                    Text(tool.title).font(.system(size: 14, weight: .semibold))
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                }
+                                .foregroundStyle(SignTheme.brandNavy)
+                                .padding(.horizontal, 16)
+                                .frame(minHeight: 52)
+                                .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(38)
+            }
+            .background(SignTheme.page)
+        }
+    }
+
+    private func groupDescription(_ group: String) -> String {
+        switch group {
+        case "Meetings And Reports": return "Calendar, minutes, agendas, and Lodge reports."
+        case "Documents And Approvals": return "Prepare, review, sign, and follow Lodge documents."
+        case "Dues And Finance": return "Your dues and authorized Lodge finance records."
+        case "People And Lodge": return "Member access, candidates, suggestions, and building requests."
+        case "Account": return "Your settings, signature, and permitted activity records."
+        default: return "Open a Lodge tool."
+        }
+    }
+
+    private func toolBelongsToGroup(_ section: AppSection, group: String) -> Bool {
+        switch group {
+        case "Meetings And Reports": return [.lodgeCalendar, .minutes, .agenda, .reportGenerator, .receivedReports].contains(section)
+        case "Documents And Approvals": return [.correspondence, .documents, .createDispensation, .approvals, .proposalReview].contains(section)
+        case "Dues And Finance": return [.dues, .myDues, .treasury].contains(section)
+        case "People And Lodge": return [.access, .memberAccess, .candidateTracker, .suggestions, .building].contains(section)
+        case "Account": return [.activity, .mySettings, .settings, .profile].contains(section)
+        default: return false
+        }
+    }
+
     @ViewBuilder
     private var workspaceContent: some View {
         if model.user?.canOpen(selection) != true {
             ContentUnavailableView("This workspace is not assigned", systemImage: "lock")
         } else { switch selection {
         case .home:
-            LandingDashboardView(
+            if let groupLanding {
+                groupLandingView(groupLanding)
+            } else {
+                LandingDashboardView(
+                correspondenceCount: correspondenceWorkspace.lettersForMySignature.count,
+                openSection: { selection = $0 },
                 openDispensations: { selection = .documents },
                 openCandidateTracker: { selection = .candidateTracker },
                 openReports: { selection = .reportGenerator },
@@ -686,6 +1106,7 @@ struct WorkspaceView: View {
                 openMyDues: { selection = .myDues },
                 openSettings: { selection = .settings }
             )
+            }
         case .building: BuildingRequestsView()
         case .lodgeCalendar: LodgeCalendarView()
         case .reportGenerator:
@@ -716,6 +1137,7 @@ struct WorkspaceView: View {
             else if model.user?.canProposeDispensation == true { MyDispensationProposalsView() }
             else { ContentUnavailableView("Proposal access is not assigned", systemImage: "lock") }
         case .profile: SignatureProfileView()
+        case .mySettings: MySettingsView()
         case .settings: SettingsView()
         default: DocumentsView()
         } }
@@ -1427,6 +1849,11 @@ struct LandingDashboardView: View {
     @State private var upcomingEvents: [LodgeCalendarEvent] = []
     @State private var upcomingUnavailable = false
     @State private var hasCalendarSourceWarnings = false
+    @State private var homeToolSearch = ""
+    @State private var allToolsExpanded = false
+    @FocusState private var toolSearchFocused: Bool
+    let correspondenceCount: Int
+    let openSection: (AppSection) -> Void
     let openDispensations: () -> Void
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
@@ -1451,8 +1878,7 @@ struct LandingDashboardView: View {
         (model.user?.canReadMinutes == true && !model.minutesReviewAlerts.isEmpty)
             || (model.user?.canUseTreasury == true && !model.treasuryAlerts.isEmpty)
             || (model.user?.canOpen(.building) == true && !model.buildingAlerts.isEmpty)
-            || (model.user?.can("documents.status") == true && awaitingCount > 0)
-            || (model.user?.role == "owner" && model.emailDeliveryReady == false)
+            || (model.user?.canPrepareCorrespondence == true && correspondenceCount > 0)
     }
 
     private var easternGreeting: String {
@@ -1466,42 +1892,48 @@ struct LandingDashboardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
+            HStack {
+                Text("Home")
+                    .font(.system(size: 30, weight: .medium, design: .serif))
+                    .foregroundStyle(Color(red: 0.12, green: 0.17, blue: 0.21))
+                Spacer()
+                Text("Stone Square Lodge No. 22")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(red: 0.35, green: 0.42, blue: 0.47))
+            }
+            .padding(.horizontal, 38)
+            .frame(height: 72)
+            .background(.white)
+            .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
             GeometryReader { available in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 17) {
-                        Text("STONE SQUARE LODGE NO. 22")
-                            .font(.caption.weight(.semibold))
-                            .tracking(1.2)
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 15) {
                         hero
-                        if available.size.width >= 760 {
-                            HStack(alignment: .top, spacing: 16) {
-                                VStack(spacing: 16) {
+                        if available.size.width > 760 {
+                            HStack(alignment: .top, spacing: 15) {
+                                VStack(spacing: 15) {
                                     attentionPanel
                                     upcomingPanel
-                                    toolsPanel
                                 }
                                 .frame(maxWidth: .infinity, alignment: .top)
-                                VStack(spacing: 16) {
+                                VStack(spacing: 15) {
                                     quickAccessPanel
                                     jurisdictionPanel
-                                    accountPanel
                                 }
-                                .frame(width: max(245, available.size.width * 0.32), alignment: .top)
+                                .frame(width: max(235, (available.size.width - 76 - 15) / 2.45), alignment: .top)
                             }
                         } else {
                             attentionPanel
                             upcomingPanel
                             quickAccessPanel
                             jurisdictionPanel
-                            toolsPanel
-                            accountPanel
                         }
+                        allToolsDisclosure
                     }
-                    .frame(maxWidth: 1180, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, available.size.width > 760 ? 38 : 18)
+                    .padding(.top, 25)
+                    .padding(.bottom, 32)
                 }
                 .background(SignTheme.page)
             }
@@ -1513,107 +1945,146 @@ struct LandingDashboardView: View {
     }
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(hasAttentionItems ? "Your Next Lodge Action" : "Welcome To Your Lodge")
-                .font(.system(size: 26, weight: .medium, design: .serif))
+        VStack(alignment: .leading, spacing: 7) {
+            Text("YOUR LODGE WORK")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(1)
+                .foregroundStyle(Color(red: 0.93, green: 0.78, blue: 0.48))
+            Text("\(easternGreeting), \(model.user?.name ?? "")")
+                .font(.system(size: 34, weight: .medium, design: .serif))
                 .foregroundStyle(SignTheme.sidebarInk)
-            Text(hasAttentionItems ? "See the work assigned to your office." : "Find meetings, dues, Lodge records, and the tools available to you.")
-                .font(.callout)
+            Text(model.user?.role == "warden"
+                 ? "View Lodge status, prepare reports, and follow your dispensation proposals."
+                 : "Review what needs attention and open your Lodge tools.")
+                .font(.system(size: 14))
                 .foregroundStyle(SignTheme.sidebarInk.opacity(0.86))
-            primaryAction.padding(.top, 7)
+            Text((model.user?.roleLabel ?? "").uppercased())
+                .font(.system(size: 10))
+                .foregroundStyle(SignTheme.sidebarInk.opacity(0.86))
+            primaryAction.padding(.top, 10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(22)
-        .background(SignTheme.brandNavy, in: RoundedRectangle(cornerRadius: 10))
+        .frame(minHeight: 174, alignment: .leading)
+        .padding(.horizontal, 29)
+        .padding(.vertical, 25)
+        .background(SignTheme.brandNavy, in: RoundedRectangle(cornerRadius: 9))
     }
 
-    private func homeCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func homeCard<Content: View>(_ title: String, eyebrow: String, trailingTitle: String? = nil,
+                                          trailingAction: (() -> Void)? = nil,
+                                          @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 19, weight: .medium, design: .serif))
-                .foregroundStyle(SignTheme.navy)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Rectangle().fill(SignTheme.cardLine).frame(height: 1)
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(eyebrow)
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(1)
+                        .foregroundStyle(Color(red: 0.43, green: 0.36, blue: 0.22))
+                    Text(title)
+                        .font(.system(size: 20, weight: .medium, design: .serif))
+                        .foregroundStyle(SignTheme.brandNavy)
+                }
+                Spacer()
+                if let trailingTitle, let trailingAction {
+                    Button(trailingTitle, action: trailingAction)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(SignTheme.brandNavy)
+                        .underline()
+                }
+            }
+            Rectangle().fill(SignTheme.brandNavy).frame(height: 3)
             content()
         }
-        .padding(18)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(SignTheme.surface, in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine, lineWidth: 1))
     }
 
     private var attentionPanel: some View {
-        homeCard("Needs Attention") {
+        homeCard("Needs Attention", eyebrow: "YOUR LODGE WORK") {
             if !hasAttentionItems {
-                Label("You’re All Caught Up", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .padding(.vertical, 11)
-            }
-            if model.user?.can("documents.status") == true && awaitingCount > 0 {
-                homeRow("Live Queue", "\(awaitingCount) Open Document\(awaitingCount == 1 ? "" : "s")", "list.number", action: openDispensations)
+                Text("No Lodge records need attention.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
             }
             if model.user?.canReadMinutes == true && !model.minutesReviewAlerts.isEmpty {
-                homeRow("Meeting Minutes", "\(model.minutesReviewAlerts.count) Review Reminder\(model.minutesReviewAlerts.count == 1 ? "" : "s")", "text.document.fill", action: openMinutes)
+                summaryRow("Meeting Minutes · \(model.minutesReviewAlerts.count) \(model.minutesReviewAlerts.count == 1 ? "notice" : "notices")", action: openMinutes)
             }
             if model.user?.canUseTreasury == true && !model.treasuryAlerts.isEmpty {
-                homeRow("Treasurer Reports", "\(model.treasuryAlerts.count) Banking Record\(model.treasuryAlerts.count == 1 ? "" : "s") Awaiting Attention", "chart.bar.doc.horizontal.fill", action: openTreasury)
+                summaryRow("Treasurer Reports · \(model.treasuryAlerts.count) \(model.treasuryAlerts.count == 1 ? "notice" : "notices")", action: openTreasury)
             }
             if model.user?.canOpen(.building) == true {
                 ForEach(model.buildingAlerts) { alert in
-                    homeRow(alert.title, alert.message, "building.2") {
+                    summaryRow("Building Requests · \(alert.title)") {
                         model.requestedBuildingRequestID = alert.requestId
                         openBuilding()
                     }
                 }
             }
-            if model.user?.role == "owner", model.emailDeliveryReady == false {
-                Label("Email Delivery Needs Attention", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text("Invitations, password reset codes, and record notifications are saved, but email cannot leave the Dashboard until the mail service is connected.")
-                    .font(.callout).foregroundStyle(.secondary)
+            if model.user?.canPrepareCorrespondence == true && correspondenceCount > 0 {
+                summaryRow("Correspondence · \(correspondenceCount) \(correspondenceCount == 1 ? "notice" : "notices")", action: openCorrespondence)
             }
         }
     }
 
     private var quickAccessPanel: some View {
-        homeCard("Quick Access") {
-            if model.user?.canOpen(.lodgeCalendar) == true {
-                homeRow("Lodge Calendar", "See Upcoming Lodge And Community Events", "calendar", action: openCalendar)
+        homeCard("Open A Tool", eyebrow: "QUICK ACCESS") {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Find A Tool")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(SignTheme.brandNavy)
+                TextField("Search available tools", text: $homeToolSearch)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .focused($toolSearchFocused)
+                    .padding(.horizontal, 13)
+                    .frame(height: 46)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
             }
-            if model.user?.can("dues.self") == true {
-                homeRow("My Dues", "View Your Assessment And Payment History", "dollarsign.circle", action: openMyDues)
+            .padding(.bottom, 5)
+            if homeToolSearch.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
+                let matches = availableTools.filter { $0.title.localizedCaseInsensitiveContains(homeToolSearch) }
+                if matches.isEmpty {
+                    Text("No matching tools are available to your account.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                } else {
+                    ForEach(matches.prefix(8)) { tool in
+                        quickButton(tool.title, action: tool.action)
+                    }
+                }
+            } else {
+                ForEach(quickTools.prefix(4)) { tool in
+                    quickButton(tool.title, action: tool.action)
+                }
             }
-            grandViewLink
         }
     }
 
     @ViewBuilder private var upcomingPanel: some View {
         if model.user?.canOpen(.lodgeCalendar) == true {
-            homeCard("Coming Up") {
+            homeCard("Coming Up", eyebrow: "LODGE CALENDAR", trailingTitle: "Open Calendar", trailingAction: openCalendar) {
                 if upcomingUnavailable {
-                    Text("Upcoming events are temporarily unavailable.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    Text("The calendar could not load. Open the calendar to try again.")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
                 } else if upcomingEvents.isEmpty {
-                    Text(hasCalendarSourceWarnings
-                         ? "No Lodge events are listed in the next 60 days."
-                         : "No upcoming events are listed in the next 60 days.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    Text("No upcoming events are listed in the next 60 days.")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
                 } else {
                     ForEach(upcomingEvents) { event in
                         let time = LodgeCalendarDates.displayTime(event.startTime)
-                        homeRow(event.title,
-                                [LodgeCalendarDates.displayDate(event.startDate), time, event.location]
-                                    .filter { !$0.isEmpty }.joined(separator: " · "),
-                                "calendar", action: openCalendar)
+                        eventRow(event.title, detail: [LodgeCalendarDates.displayDate(event.startDate), time, event.location]
+                            .filter { !$0.isEmpty }.joined(separator: " · "), action: openCalendar)
                     }
                 }
                 if hasCalendarSourceWarnings && !upcomingUnavailable {
                     Text("Some building calendar updates are unavailable. Open the calendar for details.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
                 }
-                Button("Open Lodge Calendar", action: openCalendar)
-                    .font(.callout.weight(.semibold))
-                    .padding(.top, 2)
             }
         }
     }
@@ -1637,116 +2108,180 @@ struct LandingDashboardView: View {
         }
     }
 
-    private var grandViewLink: some View {
-        Link(destination: GrandViewPortal.url) {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.up.right.square")
-                    .font(.title3)
-                    .foregroundStyle(SignTheme.gold)
-                    .frame(width: 25)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Open Grand View").font(.callout.weight(.semibold))
-                    Text("Visit Your Grand Lodge Account In Your Browser")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 9)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     private var jurisdictionPanel: some View {
-        homeCard("Jurisdiction") {
-            Text("Grand View Is The Grand Lodge’s Statewide Member Portal And Official Record.")
-                .font(.callout)
+        homeCard("Grand View", eyebrow: "GRAND LODGE") {
+            Text("Open the official Delaware member portal with your Grand View account.")
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            grandViewLink
-        }
-    }
-
-    private var accountPanel: some View {
-        homeCard("Your Account") {
-            LabeledContent("Signed In As", value: model.user?.name ?? "")
-            LabeledContent("Access", value: model.user?.roleLabel ?? "")
-        }
-    }
-
-    private var toolsPanel: some View {
-        homeCard("All Lodge Tools") {
-            if model.user?.canOpen(.building) == true { homeRow("Building Requests", model.user?.can("building.view") == true ? "Submit Building Requests And View Recorded Decisions" : "Submit A Request To Use The Lodge Building", "building.2", action: openBuilding) }
-            if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, Preview And Send A Lodge Report", "doc.text", action: openReports) }
-            if model.user?.canPrepareCorrespondence == true { homeRow("Lodge Correspondence", "Prepare And Preview A Secretary’s Letter", "envelope.open", action: openCorrespondence) }
-            if model.user?.role == "owner" { homeRow("Received Reports", "Review Reports Submitted To You", "tray.full", action: openReceivedReports) }
-            if model.user?.can("documents.status") == true { homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) Awaiting Action" : "Open The Document Queue", "doc.text", action: openDispensations) }
-            if model.user?.canReadMinutes == true { homeRow("Meeting Minutes", model.user?.can("minutes.prepare") == true ? "Prepare, Review And Attest To Meeting Records" : "Read Finalized Meeting Records", "text.document", action: openMinutes) }
-            if model.user?.role == "owner" { homeRow("Agenda Creator", "Create, Save, Resume, And Preview Lodge Agenda Drafts", "list.number", action: openAgenda) }
-            if model.user?.canUseTreasury == true {
-                homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? (model.treasuryAlerts.isEmpty ? "Prepare And Review Treasurer Reports" : "\(model.treasuryAlerts.count) Banking Record\(model.treasuryAlerts.count == 1 ? "" : "s") Awaiting A Preparer") : model.user?.can("treasury.upload") == true ? "Provide Banking Records And View Reports" : "Read Finalized Treasurer Reports", "chart.bar.doc.horizontal", action: openTreasury)
+                .fixedSize(horizontal: false, vertical: true)
+            Link(destination: GrandViewPortal.url) {
+                HStack {
+                    Text("Open Grand View ↗")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 13)
+                .frame(height: 44)
+                .background(SignTheme.brandNavy, in: RoundedRectangle(cornerRadius: 6))
             }
-            if model.user?.can("candidates.view") == true { homeRow("Candidate Tracker", "Open Candidate And Membership Records", "person.text.rectangle", action: openCandidateTracker) }
+            .buttonStyle(.plain)
         }
     }
-    @ViewBuilder private var primaryAction: some View {
+
+    private var allToolsDisclosure: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button { allToolsExpanded.toggle() } label: {
+                HStack {
+                    Text("Browse All Dashboard Tools")
+                        .font(.system(size: 17, weight: .medium, design: .serif))
+                    Image(systemName: allToolsExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(SignTheme.brandNavy)
+            }
+            .buttonStyle(.plain)
+            if allToolsExpanded {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 12)], spacing: 12) {
+                    ForEach(availableTools) { tool in
+                        Button(action: tool.action) {
+                            HStack {
+                                Text(tool.title).font(.system(size: 14, weight: .semibold))
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                            }
+                            .foregroundStyle(SignTheme.brandNavy)
+                            .padding(14)
+                            .frame(minHeight: 52)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 9))
+                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private struct HomeTool: Identifiable {
+        let title: String
+        let action: () -> Void
+        var id: String { title }
+    }
+
+    private var quickTools: [HomeTool] {
+        var tools: [HomeTool] = []
+        if model.user?.canOpen(.lodgeCalendar) == true { tools.append(.init(title: "Lodge Calendar", action: openCalendar)) }
+        if model.user?.can("dues.self") == true { tools.append(.init(title: "My Dues", action: openMyDues)) }
+        if model.user?.canReadMinutes == true { tools.append(.init(title: "Meeting Minutes", action: openMinutes)) }
+        if model.user?.can("documents.status") == true { tools.append(.init(title: "Live Queue", action: openDispensations)) }
+        if model.user?.can("reports.create") == true { tools.append(.init(title: "Report Generator", action: openReports)) }
+        if model.user?.can("candidates.view") == true { tools.append(.init(title: "Candidate Tracker", action: openCandidateTracker)) }
+        return tools
+    }
+
+    private var availableTools: [HomeTool] {
+        var tools = quickTools
+        func append(_ title: String, _ action: @escaping () -> Void) {
+            if !tools.contains(where: { $0.title == title }) { tools.append(.init(title: title, action: action)) }
+        }
+        append("Grand View", { NSWorkspace.shared.open(GrandViewPortal.url) })
+        if model.user?.role == "owner" { append("Agenda Creator", openAgenda); append("Received Reports", openReceivedReports) }
+        if model.user?.canPrepareCorrespondence == true { append("Lodge Correspondence", openCorrespondence) }
+        if model.user?.canUseTreasury == true { append("Treasurer Reports", openTreasury) }
+        if model.user?.canOpen(.building) == true { append("Building Requests", openBuilding) }
+        if model.user?.canReadDues == true { append("Dues Ledger", { openSection(.dues) }) }
+        if model.user?.canReadApprovals == true { append("Approvals", { openSection(.approvals) }) }
+        if model.user?.role == "owner" {
+            append("Create Dispensation", { openSection(.createDispensation) })
+            append("Officer Access", { openSection(.access) })
+            append("Member Access", { openSection(.memberAccess) })
+            append("Dashboard Activity", { openSection(.activity) })
+        }
+        if model.user?.canOpen(.proposalReview) == true {
+            append(model.user?.role == "owner" ? "Warden Proposals" : "My Dispensation Proposals", { openSection(.proposalReview) })
+        }
+        if model.user?.canOpen(.suggestions) == true { append("Suggestion Box", { openSection(.suggestions) }) }
+        if model.user?.canOpen(.mySettings) == true { append("My Settings", { openSection(.mySettings) }) }
+        if model.user?.canOpen(.settings) == true { append("Service Settings", openSettings) }
+        if model.user?.canOpen(.profile) == true { append("Signature Profile", { openSection(.profile) }) }
+        return tools
+    }
+
+    private var primaryAction: some View {
+        heroButton(hasAttentionItems ? "Review What Needs Attention" : "Open Lodge Tools") {
+            if hasAttentionItems { openFirstAttentionItem() }
+            else { toolSearchFocused = true }
+        }
+    }
+
+    private func openFirstAttentionItem() {
         if let alert = model.buildingAlerts.first, model.user?.canOpen(.building) == true {
-            heroButton("Review Building Request") {
-                model.requestedBuildingRequestID = alert.requestId
-                openBuilding()
-            }
+            model.requestedBuildingRequestID = alert.requestId
+            openBuilding()
         } else if !model.minutesReviewAlerts.isEmpty, model.user?.canReadMinutes == true {
-            heroButton("Open Meeting Minutes", action: openMinutes)
+            openMinutes()
         } else if !model.treasuryAlerts.isEmpty, model.user?.canUseTreasury == true {
-            heroButton("Open Treasurer Reports", action: openTreasury)
-        } else if awaitingCount > 0, model.user?.can("documents.status") == true {
-            heroButton("Open Live Queue", action: openDispensations)
-        } else if model.user?.role == "owner", model.emailDeliveryReady == false,
-                  model.user?.canOpen(.settings) == true {
-            heroButton("Open Service Settings", action: openSettings)
-        } else if model.user?.canOpen(.lodgeCalendar) == true {
-            heroButton("Open Lodge Calendar", action: openCalendar)
-        } else if model.user?.can("dues.self") == true {
-            heroButton("Open My Dues", action: openMyDues)
+            openTreasury()
+        } else if model.user?.canPrepareCorrespondence == true && correspondenceCount > 0 {
+            openCorrespondence()
         }
     }
+
     private func heroButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Text(title).font(.callout.weight(.semibold))
+                Text(title).font(.system(size: 13, weight: .semibold))
                 Spacer(minLength: 0)
                 Image(systemName: "arrow.right")
             }
             .foregroundStyle(SignTheme.brandNavy)
-            .padding(.horizontal, 16)
-            .frame(height: 44)
-            .frame(maxWidth: 350)
+            .padding(.horizontal, 17)
+            .frame(height: 43)
+            .fixedSize(horizontal: true, vertical: false)
             .background(SignTheme.gold, in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
     }
-    private func homeRow(_ title: String, _ detail: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+
+    private func quickButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.body)
-                    .foregroundStyle(SignTheme.gold)
-                    .frame(width: 25)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(title).font(.callout.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Text(title).font(.system(size: 13))
+                Spacer()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+            .foregroundStyle(Color(red: 0.09, green: 0.19, blue: 0.26))
+            .padding(.horizontal, 12)
+            .frame(height: 43)
+            .background(Color(red: 0.91, green: 0.94, blue: 0.95), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func summaryRow(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).font(.system(size: 13))
+                Spacer()
+            }
+            .foregroundStyle(Color(red: 0.12, green: 0.17, blue: 0.21))
+            .frame(minHeight: 46)
+            .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func eventRow(_ title: String, detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+            .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -2389,6 +2924,151 @@ struct SignatureProfileView: View {
     }
 }
 
+struct MySettingsView: View {
+    @EnvironmentObject var model: AppModel
+    @StateObject private var deviceSessions = AccountSessionsWorkspace()
+    @State private var sessionToRevoke: DeviceSession?
+    @State private var confirmOtherDevices = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("My Settings")
+                    .font(.system(size: 30, weight: .medium, design: .serif))
+                    .foregroundStyle(SignTheme.brandNavy)
+                Spacer()
+                Text("Stone Square Lodge No. 22")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 38)
+            .frame(height: 72)
+            .background(.white)
+            .overlay(alignment: .bottom) { SignTheme.cardLine.frame(height: 1) }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("My Settings")
+                            .font(.system(size: 31, weight: .medium, design: .serif))
+                            .foregroundStyle(SignTheme.brandNavy)
+                        Text("Your account and signed-in devices.")
+                            .font(.system(size: 14)).foregroundStyle(.secondary)
+                    }
+                    settingsCard {
+                        Text(model.user?.name ?? "")
+                            .font(.system(size: 23, weight: .medium, design: .serif))
+                            .foregroundStyle(SignTheme.brandNavy)
+                        Text(model.user?.email ?? "")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                        Text("You stay signed in for up to 90 days on this device. Your sign-in renews when you use it near the end of that period. Sign out when finished on a shared device.")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            if model.user?.canSign == true {
+                                Button("Manage My Signature") { model.requestedSection = .profile }
+                                    .buttonStyle(.bordered)
+                            }
+                            Button("Sign Out on This Device") { model.signOut() }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                    settingsCard {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("ACCOUNT SECURITY")
+                                    .font(.system(size: 10, weight: .bold)).tracking(1.5)
+                                    .foregroundStyle(SignTheme.gold)
+                                Text("Signed-in devices")
+                                    .font(.system(size: 23, weight: .medium, design: .serif))
+                                    .foregroundStyle(SignTheme.brandNavy)
+                            }
+                            Spacer()
+                            Button("Refresh") { Task { await deviceSessions.load(using: model) } }
+                                .disabled(deviceSessions.isLoading)
+                        }
+                        Text("Review devices that can open your Lodge account. End any sign-in you do not recognize.")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                        if deviceSessions.isLoading { ProgressView().controlSize(.small) }
+                        if !deviceSessions.message.isEmpty {
+                            Text(deviceSessions.message)
+                                .font(.system(size: 12))
+                                .foregroundStyle(deviceSessions.isError ? .red : .secondary)
+                        }
+                        ForEach(deviceSessions.sessions) { session in
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(session.current ? "\(session.label.isEmpty ? "This device" : session.label) · Current" : (session.label.isEmpty ? "Signed-in device" : session.label))
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text("Last used \(displayDate(session.lastUsedAt)) · Expires \(displayDate(session.expiresAt))")
+                                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if !session.current {
+                                    Button("Sign Out Device") { sessionToRevoke = session }
+                                        .buttonStyle(.bordered)
+                                        .disabled(deviceSessions.isLoading)
+                                }
+                            }
+                            .padding(13)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(SignTheme.cardLine))
+                        }
+                        if deviceSessions.sessions.contains(where: { !$0.current }) {
+                            Button("Sign Out All Other Devices") { confirmOtherDevices = true }
+                                .buttonStyle(.bordered)
+                                .disabled(deviceSessions.isLoading)
+                        }
+                    }
+                }
+                .frame(maxWidth: 1000, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(38)
+            }
+            .background(SignTheme.page)
+        }
+        .task { await deviceSessions.load(using: model) }
+        .alert("Sign Out Device?", isPresented: Binding(
+            get: { sessionToRevoke != nil },
+            set: { if !$0 { sessionToRevoke = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { sessionToRevoke = nil }
+            Button("Sign Out Device", role: .destructive) {
+                guard let id = sessionToRevoke?.id else { return }
+                sessionToRevoke = nil
+                Task { await deviceSessions.revoke(id: id, using: model) }
+            }
+        } message: {
+            Text("This device will need the account password to reconnect.")
+        }
+        .alert("Sign Out All Other Devices?", isPresented: $confirmOtherDevices) {
+            Button("Cancel", role: .cancel) {}
+            Button("Sign Out All Other Devices", role: .destructive) {
+                Task { await deviceSessions.revokeOthers(using: model) }
+            }
+        } message: {
+            Text("Every other device will need the account password to reconnect.")
+        }
+    }
+
+    private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14, content: content)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(22)
+            .background(.white, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
+    }
+
+    private func displayDate(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "unavailable" }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = parser.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+        guard let date else { return "unavailable" }
+        return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
@@ -2746,16 +3426,14 @@ struct DuesView: View {
         GeometryReader { available in
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                NativeWorkspaceHeader(title: "Dues Ledger", subtitle: "Review payments, balances, and corrections", symbol: "dollarsign.circle") {
+                NativeWorkspaceHeader(title: "Dues Ledger", subtitle: model.dues.map { "Standard \($0.duesYear) dues rate: \(lodgeMoney($0.rateCents)). Payments reconcile against both Zeffy campaigns. Life member assessments require separate review." } ?? "Review payments, balances, and corrections", symbol: "dollarsign.circle") {
                     if model.user?.canManageDues == true { Button("Record Activity", systemImage: "plus") { showingAdjustment = true } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadDues() } }.disabled(model.duesLoading)
-                    Menu {
-                        Button("Save PDF", systemImage: "doc.richtext") { Task { await export(.pdf) } }
-                        Button("Save Excel", systemImage: "tablecells") { Task { await export(.xlsx) } }
-                    } label: { Label("Export", systemImage: "square.and.arrow.down") }
+                    Button("Download PDF") { Task { await export(.pdf) } }
+                        .disabled(model.dues == nil || exporting != nil)
+                    Button("Download Excel") { Task { await export(.xlsx) } }
                         .disabled(model.dues == nil || exporting != nil)
                 }.padding(.horizontal, -22)
-                if let ledger = model.dues { Text("Standard \(ledger.duesYear) dues rate: \(lodgeMoney(ledger.rateCents)). Payments reconcile against both Zeffy campaigns. Life member assessments require separate review.").font(.callout).foregroundStyle(.secondary) }
                 if exporting != nil { ProgressView("Preparing dues snapshot…") }
                 if let correctionNotice {
                     Text(correctionNotice)
@@ -2780,7 +3458,7 @@ struct DuesView: View {
                 }
 
                 if let ledger = model.dues {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 14)], spacing: 14) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 14)], spacing: 14) {
                         duesTile("Collected", lodgeMoney(ledger.totals.collectedCents))
                         duesTile("Outstanding", lodgeMoney(ledger.totals.outstandingCents))
                         duesTile("Paid In Full", "\(ledger.totals.paidCount)")
@@ -2795,7 +3473,16 @@ struct DuesView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
 
-                    Text("By Brother").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("BY BROTHER")
+                            .font(.system(size: 10, weight: .bold)).tracking(1.5)
+                            .foregroundStyle(SignTheme.gold)
+                        Text("Member Balances")
+                            .font(.system(size: 23, weight: .medium, design: .serif))
+                            .foregroundStyle(Color(red: 0.33, green: 0.44, blue: 0.53))
+                        Text("Brothers needing attention appear first. Open a Brother's activity to review each payment and correct a manual entry.")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
                     if available.size.width >= 850 {
                         duesTable(ledger.rows)
                     } else {
@@ -3011,14 +3698,18 @@ struct DuesView: View {
 
     @ViewBuilder
     private func duesTile(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(value).font(.title3.weight(.semibold))
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Text(value)
+                .font(.system(size: 27, weight: .medium, design: .serif))
+                .foregroundStyle(Color(red: 0.33, green: 0.44, blue: 0.53))
         }
-        .padding(18)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .frame(minHeight: 76)
+        .background(SignTheme.surface, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine))
     }
 }
 

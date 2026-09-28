@@ -301,6 +301,113 @@ enum BiometricCredentialStore {
     }
 }
 
+/// Signed-in devices shown in My Settings. Revocation only happens after a view
+/// explicitly calls one of the actions, following its own confirmation prompt.
+@MainActor
+final class AccountSessionsWorkspace: ObservableObject {
+    @Published private(set) var sessions: [DeviceSession] = []
+    @Published private(set) var message = ""
+    @Published private(set) var isLoading = false
+    @Published private(set) var isError = false
+    private var loadedAccountID: Int?
+
+    func load(using model: AppModel) async {
+        guard !isLoading else { return }
+        await refresh(using: model)
+    }
+
+    func revoke(id: Int, using model: AppModel) async {
+        guard !isLoading else { return }
+        guard let accountID = model.user?.id, loadedAccountID == accountID else {
+            message = "Refresh the device list for this account before signing out a device."
+            isError = true
+            return
+        }
+        guard sessions.contains(where: { $0.id == id && !$0.current }) else {
+            message = "Choose another signed-in device."
+            isError = true
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let _: EmptyResponse = try await model.request("/api/auth/sessions/\(id)", method: "DELETE")
+        } catch {
+            message = error.localizedDescription
+            isError = true
+            return
+        }
+        sessions.removeAll { $0.id == id }
+        do {
+            try await fetch(using: model)
+            message = "That device has been signed out."
+            isError = false
+        } catch {
+            message = "That device was signed out, but the device list could not refresh: \(error.localizedDescription)"
+            isError = true
+        }
+    }
+
+    func revokeOthers(using model: AppModel) async {
+        guard !isLoading else { return }
+        guard let accountID = model.user?.id, loadedAccountID == accountID else {
+            message = "Refresh the device list for this account before signing out other devices."
+            isError = true
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let _: EmptyResponse = try await model.request("/api/auth/sessions/revoke-others", method: "POST")
+        } catch {
+            message = error.localizedDescription
+            isError = true
+            return
+        }
+        sessions.removeAll { !$0.current }
+        do {
+            try await fetch(using: model)
+            message = "All other devices have been signed out."
+            isError = false
+        } catch {
+            message = "Other devices were signed out, but the device list could not refresh: \(error.localizedDescription)"
+            isError = true
+        }
+    }
+
+    private func refresh(using model: AppModel) async {
+        isLoading = true
+        defer { isLoading = false }
+        message = "Reading signed-in devices…"
+        isError = false
+        do {
+            try await fetch(using: model)
+            message = sessions.isEmpty
+                ? "No active device sessions were returned."
+                : "\(sessions.count) signed-in device\(sessions.count == 1 ? "" : "s")."
+        } catch {
+            sessions = []
+            loadedAccountID = nil
+            message = error.localizedDescription
+            isError = true
+        }
+    }
+
+    private func fetch(using model: AppModel) async throws {
+        let credential = model.webSessionToken
+        let accountID = model.user?.id
+        let response: DeviceSessionsResponse = try await model.request("/api/auth/sessions")
+        // A delayed response from the prior account must not appear after sign-out.
+        guard credential == model.webSessionToken, accountID != nil, accountID == model.user?.id else {
+            sessions = []
+            loadedAccountID = nil
+            throw ClientError.unauthorized("Sign in to see your devices.")
+        }
+        sessions = response.sessions
+        loadedAccountID = accountID
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var buildingAlerts: [BuildingAlert] = []

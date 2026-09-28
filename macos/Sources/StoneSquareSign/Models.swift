@@ -77,7 +77,7 @@ struct User: Codable, Identifiable, Equatable {
         case .building: return can("building.request") || can("building.view") || can("building.decide")
         case .lodgeCalendar: return can("calendar.view") || can("calendar.manage")
         case .profile: return canSign
-        case .settings: return can("settings.manage")
+        case .mySettings, .settings: return can("settings.manage")
         case .activity, .access, .memberAccess, .createDispensation: return role == "owner"
         }
     }
@@ -151,6 +151,17 @@ struct SignInSession: Codable {
 }
 struct AuthResponse: Codable { let token: String; let user: User; var session: SignInSession? = nil }
 struct MeResponse: Codable { let user: User; var session: SignInSession? = nil }
+struct DeviceSession: Decodable, Identifiable {
+    let id: Int
+    let label: String
+    let createdAt: String?
+    let lastSeenAt: String?
+    let expiresAt: String?
+    let current: Bool
+
+    var lastUsedAt: String? { lastSeenAt ?? createdAt }
+}
+struct DeviceSessionsResponse: Decodable { let sessions: [DeviceSession] }
 struct DocumentsResponse: Codable { let documents: [LodgeDocument] }
 /* An invitation the Master has created that the officer has not taken up yet. Its own state,
  * distinct from having no invitation at all. */
@@ -259,7 +270,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, correspondence, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, memberAccess, dues, myDues, suggestions, profile, settings }
+enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, correspondence, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, memberAccess, dues, myDues, suggestions, profile, mySettings, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,

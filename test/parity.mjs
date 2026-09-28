@@ -39,7 +39,7 @@ const PAIRS = {
   approvalsNav: 'approvals',
   proposalReviewNav: 'proposalReview',
   profileButton: 'profile',
-  settingsNav: 'settings',
+  settingsNav: 'mySettings',
   accessNav: 'access',
 };
 
@@ -48,6 +48,7 @@ const WEB_ONLY = {};
 
 const MAC_ONLY = {
   candidateTracker: 'the web side links out to the Tracker instead of embedding it',
+  settings: 'Service Settings preserves Mac connection and automatic-login controls alongside shared My Settings',
 };
 
 const html = read('public/index.html');
@@ -57,7 +58,10 @@ const macViews = read('macos/Sources/StoneSquareSign/Views.swift');
 const webSections = [...html.matchAll(/id="([a-zA-Z]+(?:Nav|Button))"/g)].map((m) => m[1]);
 const macSections = (models.match(/enum AppSection: Hashable \{ case ([^}]+)\}/)?.[1] || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const macRouted = [...macViews.matchAll(/tag\(AppSection\.([a-zA-Z]+)\)/g)].map((m) => m[1]);
+const macRouted = [
+  ...[...macViews.matchAll(/tag\(AppSection\.([a-zA-Z]+)\)/g)].map((m) => m[1]),
+  ...[...macViews.matchAll(/navItem\([^\n]*section: \.([a-zA-Z]+)\)/g)].map((m) => m[1]),
+];
 
 let failures = 0;
 const check = (name, ok, detail = '') => {
@@ -114,7 +118,7 @@ check('both clients send the saved calendar revision for editing and removal',
   && webBuildingCalendar.includes('JSON.stringify({revision:event.revision})'));
 check('Wardens can prepare proposals natively while the owner retains the review workspace',
   macViews.includes('MyDispensationProposalsView()')
-  && macViews.includes('model.user?.showsPersonalProposals == true')
+  && macViews.includes('model.user?.canProposeDispensation == true')
   && models.includes('role != "owner" && canProposeDispensation'));
 
 check('the Mac app defaults to the hosted service, not localhost',

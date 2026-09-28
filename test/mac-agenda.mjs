@@ -10,7 +10,7 @@ const [models, views, creator, updater] = await Promise.all([
 
 assert.match(models, /enum AppSection:[^\n]*\bcase[^\n]*\bagenda\b/);
 assert.match(models, /case \.agenda: return role == "owner"/);
-assert.match(views, /Label\("Agenda Creator", systemImage:/);
+assert.match(views, /if model\.user\?\.role == "owner" \{ navItem\("Agenda Creator", mark: "AG", section: \.agenda\) \}/);
 assert.match(views, /AgendaCreatorView\(workspace: agendaWorkspace\)/);
 assert.match(creator, /AdaptiveWorkspaceSplit/);
 assert.doesNotMatch(creator, /HSplitView/);

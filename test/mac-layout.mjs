@@ -31,7 +31,7 @@ assert.doesNotMatch(allWorkspaceSources, /HSplitView/, 'no Dashboard workspace m
 assert.match(views, /struct AdaptiveWorkspaceSplit/, 'all two-pane workspaces must share one responsive layout');
 assert.match(views, /available\.size\.width < 820/, 'the shared layout must change to one pane at compact widths');
 assert.match(views, /struct AdaptiveControlBar/, 'dense action and filter rows must have a compact fallback');
-assert.match(views, /LazyVGrid\(columns: \[GridItem\(\.adaptive\(minimum: 150\)/, 'dues summary tiles must wrap instead of clipping');
+assert.match(views, /LazyVGrid\(columns: \[GridItem\(\.adaptive\(minimum: 260\)/, 'dues summary tiles must wrap instead of clipping');
 assert.match(views, /DuesPendingAttemptStore[\s\S]*byAccount:\[Int:DuesPendingAttempt\]/, 'uncertain native dues submissions must retain their attempt per account');
 assert.match(views, /\.onAppear \{ restoreUnresolvedAttempt\(\) \}/, 'reopening the native dues form must restore an unresolved submission');
 assert.match(views, /attemptedFingerprint=fingerprint[\s\S]*rememberAttempt\(\)[\s\S]*model\.request\("\/api\/dues\/adjustments"/, 'the native dues attempt must be saved before its POST');
@@ -45,6 +45,7 @@ for (const [name, source] of Object.entries({ treasury, minutes, agenda, reportG
 assert.match(minutes, /AdaptiveControlBar[\s\S]*recordSummary\(record\)[\s\S]*recordActions\(record\)/, 'minutes handoff rows must reflow at compact widths');
 assert.match(minutes, /recordActions[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*recordActionControls/, 'minutes status and claim controls must stack before they clip');
 assert.match(views, /treasuryAlertButtons[\s\S]*HStack\(alignment: \.top[\s\S]*xmark\.circle\.fill/, 'Mac banking alerts must keep a compact dismiss control beside wrapped alert text');
+assert.match(views, /if alertCount > 0 \{[\s\S]*minutesReviewAlertButtons[\s\S]*treasuryAlertButtons[\s\S]*buildingAlertButtons/, 'individual review alerts must remain reachable in the redesigned dashboard');
 assert.match(views, /struct DocumentRow[\s\S]*ViewThatFits\(in: \.horizontal\)[\s\S]*compactRow/, 'Live Queue rows must switch to a compact card before signer names collapse');
 assert.match(views, /available\.size\.width < 780[\s\S]*List\(filteredRecords\)[\s\S]*Table\(filteredRecords/, 'Candidate Tracker must use readable cards in compact windows and a table when space permits');
 assert.match(views, /TextField\("What is being asked"[\s\S]*editedFields:/, 'the native Warden review must allow the Worshipful Master to correct proposal wording');
