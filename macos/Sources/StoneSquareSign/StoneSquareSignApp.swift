@@ -10,6 +10,7 @@ struct StoneSquareSignApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(model)
+                .tint(SignTheme.brandNavy)
                 .task { updater.start() }
                 .frame(
                     minWidth: 720,

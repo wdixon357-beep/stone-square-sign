@@ -122,21 +122,22 @@
 
       <section id="appCard" class="workspace hidden">
         <aside class="sidebar">
+          <div class="sidebar-brand" aria-label="Stone Square Lodge Dashboard"><span class="sidebar-seal" aria-hidden="true">22</span><span><strong>Stone Square</strong><small>Lodge Dashboard</small></span></div>
           <div class="user-block"><span id="userInitials"></span><div><strong id="whoami"></strong><small id="userRole"></small></div></div>
           <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="workspaceSections">Sections <span aria-hidden="true">☰</span></button>
           <nav id="workspaceSections" aria-label="Dashboard sections">
-            <div class="nav-group" data-group="home"><p class="nav-group-title">Start Here</p>
+            <div class="nav-group expanded" data-group="home"><button class="nav-group-title" type="button" data-open-group="home" aria-expanded="true">Start Here <span aria-hidden="true">⌄</span></button>
             <button id="homeNav" class="nav-item active" type="button"><span>▦</span> Home</button>
             <a class="nav-item" href="https://phde.grandview.systems/users/sign_in" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="Open Grand View, Grand Lodge member portal, in a new tab"><span aria-hidden="true">GV</span> Grand View ↗</a>
             </div>
-            <div class="nav-group" data-group="meetings"><p class="nav-group-title">Meetings And Reports</p>
+            <div class="nav-group" data-group="meetings"><button class="nav-group-title" type="button" data-open-group="meetings" aria-expanded="false">Meetings And Reports <span aria-hidden="true">⌄</span></button>
             <button id="calendarNav" class="nav-item calendar-only" type="button"><span>CAL</span> Lodge Calendar</button>
             <button id="minutesNav" class="nav-item minutes-only" type="button"><span>MIN</span> Meeting Minutes</button>
             <button id="agendaNav" class="nav-item owner-only" type="button"><span>AG</span> Agenda Creator</button>
             <button id="reportsNav" class="nav-item" type="button"><span>✎</span> Report Generator</button>
             <button id="receivedReportsNav" class="nav-item owner-only hidden" type="button"><span>IN</span> Received Reports</button>
             </div>
-            <div class="nav-group" data-group="documents"><p class="nav-group-title">Documents And Approvals</p>
+            <div class="nav-group" data-group="documents"><button class="nav-group-title" type="button" data-open-group="documents" aria-expanded="false">Documents And Approvals <span aria-hidden="true">⌄</span></button>
             <button id="correspondenceNav" class="nav-item hidden" type="button"><span>LTR</span> Lodge Correspondence</button>
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
@@ -144,19 +145,19 @@
             <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> My Dispensation Proposals</button>
             <button id="proposalReviewNav" class="nav-item owner-only" type="button"><span>&#9998;</span> Warden Proposals</button>
             </div>
-            <div class="nav-group" data-group="dues"><p class="nav-group-title">Dues And Finance</p>
+            <div class="nav-group" data-group="dues"><button class="nav-group-title" type="button" data-open-group="dues" aria-expanded="false">Dues And Finance <span aria-hidden="true">⌄</span></button>
             <button id="duesNav" class="nav-item dues-ledger-only" type="button"><span>$</span> Dues Ledger</button>
             <button id="myDuesNav" class="nav-item dues-self-only" type="button"><span>ME</span> My Dues</button>
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
             </div>
-            <div class="nav-group" data-group="people"><p class="nav-group-title">People And Lodge</p>
+            <div class="nav-group" data-group="people"><button class="nav-group-title" type="button" data-open-group="people" aria-expanded="false">People And Lodge <span aria-hidden="true">⌄</span></button>
             <button id="accessNav" class="nav-item owner-only" type="button"><span>ACC</span> Officer Access</button>
             <button id="memberAccessNav" class="nav-item owner-only" type="button"><span>MEM</span> Member Access</button>
             <button id="candidateTrackerSidebar" class="nav-item candidate-only" type="button"><span>CT</span> Candidate Tracker</button>
             <button id="suggestionsNav" class="nav-item suggestions-only" type="button"><span>SB</span> Suggestion Box</button>
             <button id="buildingNav" class="nav-item building-only" type="button"><span>BLD</span> Building Requests</button>
             </div>
-            <div class="nav-group" data-group="account"><p class="nav-group-title">Account</p>
+            <div class="nav-group" data-group="account"><button class="nav-group-title" type="button" data-open-group="account" aria-expanded="false">Account <span aria-hidden="true">⌄</span></button>
             <button id="activityNav" class="nav-item owner-only" type="button"><span>ACT</span> Dashboard Activity</button>
             <button id="settingsNav" class="nav-item" type="button"><span>⚙</span> My Settings</button>
             <button id="profileButton" class="nav-item" type="button"><span>✎</span> Signature Profile</button>
@@ -171,6 +172,7 @@
         </aside>
 
         <div class="content">
+          <header class="workspace-topbar"><h1 id="workspaceTitle">Home</h1><span>Stone Square Lodge No. 22</span></header>
           <nav id="phoneSections" class="phone-nav" aria-label="Main phone navigation">
             <button type="button" data-phone-group="home" class="active"><span aria-hidden="true">⌂</span>Home</button>
             <button type="button" data-phone-group="meetings"><span aria-hidden="true">▣</span>Meetings</button>
@@ -189,7 +191,7 @@
           <section id="treasuryAlerts" class="workflow-alerts hidden" role="status" aria-live="polite" aria-label="Treasurer report alerts"></section>
           <section id="serviceHealthAlert" class="workflow-alerts hidden owner-only" role="status" aria-live="polite" aria-label="Dashboard service status"></section>
           <section id="landingSection" class="landing-section">
-            <div class="landing-head"><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="landingGreeting">Welcome</h1><p>Review what needs attention and open your Lodge tools.</p><span id="landingRole"></span></div>
+            <div class="landing-head"><p class="eyebrow">YOUR LODGE WORK</p><h1 id="landingGreeting">Welcome</h1><p>Review What Needs Attention And Open Your Lodge Tools.</p><span id="landingRole"></span><button id="homePrimaryAction" class="home-primary-action" type="button"><span id="homePrimaryActionLabel">Open Lodge Tools</span> <span aria-hidden="true">→</span></button></div>
             <div class="home-layout">
               <div class="home-main">
                 <section class="home-panel home-attention"><div class="home-panel-heading"><div><p class="eyebrow">YOUR LODGE WORK</p><h2>Needs Attention</h2></div><span id="homeAlertCount" class="home-count hidden"></span></div><div id="homeAlertList" class="home-alert-list"><p>Checking Lodge records…</p></div></section>

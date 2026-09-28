@@ -39,7 +39,7 @@ const draft = {
 
 const api = async (request, response, url) => {
   const requestBody = await body(request);
-  if (url.pathname === '/api/setup') return json(response, { registrationMode: 'invitation', needsOwnerSetup: false });
+  if (url.pathname === '/api/setup') return json(response, { registrationMode: 'invitation', needsOwnerSetup: false, emailDeliveryReady: true });
   if (url.pathname === '/api/version') return json(response, { version: '1.19.0' });
   if (url.pathname === '/api/auth/me') return json(response, { user, session: { lifetimeDays: 90 } });
   if (url.pathname === '/api/auth/sessions') return json(response, { sessions: [

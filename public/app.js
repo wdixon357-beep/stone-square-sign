@@ -833,6 +833,14 @@ const dashboardGroupForSection = section => ({
   activity: 'account', settings: 'account',
 })[section] || 'more';
 
+const setSidebarGroupExpanded = group => {
+  document.querySelectorAll('.nav-group').forEach(item => {
+    const expanded = item.dataset.group === group;
+    item.classList.toggle('expanded', expanded);
+    item.querySelector('.nav-group-title')?.setAttribute('aria-expanded', String(expanded));
+  });
+};
+
 let dashboardGroupLanding = null;
 const setPhoneNavActive = group => {
   const selected = ['home', 'meetings', 'documents', 'dues'].includes(group) ? group : 'more';
@@ -904,8 +912,10 @@ const renderDashboardGroupLanding = group => {
 const openDashboardGroup = group => {
   if (group === 'home') { if (showWorkspaceSection('home')) dashboardGroupLanding = null; return; }
   if (!showWorkspaceSection('home', { skipLoad: true })) return;
+  setSidebarGroupExpanded(group);
   dashboardGroupLanding = group;
   renderDashboardGroupLanding(group);
+  $('workspaceTitle').textContent = dashboardGroups[group].title;
   $('landingSection').classList.add('hidden');
   $('groupLandingSection').classList.remove('hidden');
   setPhoneNavActive(group);
@@ -1004,6 +1014,7 @@ const renderHomeAlertSummary = () => {
   }
   $('homeAlertCount').textContent = `${total} ${total === 1 ? 'notice' : 'notices'}`;
   $('homeAlertCount').classList.toggle('hidden', !total);
+  $('homePrimaryActionLabel').textContent = total ? 'Review What Needs Attention' : 'Open Lodge Tools';
   if (!total) {
     const message = document.createElement('p');
     message.textContent = homeAlertsLoaded ? 'No Lodge records need attention.' : 'Checking Lodge records…';
@@ -1146,6 +1157,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   dashboardGroupLanding = null;
   $('groupLandingSection').classList.add('hidden');
   setPhoneNavActive(dashboardGroupForSection(section));
+  setSidebarGroupExpanded(dashboardGroupForSection(section));
   if (home && !skipLoad) void refreshHomeCalendar();
   if (home) renderHomeAlertSummary();
   const sidebarNav = $('workspaceSections');
@@ -1153,6 +1165,16 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
     sidebarNav.classList.remove('open');
     $('sidebarToggle').setAttribute('aria-expanded', 'false');
   }
+  const sectionTitles = {
+    home: 'Home', calendar: 'Lodge Calendar', minutes: 'Meeting Minutes', agenda: 'Agenda Creator',
+    reports: 'Report Generator', receivedReports: 'Received Reports', correspondence: 'Lodge Correspondence',
+    queue: 'Live Queue', builder: 'Create Dispensation', approvals: 'Approvals',
+    proposals: 'My Dispensation Proposals', proposalReview: 'Warden Proposals',
+    dues: 'Dues Ledger', myDues: 'My Dues', treasury: 'Treasurer Reports',
+    access: 'Officer Access', memberAccess: 'Member Access', suggestions: 'Suggestion Box',
+    building: 'Building Requests', activity: 'Dashboard Activity', settings: 'My Settings',
+  };
+  $('workspaceTitle').textContent = sectionTitles[section] || 'Lodge Dashboard';
   return true;
 };
 
@@ -2243,8 +2265,21 @@ $('agendaMenuCard').addEventListener('click', () => showWorkspaceSection('agenda
 $('candidateMenuCard').addEventListener('click', () => { void openCandidateTracker(); });
 $('candidateTrackerSidebar').addEventListener('click', () => { if (showWorkspaceSection('home')) void openCandidateTracker(); });
 $('homeOpenCalendar').addEventListener('click', () => showWorkspaceSection('calendar'));
+$('homePrimaryAction').addEventListener('click', () => {
+  const firstAlert = $('homeAlertList').querySelector('button');
+  if (firstAlert) {
+    firstAlert.click();
+    return;
+  }
+  const toolSearch = $('homeToolSearch');
+  toolSearch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toolSearch.focus({ preventScroll: true });
+});
 document.querySelectorAll('#phoneSections [data-phone-group]').forEach(button => {
   button.addEventListener('click', () => openDashboardGroup(button.dataset.phoneGroup));
+});
+document.querySelectorAll('#workspaceSections [data-open-group]').forEach(button => {
+  button.addEventListener('click', () => openDashboardGroup(button.dataset.openGroup));
 });
 $('sidebarToggle').addEventListener('click', () => {
   const open = !$('workspaceSections').classList.contains('open');

@@ -6,8 +6,22 @@ import UniformTypeIdentifiers
 enum SignTheme {
     static let navy = Color(nsColor: .labelColor)
     static let blue = Color.accentColor
-    static let gold = Color(red: 0.78, green: 0.60, blue: 0.26)
+    static let gold = Color(red: 0.79, green: 0.61, blue: 0.29)
     static let ivory = Color(nsColor: .windowBackgroundColor)
+    static let brandNavy = Color(red: 0.063, green: 0.231, blue: 0.357)
+    static let sidebarInk = Color(red: 0.96, green: 0.98, blue: 0.99)
+    static let page = adaptive(light: NSColor(red: 0.949, green: 0.961, blue: 0.965, alpha: 1),
+                               dark: NSColor(red: 0.078, green: 0.137, blue: 0.200, alpha: 1))
+    static let surface = adaptive(light: .white,
+                                  dark: NSColor(red: 0.125, green: 0.196, blue: 0.271, alpha: 1))
+    static let cardLine = adaptive(light: NSColor(red: 0.85, green: 0.88, blue: 0.90, alpha: 1),
+                                   dark: NSColor(red: 0.26, green: 0.33, blue: 0.40, alpha: 1))
+
+    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
 }
 
 private enum GrandViewPortal {
@@ -26,9 +40,9 @@ struct NativeWorkspaceHeader<Actions: View>: View {
         VStack(spacing: 0) {
             ViewThatFits(in: .horizontal) {
               HStack(spacing: 14) {
-                Image(systemName: symbol).font(.title2).foregroundStyle(SignTheme.gold)
+                Image(systemName: symbol).font(.title3).foregroundStyle(SignTheme.gold)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(title).font(.system(size: 25, weight: .medium, design: .serif)).fixedSize(horizontal: false, vertical: true)
                     Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
@@ -36,9 +50,9 @@ struct NativeWorkspaceHeader<Actions: View>: View {
               }
               VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 14) {
-                    Image(systemName: symbol).font(.title2).foregroundStyle(SignTheme.gold)
+                    Image(systemName: symbol).font(.title3).foregroundStyle(SignTheme.gold)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(title).font(.title2.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                        Text(title).font(.system(size: 25, weight: .medium, design: .serif)).fixedSize(horizontal: false, vertical: true)
                         Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -47,9 +61,10 @@ struct NativeWorkspaceHeader<Actions: View>: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
               }
-            }.padding(22)
-            Divider()
+            }.padding(.horizontal, 24).padding(.vertical, 18)
+            Rectangle().fill(SignTheme.cardLine).frame(height: 1)
         }
+        .background(SignTheme.surface)
     }
 }
 extension NativeWorkspaceHeader where Actions == EmptyView {
@@ -296,11 +311,11 @@ struct WorkspaceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selection: AppSection? = .home
     @State private var toolSearch = ""
-    @State private var meetingsExpanded = true
-    @State private var documentsExpanded = true
-    @State private var financeExpanded = true
-    @State private var peopleExpanded = true
-    @State private var accountExpanded = true
+    @State private var meetingsExpanded = false
+    @State private var documentsExpanded = false
+    @State private var financeExpanded = false
+    @State private var peopleExpanded = false
+    @State private var accountExpanded = false
     @State private var alertsExpanded = true
     @State private var updateGuardID = UUID()
     @StateObject private var reportBrowser = ReportBrowserModel()
@@ -313,12 +328,26 @@ struct WorkspaceView: View {
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("STONE SQUARE").font(.headline).tracking(1.5)
-                    Text("LODGE DASHBOARD").font(.caption2).tracking(2).foregroundStyle(SignTheme.gold)
+                HStack(spacing: 11) {
+                    Text("22")
+                        .font(.system(size: 21, weight: .medium, design: .serif))
+                        .foregroundStyle(SignTheme.gold)
+                        .frame(width: 43, height: 43)
+                        .overlay(Circle().stroke(SignTheme.gold, lineWidth: 2))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Stone Square")
+                            .font(.system(size: 19, weight: .medium, design: .serif))
+                            .foregroundStyle(SignTheme.sidebarInk)
+                        Text("Lodge Dashboard")
+                            .font(.caption)
+                            .foregroundStyle(SignTheme.sidebarInk.opacity(0.78))
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(22)
+                .padding(.horizontal, 18)
+                .padding(.top, 23)
+                .padding(.bottom, 19)
+                Rectangle().fill(SignTheme.sidebarInk.opacity(0.22)).frame(height: 1).padding(.horizontal, 18)
                 if alertCount > 0 {
                     DisclosureGroup(isExpanded: $alertsExpanded) {
                         ScrollView {
@@ -336,8 +365,13 @@ struct WorkspaceView: View {
                     .padding(.horizontal, 18)
                     .padding(.bottom, 8)
                 }
-                TextField("Find A Tool", text: $toolSearch)
-                    .textFieldStyle(.roundedBorder)
+                TextField("", text: $toolSearch,
+                          prompt: Text("Find A Tool").foregroundStyle(SignTheme.sidebarInk.opacity(0.78)))
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(SignTheme.sidebarInk)
+                    .padding(.horizontal, 11)
+                    .frame(height: 36)
+                    .background(SignTheme.sidebarInk.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
                     .padding(.horizontal, 18)
                     .padding(.bottom, 10)
                 List(selection: $selection) {
@@ -356,7 +390,7 @@ struct WorkspaceView: View {
                     } else {
                     Label("Home", systemImage: "house.fill").tag(AppSection.home)
                     if model.user?.canOpen(.lodgeCalendar) == true || model.user?.canReadMinutes == true || model.user?.can("reports.create") == true || model.user?.role == "owner" {
-                        DisclosureGroup("Meetings & Reports", isExpanded: $meetingsExpanded) {
+                        DisclosureGroup("Meetings", isExpanded: $meetingsExpanded) {
                             if model.user?.canOpen(.lodgeCalendar) == true { Label("Lodge Calendar", systemImage: "calendar").tag(AppSection.lodgeCalendar) }
                             if model.user?.role == "owner" { Label("Agenda Creator", systemImage: "list.number").tag(AppSection.agenda) }
                             if model.user?.canReadMinutes == true { Label("Meeting Minutes", systemImage: "text.document.fill").tag(AppSection.minutes) }
@@ -365,7 +399,7 @@ struct WorkspaceView: View {
                         }
                     }
                     if model.user?.canPrepareCorrespondence == true || model.user?.can("documents.status") == true || model.user?.canReadApprovals == true || model.user?.canProposeDispensation == true || model.user?.role == "owner" {
-                        DisclosureGroup("Documents & Approvals", isExpanded: $documentsExpanded) {
+                        DisclosureGroup("Documents", isExpanded: $documentsExpanded) {
                             if model.user?.canPrepareCorrespondence == true { Label("Lodge Correspondence", systemImage: "envelope.open.fill").tag(AppSection.correspondence) }
                             if model.user?.can("documents.status") == true { Label("Live Queue", systemImage: "list.number").tag(AppSection.documents) }
                             if model.user?.canReadApprovals == true { Label("Approvals", systemImage: "checkmark.seal.fill").tag(AppSection.approvals) }
@@ -378,7 +412,7 @@ struct WorkspaceView: View {
                         }
                     }
                     if model.user?.canReadDues == true || model.user?.can("dues.self") == true || model.user?.canUseTreasury == true {
-                        DisclosureGroup("Dues & Finance", isExpanded: $financeExpanded) {
+                        DisclosureGroup("Dues", isExpanded: $financeExpanded) {
                             if model.user?.can("dues.self") == true { Label("My Dues", systemImage: "dollarsign.circle.fill").tag(AppSection.myDues) }
                             if model.user?.canReadDues == true { Label("Dues Ledger", systemImage: "list.bullet.rectangle.portrait.fill").tag(AppSection.dues) }
                             if model.user?.canUseTreasury == true { Label("Treasurer Reports", systemImage: "chart.bar.doc.horizontal.fill").tag(AppSection.treasury) }
@@ -399,7 +433,7 @@ struct WorkspaceView: View {
                         Label("Grand View", systemImage: "arrow.up.right.square")
                     }
                     if model.user?.role == "owner" || model.user?.canSign == true || model.user?.can("settings.manage") == true {
-                        DisclosureGroup("Account & Administration", isExpanded: $accountExpanded) {
+                        DisclosureGroup("More", isExpanded: $accountExpanded) {
                             if model.user?.role == "owner" { Label("Dashboard Activity", systemImage: "clock.arrow.circlepath").tag(AppSection.activity) }
                             if model.user?.canSign == true { Label("Signature Profile", systemImage: "signature").tag(AppSection.profile) }
                             if model.user?.can("settings.manage") == true { Label("Service Settings", systemImage: "network").tag(AppSection.settings) }
@@ -409,6 +443,8 @@ struct WorkspaceView: View {
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
+                .foregroundStyle(SignTheme.sidebarInk)
+                .tint(SignTheme.gold)
                 .environment(\.defaultMinListRowHeight, 42)
                 .frame(minHeight: 0, maxHeight: .infinity)
                 VStack(alignment: .leading, spacing: 5) {
@@ -417,18 +453,19 @@ struct WorkspaceView: View {
                         systemImage: model.isLive ? "circle.fill" : "circle.dotted"
                     )
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(model.isLive ? .green : .secondary)
+                    .foregroundStyle(model.isLive ? SignTheme.gold : SignTheme.sidebarInk.opacity(0.7))
                     Divider().padding(.vertical, 5)
-                    Text(model.user?.name ?? "").font(.callout.weight(.semibold))
-                    Text(model.user?.roleLabel ?? "").font(.caption).foregroundStyle(.secondary)
-                    Text("Automatic login on this Mac").font(.caption2).foregroundStyle(.secondary).padding(.top, 5)
-                    Text("Sign-ins and actions are recorded for Lodge administration. Active time is estimated.").font(.caption2).foregroundStyle(.secondary)
+                    Text(model.user?.name ?? "").font(.callout.weight(.semibold)).foregroundStyle(SignTheme.sidebarInk)
+                    Text(model.user?.roleLabel ?? "").font(.caption).foregroundStyle(SignTheme.sidebarInk.opacity(0.74))
+                    Text("Automatic Login On This Mac").font(.caption2).foregroundStyle(SignTheme.sidebarInk.opacity(0.74)).padding(.top, 5)
+                    Text("Sign-ins and actions are recorded for Lodge administration. Active time is estimated.").font(.caption2).foregroundStyle(SignTheme.sidebarInk.opacity(0.66))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
             }
-            .background(.bar)
-            .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
+            .background(SignTheme.brandNavy)
+            .environment(\.colorScheme, .dark)
+            .navigationSplitViewColumnWidth(min: 210, ideal: 232, max: 280)
         } detail: {
             GeometryReader { available in
                 VStack(spacing: 0) {
@@ -458,7 +495,22 @@ struct WorkspaceView: View {
             }
         }
         .onDisappear { activityPresence.stop(); AppUpdater.shared.setWorkspaceGuard(updateGuardID, check: nil) }
-        .onChange(of:selection){_,section in activityPresence.visit(section)}
+        .onChange(of:selection){_,section in
+            activityPresence.visit(section)
+            switch section {
+            case .lodgeCalendar, .agenda, .minutes, .reportGenerator, .receivedReports:
+                meetingsExpanded = true
+            case .correspondence, .documents, .approvals, .createDispensation, .proposalReview:
+                documentsExpanded = true
+            case .myDues, .dues, .treasury:
+                financeExpanded = true
+            case .candidateTracker, .access, .memberAccess, .suggestions:
+                peopleExpanded = true
+            case .activity, .profile, .settings:
+                accountExpanded = true
+            default: break
+            }
+        }
         .onChange(of: model.correspondenceRecordsRevision) { _, _ in
             guard model.user?.canPrepareCorrespondence == true else { return }
             Task {
@@ -631,7 +683,8 @@ struct WorkspaceView: View {
                 openTreasury: { selection = .treasury },
                 openBuilding: { selection = .building },
                 openCalendar: { selection = .lodgeCalendar },
-                openMyDues: { selection = .myDues }
+                openMyDues: { selection = .myDues },
+                openSettings: { selection = .settings }
             )
         case .building: BuildingRequestsView()
         case .lodgeCalendar: LodgeCalendarView()
@@ -1364,8 +1417,14 @@ struct DispensationBuilderView: View {
     }
 }
 
+private struct UpcomingCalendarResponse: Decodable {
+    let events: [LodgeCalendarEvent]
+}
+
 struct LandingDashboardView: View {
     @EnvironmentObject var model: AppModel
+    @State private var upcomingEvents: [LodgeCalendarEvent] = []
+    @State private var upcomingUnavailable = false
     let openDispensations: () -> Void
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
@@ -1377,6 +1436,7 @@ struct LandingDashboardView: View {
     let openBuilding: () -> Void
     let openCalendar: () -> Void
     let openMyDues: () -> Void
+    let openSettings: () -> Void
 
     private var awaitingCount: Int {
         if model.user?.role == "owner" || model.user?.role == "viewer" {
@@ -1405,134 +1465,277 @@ struct LandingDashboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
-            List {
-                Section {
-                    VStack(alignment: .leading, spacing: 14) {
+            GeometryReader { available in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 17) {
                         Text("STONE SQUARE LODGE NO. 22")
-                            .font(.caption.weight(.bold))
-                            .tracking(1.4)
-                            .foregroundStyle(SignTheme.gold)
-                        Text("Your Lodge At A Glance")
-                            .font(.title2.weight(.semibold))
-                        Text("Review what needs attention, then choose a Lodge tool.")
-                            .font(.callout)
+                            .font(.caption.weight(.semibold))
+                            .tracking(1.2)
                             .foregroundStyle(.secondary)
-                        primaryAction
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(20)
-                    .background(SignTheme.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-                }
-                .listRowBackground(Color.clear)
-                if hasAttentionItems {
-                    Section("Needs Attention") {
-                        if model.user?.can("documents.status") == true && awaitingCount > 0 {
-                            homeRow("Live Queue", "\(awaitingCount) open document\(awaitingCount == 1 ? "" : "s")", "list.number", action: openDispensations)
-                        }
-                        if model.user?.canReadMinutes == true && !model.minutesReviewAlerts.isEmpty {
-                            homeRow("Meeting Minutes", "\(model.minutesReviewAlerts.count) review reminder\(model.minutesReviewAlerts.count == 1 ? "" : "s")", "text.document.fill", action: openMinutes)
-                        }
-                        if model.user?.canUseTreasury == true && !model.treasuryAlerts.isEmpty {
-                            homeRow("Treasurer Reports", "\(model.treasuryAlerts.count) banking record\(model.treasuryAlerts.count == 1 ? "" : "s") awaiting attention", "chart.bar.doc.horizontal.fill", action: openTreasury)
-                        }
-                        if model.user?.canOpen(.building) == true {
-                            ForEach(model.buildingAlerts) { alert in
-                                Button {
-                                    model.requestedBuildingRequestID = alert.requestId
-                                    openBuilding()
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Label(alert.title, systemImage: "bell.badge.fill").font(.headline)
-                                        Text(alert.message).font(.callout).foregroundStyle(.secondary)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.vertical, 6)
-                                    .contentShape(Rectangle())
+                        hero
+                        if available.size.width >= 760 {
+                            HStack(alignment: .top, spacing: 16) {
+                                VStack(spacing: 16) {
+                                    attentionPanel
+                                    upcomingPanel
+                                    toolsPanel
                                 }
-                                .buttonStyle(.plain)
+                                .frame(maxWidth: .infinity, alignment: .top)
+                                VStack(spacing: 16) {
+                                    quickAccessPanel
+                                    jurisdictionPanel
+                                    accountPanel
+                                }
+                                .frame(width: max(245, available.size.width * 0.32), alignment: .top)
                             }
+                        } else {
+                            attentionPanel
+                            upcomingPanel
+                            quickAccessPanel
+                            jurisdictionPanel
+                            toolsPanel
+                            accountPanel
                         }
-                        if model.user?.role == "owner", model.emailDeliveryReady == false {
-                            Label("Email delivery needs attention", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text("Invitations, password reset codes, and record notifications are saved, but email cannot leave the Dashboard until the mail service is connected.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
+                    }
+                    .frame(maxWidth: 1180, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .padding(24)
+                }
+                .background(SignTheme.page)
+            }
+        }.background(SignTheme.page)
+            .task {
+                if model.emailDeliveryReady == nil { await model.loadServiceSetup() }
+                await loadUpcomingEvents()
+            }
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(hasAttentionItems ? "Your Next Lodge Action" : "Welcome To Your Lodge")
+                .font(.system(size: 26, weight: .medium, design: .serif))
+                .foregroundStyle(SignTheme.sidebarInk)
+            Text(hasAttentionItems ? "See the work assigned to your office." : "Find meetings, dues, Lodge records, and the tools available to you.")
+                .font(.callout)
+                .foregroundStyle(SignTheme.sidebarInk.opacity(0.86))
+            primaryAction.padding(.top, 7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(22)
+        .background(SignTheme.brandNavy, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func homeCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 19, weight: .medium, design: .serif))
+                .foregroundStyle(SignTheme.navy)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Rectangle().fill(SignTheme.cardLine).frame(height: 1)
+            content()
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(SignTheme.surface, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(SignTheme.cardLine, lineWidth: 1))
+    }
+
+    private var attentionPanel: some View {
+        homeCard("Needs Attention") {
+            if !hasAttentionItems {
+                Label("You’re All Caught Up", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .padding(.vertical, 11)
+            }
+            if model.user?.can("documents.status") == true && awaitingCount > 0 {
+                homeRow("Live Queue", "\(awaitingCount) Open Document\(awaitingCount == 1 ? "" : "s")", "list.number", action: openDispensations)
+            }
+            if model.user?.canReadMinutes == true && !model.minutesReviewAlerts.isEmpty {
+                homeRow("Meeting Minutes", "\(model.minutesReviewAlerts.count) Review Reminder\(model.minutesReviewAlerts.count == 1 ? "" : "s")", "text.document.fill", action: openMinutes)
+            }
+            if model.user?.canUseTreasury == true && !model.treasuryAlerts.isEmpty {
+                homeRow("Treasurer Reports", "\(model.treasuryAlerts.count) Banking Record\(model.treasuryAlerts.count == 1 ? "" : "s") Awaiting Attention", "chart.bar.doc.horizontal.fill", action: openTreasury)
+            }
+            if model.user?.canOpen(.building) == true {
+                ForEach(model.buildingAlerts) { alert in
+                    homeRow(alert.title, alert.message, "building.2") {
+                        model.requestedBuildingRequestID = alert.requestId
+                        openBuilding()
                     }
                 }
-                Section("Quick Access") {
-                    if model.user?.canOpen(.lodgeCalendar) == true { homeRow("Lodge Calendar", "See upcoming Lodge and community events", "calendar", action: openCalendar) }
-                    if model.user?.can("dues.self") == true { homeRow("My Dues", "View your assessment and payment history", "dollarsign.circle.fill", action: openMyDues) }
-                    Link(destination: GrandViewPortal.url) {
-                        HStack(spacing: 14) {
-                            Image(systemName: "arrow.up.right.square").font(.title3).foregroundStyle(Color.accentColor).frame(width: 28)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Open Grand View").font(.headline)
-                                Text("Visit your Grand Lodge account in your browser").font(.callout).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.up.right").foregroundStyle(.tertiary)
-                        }
-                        .padding(.vertical, 8)
-                        .contentShape(Rectangle())
+            }
+            if model.user?.role == "owner", model.emailDeliveryReady == false {
+                Label("Email Delivery Needs Attention", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Invitations, password reset codes, and record notifications are saved, but email cannot leave the Dashboard until the mail service is connected.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var quickAccessPanel: some View {
+        homeCard("Quick Access") {
+            if model.user?.canOpen(.lodgeCalendar) == true {
+                homeRow("Lodge Calendar", "See Upcoming Lodge And Community Events", "calendar", action: openCalendar)
+            }
+            if model.user?.can("dues.self") == true {
+                homeRow("My Dues", "View Your Assessment And Payment History", "dollarsign.circle", action: openMyDues)
+            }
+            grandViewLink
+        }
+    }
+
+    @ViewBuilder private var upcomingPanel: some View {
+        if model.user?.canOpen(.lodgeCalendar) == true {
+            homeCard("Coming Up") {
+                if upcomingUnavailable {
+                    Text("Upcoming events are temporarily unavailable.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else if upcomingEvents.isEmpty {
+                    Text("No upcoming events are listed in the next 60 days.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(upcomingEvents) { event in
+                        let time = LodgeCalendarDates.displayTime(event.startTime)
+                        homeRow(event.title,
+                                [LodgeCalendarDates.displayDate(event.startDate), time, event.location]
+                                    .filter { !$0.isEmpty }.joined(separator: " · "),
+                                "calendar", action: openCalendar)
                     }
-                    .buttonStyle(.plain)
                 }
-                Section("All Lodge Tools") {
-                    if model.user?.canOpen(.building) == true { homeRow("Building Requests", model.user?.can("building.view") == true ? "Submit building requests and view recorded decisions" : "Submit a request to use the Lodge building", "building.2", action: openBuilding) }
-                    if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, preview and send a Lodge report", "doc.text", action: openReports) }
-                    if model.user?.canPrepareCorrespondence == true { homeRow("Lodge Correspondence", "Prepare and preview a secretary's letter", "envelope.open.fill", action: openCorrespondence) }
-                    if model.user?.role == "owner" { homeRow("Received Reports", "Review reports submitted to you", "tray.full.fill", action: openReceivedReports) }
-                    if model.user?.can("documents.status") == true {
-                        homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) awaiting action" : "Open the document queue", "doc.text.fill", action: openDispensations)
-                    }
-                    if model.user?.canReadMinutes == true {
-                        homeRow("Meeting Minutes", model.user?.can("minutes.prepare") == true ? "Prepare, review and attest to meeting records" : "Read finalized meeting records", "text.document.fill", action: openMinutes)
-                    }
-                    if model.user?.role == "owner" { homeRow("Agenda Creator", "Create, save, resume, and preview Lodge agenda drafts", "list.number", action: openAgenda) }
-                    if model.user?.canUseTreasury == true {
-                        homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? (model.treasuryAlerts.isEmpty ? "Prepare and review treasurer reports" : "\(model.treasuryAlerts.count) banking record\(model.treasuryAlerts.count == 1 ? "" : "s") awaiting a preparer") : model.user?.can("treasury.upload") == true ? "Provide banking records and view reports" : "Read finalized treasurer reports", "chart.bar.doc.horizontal.fill", action: openTreasury)
-                    }
-                    if model.user?.can("candidates.view") == true {
-                        homeRow("Candidate Tracker", "Open candidate and membership records", "person.text.rectangle", action: openCandidateTracker)
-                    }
+                Button("Open Lodge Calendar", action: openCalendar)
+                    .font(.callout.weight(.semibold))
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    private func loadUpcomingEvents() async {
+        guard model.user?.canOpen(.lodgeCalendar) == true else { return }
+        let from = LodgeCalendarDates.key(Date())
+        let end = LodgeCalendarDates.key(LodgeCalendarDates.calendar.date(byAdding: .day, value: 60, to: Date()) ?? Date())
+        do {
+            let result: UpcomingCalendarResponse = try await model.request("/api/lodge-calendar?from=\(from)&to=\(end)")
+            upcomingEvents = Array(result.events
+                .filter { ($0.endDate.isEmpty ? $0.startDate : $0.endDate) >= from && $0.status.lowercased() != "cancelled" }
+                .sorted { ($0.startDate, $0.startTime ?? "", $0.title) < ($1.startDate, $1.startTime ?? "", $1.title) }
+                .prefix(3))
+            upcomingUnavailable = false
+        } catch {
+            upcomingEvents = []
+            upcomingUnavailable = true
+        }
+    }
+
+    private var grandViewLink: some View {
+        Link(destination: GrandViewPortal.url) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.title3)
+                    .foregroundStyle(SignTheme.gold)
+                    .frame(width: 25)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Open Grand View").font(.callout.weight(.semibold))
+                    Text("Visit Your Grand Lodge Account In Your Browser")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Section("Your Account") {
-                    LabeledContent("Signed in as", value: model.user?.name ?? "")
-                    LabeledContent("Access", value: model.user?.roleLabel ?? "")
-                }
-            }.listStyle(.inset).environment(\.defaultMinListRowHeight, 60)
-        }.background(Color(nsColor: .windowBackgroundColor))
-            .task { if model.emailDeliveryReady == nil { await model.loadServiceSetup() } }
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var jurisdictionPanel: some View {
+        homeCard("Jurisdiction") {
+            Text("Grand View Is The Grand Lodge’s Statewide Member Portal And Official Record.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            grandViewLink
+        }
+    }
+
+    private var accountPanel: some View {
+        homeCard("Your Account") {
+            LabeledContent("Signed In As", value: model.user?.name ?? "")
+            LabeledContent("Access", value: model.user?.roleLabel ?? "")
+        }
+    }
+
+    private var toolsPanel: some View {
+        homeCard("All Lodge Tools") {
+            if model.user?.canOpen(.building) == true { homeRow("Building Requests", model.user?.can("building.view") == true ? "Submit Building Requests And View Recorded Decisions" : "Submit A Request To Use The Lodge Building", "building.2", action: openBuilding) }
+            if model.user?.can("reports.create") == true { homeRow("Report Generator", "Prepare, Preview And Send A Lodge Report", "doc.text", action: openReports) }
+            if model.user?.canPrepareCorrespondence == true { homeRow("Lodge Correspondence", "Prepare And Preview A Secretary’s Letter", "envelope.open", action: openCorrespondence) }
+            if model.user?.role == "owner" { homeRow("Received Reports", "Review Reports Submitted To You", "tray.full", action: openReceivedReports) }
+            if model.user?.can("documents.status") == true { homeRow("Dispensations", awaitingCount > 0 ? "\(awaitingCount) Awaiting Action" : "Open The Document Queue", "doc.text", action: openDispensations) }
+            if model.user?.canReadMinutes == true { homeRow("Meeting Minutes", model.user?.can("minutes.prepare") == true ? "Prepare, Review And Attest To Meeting Records" : "Read Finalized Meeting Records", "text.document", action: openMinutes) }
+            if model.user?.role == "owner" { homeRow("Agenda Creator", "Create, Save, Resume, And Preview Lodge Agenda Drafts", "list.number", action: openAgenda) }
+            if model.user?.canUseTreasury == true {
+                homeRow("Treasurer Reports", model.user?.can("treasury.prepare") == true ? (model.treasuryAlerts.isEmpty ? "Prepare And Review Treasurer Reports" : "\(model.treasuryAlerts.count) Banking Record\(model.treasuryAlerts.count == 1 ? "" : "s") Awaiting A Preparer") : model.user?.can("treasury.upload") == true ? "Provide Banking Records And View Reports" : "Read Finalized Treasurer Reports", "chart.bar.doc.horizontal", action: openTreasury)
+            }
+            if model.user?.can("candidates.view") == true { homeRow("Candidate Tracker", "Open Candidate And Membership Records", "person.text.rectangle", action: openCandidateTracker) }
+        }
     }
     @ViewBuilder private var primaryAction: some View {
         if let alert = model.buildingAlerts.first, model.user?.canOpen(.building) == true {
-            Button("Review Building Request") {
+            heroButton("Review Building Request") {
                 model.requestedBuildingRequestID = alert.requestId
                 openBuilding()
-            }.buttonStyle(.borderedProminent)
+            }
         } else if !model.minutesReviewAlerts.isEmpty, model.user?.canReadMinutes == true {
-            Button("Open Meeting Minutes", action: openMinutes).buttonStyle(.borderedProminent)
+            heroButton("Open Meeting Minutes", action: openMinutes)
         } else if !model.treasuryAlerts.isEmpty, model.user?.canUseTreasury == true {
-            Button("Open Treasurer Reports", action: openTreasury).buttonStyle(.borderedProminent)
+            heroButton("Open Treasurer Reports", action: openTreasury)
         } else if awaitingCount > 0, model.user?.can("documents.status") == true {
-            Button("Open Live Queue", action: openDispensations).buttonStyle(.borderedProminent)
+            heroButton("Open Live Queue", action: openDispensations)
+        } else if model.user?.role == "owner", model.emailDeliveryReady == false,
+                  model.user?.canOpen(.settings) == true {
+            heroButton("Open Service Settings", action: openSettings)
+        } else if model.user?.canOpen(.lodgeCalendar) == true {
+            heroButton("Open Lodge Calendar", action: openCalendar)
+        } else if model.user?.can("dues.self") == true {
+            heroButton("Open My Dues", action: openMyDues)
         }
+    }
+    private func heroButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(title).font(.callout.weight(.semibold))
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.right")
+            }
+            .foregroundStyle(SignTheme.brandNavy)
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .frame(maxWidth: 350)
+            .background(SignTheme.gold, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
     }
     private func homeRow(_ title: String, _ detail: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 18) {
+            HStack(spacing: 12) {
                 Image(systemName: symbol)
-                    .font(.title3)
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 42, height: 42)
-                    .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                    .font(.body)
+                    .foregroundStyle(SignTheme.gold)
+                    .frame(width: 25)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(title).font(.headline)
-                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                    Text(title).font(.callout.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(); Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-            }.padding(.vertical, 12).contentShape(Rectangle())
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
 }
