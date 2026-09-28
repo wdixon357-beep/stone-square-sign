@@ -1419,12 +1419,14 @@ struct DispensationBuilderView: View {
 
 private struct UpcomingCalendarResponse: Decodable {
     let events: [LodgeCalendarEvent]
+    let warnings: [String]
 }
 
 struct LandingDashboardView: View {
     @EnvironmentObject var model: AppModel
     @State private var upcomingEvents: [LodgeCalendarEvent] = []
     @State private var upcomingUnavailable = false
+    @State private var hasCalendarSourceWarnings = false
     let openDispensations: () -> Void
     let openCandidateTracker: () -> Void
     let openReports: () -> Void
@@ -1592,7 +1594,9 @@ struct LandingDashboardView: View {
                     Text("Upcoming events are temporarily unavailable.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else if upcomingEvents.isEmpty {
-                    Text("No upcoming events are listed in the next 60 days.")
+                    Text(hasCalendarSourceWarnings
+                         ? "No Lodge events are listed in the next 60 days."
+                         : "No upcoming events are listed in the next 60 days.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
                     ForEach(upcomingEvents) { event in
@@ -1602,6 +1606,10 @@ struct LandingDashboardView: View {
                                     .filter { !$0.isEmpty }.joined(separator: " · "),
                                 "calendar", action: openCalendar)
                     }
+                }
+                if hasCalendarSourceWarnings && !upcomingUnavailable {
+                    Text("Some building calendar updates are unavailable. Open the calendar for details.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
                 Button("Open Lodge Calendar", action: openCalendar)
                     .font(.callout.weight(.semibold))
@@ -1621,9 +1629,11 @@ struct LandingDashboardView: View {
                 .sorted { ($0.startDate, $0.startTime ?? "", $0.title) < ($1.startDate, $1.startTime ?? "", $1.title) }
                 .prefix(3))
             upcomingUnavailable = false
+            hasCalendarSourceWarnings = !result.warnings.isEmpty
         } catch {
             upcomingEvents = []
             upcomingUnavailable = true
+            hasCalendarSourceWarnings = false
         }
     }
 
