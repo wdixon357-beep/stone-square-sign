@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const samplePdf = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sample-dispensation.pdf');
 const port = Number(process.env.WEB_RELEASE_FIXTURE_PORT || 3617);
+let syntheticDuesReversal = false;
 const user = {
   id: 999,
   name: 'William Dixon-Saunders',
@@ -37,7 +38,7 @@ const draft = {
 };
 
 const api = async (request, response, url) => {
-  await body(request);
+  const requestBody = await body(request);
   if (url.pathname === '/api/setup') return json(response, { registrationMode: 'invitation', needsOwnerSetup: false });
   if (url.pathname === '/api/version') return json(response, { version: '1.19.0' });
   if (url.pathname === '/api/auth/me') return json(response, { user, session: { lifetimeDays: 90 } });
@@ -67,7 +68,17 @@ const api = async (request, response, url) => {
   if (url.pathname === '/api/agendas') return json(response, { agendas: [{ id: 'agenda-1', revision: 1, updatedAt: '2026-09-15T20:00:00Z', draft: { meetingDate: '2026-09-17', meetingType: 'Stated Communication', startTime: '7:30 PM', dress: 'Masonic Dress', subtitle: '', officers: [{ office: 'Worshipful Master', name: 'William Dixon-Saunders' }], sections: [{ id: 'opening', heading: 'Opening', scheduledTime: '7:30 PM', body: 'Opening of the Lodge.' }] } }] });
   if (url.pathname === '/api/approvals') return json(response, { approvals: [{ id: 1, title: 'Community Event Dispensation', original_name: 'dispensation.pdf', approval_status: 'approved', approval_source: 'email', approved_by: 'District Deputy', approved_on: '2026-09-11T13:00:00Z', has_endorsed_copy: false }] });
   if (url.pathname === '/api/proposals') return json(response, { proposals: [{ id: 31, title: 'Community outreach event', requestDetails: 'Request permission for Lodge participation.', proposerName: 'Jamal Davis', proposerUserId: 4, eventDate: '2026-10-10', eventTime: '1:00 PM to 4:00 PM', locationName: 'Community Center', streetAddress: '100 Main Street', cityState: 'Middletown, DE', status: 'pending', proposerNote: '' }] });
-  if (url.pathname === '/api/dues') return json(response, { duesYear: 2026, rateCents: 25000, totals: { collectedCents: 50000, outstandingCents: 25000, paidCount: 2, unpaidCount: 1 }, staleCampaign: null, rows: [{ name: 'Brother One', status: 'paid', paidCents: 25000, assessedCents: 25000, remainingCents: 0, creditCents: 0, lastPaymentISO: '2026-01-15', payments: [{ matchedVia: 'email' }] }, { name: 'Brother Two', status: 'unpaid', paidCents: 0, assessedCents: 25000, remainingCents: 25000, creditCents: 0, payments: [] }], unmatched: [] });
+  if (url.pathname === '/api/dues/adjustments/17/reverse' && request.method === 'POST') {
+    if (syntheticDuesReversal) return json(response, { error: 'That entry has already been reversed.' }, 409);
+    if (!JSON.parse(requestBody.toString()).reason?.trim()) return json(response, { error: 'Give the reason for the reversal.' }, 400);
+    syntheticDuesReversal = true;
+    return json(response, { id: 18, message: 'The original entry remains in the record and a reversal was added.' }, 201);
+  }
+  if (url.pathname === '/api/dues') {
+    const payments = [{ adjustmentId: 17, dateISO: '2026-09-18', amountCents: 10000, campaign: 'manual', transactionType: 'payment', paymentMethod: 'Check', sourceReference: 'Preview only', enteredBy: user.name, reversesAdjustmentId: null }, { externalId: 'zeffy-preview', dateISO: '2026-09-03', amountCents: 10000, campaign: 'annual', matchedVia: 'email' }];
+    if (syntheticDuesReversal) payments.unshift({ adjustmentId: 18, dateISO: '2026-09-28', amountCents: -10000, campaign: 'manual', transactionType: 'reversal', paymentMethod: 'Check', enteredBy: user.name, reversesAdjustmentId: 17, note: 'Synthetic test correction' });
+    return json(response, { duesYear: 2026, rateCents: 17500, totals: { collectedCents: syntheticDuesReversal ? 10000 : 20000, outstandingCents: syntheticDuesReversal ? 25000 : 17500, paidCount: syntheticDuesReversal ? 0 : 1, unpaidCount: 1 }, staleCampaign: null, rows: [{ rosterId: 1, name: 'Brother One', status: syntheticDuesReversal ? 'partial' : 'paid', paidCents: syntheticDuesReversal ? 10000 : 20000, assessedCents: 17500, remainingCents: syntheticDuesReversal ? 7500 : 0, creditCents: syntheticDuesReversal ? 0 : 2500, lastPaymentISO: syntheticDuesReversal ? '2026-09-28' : '2026-09-18', payments }, { rosterId: 2, name: 'Brother Two', status: 'unpaid', paidCents: 0, assessedCents: 17500, remainingCents: 17500, creditCents: 0, payments: [] }], unmatched: [] });
+  }
   if (url.pathname === '/api/dues/me') return json(response, { duesYear: 2026, rateCents: 17500, row: { name: user.name, status: 'partial', paidCents: 7500, assessedCents: 17500, remainingCents: 10000, creditCents: 0, lastPaymentISO: '2026-09-08', payments: [{ date: '2026-09-08', amountCents: 7500, source: 'Zeffy', description: 'Annual dues payment' }] }, paymentLinks: { full: 'https://www.zeffy.com/en-US/ticketing/2026-2027-annual-dues-payment', custom: 'https://www.zeffy.com/en-US/donation-form/custom-lodge-dues-payment-stone-square-lodge-22-2026--2027' } });
   if (url.pathname === '/api/suggestions/me') return json(response, { suggestions: [{ reference: 'SS-1001', subject: 'Fellowship activity', status: 'Under Review', createdAt: '2026-09-14T18:00:00Z', ownerResponse: '' }] });
   if (url.pathname === '/api/admin/suggestions') return json(response, { suggestions: [{ id: 1, reference: 'SS-1001', submitterName: 'Brother One', category: 'Lodge activity', subject: 'Fellowship activity', body: 'Consider a quarterly fellowship activity.', status: 'Under Review', ownerResponse: '', createdAt: '2026-09-14T18:00:00Z' }] });

@@ -1,6 +1,6 @@
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
 import { buildDuesLedger, duesConfigured, duesPaymentLinks } from './dues.js';
-import { hasPermission } from './access-control.js';
+import { DUES_MANAGEMENT_ROLES, hasPermission } from './access-control.js';
 import { prepareManualDuesPayment } from './dues-assistant.js';
 
 const nowIso = () => new Date().toISOString();
@@ -21,6 +21,13 @@ const validDate = value => {
   return Number.isFinite(date.valueOf()) && date.toISOString().slice(0, 10) === value;
 };
 const failure = (statusCode, message) => Object.assign(new Error(message), { statusCode });
+const canManageDues = user => DUES_MANAGEMENT_ROLES.has(user?.role) && hasPermission(user, 'dues.manage');
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const sameDuesSubmission = (record, intended) => Number(record.roster_id) === intended.rosterId
+  && record.dues_year === intended.duesYear && record.transaction_type === intended.type
+  && Number(record.amount_cents) === intended.signed && record.effective_date === intended.effectiveDate
+  && record.payment_method === intended.method && (record.source_reference || '') === intended.source
+  && (record.note || '') === intended.note;
 
 export function mountMemberFeatures(app, {
   requireAuth, requireOwner, sendEmail, baseUrl, generateToken, hashSecret, generationFor, rateLimit,
@@ -41,8 +48,8 @@ export function mountMemberFeatures(app, {
 
   app.post('/api/dues/manual-assist', requireAuth, rateLimit({key:'dues-manual-assist',maximum:12,windowMs:3600000}), async (req, res, next) => {
     try {
-      if (!hasPermission(req.user, 'dues.manage') || !['owner', 'secretary', 'assistant_secretary'].includes(req.user.role)) {
-        throw failure(403, 'Only the Worshipful Master and the Secretary offices may prepare manual dues entries.');
+      if (!canManageDues(req.user)) {
+        throw failure(403, 'Only the Worshipful Master, Secretary offices, and Treasurer offices may prepare manual dues entries.');
       }
       const source = clean(req.body?.text, 2001);
       if (source.length < 12 || source.length > 2000) throw failure(400, 'Describe one payment in 12 to 2,000 characters.');
@@ -56,8 +63,8 @@ export function mountMemberFeatures(app, {
 
   app.post('/api/dues/adjustments', requireAuth, async (req, res, next) => {
     try {
-      if (!hasPermission(req.user, 'dues.manage') || !['owner', 'secretary', 'assistant_secretary'].includes(req.user.role)) {
-        throw failure(403, 'Only the Worshipful Master and the Secretary offices may record non-Zeffy dues activity.');
+      if (!canManageDues(req.user)) {
+        throw failure(403, 'Only the Worshipful Master, Secretary offices, and Treasurer offices may record non-Zeffy dues activity.');
       }
       const rosterId = Number(req.body?.rosterId);
       const type = clean(req.body?.transactionType, 30).toLowerCase();
@@ -66,50 +73,76 @@ export function mountMemberFeatures(app, {
       const method = clean(req.body?.paymentMethod, 40);
       const source = clean(req.body?.sourceReference, 160);
       const note = clean(req.body?.note, 500);
+      const suppliedSubmissionId = req.body?.clientSubmissionId;
+      if (suppliedSubmissionId !== undefined && (typeof suppliedSubmissionId !== 'string' || !UUID.test(suppliedSubmissionId.trim()))) {
+        throw failure(400, 'Use a valid submission ID for this dues entry.');
+      }
+      const submissionId = suppliedSubmissionId === undefined ? null : suppliedSubmissionId.trim().toLowerCase();
       if (!Number.isSafeInteger(rosterId) || rosterId < 1 || !Object.hasOwn(TRANSACTION_SIGNS, type) || !cents
           || !validDate(effectiveDate) || !METHODS.has(method)) {
         throw failure(400, 'Choose a Brother, transaction type, amount, date, and payment method.');
       }
       if (type === 'reversal') throw failure(400, 'Use the reverse action on the original entry.');
+      if (/\bzeffy\b/i.test(`${source} ${note}`)) throw failure(409, 'Zeffy payments are reconciled automatically. Do not record them manually.');
       const signed = cents * TRANSACTION_SIGNS[type];
-      let id;
+      const duesYear = process.env.DUES_YEAR || '2026-2027';
+      const intended = { rosterId, duesYear, type, signed, effectiveDate, method, source, note };
+      let id; let replayed = false;
       await withTransaction(async () => {
+        const useRecordedSubmission = async () => {
+          if (!submissionId) return false;
+          const recorded = await dbGet('SELECT * FROM dues_adjustments WHERE entered_by_user_id=? AND client_submission_id=?', [req.user.id, submissionId]);
+          if (!recorded) return false;
+          if (!sameDuesSubmission(recorded, intended)) throw failure(409, 'That submission ID belongs to different dues activity. Review the ledger and start a new entry.');
+          id = recorded.id; replayed = true;
+          return true;
+        };
+        if (await useRecordedSubmission()) return;
         const brother = await dbGet('SELECT id,first_name,last_name FROM roster WHERE id=? FOR UPDATE', [rosterId]);
         if (!brother) throw failure(404, 'That Brother was not found on the Lodge roster.');
+        if (await useRecordedSubmission()) return;
         if (source && await dbGet(`SELECT 1 FROM dues_adjustments a
           WHERE a.roster_id=? AND a.dues_year=? AND LOWER(a.source_reference)=LOWER(?)
             AND a.transaction_type=? AND a.amount_cents=?
             AND NOT EXISTS (SELECT 1 FROM dues_adjustments r WHERE r.reverses_adjustment_id=a.id)`,
-          [rosterId, process.env.DUES_YEAR || '2026-2027', source, type, signed])) {
+          [rosterId, duesYear, source, type, signed])) {
           throw failure(409, 'That payment reference has already been recorded for this Brother.');
         }
         if (!source && await dbGet(`SELECT 1 FROM dues_adjustments a
           WHERE a.roster_id=? AND a.dues_year=? AND a.source_reference IS NULL
             AND a.transaction_type=? AND a.amount_cents=? AND a.effective_date=? AND a.payment_method=?
-            AND a.created_at>? AND NOT EXISTS (SELECT 1 FROM dues_adjustments r WHERE r.reverses_adjustment_id=a.id)`,
-          [rosterId, process.env.DUES_YEAR || '2026-2027', type, signed, effectiveDate, method, new Date(Date.now() - 10 * 60 * 1000).toISOString()])) {
-          throw failure(409, 'An identical payment was just recorded. Check the ledger before trying again, or enter its distinct receipt reference.');
+            AND NOT EXISTS (SELECT 1 FROM dues_adjustments r WHERE r.reverses_adjustment_id=a.id)`,
+          [rosterId, duesYear, type, signed, effectiveDate, method])) {
+          throw failure(409, 'An identical entry without a reference is already recorded. Check the ledger, or enter a distinct receipt reference for a separate payment.');
         }
         const inserted = await dbRun(`INSERT INTO dues_adjustments
-          (roster_id,dues_year,transaction_type,amount_cents,effective_date,payment_method,source_reference,note,entered_by_user_id,created_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?)`, [rosterId, process.env.DUES_YEAR || '2026-2027', type, signed, effectiveDate, method, source || null, note || null, req.user.id, nowIso()]);
+          (roster_id,dues_year,transaction_type,amount_cents,effective_date,payment_method,source_reference,note,entered_by_user_id,created_at,client_submission_id)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT (entered_by_user_id,client_submission_id) WHERE client_submission_id IS NOT NULL DO NOTHING RETURNING id`,
+          [rosterId, duesYear, type, signed, effectiveDate, method, source || null, note || null, req.user.id, nowIso(), submissionId]);
+        if (!inserted.lastID) {
+          if (await useRecordedSubmission()) return;
+          throw failure(409, 'This dues submission could not be confirmed. Refresh the ledger before trying again.');
+        }
         id = inserted.lastID;
         await dbRun(`INSERT INTO audit_events (user_id,action,ip_address,user_agent,details_json,created_at)
           VALUES (?,?,?,?,?,?)`, [req.user.id, 'dues_adjustment_recorded', req.ip, clean(req.get('user-agent'), 500), JSON.stringify({ adjustmentId: id, rosterId, transactionType: type, amountCents: signed, effectiveDate }), nowIso()]);
       });
-      res.status(201).json({ id, message: 'The non-Zeffy dues activity was recorded.' });
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.status(replayed ? 200 : 201).json({ id, replayed, message: replayed ? 'This dues activity was already recorded. No second entry was added.' : 'The non-Zeffy dues activity was recorded.' });
     } catch (error) { next(error); }
   });
 
   app.post('/api/dues/adjustments/:id/reverse', requireAuth, async (req, res, next) => {
     try {
-      if (!hasPermission(req.user, 'dues.manage') || !['owner', 'secretary', 'assistant_secretary'].includes(req.user.role)) throw failure(403, 'Dues adjustment access is restricted.');
+      if (!canManageDues(req.user)) throw failure(403, 'Dues adjustment access is restricted.');
       const originalId = Number(req.params.id); const reason = clean(req.body?.reason, 500);
       if (!Number.isSafeInteger(originalId) || originalId < 1 || !reason) throw failure(400, 'Give the reason for the reversal.');
       let id;
       await withTransaction(async () => {
         const original = await dbGet('SELECT * FROM dues_adjustments WHERE id=? FOR UPDATE', [originalId]);
         if (!original) throw failure(404, 'The original dues entry was not found.');
+        if (original.transaction_type === 'reversal') throw failure(400, 'A reversal cannot be reversed. Record a new, verified entry if another correction is needed.');
         if (await dbGet('SELECT 1 FROM dues_adjustments WHERE reverses_adjustment_id=?', [originalId])) throw failure(409, 'That entry has already been reversed.');
         const inserted = await dbRun(`INSERT INTO dues_adjustments
           (roster_id,dues_year,transaction_type,amount_cents,effective_date,payment_method,source_reference,note,entered_by_user_id,reverses_adjustment_id,created_at)

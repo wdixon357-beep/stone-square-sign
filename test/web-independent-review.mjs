@@ -13,7 +13,7 @@ const candidateSetup = ({ returnedUrl = 'https://tracker.stonesquare22pha.org/ap
     URL,
     apiFetch: async (...args) => { calls.push(['api', ...args]); return { url: returnedUrl }; },
     setMessage: (_element, text, error = false) => messages.push({ text, error }),
-    $: () => ({}),
+    $: id => id === 'homeToolSearch' ? { addEventListener: () => {} } : {},
     window: { location: { assign: url => calls.push(['assign', url]) } },
   };
   vm.createContext(context);

@@ -1,5 +1,5 @@
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
-import { hasPermission, resolvePermissions, permissionsForStorage, mountAccessRoutes, ensureBrotherSelfServiceAccess } from './access-control.js';
+import { hasPermission, resolvePermissions, permissionsForStorage, mountAccessRoutes, ensureBrotherSelfServiceAccess, grantTreasuryDuesAccessOnce } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity, recordAppIncident, clientName } from './activity.js';
 import path from 'node:path';
@@ -1797,13 +1797,16 @@ app.put('/api/officers/invitations/role', requireAuth, requireOwner, async (req,
     if (!['warden', 'assistant_treasurer'].includes(role)) return res.status(400).json({ error: 'Choose an available invitation office.' });
     if (role === 'warden' && !WARDEN_EMAILS.has(email)) return res.status(403).json({ error: 'This address is not configured for a Warden seat.' });
     await withTransaction(async () => {
-      const invite = await dbGet('SELECT id, role FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ? FOR UPDATE', [email, nowIso()]);
+      const invite = await dbGet('SELECT id, role, permissions_json, roster_id FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ? FOR UPDATE', [email, nowIso()]);
       if (!invite) throw httpError(404, 'An active pending invitation was not found.');
       if (role === 'assistant_treasurer') {
         if (!['treasury_preparer', 'assistant_treasurer'].includes(invite.role)) throw httpError(400, 'This correction applies to an existing treasury preparer invitation.');
         if (await dbGet("SELECT 1 FROM users WHERE role='assistant_treasurer' AND access_revoked_at IS NULL AND email<>?", [email]) || await dbGet("SELECT 1 FROM invitations WHERE role='assistant_treasurer' AND used_at IS NULL AND expires_at>? AND id<>?", [nowIso(), invite.id])) throw httpError(409, 'Assistant Treasurer already has an account or invitation.');
       }
-      await dbRun('UPDATE invitations SET role = ? WHERE id = ?', [role, invite.id]);
+      const permissions = role === 'assistant_treasurer' && invite.role !== role
+        ? JSON.stringify(permissionsForStorage([...resolvePermissions(invite), 'dues.ledger', 'dues.manage'], role))
+        : invite.permissions_json;
+      await dbRun('UPDATE invitations SET role = ?, permissions_json = ? WHERE id = ?', [role, permissions, invite.id]);
       await addAudit({ userId: req.user.id, action: 'officer_invitation_role_changed', ip: req.ip,
         details: { email, before: invite.role, after: role } });
     });
@@ -3752,6 +3755,7 @@ validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
 await ensureBrotherSelfServiceAccess();
+await grantTreasuryDuesAccessOnce();
 await initializeBuildingCalendar();
 await initAgendaSchema();
 await initTreasurySchema();

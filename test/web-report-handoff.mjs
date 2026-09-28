@@ -21,7 +21,7 @@ const context = {
   Date,
   apiFetch: (...args) => { apiCalls += 1; return nextHandoff(...args); },
   setMessage: (_element, text, error = false) => messages.push({ text, error }),
-  $: id => elements[id] || (elements[id] = {}),
+  $: id => elements[id] || (elements[id] = { addEventListener() {} }),
   window: {
     addEventListener: (name, listener) => { listeners[name] = listener; },
     open: () => null,

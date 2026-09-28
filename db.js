@@ -450,6 +450,9 @@ export const initSchema = async (exec = run) => {
     reverses_adjustment_id INTEGER REFERENCES dues_adjustments(id),
     created_at TEXT NOT NULL
   )`);
+  await addColumn(exec, 'dues_adjustments', 'client_submission_id', 'TEXT');
+  await exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dues_adjustment_submission
+    ON dues_adjustments(entered_by_user_id, client_submission_id) WHERE client_submission_id IS NOT NULL`);
   await exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dues_adjustment_reversal
     ON dues_adjustments(reverses_adjustment_id) WHERE reverses_adjustment_id IS NOT NULL`);
   await exec(`CREATE INDEX IF NOT EXISTS idx_dues_adjustments_roster_year

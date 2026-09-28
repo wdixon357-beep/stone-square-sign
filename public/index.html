@@ -196,7 +196,7 @@
                 <section id="homeCalendarPanel" class="home-panel calendar-only"><div class="home-panel-heading"><div><p class="eyebrow">LODGE CALENDAR</p><h2>Coming Up</h2></div><button id="homeOpenCalendar" class="home-text-action" type="button">Open Calendar</button></div><div id="homeUpcomingEvents" class="home-event-list"><p>Checking the Lodge calendar…</p></div></section>
               </div>
               <div class="home-side">
-                <section class="home-panel"><div class="home-panel-heading"><div><p class="eyebrow">QUICK ACCESS</p><h2>Open A Tool</h2></div></div><div id="homeQuickLinks" class="home-quick-links"></div></section>
+                <section class="home-panel"><div class="home-panel-heading"><div><p class="eyebrow">QUICK ACCESS</p><h2>Open A Tool</h2></div></div><label class="home-tool-search">Find A Tool<input id="homeToolSearch" type="search" autocomplete="off" placeholder="Search available tools" aria-controls="homeToolResults"></label><div id="homeToolResults" class="home-tool-results hidden" role="region" aria-label="Matching Tools" aria-live="polite"></div><div id="homeQuickLinks" class="home-quick-links"></div></section>
                 <section class="home-panel home-grand-view"><div class="home-panel-heading"><div><p class="eyebrow">GRAND LODGE</p><h2>Grand View</h2></div></div><p>Open the official Delaware member portal with your Grand View account.</p><a href="https://phde.grandview.systems/users/sign_in" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open Grand View ↗</a></section>
               </div>
             </div>
@@ -366,8 +366,8 @@
             <div class="metrics">
               <article><span>Collected</span><strong id="duesCollected">&mdash;</strong></article>
               <article><span>Outstanding</span><strong id="duesOutstanding">&mdash;</strong></article>
-              <article><span>Paid in full</span><strong id="duesPaidCount">&mdash;</strong></article>
-              <article><span>Not yet paid</span><strong id="duesUnpaidCount">&mdash;</strong></article>
+              <article><span>Paid In Full</span><strong id="duesPaidCount">&mdash;</strong></article>
+              <article><span>Not Yet Paid</span><strong id="duesUnpaidCount">&mdash;</strong></article>
             </div>
 
             <div id="duesStale" class="message hidden" role="status"></div>
@@ -375,12 +375,12 @@
             <p id="duesExportMessage" class="message" role="status" aria-live="polite"></p>
 
             <section class="panel dues-manage-only">
-              <div class="panel-title"><div><p class="eyebrow">NON-ZEFFY ACTIVITY</p><h2>Record a payment or adjustment</h2></div></div>
+              <div class="panel-title"><div><p class="eyebrow">NON-ZEFFY ACTIVITY</p><h2>Record A Payment Or Adjustment</h2></div></div>
               <div class="dues-assist">
-                <label for="duesAssistText">Describe one manual payment</label>
+                <label for="duesAssistText">Describe One Manual Payment</label>
                 <p class="helper">For example: Bro. James Smith paid $175 by check 1042 today. Review the Brother, amount, date and balance before recording.</p>
                 <textarea id="duesAssistText" rows="3" maxlength="2000" placeholder="Brother, amount, date and how it was paid"></textarea>
-                <div class="builder-actions"><button id="duesAssistPrepare" class="secondary" type="button">Prepare payment details</button><p id="duesAssistMessage" class="message" role="status"></p></div>
+                <div class="builder-actions"><button id="duesAssistPrepare" class="secondary" type="button">Prepare Payment Details</button><p id="duesAssistMessage" class="message" role="status"></p></div>
                 <div id="duesAssistReview" class="dues-assist-review hidden" role="status"></div>
               </div>
               <form id="duesAdjustmentForm" class="dues-adjustment-grid">
@@ -388,21 +388,27 @@
                 <label>Type<select id="duesAdjustmentType" required><option value="payment">Payment</option><option value="credit">Credit</option><option value="refund">Refund</option><option value="chargeback">Chargeback</option><option value="correction">Correction</option></select></label>
                 <label>Amount<input id="duesAdjustmentAmount" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
                 <label>Date<input id="duesAdjustmentDate" type="date" required></label>
-                <label>Method<select id="duesAdjustmentMethod" required><option value="">Choose a method</option><option>Cash</option><option>Check</option><option>Money order</option><option>Bank transfer</option><option>Other</option></select></label>
+                <label>Method<select id="duesAdjustmentMethod" required><option value="">Choose A Method</option><option>Cash</option><option>Check</option><option value="Money order">Money Order</option><option value="Bank transfer">Bank Transfer</option><option>Other</option></select></label>
                 <label>Reference<input id="duesAdjustmentReference" maxlength="160" placeholder="Receipt, check number, or source"></label>
                 <label class="wide">Note<textarea id="duesAdjustmentNote" rows="2" maxlength="500"></textarea></label>
-                <div class="wide builder-actions"><p id="duesAdjustmentMessage" class="message" role="status"></p><button class="primary" type="submit">Confirm and record activity</button></div>
+                <div class="wide builder-actions"><p id="duesAdjustmentMessage" class="message" role="status"></p><button id="duesStartNewEntry" class="secondary" type="button">Start New Entry</button><button class="primary" type="submit">Confirm And Record Activity</button></div>
               </form>
             </section>
 
             <section class="records">
-              <div class="records-head"><div><p class="eyebrow">BY BROTHER</p><h2>Member balances</h2><p class="helper">Brothers needing attention appear first. Balances reflect the current dues year.</p></div></div>
+              <div class="records-head"><div><p class="eyebrow">BY BROTHER</p><h2>Member Balances</h2><p class="helper">Brothers needing attention appear first. Open a Brother's activity to review each payment and correct a manual entry.</p></div></div>
               <div class="dues-ledger-frame">
                 <table class="dues-ledger-table" role="table">
-                  <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Brother</th><th scope="col" role="columnheader">Dues assessed</th><th scope="col" role="columnheader">Paid to date</th><th scope="col" role="columnheader">Balance due</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Last activity</th></tr></thead>
+                  <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Brother</th><th scope="col" role="columnheader">Dues Assessed</th><th scope="col" role="columnheader">Paid To Date</th><th scope="col" role="columnheader">Balance Due</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Last Activity</th></tr></thead>
                   <tbody id="duesRows" role="rowgroup"></tbody>
                 </table>
               </div>
+            </section>
+
+            <section id="duesDetailPanel" class="panel dues-detail-panel hidden" aria-live="polite" aria-label="Brother dues activity">
+              <div class="panel-title"><div><p class="eyebrow">PAYMENT HISTORY</p><h2 id="duesDetailName">Brother's Dues Activity</h2><p id="duesDetailSummary" class="helper"></p><p class="helper">Zeffy payments are shown for review. Lodge entries can be corrected here by authorized officers.</p></div><button id="duesDetailClose" class="secondary" type="button">Close Activity</button></div>
+              <div id="duesDetailPayments" class="dues-payment-list"></div>
+              <p id="duesDetailMessage" class="message" role="status"></p>
             </section>
 
             <section id="duesUnmatchedPanel" class="panel hidden">

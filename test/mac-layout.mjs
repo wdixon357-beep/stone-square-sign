@@ -32,6 +32,10 @@ assert.match(views, /struct AdaptiveWorkspaceSplit/, 'all two-pane workspaces mu
 assert.match(views, /available\.size\.width < 820/, 'the shared layout must change to one pane at compact widths');
 assert.match(views, /struct AdaptiveControlBar/, 'dense action and filter rows must have a compact fallback');
 assert.match(views, /LazyVGrid\(columns: \[GridItem\(\.adaptive\(minimum: 150\)/, 'dues summary tiles must wrap instead of clipping');
+assert.match(views, /DuesPendingAttemptStore[\s\S]*byAccount:\[Int:DuesPendingAttempt\]/, 'uncertain native dues submissions must retain their attempt per account');
+assert.match(views, /\.onAppear \{ restoreUnresolvedAttempt\(\) \}/, 'reopening the native dues form must restore an unresolved submission');
+assert.match(views, /attemptedFingerprint=fingerprint[\s\S]*rememberAttempt\(\)[\s\S]*model\.request\("\/api\/dues\/adjustments"/, 'the native dues attempt must be saved before its POST');
+assert.match(views, /catch ClientError\.rejected\(let detail\)[\s\S]*clearAttempt\(\)/, 'definitive validation errors must release the pending attempt for correction');
 assert.doesNotMatch(views, /frame\(minWidth: 920/, 'document previews must be allowed to fit smaller Mac windows');
 assert.match(buildingCalendar, /AdaptiveControlBar[\s\S]*calendarNavigation[\s\S]*scopePicker/, 'the calendar toolbar must stack at compact widths');
 assert.doesNotMatch(buildingCalendar, /frame\(width: 790, height: 760\)/, 'the building request sheet must not force a fixed oversized window');

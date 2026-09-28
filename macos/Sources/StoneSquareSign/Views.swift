@@ -293,7 +293,9 @@ struct AuthenticationView: View {
 
 struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selection: AppSection? = .home
+    @State private var toolSearch = ""
     @State private var meetingsExpanded = true
     @State private var documentsExpanded = true
     @State private var financeExpanded = true
@@ -334,7 +336,24 @@ struct WorkspaceView: View {
                     .padding(.horizontal, 18)
                     .padding(.bottom, 8)
                 }
+                TextField("Find A Tool", text: $toolSearch)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 10)
                 List(selection: $selection) {
+                    if !toolSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        ForEach(searchResults) { tool in
+                            Label(tool.title, systemImage: tool.symbol).tag(tool.section)
+                        }
+                        if "Grand View".localizedCaseInsensitiveContains(toolSearch) {
+                            Link(destination: GrandViewPortal.url) {
+                                Label("Grand View", systemImage: "arrow.up.right.square")
+                            }
+                        }
+                        if searchResults.isEmpty && !"Grand View".localizedCaseInsensitiveContains(toolSearch) {
+                            Text("No Matching Tools").foregroundStyle(.secondary)
+                        }
+                    } else {
                     Label("Home", systemImage: "house.fill").tag(AppSection.home)
                     if model.user?.canOpen(.lodgeCalendar) == true || model.user?.canReadMinutes == true || model.user?.can("reports.create") == true || model.user?.role == "owner" {
                         DisclosureGroup("Meetings & Reports", isExpanded: $meetingsExpanded) {
@@ -386,13 +405,15 @@ struct WorkspaceView: View {
                             if model.user?.can("settings.manage") == true { Label("Service Settings", systemImage: "network").tag(AppSection.settings) }
                         }
                     }
+                    }
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 42)
                 .frame(minHeight: 0, maxHeight: .infinity)
                 VStack(alignment: .leading, spacing: 5) {
                     Label(
-                        model.isLive ? "Live queue connected" : "Reconnecting",
+                        model.isLive ? "Live Queue Connected" : "Reconnecting",
                         systemImage: model.isLive ? "circle.fill" : "circle.dotted"
                     )
                     .font(.caption2.weight(.semibold))
@@ -415,6 +436,7 @@ struct WorkspaceView: View {
                                      openCorrespondence: { selection = .correspondence })
                     workspaceContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(reduceMotion ? .identity : .opacity)
                 }
                 .frame(
                     width: available.size.width,
@@ -422,6 +444,7 @@ struct WorkspaceView: View {
                     alignment: .topLeading
                 )
                 .clipped()
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selection)
             }
         }
         .task {
@@ -452,6 +475,41 @@ struct WorkspaceView: View {
 
     private var alertCount: Int {
         model.minutesReviewAlerts.count + model.treasuryAlerts.count + model.buildingAlerts.count
+    }
+
+    private struct SearchTool: Identifiable {
+        let section: AppSection
+        let title: String
+        let symbol: String
+        var id: AppSection { section }
+    }
+
+    private var searchResults: [SearchTool] {
+        let all: [SearchTool] = [
+            .init(section: .home, title: "Home", symbol: "house.fill"),
+            .init(section: .lodgeCalendar, title: "Lodge Calendar", symbol: "calendar"),
+            .init(section: .agenda, title: "Agenda Creator", symbol: "list.number"),
+            .init(section: .minutes, title: "Meeting Minutes", symbol: "text.document.fill"),
+            .init(section: .reportGenerator, title: "Report Generator", symbol: "doc.text"),
+            .init(section: .receivedReports, title: "Received Reports", symbol: "tray.full.fill"),
+            .init(section: .correspondence, title: "Lodge Correspondence", symbol: "envelope.open.fill"),
+            .init(section: .documents, title: "Live Queue", symbol: "list.number"),
+            .init(section: .approvals, title: "Approvals", symbol: "checkmark.seal.fill"),
+            .init(section: .createDispensation, title: "Create Dispensation", symbol: "doc.badge.plus"),
+            .init(section: .proposalReview, title: model.user?.role == "owner" ? "Warden Proposals" : "My Dispensation Proposals", symbol: "square.and.pencil"),
+            .init(section: .myDues, title: "My Dues", symbol: "dollarsign.circle.fill"),
+            .init(section: .dues, title: "Dues Ledger", symbol: "list.bullet.rectangle.portrait.fill"),
+            .init(section: .treasury, title: "Treasurer Reports", symbol: "chart.bar.doc.horizontal.fill"),
+            .init(section: .candidateTracker, title: "Candidate Tracker", symbol: "person.text.rectangle.fill"),
+            .init(section: .access, title: "Officer Access", symbol: "person.badge.key.fill"),
+            .init(section: .memberAccess, title: "Member Access", symbol: "person.3.fill"),
+            .init(section: .suggestions, title: "Suggestion Box", symbol: "text.bubble.fill"),
+            .init(section: .building, title: "Building Requests", symbol: "building.2"),
+            .init(section: .activity, title: "Dashboard Activity", symbol: "clock.arrow.circlepath"),
+            .init(section: .profile, title: "Signature Profile", symbol: "signature"),
+            .init(section: .settings, title: "Service Settings", symbol: "network")
+        ]
+        return all.filter { model.user?.canOpen($0.section) == true && $0.title.localizedCaseInsensitiveContains(toolSearch) }
     }
 
     private var minutesReviewAlertButtons: some View {
@@ -1339,9 +1397,9 @@ struct LandingDashboardView: View {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .current
         let hour = calendar.component(.hour, from: Date())
-        if hour < 12 { return "Good morning" }
-        if hour < 17 { return "Good afternoon" }
-        return "Good evening"
+        if hour < 12 { return "Good Morning" }
+        if hour < 17 { return "Good Afternoon" }
+        return "Good Evening"
     }
 
     var body: some View {
@@ -1349,7 +1407,11 @@ struct LandingDashboardView: View {
             NativeWorkspaceHeader(title: "Home", subtitle: "\(easternGreeting), \(model.user?.name ?? "")", symbol: "square.grid.2x2")
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("STONE SQUARE LODGE NO. 22")
+                            .font(.caption.weight(.bold))
+                            .tracking(1.4)
+                            .foregroundStyle(SignTheme.gold)
                         Text("Your Lodge At A Glance")
                             .font(.title2.weight(.semibold))
                         Text("Review what needs attention, then choose a Lodge tool.")
@@ -1358,8 +1420,10 @@ struct LandingDashboardView: View {
                         primaryAction
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 10)
+                    .padding(20)
+                    .background(SignTheme.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
                 }
+                .listRowBackground(Color.clear)
                 if hasAttentionItems {
                     Section("Needs Attention") {
                         if model.user?.can("documents.status") == true && awaitingCount > 0 {
@@ -1433,11 +1497,11 @@ struct LandingDashboardView: View {
                         homeRow("Candidate Tracker", "Open candidate and membership records", "person.text.rectangle", action: openCandidateTracker)
                     }
                 }
-                Section("Your account") {
+                Section("Your Account") {
                     LabeledContent("Signed in as", value: model.user?.name ?? "")
                     LabeledContent("Access", value: model.user?.roleLabel ?? "")
                 }
-            }.listStyle(.inset).environment(\.defaultMinListRowHeight, 48)
+            }.listStyle(.inset).environment(\.defaultMinListRowHeight, 60)
         }.background(Color(nsColor: .windowBackgroundColor))
             .task { if model.emailDeliveryReady == nil { await model.loadServiceSetup() } }
     }
@@ -1457,11 +1521,18 @@ struct LandingDashboardView: View {
     }
     private func homeRow(_ title: String, _ detail: String, _ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: symbol).font(.title3).foregroundStyle(Color.accentColor).frame(width: 28)
-                VStack(alignment: .leading, spacing: 4) { Text(title).font(.headline); Text(detail).font(.callout).foregroundStyle(.secondary) }
+            HStack(spacing: 18) {
+                Image(systemName: symbol)
+                    .font(.title3)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 42, height: 42)
+                    .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title).font(.headline)
+                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                }
                 Spacer(); Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-            }.padding(.vertical, 8).contentShape(Rectangle())
+            }.padding(.vertical, 12).contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
 }
@@ -2432,6 +2503,9 @@ func signatureDataURL(image: NSImage) -> String? {
 struct DuesView: View {
     @EnvironmentObject var model: AppModel
     @State private var showingAdjustment = false
+    @State private var activityRow: DuesRow?
+    @State private var correctionNotice: String?
+    @State private var correctionNeedsReview = false
     @State private var exporting: DuesExportFormat?
     @State private var exportNotice: String?
     @State private var exportFailed = false
@@ -2459,8 +2533,8 @@ struct DuesView: View {
         GeometryReader { available in
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                NativeWorkspaceHeader(title: "Dues", subtitle: "Payments, balances and reconciliation", symbol: "dollarsign.circle") {
-                    if model.user?.can("dues.manage") == true { Button("Record activity", systemImage: "plus") { showingAdjustment = true } }
+                NativeWorkspaceHeader(title: "Dues Ledger", subtitle: "Review payments, balances, and corrections", symbol: "dollarsign.circle") {
+                    if model.user?.canManageDues == true { Button("Record Activity", systemImage: "plus") { showingAdjustment = true } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadDues() } }.disabled(model.duesLoading)
                     Menu {
                         Button("Save PDF", systemImage: "doc.richtext") { Task { await export(.pdf) } }
@@ -2468,8 +2542,14 @@ struct DuesView: View {
                     } label: { Label("Export", systemImage: "square.and.arrow.down") }
                         .disabled(model.dues == nil || exporting != nil)
                 }.padding(.horizontal, -22)
-                if let ledger = model.dues { Text("\(ledger.duesYear) dues, \(lodgeMoney(ledger.rateCents)) each, reconciled against both Zeffy campaigns.").font(.callout).foregroundStyle(.secondary) }
+                if let ledger = model.dues { Text("Standard \(ledger.duesYear) dues rate: \(lodgeMoney(ledger.rateCents)). Payments reconcile against both Zeffy campaigns. Life member assessments require separate review.").font(.callout).foregroundStyle(.secondary) }
                 if exporting != nil { ProgressView("Preparing dues snapshot…") }
+                if let correctionNotice {
+                    Text(correctionNotice)
+                        .font(.callout)
+                        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                        .background((correctionNeedsReview ? Color.orange : Color.green).opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+                }
                 if let exportNotice {
                     Text(exportNotice)
                         .foregroundStyle(exportFailed ? .red : .secondary)
@@ -2490,8 +2570,8 @@ struct DuesView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 14)], spacing: 14) {
                         duesTile("Collected", lodgeMoney(ledger.totals.collectedCents))
                         duesTile("Outstanding", lodgeMoney(ledger.totals.outstandingCents))
-                        duesTile("Paid in full", "\(ledger.totals.paidCount)")
-                        duesTile("Not yet paid", "\(ledger.totals.unpaidCount)")
+                        duesTile("Paid In Full", "\(ledger.totals.paidCount)")
+                        duesTile("Not Yet Paid", "\(ledger.totals.unpaidCount)")
                     }
 
                     if let stale = ledger.staleCampaign {
@@ -2502,7 +2582,7 @@ struct DuesView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
 
-                    Text("BY BROTHER").font(.caption2).tracking(1.4).foregroundStyle(.secondary)
+                    Text("By Brother").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     if available.size.width >= 850 {
                         duesTable(ledger.rows)
                     } else {
@@ -2510,7 +2590,7 @@ struct DuesView: View {
                     }
 
                     if !ledger.unmatched.isEmpty {
-                        Text("COULD NOT BE MATCHED").font(.caption2).tracking(1.4).foregroundStyle(.secondary)
+                        Text("Could Not Be Matched").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         Text("These came through Zeffy but matched nobody on the roster. Usually a nickname, a spouse's card, or a Brother missing from the roster.")
                             .font(.caption).foregroundStyle(.secondary)
                         VStack(spacing: 8) {
@@ -2546,6 +2626,23 @@ struct DuesView: View {
             }
         }
         .sheet(isPresented: $showingAdjustment) { DuesAdjustmentView(rows: model.dues?.rows ?? []) { await model.loadDues() } }
+        .sheet(item: $activityRow) { row in
+            DuesActivityView(row: row) { adjustmentID, amountCents in
+                await model.loadDues()
+                let updated = model.dues?.rows.first { $0.rosterId == row.rosterId }
+                let reversalFound = updated?.payments.contains {
+                    $0.reversesAdjustmentId == adjustmentID && $0.amountCents == -amountCents
+                } == true
+                let balanceVerified = updated?.paidCents == row.paidCents - amountCents
+                    && updated?.remainingCents == max(0, row.assessedCents - row.paidCents + amountCents)
+                correctionNeedsReview = model.duesError != nil || !reversalFound || !balanceVerified
+                correctionNotice = correctionNeedsReview
+                    ? "The reversal request succeeded, but the updated balance could not be verified. Select Refresh and review Payment Activity before trying again."
+                    : "The reversal was recorded. Payment Activity and the updated balance have been verified."
+                activityRow = nil
+            }
+            .environmentObject(model)
+        }
     }
 
     @MainActor
@@ -2582,7 +2679,7 @@ struct DuesView: View {
 
     private func statusLabel(_ status: String) -> String {
         switch status {
-        case "paid": return "Paid in full"
+        case "paid": return "Paid In Full"
         case "partial": return "Partial"
         default: return "Unpaid"
         }
@@ -2596,12 +2693,12 @@ struct DuesView: View {
     private func duesTable(_ rows: [DuesRow]) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Text("BROTHER").frame(maxWidth: .infinity, alignment: .leading)
-                Text("DUES ASSESSED").frame(width: moneyColumnWidth, alignment: .trailing)
-                Text("PAID TO DATE").frame(width: moneyColumnWidth, alignment: .trailing)
-                Text("BALANCE DUE").frame(width: moneyColumnWidth, alignment: .trailing)
-                Text("STATUS").frame(width: statusColumnWidth, alignment: .leading)
-                Text("LAST ACTIVITY").frame(width: activityColumnWidth, alignment: .leading)
+                Text("Brother").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Dues Assessed").frame(width: moneyColumnWidth, alignment: .trailing)
+                Text("Paid To Date").frame(width: moneyColumnWidth, alignment: .trailing)
+                Text("Balance Due").frame(width: moneyColumnWidth, alignment: .trailing)
+                Text("Status").frame(width: statusColumnWidth, alignment: .leading)
+                Text("Last Activity").frame(width: activityColumnWidth, alignment: .leading)
             }
             .font(.caption2.weight(.bold))
             .tracking(0.7)
@@ -2611,6 +2708,7 @@ struct DuesView: View {
             .background(SignTheme.navy.opacity(0.06))
 
             ForEach(rows) { row in
+                Button { activityRow = row } label: {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.name).font(.callout.weight(.semibold)).lineLimit(2)
@@ -2631,11 +2729,15 @@ struct DuesView: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1).minimumScaleFactor(0.8)
                         .frame(width: activityColumnWidth, alignment: .leading)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 11)
+                .padding(.vertical, 16)
+                .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(duesAccessibility(row))
+                .accessibilityLabel("\(duesAccessibility(row)). View Payment Activity")
                 Divider()
             }
         }
@@ -2646,6 +2748,7 @@ struct DuesView: View {
     private func duesCompactRows(_ rows: [DuesRow]) -> some View {
         VStack(spacing: 8) {
             ForEach(rows) { row in
+                Button { activityRow = row } label: {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(row.name).font(.callout.weight(.semibold))
@@ -2655,16 +2758,21 @@ struct DuesView: View {
                             .foregroundStyle(tint(row.status))
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], alignment: .leading, spacing: 8) {
-                        compactAmount("Dues assessed", row.assessedCents)
-                        compactAmount("Paid to date", row.paidCents)
-                        compactAmount("Balance due", row.remainingCents)
+                        compactAmount("Dues Assessed", row.assessedCents)
+                        compactAmount("Paid To Date", row.paidCents)
+                        compactAmount("Balance Due", row.remainingCents)
                     }
                     Text("Last activity: \(lastActivity(row))\(row.creditCents > 0 ? " · \(lodgeMoney(row.creditCents)) credit" : "")")
                         .font(.caption).foregroundStyle(.secondary)
+                    Label("View Payment Activity", systemImage: "arrow.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
                 }
-                .padding(12)
+                .padding(18)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -2682,7 +2790,7 @@ struct DuesView: View {
 
     private func compactAmount(_ label: String, _ cents: Int) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             amountCell(cents)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2691,16 +2799,183 @@ struct DuesView: View {
     @ViewBuilder
     private func duesTile(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased()).font(.caption2).tracking(1.2).foregroundStyle(.secondary)
+            Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Text(value).font(.title3.weight(.semibold))
         }
-        .padding(14)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 
+
+private struct DuesReversalDraft: Encodable { let reason: String }
+
+struct DuesActivityView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let row: DuesRow
+    let reversed: (Int, Int) async -> Void
+    @State private var selectedAdjustmentID: Int?
+    @State private var reason = ""
+    @State private var message = ""
+    @State private var working = false
+
+    private var reversalIDs: Set<Int> {
+        Set(row.payments.compactMap(\.reversesAdjustmentId))
+    }
+
+    private var selectedPayment: DuesPayment? {
+        row.payments.first { $0.adjustmentId == selectedAdjustmentID }
+    }
+
+    private func canReverse(_ payment: DuesPayment) -> Bool {
+        guard let id = payment.adjustmentId else { return false }
+        return model.user?.canManageDues == true
+            && payment.campaign == "manual"
+            && payment.reversesAdjustmentId == nil
+            && !reversalIDs.contains(id)
+    }
+
+    private func activityTitle(_ payment: DuesPayment) -> String {
+        if payment.reversesAdjustmentId != nil { return "Reversal" }
+        if payment.campaign == "manual" { return "Manual \((payment.transactionType ?? "payment").capitalized)" }
+        if payment.campaign == "annual" { return "Zeffy Annual Dues" }
+        return payment.campaign == "custom" ? "Zeffy Custom Dues" : "Zeffy Payment"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Payment Activity").font(.title2.weight(.semibold))
+                    Text(row.name).font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.disabled(working)
+            }
+            HStack(spacing: 18) {
+                balanceSummary("Dues Assessed", row.assessedCents)
+                balanceSummary("Paid To Date", row.paidCents)
+                balanceSummary("Balance Due", row.remainingCents)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if row.payments.isEmpty {
+                        Text("No payments have been recorded for this dues year.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(row.payments.enumerated()), id: \.offset) { _, payment in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(activityTitle(payment)).font(.headline)
+                                Spacer()
+                                Text(lodgeMoney(payment.amountCents))
+                                    .font(.headline.monospacedDigit())
+                            }
+                            Text(LodgeCalendarDates.displayDate(String(payment.dateISO.prefix(10))))
+                                .font(.callout).foregroundStyle(.secondary)
+                            if payment.campaign == "manual" {
+                                let details = [payment.paymentMethod, payment.sourceReference, payment.enteredBy]
+                                    .compactMap { $0?.isEmpty == false ? $0 : nil }
+                                if !details.isEmpty {
+                                    Text(details.joined(separator: " · "))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                if let note = payment.note, !note.isEmpty {
+                                    Text(note).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            if let adjustmentID = payment.adjustmentId, reversalIDs.contains(adjustmentID) {
+                                Label("Reversed", systemImage: "arrow.uturn.backward.circle")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            }
+                            if canReverse(payment), let adjustmentID = payment.adjustmentId {
+                                Button("Review Reversal") {
+                                    selectedAdjustmentID = adjustmentID
+                                    reason = ""
+                                    message = ""
+                                }
+                                .font(.callout.weight(.semibold))
+                            }
+                        }
+                        .padding(18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+            }
+            if let payment = selectedPayment, canReverse(payment) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Review Dues Reversal").font(.headline)
+                    Text(payment.amountCents >= 0
+                         ? "The original entry will remain in the record. A reversal will remove \(lodgeMoney(payment.amountCents)) from this Brother's paid total."
+                         : "The original entry will remain in the record. A reversal will restore \(lodgeMoney(-payment.amountCents)) to this Brother's paid total.")
+                        .font(.callout)
+                    HStack {
+                        Text("Current Balance Due")
+                        Spacer()
+                        Text(lodgeMoney(row.remainingCents))
+                    }
+                    HStack {
+                        Text("Projected Balance Due").fontWeight(.semibold)
+                        Spacer()
+                        Text(lodgeMoney(max(0, row.assessedCents - row.paidCents + payment.amountCents)))
+                            .fontWeight(.semibold)
+                    }
+                    TextField("Reason For Reversal", text: $reason, axis: .vertical)
+                        .lineLimit(2...4)
+                    if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
+                    HStack {
+                        Button("Cancel") { selectedAdjustmentID = nil; reason = "" }
+                        Spacer()
+                        Button("Confirm Reversal") { Task { await reverse(payment) } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(working || reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(18)
+                .background(SignTheme.gold.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 520, idealWidth: 680, minHeight: 540, idealHeight: 700)
+    }
+
+    private func balanceSummary(_ title: String, _ cents: Int) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(lodgeMoney(cents)).font(.title3.weight(.semibold).monospacedDigit())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @MainActor private func reverse(_ payment: DuesPayment) async {
+        guard let id = payment.adjustmentId, canReverse(payment) else { return }
+        working = true
+        defer { working = false }
+        do {
+            await model.loadDues()
+            guard model.duesError == nil, let current = model.dues?.rows.first(where: { $0.rosterId == row.rosterId }) else {
+                message = "The current ledger could not be checked. Refresh and try again."
+                return
+            }
+            guard current == row else {
+                message = "This Brother's ledger changed. Close Payment Activity and review the current entries before reversing."
+                return
+            }
+            let body = try JSONEncoder().encode(DuesReversalDraft(reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)))
+            let _: MessageResponse = try await model.request("/api/dues/adjustments/\(id)/reverse", method: "POST", body: body)
+            await reversed(id, payment.amountCents)
+            dismiss()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+}
 
 /* What the District Deputy decided about each dispensation.
  *
@@ -2994,7 +3269,23 @@ struct OwnerSuggestionCard: View {
 }
 
 private struct DuesAdjustmentDraft: Encodable {
-    let rosterId:Int; let transactionType:String; let amount:String; let effectiveDate:String; let paymentMethod:String; let sourceReference:String; let note:String
+    let rosterId:Int; let transactionType:String; let amount:String; let effectiveDate:String; let paymentMethod:String; let sourceReference:String; let note:String; let clientSubmissionId:String
+}
+private struct DuesAdjustmentResult: Decodable { let id: Int; let message: String; let replayed: Bool? }
+private struct DuesPendingAttempt {
+    let submissionId:String
+    let rosterId:Int
+    let transactionType:String
+    let amount:String
+    let effectiveDate:String
+    let paymentMethod:String
+    let sourceReference:String
+    let note:String
+    let baselineAdjustmentIds:Set<Int>
+    var resultId:Int?
+}
+@MainActor private enum DuesPendingAttemptStore {
+    static var byAccount:[Int:DuesPendingAttempt]=[:]
 }
 private struct DuesAssistRequest: Encodable { let text: String }
 private struct DuesAssistResponse: Decodable { let proposal: DuesAssistProposal; let saved: Bool }
@@ -3032,24 +3323,32 @@ struct DuesAdjustmentView: View {
     @State private var assisting=false
     @State private var assistMessage=""
     @State private var dateConfirmed=true
-    private var selectedRow:DuesRow? { rows.first { $0.rosterId == rosterId } }
+    @State private var clientSubmissionId=UUID().uuidString
+    @State private var attemptedFingerprint:String?
+    @State private var pendingResultId:Int?
+    @State private var baselineAdjustmentIds:Set<Int>=[]
+    @State private var uncertain=false
+    @State private var checkingLedger=false
+    @State private var showCloseWarning=false
+    @State private var messageIsError=false
+    private var selectedRow:DuesRow? { model.dues?.rows.first { $0.rosterId == rosterId } ?? rows.first { $0.rosterId == rosterId } }
     private var projectedBalance:Int? {
         guard let row=selectedRow, let dollars=Double(amount), dollars > 0 else { return nil }
         let direction = ["refund","chargeback"].contains(type) ? -1 : 1
         return max(0,row.assessedCents-row.paidCents-direction*Int((dollars*100).rounded()))
     }
     var body: some View { VStack(alignment:.leading,spacing:12){
-        HStack{VStack(alignment:.leading){Text("Record non-Zeffy dues activity").font(.title2.weight(.semibold));Text("Review the details before recording a payment.").foregroundStyle(.secondary)};Spacer();Button("Cancel"){dismiss()}}
+        HStack{VStack(alignment:.leading){Text("Record Non-Zeffy Dues Activity").font(.title2.weight(.semibold));Text("Review the details before recording a payment.").foregroundStyle(.secondary)};Spacer();Button("Cancel"){if uncertain{showCloseWarning=true}else{dismiss()}}}
         ScrollView { VStack(alignment:.leading,spacing:14){
             VStack(alignment:.leading,spacing:8){
-                Text("Describe one manual payment").font(.headline)
+                Text("Describe One Manual Payment").font(.headline)
                 Text("For example: Bro. James Smith paid $175 by check 1042 today.").font(.caption).foregroundStyle(.secondary)
                 TextEditor(text:$assistText).frame(minHeight:76).padding(5).background(Color.primary.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius:8))
-                HStack{Button("Prepare payment details"){Task{await prepare()}}.disabled(assisting || assistText.trimmingCharacters(in:.whitespacesAndNewlines).count < 12);if assisting{ProgressView()};Text(assistMessage).font(.caption).foregroundStyle(.secondary)}
+                HStack{Button("Prepare Payment Details"){Task{await prepare()}}.disabled(model.user?.canManageDues != true || uncertain || assisting || assistText.trimmingCharacters(in:.whitespacesAndNewlines).count < 12);if assisting{ProgressView()};Text(assistMessage).font(.caption).foregroundStyle(.secondary)}
             }.padding(14).background(SignTheme.gold.opacity(0.10)).clipShape(RoundedRectangle(cornerRadius:12))
             if assistReady {
                 VStack(alignment:.leading,spacing:6){
-                    Text("Review before recording").font(.headline)
+                    Text("Review Before Recording").font(.headline)
                     Text("\(selectedRow?.name ?? "Select the Brother") · \(amount.isEmpty ? "Confirm amount" : "$\(amount)") · \(dateConfirmed ? date.formatted(date:.abbreviated,time:.omitted) : "Confirm date") · \(method.isEmpty ? "Choose method" : method)")
                     if let row=selectedRow,let projectedBalance { Text("Current balance \(lodgeMoney(row.remainingCents)) → projected balance \(lodgeMoney(projectedBalance))") }
                     ForEach(assistWarnings,id:\.self){ Text("• \($0)").font(.caption).foregroundStyle(.secondary) }
@@ -3060,16 +3359,25 @@ struct DuesAdjustmentView: View {
                 Picker("Type",selection:$type){ForEach(["payment","credit","refund","chargeback","correction"],id:\.self){Text($0.capitalized)}}
                 TextField("Amount",text:$amount)
                 DatePicker("Date",selection:$date,displayedComponents:.date).onChange(of:date){_,_ in dateConfirmed=true}
-                if !dateConfirmed { Button("Confirm the displayed date") { dateConfirmed=true } }
+                if !dateConfirmed { Button("Confirm The Displayed Date") { dateConfirmed=true } }
                 Picker("Method",selection:$method){Text("Choose a method").tag("");ForEach(["Cash","Check","Money order","Bank transfer","Other"],id:\.self){Text($0)}}
                 TextField("Reference",text:$reference)
                 TextField("Note",text:$note,axis:.vertical).lineLimit(2...5)
-            }.frame(minHeight:300)
+            }.frame(minHeight:300).disabled(uncertain || working)
         }}
-        if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red) }
-        HStack{Spacer();Button("Confirm and record activity"){Task{await save()}}.buttonStyle(.borderedProminent).disabled(working || rosterId == nil || Double(amount) == nil || method.isEmpty || !dateConfirmed)}
-    }.padding(24).frame(minWidth:520,idealWidth:650,minHeight:580,idealHeight:680) }
+        if !message.isEmpty { Text(message).font(.caption).foregroundStyle(messageIsError ? .red : .secondary) }
+        HStack{if uncertain{Button("Check Ledger"){Task{await checkLedger()}}.disabled(checkingLedger);if checkingLedger{ProgressView()}};Spacer();Button("Confirm And Record Activity"){Task{await save()}}.buttonStyle(.borderedProminent).disabled(model.user?.canManageDues != true || uncertain || working || rosterId == nil || Double(amount) == nil || method.isEmpty || !dateConfirmed)}
+    }.padding(24).frame(minWidth:520,idealWidth:650,minHeight:580,idealHeight:680)
+        .alert("Submission Status Unverified", isPresented: $showCloseWarning) {
+            Button("Keep Checking", role: .cancel) {}
+            Button("Close Form", role: .destructive) { dismiss() }
+        } message: {
+            Text("The payment may already be recorded. Check this Brother's Payment Activity before creating another entry.")
+        }
+        .onAppear { restoreUnresolvedAttempt() }
+    }
     @MainActor private func prepare() async {
+        guard model.user?.canManageDues == true else { return }
         assisting=true;defer{assisting=false};assistReady=false;assistMessage="Reading the payment note…"
         do {
             let data=try JSONEncoder().encode(DuesAssistRequest(text:assistText))
@@ -3084,7 +3392,116 @@ struct DuesAdjustmentView: View {
             assistWarnings=proposal.warnings;assistReady=true;assistMessage="Check the fields and confirm when correct."
         } catch { assistMessage=error.localizedDescription }
     }
-    @MainActor private func save() async { guard let rosterId else{return};working=true;defer{working=false};let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.dateFormat="yyyy-MM-dd";do{let data=try JSONEncoder().encode(DuesAdjustmentDraft(rosterId:rosterId,transactionType:type,amount:amount,effectiveDate:formatter.string(from:date),paymentMethod:method,sourceReference:reference,note:note));let _:MessageResponse=try await model.request("/api/dues/adjustments",method:"POST",body:data);await saved();dismiss()}catch{message=error.localizedDescription}}
+    private var effectiveDate:String {
+        let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.dateFormat="yyyy-MM-dd"
+        return formatter.string(from:date)
+    }
+    private var signedAmountCents:Int? {
+        guard let dollars=Double(amount),dollars>0 else{return nil}
+        let cents=Int((dollars*100).rounded())
+        return ["refund","chargeback"].contains(type) ? -cents : cents
+    }
+    private var intentFingerprint:String {
+        [String(rosterId ?? 0),type,String(signedAmountCents ?? 0),effectiveDate,method.trimmingCharacters(in:.whitespacesAndNewlines),reference.trimmingCharacters(in:.whitespacesAndNewlines),note.trimmingCharacters(in:.whitespacesAndNewlines)].joined(separator:"\u{1F}")
+    }
+    private func paymentMatchesIntent(_ payment:DuesPayment)->Bool {
+        payment.campaign == "manual" && payment.reversesAdjustmentId == nil
+            && payment.transactionType == type && payment.amountCents == signedAmountCents
+            && payment.dateISO == effectiveDate && payment.paymentMethod == method.trimmingCharacters(in:.whitespacesAndNewlines)
+            && (payment.sourceReference ?? "") == reference.trimmingCharacters(in:.whitespacesAndNewlines)
+    }
+    @MainActor private func verifiedResult(_ id:Int)->Bool {
+        guard model.duesError == nil,let current=model.dues?.rows.first(where:{$0.rosterId==rosterId}) else{return false}
+        return current.payments.contains{$0.adjustmentId==id && paymentMatchesIntent($0)}
+    }
+    @MainActor private func rememberAttempt() {
+        guard let accountId=model.user?.id,let rosterId else{return}
+        DuesPendingAttemptStore.byAccount[accountId]=DuesPendingAttempt(
+            submissionId:clientSubmissionId,rosterId:rosterId,transactionType:type,amount:amount,
+            effectiveDate:effectiveDate,paymentMethod:method,sourceReference:reference,note:note,
+            baselineAdjustmentIds:baselineAdjustmentIds,resultId:pendingResultId)
+    }
+    @MainActor private func clearAttempt() {
+        guard let accountId=model.user?.id else{return}
+        DuesPendingAttemptStore.byAccount[accountId]=nil
+    }
+    @MainActor private func restoreUnresolvedAttempt() {
+        guard let accountId=model.user?.id,let pending=DuesPendingAttemptStore.byAccount[accountId] else{return}
+        clientSubmissionId=pending.submissionId
+        rosterId=pending.rosterId;type=pending.transactionType;amount=pending.amount
+        method=pending.paymentMethod;reference=pending.sourceReference;note=pending.note
+        let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.dateFormat="yyyy-MM-dd"
+        if let restoredDate=formatter.date(from:pending.effectiveDate){date=restoredDate}
+        baselineAdjustmentIds=pending.baselineAdjustmentIds
+        pendingResultId=pending.resultId
+        attemptedFingerprint=intentFingerprint
+        uncertain=true;messageIsError=true
+        message="This entry was not verified before the form closed. Select Check Ledger before any retry."
+    }
+    @MainActor private func save() async {
+        guard model.user?.canManageDues == true,let rosterId,!uncertain else{return}
+        let fingerprint=intentFingerprint
+        if let previous=attemptedFingerprint,previous != fingerprint {
+            clientSubmissionId=UUID().uuidString
+            pendingResultId=nil
+        }
+        if attemptedFingerprint != fingerprint {
+            baselineAdjustmentIds=Set(model.dues?.rows.first(where:{$0.rosterId==rosterId})?.payments.compactMap(\.adjustmentId) ?? [])
+        }
+        attemptedFingerprint=fingerprint
+        rememberAttempt()
+        working=true;defer{working=false}
+        do {
+            let draft=DuesAdjustmentDraft(rosterId:rosterId,transactionType:type,amount:amount,effectiveDate:effectiveDate,paymentMethod:method,sourceReference:reference,note:note,clientSubmissionId:clientSubmissionId)
+            let result:DuesAdjustmentResult=try await model.request("/api/dues/adjustments",method:"POST",body:JSONEncoder().encode(draft))
+            pendingResultId=result.id
+            rememberAttempt()
+            await saved()
+            if verifiedResult(result.id) {
+                clearAttempt()
+                clientSubmissionId=UUID().uuidString
+                dismiss()
+            } else {
+                uncertain=true
+                messageIsError=true
+                message="The service accepted this entry, but the ledger readback is incomplete. Select Check Ledger before any retry."
+            }
+        } catch ClientError.rejected(let detail) {
+            clearAttempt()
+            attemptedFingerprint=nil
+            uncertain=false
+            messageIsError=true
+            message="The entry was not accepted: \(detail) Correct the details and try again."
+        } catch {
+            uncertain=true
+            messageIsError=true
+            message="The submission status is uncertain: \(error.localizedDescription) Select Check Ledger before any retry."
+        }
+    }
+    @MainActor private func checkLedger() async {
+        guard uncertain,!checkingLedger else{return}
+        checkingLedger=true;defer{checkingLedger=false}
+        await model.loadDues()
+        guard model.duesError == nil,let current=model.dues?.rows.first(where:{$0.rosterId==rosterId}) else {
+            messageIsError=true
+            message="The ledger could not be checked. Do not submit another entry yet."
+            return
+        }
+        if let id=pendingResultId,verifiedResult(id) {
+            clearAttempt()
+            clientSubmissionId=UUID().uuidString
+            dismiss()
+            return
+        }
+        if current.payments.contains(where:{$0.adjustmentId.map{!baselineAdjustmentIds.contains($0)} == true && paymentMatchesIntent($0)}) {
+            messageIsError=true
+            message="A matching entry now appears in Payment Activity. Close this form and review that entry before creating anything else."
+            return
+        }
+        uncertain=false
+        messageIsError=false
+        message="No matching entry appears in the refreshed ledger. A retry will use the same submission ID so the service cannot record this attempt twice."
+    }
 }
 
 private struct MemberInviteDraft:Encodable{let email:String;let sendEmail:Bool}

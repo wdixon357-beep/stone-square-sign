@@ -7,8 +7,10 @@ struct AccessAccount: Decodable, Identifiable {
     let pending: Bool; let revoked: Bool; let permissions: [String]
 }
 enum AccessPermissions {
+    static let duesManagerRoles = User.duesManagerRoles
     static func normalized(_ selected: Set<String>, role: String? = nil) -> Set<String> {
         var values = selected
+        if let role, !duesManagerRoles.contains(role) { values.remove("dues.manage") }
         if values.contains("building.decide") { values.insert("building.view") }
         if values.contains("calendar.manage") { values.insert("calendar.view") }
         if values.contains("minutes.prepare") { values.insert("minutes.view") }
@@ -32,7 +34,7 @@ struct NativeAccountPermissionsView: View {
     @State private var busy = false
     @State private var message = ""
     var body: some View {
-        GroupBox("Individual permissions") {
+        GroupBox("Individual Permissions") {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Choose the workspaces and actions assigned to each person, then save their permissions. Preparation, upload and signing access also enable the related record view.").font(.callout).foregroundStyle(.secondary)
                 ForEach(accounts) { account in
@@ -41,14 +43,15 @@ struct NativeAccountPermissionsView: View {
                             Text(account.email).font(.caption).foregroundStyle(.secondary)
                             if account.role == "owner" { Text("The Worshipful Master retains full access.").font(.callout) }
                             else {
-                                ForEach(capabilities) { capability in
+                                ForEach(capabilities.filter { $0.id != "dues.manage" || AccessPermissions.duesManagerRoles.contains(account.role) || account.permissions.contains("dues.manage") }) { capability in
                                     Toggle(capability.label, isOn: Binding(get: { (drafts[account.key] ?? Set(account.permissions)).contains(capability.id) }, set: { enabled in
                                         var values = drafts[account.key] ?? Set(account.permissions)
-                                        if enabled { values.insert(capability.id) } else { values.remove(capability.id) }
+                                        if enabled && (capability.id != "dues.manage" || AccessPermissions.duesManagerRoles.contains(account.role)) { values.insert(capability.id) }
+                                        else { values.remove(capability.id) }
                                         drafts[account.key] = values == Set(account.permissions) ? nil : values
-                                    })).toggleStyle(.checkbox).disabled(["secretary", "assistant_secretary", "treasurer", "assistant_treasurer", "treasury_preparer", "warden", "officer"].contains(account.role) && ["minutes.view", "treasury.view"].contains(capability.id))
+                                    })).toggleStyle(.checkbox).disabled((!["owner", "secretary", "assistant_secretary", "treasurer", "assistant_treasurer"].contains(account.role) && capability.id == "dues.manage" && !(drafts[account.key] ?? Set(account.permissions)).contains("dues.manage")) || (["secretary", "assistant_secretary", "treasurer", "assistant_treasurer", "treasury_preparer", "warden", "officer"].contains(account.role) && ["minutes.view", "treasury.view"].contains(capability.id)))
                                 }
-                                Button("Save permissions") { Task { await save(account) } }
+                                Button("Save Permissions") { Task { await save(account) } }
                                     .disabled(drafts[account.key] == nil || drafts[account.key] == Set(account.permissions))
                             }
                         }.padding(12)

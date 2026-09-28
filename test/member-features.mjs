@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
+import bcrypt from 'bcrypt';
 import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
 import os from 'node:os';import fs from 'node:fs/promises';import path from 'node:path';
 import {spawn} from 'node:child_process';import {createServer} from 'node:http';import {once} from 'node:events';
 const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'ss-member-'));
+const password='Local preview password';
 process.env.DATABASE_URL='';process.env.PGLITE_DIR=tmp;process.env.NODE_ENV='test';
 const db=await import('../db.js');await db.connect();await db.initSchema();
-const {ensureBrotherSelfServiceAccess}=await import('../access-control.js');
+const {ensureBrotherSelfServiceAccess,grantTreasuryDuesAccessOnce}=await import('../access-control.js');
 for(const r of [{f:'William',l:'Owner',e:['owner@example.org']},{f:'James',l:'Member',e:['james@example.org']},{f:'Peter',l:'Member',e:['peter@example.org']},{f:'Legacy',l:'Invite',e:['legacy@example.org']}])await db.dbRun('insert into roster(first_name,last_name,title,prefix,emails,updated_at) values(?,?,?,?,?,?)',[r.f,r.l,'Brother','Bro.',r.e,new Date().toISOString()]);
 const migrationUser=await db.dbRun('insert into users(email,password_hash,name,role,created_at) values(?,?,?,?,?)',['migration@example.org','not-used','Migration Fixture','signer',new Date().toISOString()]);
 const legacyInvite=await db.dbRun('insert into invitations(email,name,role,token_hash,invited_by_user_id,expires_at,created_at) values(?,?,?,?,?,?,?)',['legacy@example.org','Legacy Invite','warden','legacy-invite-hash',migrationUser.lastID,new Date(Date.now()+86400000).toISOString(),new Date().toISOString()]);
@@ -17,8 +19,23 @@ const driftedUser=await db.dbRun('insert into users(email,password_hash,name,rol
 await db.dbRun('insert into roster(first_name,last_name,title,prefix,emails,updated_at) values(?,?,?,?,?,?)',['Drifted','Member','Brother','Bro.',['drifted-member@example.org'],new Date().toISOString()]);
 const memberRoster=await db.dbGet("select id from roster where first_name='Drifted' and last_name='Member'");
 const driftedMember=await db.dbRun('insert into users(email,password_hash,name,role,created_at,permissions_json,roster_id) values(?,?,?,?,?,?,?)',['drifted-member@example.org','not-used','Drifted Lodge Member','member',new Date().toISOString(),'[]',memberRoster.id]);
+const legacyTreasurer=await db.dbRun('insert into users(email,password_hash,name,role,created_at,permissions_json) values(?,?,?,?,?,?)',['legacy-treasurer@fixture.local',await bcrypt.hash(password,10),'Legacy Treasurer','treasurer',new Date().toISOString(),'["treasury.prepare"]']);
+const legacyAssistantTreasurer=await db.dbRun('insert into invitations(email,name,role,token_hash,invited_by_user_id,expires_at,created_at,permissions_json) values(?,?,?,?,?,?,?,?)',['legacy-assistant-treasurer@example.org','Legacy Assistant Treasurer','assistant_treasurer','legacy-assistant-hash',migrationUser.lastID,new Date(Date.now()+86400000).toISOString(),new Date().toISOString(),'["treasury.prepare"]']);
 await db.dbRun('update invitations set permissions_json=? where id=?',['[]',legacyInvite.lastID]);
 await ensureBrotherSelfServiceAccess();
+await grantTreasuryDuesAccessOnce();
+for(const [table,id] of [['users',legacyTreasurer.lastID],['invitations',legacyAssistantTreasurer.lastID]]){
+ const granted=JSON.parse((await db.dbGet(`SELECT permissions_json FROM ${table} WHERE id=?`,[id])).permissions_json);
+ assert.ok(granted.includes('dues.ledger')&&granted.includes('dues.manage'),'one-time migration grants existing Treasury offices dues access');
+}
+await db.dbRun('UPDATE users SET permissions_json=? WHERE id=?',['["dues.ledger"]',legacyTreasurer.lastID]);
+await grantTreasuryDuesAccessOnce();
+assert.deepEqual(JSON.parse((await db.dbGet('SELECT permissions_json FROM users WHERE id=?',[legacyTreasurer.lastID])).permissions_json),['dues.ledger'],'later owner revocation remains effective after startup migration');
+await db.dbRun('UPDATE users SET permissions_json=? WHERE id=?',['["dues.ledger","dues.manage"]',legacyTreasurer.lastID]);
+const peterRosterId=(await db.dbGet("SELECT id FROM roster WHERE first_name='Peter' AND last_name='Member'")).id;
+const oldSubmissionId='00000000-0000-4000-8000-000000000001';
+const oldEntry=await db.dbRun(`INSERT INTO dues_adjustments (roster_id,dues_year,transaction_type,amount_cents,effective_date,payment_method,entered_by_user_id,client_submission_id,created_at)
+ VALUES (?,?,?,?,?,?,?,?,?)`,[peterRosterId,'2026-2027','payment',1250,'2026-09-12','Cash',legacyTreasurer.lastID,oldSubmissionId,new Date(Date.now()-11*60*1000).toISOString()]);
 for(const record of [await db.dbGet('select * from users where id=?',[driftedUser.lastID]),await db.dbGet('select * from invitations where id=?',[legacyInvite.lastID])]){
  const granted=JSON.parse(record.permissions_json);assert.ok(granted.includes('dues.self')&&granted.includes('suggestions.create'),'existing roster-linked accounts and invitations receive Brother self-service access');
 }
@@ -26,7 +43,7 @@ const repairedMember=JSON.parse((await db.dbGet('select permissions_json from us
 assert.ok(['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage'].every(permission=>repairedMember.includes(permission)),'older Lodge Member accounts receive the complete member baseline');
 await db.dbRun('delete from users where id=?',[driftedUser.lastID]);
 await db.dbRun('delete from users where id=?',[driftedMember.lastID]);
-await db.dbRun('delete from invitations where id=?',[legacyInvite.lastID]);await db.dbRun('delete from users where id=?',[migrationUser.lastID]);await db.dbRun("delete from roster where first_name='Legacy' and last_name='Invite'");await db.dbRun("delete from roster where first_name='Drifted' and last_name='Member'");await db.close();
+await db.dbRun('delete from invitations where id=?',[legacyInvite.lastID]);await db.dbRun('delete from invitations where id=?',[legacyAssistantTreasurer.lastID]);await db.dbRun('delete from users where id=?',[migrationUser.lastID]);await db.dbRun("delete from roster where first_name='Legacy' and last_name='Invite'");await db.dbRun("delete from roster where first_name='Drifted' and last_name='Member'");await db.close();
 const zeffyPayment={id:'pay-1',campaign_id:'annual',status:'succeeded',created:Date.UTC(2026,8,1)/1000,amount:5000,buyer:{email:'james@example.org',first_name:'James',last_name:'Member'}};
 const zeffy=createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify({data:[zeffyPayment,{...zeffyPayment}],has_more:false}));});zeffy.listen(0,'127.0.0.1');await once(zeffy,'listening');
 const loader=path.join(tmp,'dues-generator-loader.mjs');
@@ -38,7 +55,7 @@ setGenerationForTests({initSchema:async()=>{},status:async()=>({configured:true}
 const probe=createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(r=>probe.close(r));const base=`http://127.0.0.1:${port}`;
 let log='';const app=spawn(process.execPath,['--import',loader,'server.js'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:String(port),APP_BASE_URL:base,OWNER_EMAIL:'owner@example.org',ZEFFY_API_KEY:'test',ZEFFY_API_BASE:`http://127.0.0.1:${zeffy.address().port}`,ZEFFY_DUES_CAMPAIGN_ID:'annual',DUES_YEAR:'2026-2027',WARDEN_EMAILS:'',OPENAI_API_KEY:''},stdio:['ignore','pipe','pipe']});app.stdout.on('data',d=>log+=d);app.stderr.on('data',d=>log+=d);
 const api=async(p,t,method='GET',body)=>{const r=await fetch(base+p,{method,headers:{...(t?{Authorization:`Bearer ${t}`}:{color:''}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});return{status:r.status,data:r.headers.get('content-type')?.includes('json')?await r.json():await r.text()}};
-const password='Local preview password';let checks=0;const check=(label,value)=>{assert.ok(value,label);checks++;console.log('PASS '+label)};
+let checks=0;const check=(label,value)=>{assert.ok(value,label);checks++;console.log('PASS '+label)};
 try{for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  const owner=(await api('/api/auth/register',null,'POST',{email:'owner@example.org',name:'William Owner',password})).data;
  const roster=(await api('/api/admin/member-access',owner.token)).data.members;check('Owner sees roster-linked Member Access',roster.length===3);
@@ -52,7 +69,23 @@ try{for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}cat
  check('Brother cannot read Dashboard Activity',(await api('/api/admin/activity',james.token)).status===403);
  const mine=await api('/api/dues/me',james.token);check('My Dues returns only the linked Brother',mine.status===200&&mine.data.row.name.includes('James')&&mine.data.row.paidCents===5000&&!('rows' in mine.data));
  check('Duplicate Zeffy payment identifiers count only once',mine.data.row.payments.filter(payment=>payment.externalId==='pay-1').length===1);
- check('Another Brother sees his own zero balance record',(await api('/api/dues/me',peter.token)).data.row.name.includes('Peter'));
+ check('Another Brother sees only his own balance record',(await api('/api/dues/me',peter.token)).data.row.name.includes('Peter'));
+ const legacyTreasuryLogin=await api('/api/auth/login',null,'POST',{email:'legacy-treasurer@fixture.local',password});assert.equal(legacyTreasuryLogin.status,200);
+ const treasuryToken=legacyTreasuryLogin.data.token;
+ const oldSubmission={rosterId:peterRosterId,transactionType:'payment',amount:'12.50',effectiveDate:'2026-09-12',paymentMethod:'Cash',clientSubmissionId:oldSubmissionId};
+ const agedReplay=await api('/api/dues/adjustments',treasuryToken,'POST',oldSubmission);
+ check('Exact replay after more than ten minutes returns the original entry',(agedReplay.status===200&&agedReplay.data.replayed===true&&agedReplay.data.id===oldEntry.lastID));
+ check('A new ID cannot duplicate an older cash entry without a reference',(await api('/api/dues/adjustments',treasuryToken,'POST',{...oldSubmission,clientSubmissionId:'00000000-0000-4000-8000-000000000009'})).status===409);
+ const newSubmission={...oldSubmission,amount:'8.00',effectiveDate:'2026-09-15',clientSubmissionId:'00000000-0000-4000-8000-000000000002'};
+ const firstSubmission=await api('/api/dues/adjustments',treasuryToken,'POST',newSubmission);
+ const newReplay=await api('/api/dues/adjustments',treasuryToken,'POST',{...newSubmission,amount:'8'});
+ check('First submission creates one entry and normalized retry returns the same ID',firstSubmission.status===201&&firstSubmission.data.replayed===false&&newReplay.status===200&&newReplay.data.replayed===true&&newReplay.data.id===firstSubmission.data.id);
+ check('Conflicting payload cannot reuse a submission ID',(await api('/api/dues/adjustments',treasuryToken,'POST',{...newSubmission,amount:'9.00'})).status===409);
+ check('Malformed submission ID is refused',(await api('/api/dues/adjustments',treasuryToken,'POST',{...newSubmission,clientSubmissionId:'not-a-uuid'})).status===400);
+ const concurrentSubmission={...newSubmission,amount:'9.00',clientSubmissionId:'00000000-0000-4000-8000-000000000003'};
+ const concurrent=await Promise.all([api('/api/dues/adjustments',treasuryToken,'POST',concurrentSubmission),api('/api/dues/adjustments',treasuryToken,'POST',concurrentSubmission)]);
+ check('Concurrent retries commit only one entry',concurrent.map(result=>result.status).sort().join(',')==='200,201'&&concurrent[0].data.id===concurrent[1].data.id);
+ check('Idempotent retries never add a second payment',(await api('/api/dues/me',peter.token)).data.row.paidCents===2950);
  check('Member cannot retrieve the full Lodge ledger',(await api('/api/dues',james.token)).status===403);
  for(const format of ['pdf','xlsx']){
   const endpoint=`/api/dues/export.${format}`;
@@ -80,12 +113,14 @@ try{for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break}cat
  const adjust=await api('/api/dues/adjustments',owner.token,'POST',{rosterId:mine.data.row.rosterId,transactionType:'payment',amount:'25.00',effectiveDate:'2026-09-15',paymentMethod:'Cash',sourceReference:'receipt 1',note:'test entry'});check('Manual entry is accepted atomically',adjust.status===201);
  check('A repeated receipt cannot silently credit the same payment twice',(await api('/api/dues/adjustments',owner.token,'POST',{rosterId:mine.data.row.rosterId,transactionType:'payment',amount:'25.00',effectiveDate:'2026-09-15',paymentMethod:'Cash',sourceReference:'receipt 1',note:'retry'})).status===409);
  check('Invalid cents and impossible dates cannot be recorded',(await api('/api/dues/adjustments',owner.token,'POST',{rosterId:mine.data.row.rosterId,transactionType:'payment',amount:'25.001',effectiveDate:'2026-09-15',paymentMethod:'Cash'})).status===400&&(await api('/api/dues/adjustments',owner.token,'POST',{rosterId:mine.data.row.rosterId,transactionType:'payment',amount:'25.00',effectiveDate:'2026-09-31',paymentMethod:'Cash'})).status===400);
+ check('A Zeffy payment cannot be duplicated as a manual entry',(await api('/api/dues/adjustments',owner.token,'POST',{rosterId:mine.data.row.rosterId,transactionType:'payment',amount:'50.00',effectiveDate:'2026-09-01',paymentMethod:'Other',note:'Paid through Zeffy'})).status===409);
  const peterDues=(await api('/api/dues/me',peter.token)).data.row;
  const cashWithoutReference={rosterId:peterDues.rosterId,transactionType:'payment',amount:'10.00',effectiveDate:'2026-09-15',paymentMethod:'Cash'};
  check('A cash payment without a reference is accepted once',(await api('/api/dues/adjustments',owner.token,'POST',cashWithoutReference)).status===201);
  check('Retrying the same no-reference payment is blocked',(await api('/api/dues/adjustments',owner.token,'POST',cashWithoutReference)).status===409);
  const updated=await api('/api/dues/me',james.token);check('Manual and Zeffy activity calculate together',updated.data.row.paidCents===7500);
  const reversed=await api(`/api/dues/adjustments/${adjust.data.id}/reverse`,owner.token,'POST',{reason:'Synthetic correction'});check('A correction preserves the original entry and adds an immutable reversal',reversed.status===201);
+ check('An entry cannot be reversed twice or reverse its own reversal',(await api(`/api/dues/adjustments/${adjust.data.id}/reverse`,owner.token,'POST',{reason:'Synthetic retry'})).status===409&&(await api(`/api/dues/adjustments/${reversed.data.id}/reverse`,owner.token,'POST',{reason:'Synthetic mistake'})).status===400);
  const afterReversal=await api('/api/dues/me',james.token);check('Reversal arithmetic restores the verified Zeffy balance',afterReversal.data.row.paidCents===5000&&afterReversal.data.row.payments.some(payment=>payment.reversesAdjustmentId===adjust.data.id));
  check('Promoting a roster-linked Brother ends his existing sign-in',(await api(`/api/admin/accounts/${peter.user.id}/role`,owner.token,'PUT',{role:'assistant_secretary'})).status===200&&(await api('/api/auth/me',peter.token)).status===401);
  const promoted=(await api('/api/auth/login',null,'POST',{email:'peter@example.org',password})).data;

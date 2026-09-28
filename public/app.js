@@ -150,6 +150,7 @@ const restoreWebDrafts = () => {
     state.minutesSourceDirty = true;
     setMessage($('minutesMessage'), 'Your unfinished meeting source from this tab has been restored.');
   }
+  restoreDuesEntryDraft();
 };
 
 const hasUnsavedWorkspace = section => ({
@@ -437,14 +438,16 @@ const easternGreeting = () => {
   const hour = Number(new Intl.DateTimeFormat('en-US', {
     hour: '2-digit', hourCycle: 'h23', timeZone: 'America/New_York',
   }).format(new Date()));
-  if (hour < 12) return 'Good morning';
-  if (hour < 17) return 'Good afternoon';
-  return 'Good evening';
+  if (hour < 12) return 'Good Morning';
+  if (hour < 17) return 'Good Afternoon';
+  return 'Good Evening';
 };
 
 /* Who is ever asked for a saved signature. An allowlist, so a new role is never trapped
  * behind the forced signature modal that has no dismiss control. */
 const can = (permission, user = state.user) => user?.role === 'owner' || Boolean(user?.permissions?.includes(permission));
+const DUES_MANAGEMENT_ROLES = new Set(['owner', 'secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer']);
+const canManageDues = (user = state.user) => DUES_MANAGEMENT_ROLES.has(user?.role) && can('dues.manage', user);
 
 const applyWorkspacePermissions = user => {
   $('minutesPageDescription').textContent = can('minutes.prepare', user) ? 'Prepare and review meeting minutes. The preparing officer attests, and the Worshipful Master reviews and authorizes distribution.' : 'Read finalized meeting minutes.';
@@ -492,7 +495,7 @@ const applyWorkspacePermissions = user => {
     element.classList.toggle('hidden', !maySeeDues);
   });
   document.querySelectorAll('.dues-self-only').forEach(element => element.classList.toggle('hidden', !maySeeOwnDues));
-  document.querySelectorAll('.dues-manage-only').forEach(element => element.classList.toggle('hidden', !can('dues.manage', user)));
+  document.querySelectorAll('.dues-manage-only').forEach(element => element.classList.toggle('hidden', !canManageDues(user)));
   document.querySelectorAll('.suggestions-only').forEach(element => element.classList.toggle('hidden', !can('suggestions.create', user)));
   document.querySelectorAll('.minutes-only').forEach((element) => {
     element.classList.toggle('hidden', !maySeeMinutes);
@@ -853,6 +856,7 @@ const refreshDashboardNavigation = () => {
   });
   if (dashboardGroupLanding) renderDashboardGroupLanding(dashboardGroupLanding);
   renderHomeQuickLinks();
+  renderHomeToolSearch();
 };
 
 const renderDashboardGroupLanding = group => {
@@ -930,6 +934,45 @@ const renderHomeQuickLinks = () => {
     links.append(button);
   }
 };
+
+const renderHomeToolSearch = () => {
+  const search = $('homeToolSearch');
+  const results = $('homeToolResults');
+  const query = search.value.trim().toLocaleLowerCase();
+  results.replaceChildren();
+  results.classList.toggle('hidden', query.length < 2);
+  if (query.length < 2) return;
+  const matches = [...document.querySelectorAll('#workspaceSections .nav-item')]
+    .filter(item => !item.classList.contains('hidden'))
+    .filter(item => item.textContent.toLocaleLowerCase().includes(query))
+    .slice(0, 8);
+  if (!matches.length) {
+    const empty = document.createElement('p');
+    empty.textContent = 'No matching tools are available to your account.';
+    results.append(empty);
+    return;
+  }
+  for (const item of matches) {
+    const group = item.closest('.nav-group')?.dataset.group;
+    const label = item.textContent.replace(item.querySelector('span')?.textContent || '', '').trim();
+    const result = document.createElement(item.tagName === 'A' ? 'a' : 'button');
+    if (result.tagName === 'A') {
+      result.href = item.href;
+      result.target = '_blank';
+      result.rel = 'noopener noreferrer';
+      result.referrerPolicy = 'no-referrer';
+    } else {
+      result.type = 'button';
+      result.addEventListener('click', () => { item.click(); search.value = ''; renderHomeToolSearch(); });
+    }
+    result.textContent = label;
+    const category = document.createElement('small');
+    category.textContent = dashboardGroups[group]?.title || 'Dashboard';
+    result.append(category);
+    results.append(result);
+  }
+};
+$('homeToolSearch').addEventListener('input', renderHomeToolSearch);
 
 const homeAlertSources = [
   ['minutesReviewAlerts', 'Meeting Minutes'], ['buildingAlerts', 'Building Requests'],
@@ -2239,6 +2282,7 @@ $('dispensationsMenuCard').addEventListener('click', () => showWorkspaceSection(
 $('proposeMenuCard')?.addEventListener('click', () => showWorkspaceSection('proposals'));
 $('duesNav').addEventListener('click', () => showWorkspaceSection('dues'));
 $('duesMenuCard').addEventListener('click', () => showWorkspaceSection('dues'));
+$('duesDetailClose').addEventListener('click', () => { $('duesDetailPanel').classList.add('hidden'); state.duesDetailRosterId = null; });
 $('duesRefresh').addEventListener('click', () => renderDues(true));
 $('duesExportPdf').addEventListener('click', () => exportDuesLedger('pdf'));
 $('duesExportExcel').addEventListener('click', () => exportDuesLedger('xlsx'));
@@ -3597,6 +3641,74 @@ const exportDuesLedger = async format => {
   }
 };
 
+const duesEntryReversed = (row, payment) => row.payments.some(entry => entry.reversesAdjustmentId === payment.adjustmentId);
+const duesEntryCanReverse = (row, payment) => canManageDues() && payment.campaign === 'manual'
+  && Number.isSafeInteger(payment.adjustmentId) && payment.adjustmentId > 0
+  && !payment.reversesAdjustmentId && payment.transactionType !== 'reversal' && !duesEntryReversed(row, payment);
+const duesProjectedBalanceAfterReversal = (row, payment) => Math.max(0, row.assessedCents - (row.paidCents - payment.amountCents));
+
+const renderDuesDetail = (rosterId, { focus = false } = {}) => {
+  const panel = $('duesDetailPanel');
+  const row = state.duesLedger?.rows.find(item => String(item.rosterId) === String(rosterId));
+  if (!row) { panel.classList.add('hidden'); state.duesDetailRosterId = null; return; }
+  state.duesDetailRosterId = row.rosterId;
+  $('duesDetailName').textContent = row.name;
+  $('duesDetailSummary').textContent = `${money(row.paidCents)} paid to date · ${money(row.remainingCents)} balance due`;
+  const list = $('duesDetailPayments'); list.replaceChildren();
+  if (!row.payments.length) {
+    const empty = document.createElement('p'); empty.className = 'helper';
+    empty.textContent = 'No payments or adjustments are recorded for this dues year.';
+    list.append(empty);
+  }
+  for (const payment of row.payments) {
+    const card = document.createElement('article'); card.className = 'dues-payment';
+    const source = payment.campaign === 'manual' ? 'Lodge Entry' : 'Zeffy Payment';
+    const type = payment.campaign === 'manual'
+      ? (payment.transactionType === 'reversal' ? 'Reversal' : (payment.transactionType || 'Payment').replace(/^./, letter => letter.toUpperCase()))
+      : (payment.campaign === 'annual' ? 'Full Dues Payment' : 'Custom Dues Payment');
+    const reversed = payment.campaign === 'manual' && duesEntryReversed(row, payment);
+    const displayedAmount = payment.amountCents < 0 ? `-${money(-payment.amountCents)}` : money(payment.amountCents);
+    card.innerHTML = `<div class="dues-payment-main"><div><strong>${escapeMarkup(type)}</strong><span class="dues-source">${source}${reversed ? ' · Reversed' : ''}</span></div><b>${escapeMarkup(displayedAmount)}</b></div>
+      <p>${escapeMarkup(duesDate(payment.dateISO))}${payment.paymentMethod ? ` · ${escapeMarkup(payment.paymentMethod)}` : ''}${payment.sourceReference ? ` · ${escapeMarkup(payment.sourceReference)}` : ''}</p>
+      ${payment.enteredBy ? `<p>Entered by ${escapeMarkup(payment.enteredBy)}</p>` : ''}
+      ${payment.note ? `<p>${escapeMarkup(payment.note)}</p>` : ''}`;
+    if (duesEntryCanReverse(row, payment)) {
+      const open = document.createElement('button'); open.type = 'button'; open.className = 'secondary dues-correct-button';
+      open.textContent = 'Correct This Entry';
+      open.addEventListener('click', () => {
+        list.querySelectorAll('.dues-reverse-form').forEach(form => form.remove());
+        const form = document.createElement('form'); form.className = 'dues-reverse-form';
+        form.innerHTML = `<strong>Review Correction</strong><p>This will reverse the ${escapeMarkup(money(payment.amountCents))} ${escapeMarkup(type.toLowerCase())} dated ${escapeMarkup(duesDate(payment.dateISO))}. The original entry stays in the history.</p>
+          <p class="dues-balance-preview">Current Balance ${escapeMarkup(money(row.remainingCents))} <span aria-hidden="true">→</span> Projected Balance ${escapeMarkup(money(duesProjectedBalanceAfterReversal(row, payment)))}</p>
+          <label>Reason For Correction<textarea name="reason" maxlength="500" rows="2" required placeholder="Explain why this entry should be reversed"></textarea></label>
+          <label class="dues-confirm-label"><input name="confirmed" type="checkbox" required> I checked the Brother, date, amount, and projected balance.</label>
+          <div class="dues-reverse-actions"><button type="button" class="secondary">Cancel</button><button type="submit" class="primary">Confirm Reversal</button></div>`;
+        form.querySelector('[type="button"]').addEventListener('click', () => form.remove());
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          if (!form.reportValidity()) return;
+          const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+          setMessage($('duesDetailMessage'), 'Recording the correction…');
+          try {
+            await apiFetch(`/api/dues/adjustments/${payment.adjustmentId}/reverse`, { method: 'POST', body: JSON.stringify({ reason: form.elements.reason.value.trim() }) });
+            state.duesLoaded = false;
+            await renderDues(true);
+            const refreshed = state.duesLedger?.rows.find(item => item.rosterId === row.rosterId);
+            if (!refreshed || !duesEntryReversed(refreshed, payment)) throw new Error('The correction was submitted, but its refreshed ledger entry could not be verified. Refresh the ledger before trying again.');
+            setMessage($('duesDetailMessage'), `Correction recorded. ${row.name}'s balance is now ${money(refreshed.remainingCents)}.`);
+          } catch (error) { setMessage($('duesDetailMessage'), `${error.message} Refresh the ledger and check the activity before trying again.`, true); submit.disabled = false; }
+        });
+        card.append(form);
+        form.elements.reason.focus();
+      });
+      card.append(open);
+    }
+    list.append(card);
+  }
+  panel.classList.remove('hidden');
+  if (focus) panel.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+};
+
 const renderDues = async (force = false) => {
   if (state.duesLoading) return;
   if (state.duesLoaded && !force) return;
@@ -3606,7 +3718,7 @@ const renderDues = async (force = false) => {
     const led = await apiFetch('/api/dues');
     state.duesLedger = led;
     $('duesYearLine').textContent =
-      `${led.duesYear} dues, ${money(led.rateCents)} each, reconciled live against both Zeffy campaigns.`;
+      `Standard ${led.duesYear} dues rate: ${money(led.rateCents)}. Payments reconcile against both Zeffy campaigns. Life member assessments require separate review.`;
     $('duesCollected').textContent = money(led.totals.collectedCents);
     $('duesOutstanding').textContent = money(led.totals.outstandingCents);
     $('duesPaidCount').textContent = String(led.totals.paidCount);
@@ -3621,8 +3733,8 @@ const renderDues = async (force = false) => {
     const rows = $('duesRows');
     rows.replaceChildren();
     const brotherSelect = $('duesAdjustmentBrother');
-    if (brotherSelect && can('dues.manage')) {
-      const selected = brotherSelect.value;
+    if (brotherSelect && canManageDues()) {
+      const selected = brotherSelect.value || (duesSubmissionPayload ? String(JSON.parse(duesSubmissionPayload).rosterId) : '');
       brotherSelect.replaceChildren(new Option('Choose a Brother', ''));
       [...led.rows].sort((a,b)=>a.name.localeCompare(b.name)).forEach(row => brotherSelect.add(new Option(row.name, String(row.rosterId))));
       brotherSelect.value = selected;
@@ -3635,15 +3747,17 @@ const renderDues = async (force = false) => {
       const paymentCount = r.payments?.length || 0;
       const paymentNote = paymentCount ? `${paymentCount} ${paymentCount === 1 ? 'entry' : 'entries'} recorded` : 'No activity recorded';
       const balanceNote = r.creditCents ? `<span class="dues-cell-note">${escapeMarkup(money(r.creditCents))} credit</span>` : '';
-      const statusLabel = { paid: 'Paid in full', partial: 'Partially paid', unpaid: 'Unpaid', unknown: 'Check status' }[status];
-      el.innerHTML = `<td role="cell" data-label="Brother" class="dues-member-cell"><strong>${escapeMarkup(r.name)}</strong><span class="dues-cell-note">${paymentNote}</span></td>
-        <td role="cell" data-label="Dues assessed" class="dues-money">${escapeMarkup(money(r.assessedCents))}</td>
-        <td role="cell" data-label="Paid to date" class="dues-money">${escapeMarkup(money(r.paidCents))}</td>
-        <td role="cell" data-label="Balance due" class="dues-money dues-balance">${escapeMarkup(money(r.remainingCents))}${balanceNote}</td>
+      const statusLabel = { paid: 'Paid In Full', partial: 'Partially Paid', unpaid: 'Unpaid', unknown: 'Check Status' }[status];
+      el.innerHTML = `<td role="cell" data-label="Brother" class="dues-member-cell"><strong>${escapeMarkup(r.name)}</strong><span class="dues-cell-note">${paymentNote}</span><button class="dues-activity-button" type="button" aria-label="View dues activity for ${escapeMarkup(r.name)}">View Activity</button></td>
+        <td role="cell" data-label="Dues Assessed" class="dues-money">${escapeMarkup(money(r.assessedCents))}</td>
+        <td role="cell" data-label="Paid To Date" class="dues-money">${escapeMarkup(money(r.paidCents))}</td>
+        <td role="cell" data-label="Balance Due" class="dues-money dues-balance">${escapeMarkup(money(r.remainingCents))}${balanceNote}</td>
         <td role="cell" data-label="Status"><span class="dues-status dues-status-${status}">${statusLabel}</span></td>
-        <td role="cell" data-label="Last activity" class="dues-last-payment">${escapeMarkup(duesDate(r.lastPaymentISO))}</td>`;
+        <td role="cell" data-label="Last Activity" class="dues-last-payment">${escapeMarkup(duesDate(r.lastPaymentISO))}</td>`;
+      el.querySelector('.dues-activity-button').addEventListener('click', () => renderDuesDetail(r.rosterId, { focus: true }));
       rows.append(el);
     }
+    if (state.duesDetailRosterId != null) renderDuesDetail(state.duesDetailRosterId);
 
     const panel = $('duesUnmatchedPanel');
     const un = $('duesUnmatched');
@@ -3675,7 +3789,7 @@ const renderMyDues = async () => {
     $('myDuesAssessed').textContent = money(row.assessedCents);
     $('myDuesPaid').textContent = money(row.paidCents);
     $('myDuesBalance').textContent = row.creditCents ? `${money(row.creditCents)} credit` : money(row.remainingCents);
-    $('myDuesStatus').textContent = row.status === 'paid' ? 'Paid in full' : row.status === 'partial' ? 'Partially paid' : 'Payment due';
+    $('myDuesStatus').textContent = row.status === 'paid' ? 'Paid In Full' : row.status === 'partial' ? 'Partially Paid' : 'Payment Due';
     $('myDuesFullPay').href = payload.paymentLinks.full;
     $('myDuesCustomPay').href = payload.paymentLinks.custom;
     const list = $('myDuesPayments'); list.replaceChildren();
@@ -3774,10 +3888,127 @@ $('duesAssistPrepare').addEventListener('click', async event => {
   } catch (error) { setMessage($('duesAssistMessage'), error.message, true); }
   finally { button.disabled = false; }
 });
+let duesSubmissionId = null;
+let duesSubmissionPayload = null;
+let duesSubmissionAttempted = false;
+let duesSubmissionBusy = false;
+const DUES_ENTRY_FIELDS = {
+  rosterId: 'duesAdjustmentBrother', transactionType: 'duesAdjustmentType', amount: 'duesAdjustmentAmount',
+  effectiveDate: 'duesAdjustmentDate', paymentMethod: 'duesAdjustmentMethod',
+  sourceReference: 'duesAdjustmentReference', note: 'duesAdjustmentNote',
+};
+const saveDuesEntryDraft = () => {
+  const key = draftStorageKey('dues-entry');
+  if (!key) return false;
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ id: duesSubmissionId, payload: duesSubmissionPayload }));
+    return true;
+  } catch { return false; }
+};
+const restoreDuesEntryDraft = () => {
+  if (!canManageDues() || duesSubmissionAttempted) return;
+  const key = draftStorageKey('dues-entry');
+  if (!key) return;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+    if (!saved || typeof saved.id !== 'string' || typeof saved.payload !== 'string') return;
+    const details = JSON.parse(saved.payload);
+    if (!details || !Number.isSafeInteger(details.rosterId) || details.rosterId < 1) return;
+    duesSubmissionId = saved.id;
+    duesSubmissionPayload = saved.payload;
+    duesSubmissionAttempted = true;
+    $('duesStartNewEntry').textContent = 'Verify Previous Entry And Start New';
+    Object.entries(DUES_ENTRY_FIELDS).forEach(([field, elementId]) => { $(elementId).value = String(details[field] ?? ''); });
+    setMessage($('duesAdjustmentMessage'), 'A previous payment needs confirmation. Select Confirm And Record Activity to safely check it, or Start New Entry to resolve it before moving on.');
+  } catch { setMessage($('duesAdjustmentMessage'), 'A previous dues entry could not be restored. Do not record another payment until the ledger has been reviewed.', true); }
+};
+const clearDuesSubmission = () => {
+  duesSubmissionId = null;
+  duesSubmissionPayload = null;
+  duesSubmissionAttempted = false;
+  $('duesStartNewEntry').textContent = 'Start New Entry';
+  clearSessionDraft('dues-entry');
+};
+const resetDuesEntryDraft = () => {
+  $('duesAdjustmentForm').reset();
+  clearDuesSubmission();
+  duesAssistProposal = null;
+  $('duesAssistText').value = '';
+  $('duesAssistReview').classList.add('hidden');
+  $('duesAssistReview').replaceChildren();
+  setMessage($('duesAssistMessage'), '');
+  $('duesAdjustmentDate').value = duesTodayEastern();
+};
+const recordDuesEntry = async (button, details, startNewAfter = false) => {
+  if (duesSubmissionBusy) return;
+  const serialized = JSON.stringify(details);
+  if (duesSubmissionPayload && duesSubmissionPayload !== serialized) {
+    setMessage($('duesAdjustmentMessage'), 'These details changed after a recording attempt. Restore the original details or select Start New Entry to resolve the earlier payment first.', true);
+    return;
+  }
+  if (!duesSubmissionId) duesSubmissionId = window.crypto.randomUUID();
+  duesSubmissionPayload = serialized;
+  duesSubmissionAttempted = true;
+  $('duesStartNewEntry').textContent = 'Verify Previous Entry And Start New';
+  if (!saveDuesEntryDraft()) {
+    setMessage($('duesAdjustmentMessage'), 'This browser could not safely preserve the payment for a retry. Enable session storage before recording dues activity.', true);
+    return;
+  }
+  duesSubmissionBusy = true;
+  button.disabled = true;
+  $('duesStartNewEntry').disabled = true;
+  setMessage($('duesAdjustmentMessage'), startNewAfter ? 'Checking the previous payment before starting a new entry…' : 'Recording and checking the updated ledger…');
+  try {
+    const result = await apiFetch('/api/dues/adjustments', { method: 'POST', body: JSON.stringify({ ...details, clientSubmissionId: duesSubmissionId }) });
+    state.duesLoaded = false;
+    await renderDues(true);
+    const updated = state.duesLedger?.rows.find(row => row.rosterId === details.rosterId);
+    if (!state.duesLoaded || !updated?.payments.some(payment => payment.adjustmentId === Number(result.id))) {
+      throw new Error('The entry was accepted, but the refreshed ledger could not be verified.');
+    }
+    resetDuesEntryDraft();
+    setMessage($('duesAdjustmentMessage'), startNewAfter
+      ? 'The previous activity and updated balance were verified. A new entry is ready.'
+      : 'The activity was recorded and the updated balance was verified.');
+  } catch (error) {
+    if (error?.status === 400 || error?.status === 422) {
+      clearDuesSubmission();
+      if (startNewAfter) resetDuesEntryDraft();
+      setMessage($('duesAdjustmentMessage'), startNewAfter
+        ? 'The previous entry was rejected and no payment was recorded. A new entry is ready.'
+        : `${error.message} Correct the details and try again.`, !startNewAfter);
+    } else {
+      setMessage($('duesAdjustmentMessage'), `${error.message} The previous payment is still unresolved. Try the same submission again to verify its ledger entry before starting another.`, true);
+    }
+  } finally {
+    duesSubmissionBusy = false;
+    button.disabled = false;
+    $('duesStartNewEntry').disabled = false;
+  }
+};
+$('duesStartNewEntry').addEventListener('click', async event => {
+  if (duesSubmissionBusy) return;
+  if (duesSubmissionAttempted) {
+    if (!duesSubmissionPayload || !duesSubmissionId) {
+      setMessage($('duesAdjustmentMessage'), 'The previous payment could not be recovered. Review the ledger before recording another entry.', true);
+      return;
+    }
+    if (!window.confirm('This will retry the previous payment using its original submission ID. If the first request did not reach the service, this may record that payment now. Continue and check the ledger before starting a new entry?')) return;
+    await recordDuesEntry(event.currentTarget, JSON.parse(duesSubmissionPayload), true);
+    return;
+  }
+  resetDuesEntryDraft();
+  setMessage($('duesAdjustmentMessage'), 'New entry ready. Review the Brother and payment details before recording.');
+});
 $('duesAdjustmentForm').addEventListener('submit', async event => {
-  event.preventDefault(); const button=event.submitter;button.disabled=true;
-  try { await apiFetch('/api/dues/adjustments',{method:'POST',body:JSON.stringify({rosterId:Number($('duesAdjustmentBrother').value),transactionType:$('duesAdjustmentType').value,amount:$('duesAdjustmentAmount').value,effectiveDate:$('duesAdjustmentDate').value,paymentMethod:$('duesAdjustmentMethod').value,sourceReference:$('duesAdjustmentReference').value,note:$('duesAdjustmentNote').value})});event.currentTarget.reset();duesAssistProposal=null;$('duesAssistText').value='';$('duesAssistReview').classList.add('hidden');$('duesAssistReview').replaceChildren();setMessage($('duesAssistMessage'),'');$('duesAdjustmentDate').value=duesTodayEastern();state.duesLoaded=false;await renderDues(true);setMessage($('duesAdjustmentMessage'),'The activity was recorded and the balance was recalculated.'); }
-  catch(error){setMessage($('duesAdjustmentMessage'),error.message,true);}finally{button.disabled=false;}
+  event.preventDefault();
+  const details = {
+    rosterId: Number($('duesAdjustmentBrother').value), transactionType: $('duesAdjustmentType').value,
+    amount: $('duesAdjustmentAmount').value, effectiveDate: $('duesAdjustmentDate').value,
+    paymentMethod: $('duesAdjustmentMethod').value, sourceReference: $('duesAdjustmentReference').value,
+    note: $('duesAdjustmentNote').value,
+  };
+  await recordDuesEntry(event.submitter, details);
 });
 
 $('suggestionForm').addEventListener('submit', async event => {

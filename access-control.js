@@ -10,6 +10,7 @@ const personal=['building.request','signature.manage','settings.manage'];
 const reader=['calendar.view','reports.create','minutes.view','treasury.view',...personal];
 export const MEMBER_BASELINE_PERMISSIONS=['reports.create','minutes.view','treasury.view','dues.self','suggestions.create','settings.manage'];
 export const UNIVERSAL_RECORD_ROLES=new Set(['secretary','assistant_secretary','treasurer','assistant_treasurer','treasury_preparer','warden','officer']);
+export const DUES_MANAGEMENT_ROLES=new Set(['owner','secretary','assistant_secretary','treasurer','assistant_treasurer']);
 export function permissionsForStorage(values,role){
  const normalized=normalizePermissions(values,role);
  return UNIVERSAL_RECORD_ROLES.has(role)?normalized.filter(value=>!['minutes.view','treasury.view'].includes(value)):normalized;
@@ -36,8 +37,9 @@ export function resolvePermissions(user){
  switch(user?.role){
  case 'secretary': return [...reader,'building.view','minutes.prepare','treasury.prepare','treasury.upload','dues.self','dues.ledger','dues.manage','suggestions.create','documents.status','documents.sign','candidates.view'];
  case 'assistant_secretary': return [...reader,'building.view','minutes.prepare','treasury.prepare','dues.self','dues.ledger','dues.manage','suggestions.create','documents.status','documents.sign','candidates.view'];
- case 'treasurer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','treasury.upload','dues.self','suggestions.create',...personal];
- case 'assistant_treasurer':case 'treasury_preparer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','dues.self','suggestions.create',...personal];
+ case 'treasurer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','treasury.upload','dues.self','dues.ledger','dues.manage','suggestions.create',...personal];
+ case 'assistant_treasurer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','dues.self','dues.ledger','dues.manage','suggestions.create',...personal];
+ case 'treasury_preparer':return ['calendar.view','reports.create','minutes.view','treasury.view','treasury.prepare','dues.self','suggestions.create',...personal];
  case 'warden':return [...reader,'building.view','dues.self','dues.ledger','suggestions.create','documents.status','candidates.view','proposals.create'];
  case 'member':return [...MEMBER_BASELINE_PERMISSIONS];
  case 'officer':return reader;
@@ -47,6 +49,22 @@ export function resolvePermissions(user){
  }
 }
 export const hasPermission=(user,key)=>resolvePermissions(user).includes(key);
+export async function grantTreasuryDuesAccessOnce(){
+ await dbRun('CREATE TABLE IF NOT EXISTS app_migrations (migration_key TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+ await withTransaction(async()=>{
+  const inserted=await dbRun("INSERT INTO app_migrations (migration_key,applied_at) VALUES ('treasury_dues_access_2026_09',?) ON CONFLICT (migration_key) DO NOTHING",[new Date().toISOString()]);
+  if(!inserted.changes)return;
+  for(const table of ['users','invitations']){
+   const where=table==='users'?'access_revoked_at IS NULL':'used_at IS NULL AND expires_at>?';
+   const params=table==='users'?[]:[new Date().toISOString()];
+   for(const account of await dbAll(`SELECT id,role,permissions_json,roster_id FROM ${table} WHERE role IN ('treasurer','assistant_treasurer') AND ${where}`,params)){
+    const permissions=new Set(resolvePermissions(account));
+    permissions.add('dues.ledger');permissions.add('dues.manage');
+    await dbRun(`UPDATE ${table} SET permissions_json=? WHERE id=?`,[JSON.stringify(permissionsForStorage([...permissions],account.role)),account.id]);
+   }
+  }
+ });
+}
 export async function ensureBrotherSelfServiceAccess(){
  const groups=[
   ['users',"roster_id IS NOT NULL AND role<>'owner' AND access_revoked_at IS NULL"],
@@ -78,6 +96,7 @@ export function mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged=
  if(!account||(table==='invitations'&&(account.used_at||account.expires_at<=new Date().toISOString())))throw Object.assign(new Error('Officer account or pending invitation not found.'),{statusCode:404});
  if(account.role==='owner')throw Object.assign(new Error('The Worshipful Master administrator retains full access.'),{statusCode:403});
  const permissions=normalizePermissions(req.body.permissions,account.role),stored=permissionsForStorage(req.body.permissions,account.role);
+ if(permissions.includes('dues.manage')&&!DUES_MANAGEMENT_ROLES.has(account.role))throw Object.assign(new Error('Dues correction access is limited to the Worshipful Master and the Secretary and Treasurer offices.'),{statusCode:400});
  await dbRun(`UPDATE ${table} SET permissions_json=? WHERE id=?`,[JSON.stringify(stored),id]);
  await dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',[req.user.id,'officer_permissions_changed',req.ip,JSON.stringify({key:req.body.key,name:account.name,before:resolvePermissions(account),after:permissions}),new Date().toISOString()]);
  if(table==='users')onAccessChanged(id);

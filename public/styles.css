@@ -455,6 +455,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 }
 @media (min-width: 600px) and (max-width: 1100px) { .dues-ledger-table tbody { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 390px) { .dues-ledger-table td { padding-inline: 8px; } .dues-ledger-table td:not(:first-child)::before { font-size: 8px; letter-spacing: .04em; } }
+@media (max-width: 360px) {
+  .dues-ledger-table td:nth-child(2), .dues-ledger-table td:nth-child(3) { grid-column: span 3; }
+  .dues-ledger-table td:nth-child(4) { grid-column: 1 / -1; border-top: 1px solid #e8ecee; }
+}
 #duesSection .dues-head-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 8px; }
 .dues-head-actions button { min-height: 44px; }
 @media (max-width: 600px) { #duesSection .dues-head-actions { flex: 1 1 100%; width: 100%; } .dues-head-actions button { flex: 1 1 135px; } }
@@ -867,4 +871,81 @@ summary { min-height: 44px; display: flex; align-items: center; }
   .landing-head h1 { font-size: 28px; }
   .home-panel { padding: 15px; }
   .all-tools .document-menu-card { min-height: 112px; }
+}
+
+/* Stone Square's roomier portal surfaces retain the existing section map. */
+@media (min-width: 1101px) {
+  .workspace { grid-template-columns: 270px minmax(0, 1fr); }
+  .sidebar { padding: 27px 17px; }
+  .sidebar #workspaceSections { margin-top: 22px; }
+  .nav-group { gap: 5px; padding: 14px 0 19px; }
+  .nav-group-title { margin: 0 9px 7px; }
+  .sidebar #workspaceSections .nav-item { min-height: 48px; padding: 11px 13px; }
+  .content { padding: 34px clamp(28px, 3.6vw, 54px) 56px; }
+}
+.landing-section { gap: 25px; }
+@media (min-width: 1101px) {
+  .sidebar #workspaceSections .nav-item { color: rgba(255,255,255,.96); font-size: 15px; font-weight: 650; }
+  .nav-group-title { color: #e2ecf1; font-size: 11px; letter-spacing: .10em; }
+}
+.landing-head { padding: clamp(26px, 3vw, 38px); border: 1px solid #b6c6c4; box-shadow: 0 14px 35px #092b3519; }
+.landing-head h1 { line-height: 1.15; }
+.home-layout { gap: 22px; }
+.home-main, .home-side { gap: 22px; }
+.home-panel { padding: clamp(20px, 2.1vw, 28px); border-color: #d7e0df; border-radius: 16px; box-shadow: 0 12px 32px #102d3910; }
+.home-panel-heading { margin-bottom: 18px; }
+.home-panel h2 { font-size: 21px; }
+.home-alert-list, .home-event-list, .home-quick-links { gap: 11px; }
+.home-tool-search { display: grid; gap: 7px; margin: 0 0 17px; color: var(--navy); font-size: 12px; font-weight: 750; }
+.home-tool-search input { width: 100%; min-height: 46px; padding: 10px 13px; border: 1px solid #cbd9dc; border-radius: 9px; background: #fff; color: var(--ink); font-size: 14px; }
+.home-tool-results { display: grid; gap: 7px; margin: -5px 0 17px; padding: 9px; border: 1px solid #d7e0df; border-radius: 10px; background: #f5f9f9; }
+.home-tool-results.hidden { display: none; }
+.home-tool-results button, .home-tool-results a { display: block; width: 100%; min-height: 47px; padding: 8px 11px; border: 1px solid #d7e0df; border-radius: 7px; background: #fff; color: var(--navy); text-align: left; text-decoration: none; font-size: 12px; font-weight: 750; }
+.home-tool-results small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 550; }
+.home-tool-results p { margin: 0; padding: 8px; color: var(--muted); font-size: 12px; }
+.home-alert-list button, .home-event-list button, .home-quick-links button { min-height: 52px; padding: 14px 16px; border-radius: 10px; }
+.home-alert-list button, .home-event-list button, .home-quick-links button, .group-link-section button, .group-link-section a,
+.sidebar #workspaceSections .nav-item, .dues-activity-button, .dues-correct-button { transition: background-color 170ms ease, border-color 170ms ease, box-shadow 170ms ease, transform 170ms ease; }
+.home-alert-list button:hover, .home-event-list button:hover, .home-quick-links button:hover, .group-link-section button:hover, .group-link-section a:hover { transform: translateY(-1px); box-shadow: 0 6px 16px #102d3912; }
+.group-landing-links { gap: 22px; }
+.group-link-section { gap: 11px; }
+.group-link-section button, .group-link-section a { min-height: 56px; padding: 15px 17px; border-radius: 10px; }
+.all-tools { margin-top: 3px; padding-top: 20px; }
+
+/* Financial corrections stay attached to their original entry and show the projected balance. */
+.dues-activity-button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; margin-top: 9px; padding: 7px 12px; border: 1px solid #b6c9d1; border-radius: 8px; background: #f2f8f9; color: var(--navy); font-size: 12px; font-weight: 750; }
+.dues-activity-button:hover { border-color: var(--blue); background: #e7f3f6; }
+.dues-detail-panel { margin-top: 24px; scroll-margin-top: 24px; }
+.dues-detail-panel .panel-title { align-items: center; margin-bottom: 15px; }
+.dues-payment-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.dues-payment { min-width: 0; padding: 19px; border: 1px solid #dce4e4; border-radius: 12px; background: #fff; box-shadow: 0 8px 20px #0c2b3709; }
+.dues-payment-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; color: var(--navy); }
+.dues-payment-main strong, .dues-payment-main b { font-size: 15px; }
+.dues-payment-main b { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dues-source { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.dues-payment > p { margin: 9px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.dues-correct-button { margin-top: 15px; min-height: 42px; }
+.dues-reverse-form { display: grid; gap: 13px; margin-top: 16px; padding: 18px; border: 1px solid #d8aa4d; border-radius: 11px; background: #fffbf1; }
+.dues-reverse-form > strong { color: var(--navy); font-size: 16px; }
+.dues-reverse-form > p { margin: 0; color: #475463; font-size: 12px; line-height: 1.5; }
+.dues-reverse-form .dues-balance-preview { padding: 11px 13px; border-radius: 7px; background: white; color: var(--navy); font-weight: 750; font-variant-numeric: tabular-nums; }
+.dues-reverse-form label { display: grid; gap: 7px; color: var(--navy); font-size: 12px; font-weight: 700; }
+.dues-reverse-form textarea { width: 100%; min-height: 78px; }
+.dues-reverse-form .dues-confirm-label { display: flex; align-items: flex-start; gap: 9px; line-height: 1.5; }
+.dues-confirm-label input { flex: 0 0 19px; width: 19px; height: 19px; margin: 0; }
+.dues-reverse-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.dues-reverse-actions button { min-height: 44px; }
+@media (max-width: 900px) { .home-layout, .dues-payment-list { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+  .landing-section { gap: 17px; }
+  .landing-head { padding: 23px 20px; }
+  .home-layout, .home-main, .home-side { gap: 15px; }
+  .home-panel { padding: 20px; }
+  .dues-payment { padding: 16px; }
+  .dues-detail-panel .panel-title > button { width: 100%; }
+  .dues-reverse-actions button { flex: 1 1 130px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-alert-list button, .home-event-list button, .home-quick-links button, .group-link-section button, .group-link-section a,
+  .sidebar #workspaceSections .nav-item, .dues-activity-button, .dues-correct-button { transition: none; }
 }

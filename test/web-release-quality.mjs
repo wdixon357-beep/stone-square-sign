@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import './web-dues-submission.mjs';
 
 const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
 const app = read('../public/app.js');
@@ -167,6 +168,27 @@ assert.match(html, /id="sidebarToggle"[^>]*aria-expanded="false"[^>]*aria-contro
 assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.sidebar #workspaceSections \{[^}]*display:\s*none;[^}]*position:\s*absolute/, 'iPad navigation must open as a collapsible menu instead of occupying a full row');
 assert.match(styles, /\.sidebar #workspaceSections \.nav-item \{[^}]*min-height:\s*44px;[^}]*color:\s*rgba\(255,255,255,\.88\);[^}]*font-size:\s*14px/, 'grouped sidebar labels must remain readable and have comfortable touch targets');
 assert.match(app, /refreshDashboardNavigation[\s\S]*group\.classList\.toggle\('hidden', !visible\)/, 'role-gated empty dashboard groups must not appear');
+assert.match(html, /id="homeToolSearch"[^>]*type="search"/, 'Home must provide a direct finder for the tools available to an account');
+assert.match(app, /renderHomeToolSearch[\s\S]*!item\.classList\.contains\('hidden'\)/, 'the tool finder must exclude role-gated destinations');
+for (const id of ['duesDetailPanel', 'duesDetailName', 'duesDetailSummary', 'duesDetailPayments', 'duesDetailMessage']) {
+  assert.match(html, new RegExp(`id="${id}"`), `the dues correction view must include ${id}`);
+}
+assert.match(app, /\/api\/dues\/adjustments\/\$\{payment\.adjustmentId\}\/reverse/, 'dues corrections must use the audited reversal route');
+assert.match(app, /The correction was submitted, but its refreshed ledger entry could not be verified/, 'dues corrections must verify the readback before claiming completion');
+const duesHelpers = app.slice(app.indexOf('const duesEntryReversed ='), app.indexOf('const renderDuesDetail ='));
+const duesGate = app.slice(app.indexOf('const DUES_MANAGEMENT_ROLES ='), app.indexOf('const applyWorkspacePermissions ='));
+const duesRules = { can: permission => permission === 'dues.manage', state: { user: { role: 'secretary' } }, globalThis: {} };
+vm.runInNewContext(`${duesGate}\n${duesHelpers}\nglobalThis.rules = { reversed: duesEntryReversed, canReverse: duesEntryCanReverse, projected: duesProjectedBalanceAfterReversal };`, duesRules);
+const manualEntry = { adjustmentId: 18, campaign: 'manual', transactionType: 'payment', amountCents: 10000, reversesAdjustmentId: null };
+const brotherDues = { assessedCents: 17500, paidCents: 20000, payments: [manualEntry] };
+assert.equal(duesRules.globalThis.rules.canReverse(brotherDues, manualEntry), true, 'an unreversed manual entry may be corrected');
+duesRules.state.user.role = 'warden';
+assert.equal(duesRules.globalThis.rules.canReverse(brotherDues, manualEntry), false, 'a Warden with an accidental manage grant must not see correction actions');
+duesRules.state.user.role = 'secretary';
+assert.equal(duesRules.globalThis.rules.projected(brotherDues, manualEntry), 7500, 'the correction preview must calculate the projected balance');
+brotherDues.payments.push({ adjustmentId: 19, campaign: 'manual', transactionType: 'reversal', amountCents: -10000, reversesAdjustmentId: 18 });
+assert.equal(duesRules.globalThis.rules.canReverse(brotherDues, manualEntry), false, 'an entry already reversed must stay read-only');
+assert.equal(duesRules.globalThis.rules.canReverse(brotherDues, { campaign: 'annual', amountCents: 10000 }), false, 'a Zeffy payment must stay read-only');
 assert.match(styles, /\.panel-title > button,[^}]+flex:\s*0 0 auto/, 'panel action labels must keep their readable width on phones');
 assert.match(styles, /\.minutes-row > \* \{ min-width: 0; \}[\s\S]*\.minutes-row h3[^}]*overflow-wrap: anywhere/, 'minutes titles must wrap inside phone-width record rows');
 assert.match(buildingCalendar, /class="building-agreement-text"/, 'building agreements must use a CSP-compatible style class');

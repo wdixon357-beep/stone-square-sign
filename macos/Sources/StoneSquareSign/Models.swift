@@ -17,6 +17,7 @@ enum LodgeDateTime {
 }
 
 struct User: Codable, Identifiable, Equatable {
+    static let duesManagerRoles: Set<String> = ["owner", "secretary", "assistant_secretary", "treasurer", "assistant_treasurer"]
     let id: Int
     let email: String
     let name: String
@@ -32,8 +33,9 @@ struct User: Codable, Identifiable, Equatable {
         switch role {
         case "secretary": defaults += ["minutes.prepare", "treasury.prepare", "treasury.upload", "dues.self", "dues.ledger", "dues.manage", "suggestions.create", "documents.status", "documents.sign", "candidates.view"]
         case "assistant_secretary": defaults += ["minutes.prepare", "treasury.prepare", "dues.self", "dues.ledger", "dues.manage", "suggestions.create", "documents.status", "documents.sign", "candidates.view"]
-        case "treasurer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "treasury.upload", "dues.self", "suggestions.create", "signature.manage", "settings.manage"]
-        case "assistant_treasurer", "treasury_preparer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "dues.self", "suggestions.create", "signature.manage", "settings.manage"]
+        case "treasurer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "treasury.upload", "dues.self", "dues.ledger", "dues.manage", "suggestions.create", "signature.manage", "settings.manage"]
+        case "assistant_treasurer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "dues.self", "dues.ledger", "dues.manage", "suggestions.create", "signature.manage", "settings.manage"]
+        case "treasury_preparer": defaults = ["reports.create", "minutes.view", "treasury.view", "treasury.prepare", "dues.self", "suggestions.create", "signature.manage", "settings.manage"]
         case "warden": defaults += ["dues.self", "dues.ledger", "suggestions.create", "documents.status", "candidates.view", "proposals.create"]
         case "member": defaults = ["reports.create", "minutes.view", "treasury.view", "dues.self", "suggestions.create", "settings.manage"]
         case "officer": break
@@ -47,6 +49,10 @@ struct User: Codable, Identifiable, Equatable {
     var canUseTreasury: Bool { can("treasury.view") || can("treasury.prepare") || can("treasury.upload") }
     var canReadMinutes: Bool { can("minutes.view") || can("minutes.prepare") }
     var canReadDues: Bool { can("dues.ledger") }
+    var canManageDues: Bool {
+        Self.duesManagerRoles.contains(role)
+            && can("dues.manage")
+    }
     var canReadApprovals: Bool { ["owner", "secretary", "assistant_secretary", "viewer"].contains(role) && can("documents.status") }
     var canPrepareCorrespondence: Bool { ["owner", "secretary", "assistant_secretary"].contains(role) && can("reports.create") }
     var canProposeDispensation: Bool { can("proposals.create") }
@@ -265,6 +271,13 @@ struct DuesPayment: Codable, Hashable {
     let amountCents: Int
     let campaign: String
     let matchedVia: String
+    let adjustmentId: Int?
+    let transactionType: String?
+    let paymentMethod: String?
+    let sourceReference: String?
+    let note: String?
+    let enteredBy: String?
+    let reversesAdjustmentId: Int?
 }
 
 struct DuesRow: Codable, Identifiable, Hashable {

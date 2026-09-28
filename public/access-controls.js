@@ -16,13 +16,21 @@ export async function renderAccessControls(root, api) {
         const label = document.createElement('label'), input = document.createElement('input'), text = document.createElement('span');
         input.type = 'checkbox'; input.value = capability.id; input.checked = account.permissions.includes(capability.id); text.textContent = capability.label; label.append(input, text); fieldset.append(label);
         if (['secretary','assistant_secretary','treasurer','assistant_treasurer','treasury_preparer','warden','officer'].includes(account.role) && ['minutes.view','treasury.view'].includes(capability.id)) { input.disabled = true; text.textContent += ' · Included for every officer'; }
+        if (capability.id === 'dues.manage') {
+          text.textContent = 'Record And Correct Dues Entries';
+          if (!['owner','secretary','assistant_secretary','treasurer','assistant_treasurer'].includes(account.role)) {
+            input.checked = false;
+            input.disabled = true;
+            text.textContent += ' · Available Only To The Secretary And Treasurer Offices';
+          }
+        }
       }
       fieldset.addEventListener('change', () => root.dirtyAccessKeys.add(account.key));
       const save = document.createElement('button'); save.type = 'button'; save.className = 'secondary'; save.textContent = 'Save access';
       const status = document.createElement('p'); status.setAttribute('role', 'status');
       save.addEventListener('click', async () => {
         save.disabled = true; fieldset.disabled = true; status.textContent = 'Saving access…';
-        try { await api('/api/admin/access', { method: 'PUT', body: JSON.stringify({ key: account.key, permissions: [...fieldset.querySelectorAll('input:checked')].map(input => input.value) }) }); const refreshed = await api('/api/admin/access'); const saved = refreshed.accounts.find(item => item.key === account.key); if (saved) for (const input of fieldset.querySelectorAll('input')) input.checked = saved.permissions.includes(input.value); root.dirtyAccessKeys.delete(account.key); status.textContent = 'Access saved.'; }
+        try { await api('/api/admin/access', { method: 'PUT', body: JSON.stringify({ key: account.key, permissions: [...fieldset.querySelectorAll('input:checked')].filter(input => !input.disabled).map(input => input.value) }) }); const refreshed = await api('/api/admin/access'); const saved = refreshed.accounts.find(item => item.key === account.key); if (saved) for (const input of fieldset.querySelectorAll('input')) input.checked = !input.disabled && saved.permissions.includes(input.value); root.dirtyAccessKeys.delete(account.key); status.textContent = 'Access saved.'; }
         catch(error) { status.textContent = error.message || 'Access could not be saved.'; }
         finally { save.disabled = false; fieldset.disabled = false; }
       });

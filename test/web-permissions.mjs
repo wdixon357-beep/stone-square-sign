@@ -29,6 +29,23 @@ await panels[1].children.find(el=>el.tag==='button').events.click();
 assert.deepEqual(JSON.parse(calls[1].init.body),{key:'user:2',permissions:['reports.create','treasury.upload']});
 await panels[2].children.find(el=>el.tag==='button').events.click();
 assert.equal(JSON.parse(calls.filter(call=>call.init).at(-1).init.body).key,'invite:3');
+const duesRoot=new Element(),duesCalls=[];
+await renderAccessControls(duesRoot,async(path,init)=>{
+  if(init){duesCalls.push(JSON.parse(init.body));return{ok:true};}
+  return{capabilities:[{id:'dues.ledger',label:'View full dues ledger'},{id:'dues.manage',label:'Record non-Zeffy dues activity'}],accounts:[
+    {key:'user:4',name:'Warden',email:'warden@example.test',role:'warden',permissions:['dues.ledger','dues.manage']},
+    {key:'user:5',name:'Treasurer',email:'treasurer@example.test',role:'treasurer',permissions:['dues.ledger','dues.manage']},
+  ]};
+});
+const duesPanels=duesRoot.children.filter(el=>el.tag==='details');
+const wardenDues=duesPanels[0].children.find(el=>el.tag==='fieldset').querySelectorAll('input').find(input=>input.value==='dues.manage');
+const treasurerDues=duesPanels[1].children.find(el=>el.tag==='fieldset').querySelectorAll('input').find(input=>input.value==='dues.manage');
+assert.equal(wardenDues.disabled,true,'unrelated offices cannot grant or keep dues correction in the access control');
+assert.equal(wardenDues.checked,false);
+assert.equal(treasurerDues.disabled,undefined,'Treasurer correction access remains editable');
+assert.equal(treasurerDues.checked,true);
+await duesPanels[0].children.find(el=>el.tag==='button').events.click();
+assert.deepEqual(duesCalls.at(-1).permissions,['dues.ledger'],'saving Warden access must exclude an invalid dues correction grant');
 const treasury=fs.readFileSync(new URL('../public/treasury.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export class TreasuryWorkspace','class TreasuryWorkspace');
 const apiCalls=[], ui={querySelector:()=>({})};
 const ctx={clearTimeout,document:{getElementById:()=>ui},URL:{createObjectURL:()=> 'blob:local',revokeObjectURL(){}},MinutesPreview:class{async show(){}},structuredClone,Uint8Array};
