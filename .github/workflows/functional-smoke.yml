@@ -1,0 +1,46 @@
+# Exercise Lodge workflows against isolated synthetic records. The suite starts
+# temporary local services and PGlite databases; it never signs in to production.
+# GitHub Actions failures stay in the repository and do not create officer alerts.
+name: Private functional rehearsal
+
+on:
+  schedule:
+    - cron: '23 9 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-functional-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      NODE_ENV: test
+      DATABASE_URL: ''
+      PGLITE_DIR: ''
+      OPENAI_API_KEY: ''
+      SMTP_HOST: ''
+      SMTP_USER: ''
+      SMTP_PASS: ''
+      ZEFFY_API_KEY: ''
+      RENDER_DEPLOY_HOOK: ''
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Rehearse web and shared-service workflows with synthetic users
+        run: node scripts/functional-smoke.mjs

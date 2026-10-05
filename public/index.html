@@ -232,7 +232,13 @@
           <section id="activitySection" class="hidden"></section>
           <section id="memberAccessSection" class="hidden">
             <div class="content-head"><div><p class="eyebrow">WORSHIPFUL MASTER ONLY</p><h1>Member Access</h1><p>Each account is linked to one verified Lodge roster record.</p></div><button id="memberAccessRefresh" class="secondary" type="button">Refresh</button></div>
-            <p id="memberAccessMessage" class="message" role="status"></p><div id="memberAccessList" class="dues-rows"></div>
+            <p id="memberAccessMessage" class="message" role="status"></p>
+            <div id="memberAccessInviteResult" class="invite-result hidden">
+              <label for="memberAccessInviteUrl">Private activation link</label>
+              <textarea id="memberAccessInviteUrl" rows="3" readonly spellcheck="false" aria-describedby="memberAccessMessage"></textarea>
+              <button id="memberAccessCopyInvite" class="secondary" type="button">Copy private link</button>
+            </div>
+            <div id="memberAccessList" class="dues-rows"></div>
           </section>
           <section id="treasurySection" class="hidden"></section>
           <section id="reportsSection" class="hidden">

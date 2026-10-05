@@ -7,13 +7,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../publ
 const samplePdf = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sample-dispensation.pdf');
 const port = Number(process.env.WEB_RELEASE_FIXTURE_PORT || 3617);
 let syntheticDuesReversal = false;
+let syntheticMemberInvite = false;
+const memberPreview = process.env.WEB_RELEASE_FIXTURE_ROLE === 'member';
 const user = {
-  id: 999,
-  name: 'William Dixon-Saunders',
+  id: memberPreview ? 998 : 999,
+  name: memberPreview ? 'James Example' : 'William Dixon-Saunders',
   email: 'preview@example.invalid',
-  role: 'owner',
-  hasSignature: true,
-  permissions: [],
+  role: memberPreview ? 'member' : 'owner',
+  hasSignature: !memberPreview,
+  permissions: memberPreview ? ['reports.create', 'minutes.view', 'treasury.view', 'dues.self', 'suggestions.create', 'settings.manage'] : [],
 };
 const json = (response, payload, status = 200) => {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -57,10 +59,11 @@ const api = async (request, response, url) => {
   if (url.pathname === '/api/generation/status') return json(response, { configured: true, administratorDetails: true, remainingDollars: 4.75, model: 'gpt-5.6-luna' });
   if (url.pathname === '/api/minutes') {
     const minutesDraft = { meetingDate: '2026-09-03', meetingType: 'Stated Communication', degree: 'Third Degree', openingTime: '7:36 PM', closingTime: '10:30 PM', presiding: 'WM Dixon-Saunders', quorum: 'Yes', nextMeeting: '2026-10-01', present: ['Brother One'], excused: ['Brother Two'], visitors: [], officerAttendance: [], sections: [{ heading: 'Sickness and Distress', body: 'The Lodge remembered the sick and distressed.' }], warnings: [], sensitiveReview: [], actionItems: [], income: [], expenses: [] };
-    return json(response, { minutes: [
+    const records = [
       { id: 21, meetingDate: '2026-09-17', createdBy: user.name, updatedBy: user.name, updatedAt: '2026-09-16T20:00:00Z', createdByUserId: user.id, status: 'draft', draft: { ...minutesDraft, meetingDate: '2026-09-17', nextMeeting: '2026-10-01' } },
       { id: 20, meetingDate: '2026-09-03', createdBy: 'Adrian Reese', updatedBy: 'Adrian Reese', updatedAt: '2026-09-12T20:00:00Z', createdByUserId: 3, status: 'ready_for_distribution', draft: minutesDraft },
-    ] });
+    ];
+    return json(response, { minutes: memberPreview ? records.filter(record => record.status === 'ready_for_distribution') : records });
   }
   if (url.pathname === '/api/archives/minutes') return json(response, { records: [] });
   if (url.pathname === '/api/officer-reports') return json(response, { reports: [{ id: 'report-1', title: 'Nursing Facility Outreach Report', preparedBy: 'Jamal Davis', office: 'Senior Warden', submittedAt: '2026-09-10T20:00:00Z', type: 'activity' }] });
@@ -82,7 +85,11 @@ const api = async (request, response, url) => {
   if (url.pathname === '/api/dues/me') return json(response, { duesYear: 2026, rateCents: 17500, row: { name: user.name, status: 'partial', paidCents: 7500, assessedCents: 17500, remainingCents: 10000, creditCents: 0, lastPaymentISO: '2026-09-08', payments: [{ date: '2026-09-08', amountCents: 7500, source: 'Zeffy', description: 'Annual dues payment' }] }, paymentLinks: { full: 'https://www.zeffy.com/en-US/ticketing/2026-2027-annual-dues-payment', custom: 'https://www.zeffy.com/en-US/donation-form/custom-lodge-dues-payment-stone-square-lodge-22-2026--2027' } });
   if (url.pathname === '/api/suggestions/me') return json(response, { suggestions: [{ reference: 'SS-1001', subject: 'Fellowship activity', status: 'Under Review', createdAt: '2026-09-14T18:00:00Z', ownerResponse: '' }] });
   if (url.pathname === '/api/admin/suggestions') return json(response, { suggestions: [{ id: 1, reference: 'SS-1001', submitterName: 'Brother One', category: 'Lodge activity', subject: 'Fellowship activity', body: 'Consider a quarterly fellowship activity.', status: 'Under Review', ownerResponse: '', createdAt: '2026-09-14T18:00:00Z' }] });
-  if (url.pathname === '/api/admin/member-access') return json(response, { members: [{ id: 1, prefix: 'Bro.', first_name: 'Brother', last_name: 'One', emails: ['brother.one@example.invalid'], user_id: 10, account_email: 'brother.one@example.invalid' }, { id: 2, prefix: 'Bro.', first_name: 'Brother', last_name: 'Two', emails: ['brother.two@example.invalid'], user_id: null, invitation_id: null }] });
+  if (url.pathname === '/api/admin/member-access') return json(response, { members: [{ id: 1, prefix: 'Bro.', first_name: 'Brother', last_name: 'One', emails: ['brother.one@example.invalid'], user_id: 10, account_email: 'brother.one@example.invalid' }, { id: 2, prefix: 'Bro.', first_name: 'Brother', last_name: 'Two', emails: ['brother.two@example.invalid'], user_id: null, invitation_id: syntheticMemberInvite ? 22 : null, invitation_email: syntheticMemberInvite ? 'brother.two@example.invalid' : null }] });
+  if (url.pathname === '/api/admin/member-access/2/invite' && request.method === 'POST') {
+    syntheticMemberInvite = true;
+    return json(response, { inviteUrl: 'https://sign.example.invalid/?invite=synthetic-private-token' }, 201);
+  }
   if (url.pathname === '/api/building/requests') return json(response, { canDecide: true, requests: [{ id: 'SSL-100', organization: 'Stone Square Lodge No. 22', date: '2026-10-10', start: '13:00', end: '16:00', spaces: ['Lodge building'], description: 'Community outreach planning', contactName: 'Jamal Davis', contact: 'jamal@example.invalid', status: 'pending', revision: 1, note: '' }] });
   if (url.pathname === '/api/lodge-calendar') return json(response, { warnings: [], events: [{ id: 'event-1', title: 'Stated Communication', startDate: new Date().toISOString().slice(0, 8) + '15', endDate: new Date().toISOString().slice(0, 8) + '15', startTime: '19:30', endTime: '22:00', allDay: false, category: 'lodge', status: 'scheduled', location: 'Stone Square Lodge No. 22', description: 'Monthly stated communication.', source: 'Lodge calendar', editable: true, revision: 1 }] });
   if (url.pathname === '/api/archives/treasury') return json(response, { records: [] });

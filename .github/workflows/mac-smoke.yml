@@ -1,0 +1,58 @@
+# Exercise the native client with synthetic fixtures. These checks do not sign in,
+# write Lodge records, send mail, or open the installed app on an officer's Mac.
+name: Mac app smoke checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mac-smoke.yml'
+      - '*.js'
+      - '*.json'
+      - 'macos/**'
+      - 'public/**'
+      - 'test/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/mac-smoke.yml'
+      - '*.js'
+      - '*.json'
+      - 'macos/**'
+      - 'public/**'
+      - 'test/**'
+  schedule:
+    - cron: '40 10 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-smoke:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check native routes, responsive layout, and web parity
+        run: |
+          node test/mac-layout.mjs
+          node test/mac-agenda.mjs
+          node test/parity.mjs
+
+      - name: Exercise synthetic native sessions, minutes, and reports
+        run: |
+          node test/mac-session.mjs
+          node test/mac-minutes-dates.mjs
+          node test/mac-report.mjs
+
+      - name: Compile the complete Mac app
+        run: node test/mac-compiles.mjs

@@ -101,6 +101,13 @@ try {
   assert.ok(draft.warnings.includes('Organized with GPT-5.6 Luna; source verification is required.'));
   assert.ok(!draft.warnings.some(warning => warning.includes('Prayers were requested for the families.')), 'references expose line numbers rather than repeating source details');
 
+  const wrappedCitation = response();
+  wrappedCitation.evidence.find(item => item.field === 'sections[2].body').quote =
+    'Community Supper: Fish and two sides were proposed. No vote was taken. Volunteers will confirm the menu.';
+  const wrappedDraft = await generateMinutesDraft(source, {generateStructured: async () => wrappedCitation});
+  assert.ok(wrappedDraft.warnings.some(warning => /Source reference: New Business and Motions, lines 7 to 8/.test(warning)),
+    'whitespace-only citation wrapping resolves to the exact source span without another paid request');
+
   const visitorSource = `${source}\nVisitors: Bro. Alex Example, Example Lodge No. 99\nNone reported.`;
   const visitorResponse = response();
   visitorResponse.draft.visitors = ['Bro. Alex Example, Example Lodge No. 99'];

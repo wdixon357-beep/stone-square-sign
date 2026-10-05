@@ -507,8 +507,14 @@ const applyWorkspacePermissions = user => {
   return { maySeeTreasury, maySeeMinutes };
 };
 
+const clearMemberAccessInvite = () => {
+  $('memberAccessInviteUrl').value = '';
+  hide($('memberAccessInviteResult'));
+};
+
 const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   state.user = user;
+  clearMemberAccessInvite();
   homeAlertsLoaded = false;
   const sessionDays = Number(session?.lifetimeDays);
   const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
@@ -589,6 +595,7 @@ const refreshSessionPermissions = async () => {
     if (error.status === 401 && state.authEpoch === authEpoch && state.user?.id === userId) {
       state.authEpoch += 1;
       state.user = null;
+      clearMemberAccessInvite();
       hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
       setMessage(authMessage, 'Your session is no longer authorized. Sign in again to continue.', true);
     }
@@ -3045,6 +3052,7 @@ $('logoutBtn').addEventListener('click', async () => {
   state.authEpoch += 1;
   state.legacyToken = '';
   state.user = null;
+  clearMemberAccessInvite();
   state.reportHandoff = null;
   state.reportHandoffExpiresAt = 0;
   localStorage.removeItem('stone-square-sign-token');
@@ -3876,12 +3884,24 @@ const renderMemberAccess = async () => {
       const name=`${member.prefix||'Bro.'} ${member.firstName||member.first_name} ${member.lastName||member.last_name}`;
       const emails=member.emails||[];const account=member.userId||member.user_id;const pending=member.invitationId||member.invitation_id;
       const copy=document.createElement('div');copy.className='grow';copy.innerHTML=`<div class="name">${escapeMarkup(name)}</div><small>${account?`Active account · ${escapeMarkup(member.accountEmail||member.account_email)}`:pending?`Invitation pending · ${escapeMarkup(member.invitationEmail||member.invitation_email)}`:emails.length?escapeMarkup(emails.join(', ')):'Email review needed'}</small>`;row.append(copy);
-      if(!account&&!pending&&emails.length){const select=document.createElement('select');emails.forEach(email=>select.add(new Option(email,email)));const invite=document.createElement('button');invite.type='button';invite.className='secondary small';invite.textContent='Create invitation';invite.onclick=async()=>{invite.disabled=true;try{const result=await apiFetch(`/api/admin/member-access/${member.id}/invite`,{method:'POST',body:JSON.stringify({email:select.value,sendEmail:false})});await navigator.clipboard?.writeText(result.inviteUrl);setMessage($('memberAccessMessage'),`Invitation created for ${name}. The private link was copied when your browser allowed it.`);await renderMemberAccess();}catch(error){setMessage($('memberAccessMessage'),error.message,true);invite.disabled=false;}};row.append(select,invite);}
+      if(!account&&!pending&&emails.length){const select=document.createElement('select');emails.forEach(email=>select.add(new Option(email,email)));const invite=document.createElement('button');invite.type='button';invite.className='secondary small';invite.textContent='Create invitation';invite.onclick=async()=>{invite.disabled=true;try{const result=await apiFetch(`/api/admin/member-access/${member.id}/invite`,{method:'POST',body:JSON.stringify({email:select.value,sendEmail:false})});await renderMemberAccess();$('memberAccessInviteUrl').value=result.inviteUrl;show($('memberAccessInviteResult'));setMessage($('memberAccessMessage'),`Invitation created for ${name}. Copy the private activation link below and send it to him.`);}catch(error){setMessage($('memberAccessMessage'),error.message,true);invite.disabled=false;}};row.append(select,invite);}
       list.append(row);
     }
     setMessage($('memberAccessMessage'),`${payload.members.length} roster records checked. Invitations are created without sending email until you choose to distribute them.`);
   }catch(error){setMessage($('memberAccessMessage'),error.message,true);}
 };
+
+$('memberAccessCopyInvite').addEventListener('click',async()=>{
+  const field=$('memberAccessInviteUrl');
+  try{
+    if(!navigator.clipboard?.writeText)throw new Error('Clipboard unavailable');
+    await navigator.clipboard.writeText(field.value);
+    setMessage($('memberAccessMessage'),'Private activation link copied.');
+  }catch{
+    field.focus();field.select();
+    setMessage($('memberAccessMessage'),'Select and copy the private activation link shown below.');
+  }
+});
 
 const duesTodayEastern = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 $('duesAdjustmentDate').value = duesTodayEastern();

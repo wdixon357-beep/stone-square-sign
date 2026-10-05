@@ -311,6 +311,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .row-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 .invite-result { margin-top: 16px; padding: 14px; border: 1px solid var(--gold-soft); border-radius: 8px; background: #faf5e8; }
 .invite-result p { color: var(--ink); font-size: 11px; line-height: 1.5; }
+#memberAccessInviteResult { display: grid; gap: 10px; max-width: 100%; }
+#memberAccessInviteUrl { max-width: 100%; resize: vertical; overflow-wrap: anywhere; }
+#memberAccessInviteResult.hidden { display: none; }
 
 @media (max-width: 1100px) {
   .auth-layout { grid-template-columns: 1fr; }
