@@ -4590,8 +4590,15 @@ struct MemberAccessView: View {
     @State private var message = ""
     @State private var loading = true
     @State private var invitingMemberID: Int?
+    @State private var selectedEmailByMember: [Int: String] = [:]
+    @State private var privateLink = ""
+    @State private var privateLinkOwnerID: Int?
+    @State private var privateLinkMemberID: Int?
+    @State private var privateLinkRecipient = ""
 
     var body: some View {
+        Group {
+        if model.user?.role == "owner" {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 NativeWorkspaceHeader(title: "Member Access", subtitle: "Roster-linked Brother accounts", symbol: "person.3.fill") {
@@ -4604,8 +4611,9 @@ struct MemberAccessView: View {
                 if !loading && members.isEmpty && message.isEmpty {
                     Text("No roster records are available.").foregroundStyle(.secondary)
                 }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) {
                 ForEach(members) { member in
-                    HStack {
+                    VStack(alignment: .leading, spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(member.displayName).fontWeight(.semibold)
                             Text(member.userId != nil
@@ -4617,49 +4625,137 @@ struct MemberAccessView: View {
                                         : member.emails.joined(separator: ", "))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        Spacer()
+                        if !privateLink.isEmpty && privateLinkOwnerID == model.user?.id && privateLinkMemberID == member.id {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Private invitation for \(privateLinkRecipient)")
+                                    .font(.headline)
+                                    .foregroundStyle(SignTheme.brandNavy)
+                                Text("This link is private. Send it only to the Brother whose address you selected.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(privateLink)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button("Copy private link", systemImage: "doc.on.doc") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(privateLink, forType: .string)
+                                }
+                            }
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(SignTheme.gold.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                        }
                         if member.userId == nil && member.invitationId == nil && !member.emails.isEmpty {
-                            Button("Create invitation") { Task { await invite(member) } }
-                                .disabled(loading || invitingMemberID != nil)
+                            VStack(alignment: .leading, spacing: 8) {
+                                if member.emails.count > 1 {
+                                    Picker("Invitation email", selection: Binding(
+                                        get: { selectedEmailByMember[member.id] ?? "" },
+                                        set: { selectedEmailByMember[member.id] = $0 }
+                                    )) {
+                                        Text("Choose an address").tag("")
+                                        ForEach(member.emails, id: \.self) { address in
+                                            Text(address).tag(address)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(maxWidth: 360)
+                                }
+                                Button("Create invitation") { Task { await invite(member) } }
+                                    .disabled(loading || invitingMemberID != nil || invitationEmail(for: member) == nil)
+                            }
                         }
                     }
                     .padding(14)
+                    .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
                     .background(Color.primary.opacity(0.04))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
+                }
+                .frame(maxWidth: 1500, alignment: .leading)
             }
             .padding(28)
         }
-        .task { await load() }
+        } else {
+            ContentUnavailableView("Member Access", systemImage: "person.crop.circle.badge.exclamationmark",
+                                   description: Text("This workspace is available to the administrator."))
+        }
+        }
+        .task(id: model.user?.id) {
+            clearPrivateLink()
+            guard model.user?.role == "owner" else { members = []; return }
+            await load()
+        }
+        .onChange(of: model.user?.role) { _, _ in clearPrivateLink() }
+        .onDisappear { clearPrivateLink() }
+    }
+
+    static func invitationEmail(for member: MemberAccessRecord, selected: String?) -> String? {
+        if member.emails.count == 1 { return member.emails.first }
+        guard let selected, member.emails.contains(selected) else { return nil }
+        return selected
+    }
+
+    private func invitationEmail(for member: MemberAccessRecord) -> String? {
+        Self.invitationEmail(for: member, selected: selectedEmailByMember[member.id])
+    }
+
+    private func clearPrivateLink() {
+        if !privateLink.isEmpty && NSPasteboard.general.string(forType: .string) == privateLink {
+            NSPasteboard.general.clearContents()
+        }
+        privateLink = ""
+        privateLinkOwnerID = nil
+        privateLinkMemberID = nil
+        privateLinkRecipient = ""
+        selectedEmailByMember.removeAll()
     }
 
     @MainActor private func load() async {
+        guard model.user?.role == "owner", let ownerID = model.user?.id else {
+            members = []
+            message = ""
+            loading = false
+            return
+        }
         loading = true
         message = "Checking roster links and account status…"
-        defer { loading = false }
+        defer { if model.user?.id == ownerID { loading = false } }
         do {
             let result: MemberAccessResponse = try await model.request("/api/admin/member-access")
+            guard model.user?.id == ownerID, model.user?.role == "owner" else { return }
             members = result.members
             message = "\(members.count) roster records checked. Invitations are not emailed until you distribute them."
         } catch {
+            guard model.user?.id == ownerID, model.user?.role == "owner" else { return }
             members = []
             message = "Member access could not load: \(error.localizedDescription)"
         }
     }
 
     @MainActor private func invite(_ member: MemberAccessRecord) async {
-        guard invitingMemberID == nil, let email = member.emails.first else { return }
+        guard model.user?.role == "owner", let ownerID = model.user?.id,
+              invitingMemberID == nil, let email = invitationEmail(for: member) else { return }
         invitingMemberID = member.id
         defer { invitingMemberID = nil }
         do {
             let data = try JSONEncoder().encode(MemberInviteDraft(email: email, sendEmail: false))
             let result: InviteResponse = try await model.request("/api/admin/member-access/\(member.id)/invite", method: "POST", body: data)
+            guard model.user?.id == ownerID, model.user?.role == "owner" else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(result.inviteUrl, forType: .string)
             await load()
-            message = "Invitation created for \(member.displayName). The private link was copied."
+            guard model.user?.id == ownerID, model.user?.role == "owner" else { return }
+            privateLink = result.inviteUrl
+            privateLinkOwnerID = ownerID
+            privateLinkMemberID = member.id
+            privateLinkRecipient = member.displayName
+            message = "Invitation created for \(member.displayName) at \(email). The private link is shown with his roster entry and copied."
         } catch {
+            guard model.user?.id == ownerID, model.user?.role == "owner" else { return }
             message = "Invitation could not be created: \(error.localizedDescription)"
         }
     }

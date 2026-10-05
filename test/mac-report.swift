@@ -127,6 +127,13 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
 
 @main struct NativeReportTests {
     @MainActor static func main() async throws {
+        let severalEmails = try JSONDecoder().decode(MemberAccessRecord.self, from: Data(#"{"id":19,"firstName":"Test","lastName":"Brother","emails":["one@example.invalid","two@example.invalid"]}"#.utf8))
+        precondition(MemberAccessView.invitationEmail(for: severalEmails, selected: nil) == nil)
+        precondition(MemberAccessView.invitationEmail(for: severalEmails, selected: "two@example.invalid") == "two@example.invalid")
+        precondition(MemberAccessView.invitationEmail(for: severalEmails, selected: "other@example.invalid") == nil)
+        let oneEmail = try JSONDecoder().decode(MemberAccessRecord.self, from: Data(#"{"id":20,"firstName":"Single","lastName":"Brother","emails":["only@example.invalid"]}"#.utf8))
+        precondition(MemberAccessView.invitationEmail(for: oneEmail, selected: nil) == "only@example.invalid")
+        print("PASS: native member invitations require an explicit roster address when more than one is available")
         let archiveJSON = Data(#"{"id":"historical-1","title":"Meeting Minutes, January 1, 2024","recordDate":"2024-01-01"}"#.utf8)
         let archiveRecord = try JSONDecoder().decode(FinalReportBrowserView.ArchiveRecord.self, from: archiveJSON)
         precondition(archiveRecord.id == "historical-1" && archiveRecord.recordDate == "2024-01-01")

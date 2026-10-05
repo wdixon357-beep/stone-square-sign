@@ -15,6 +15,7 @@ const buildingCalendar = read('../macos/Sources/StoneSquareSign/BuildingCalendar
 const activity = read('../macos/Sources/StoneSquareSign/Activity.swift');
 const api = read('../macos/Sources/StoneSquareSign/APIClient.swift');
 const allWorkspaceSources = [views, received, treasury, minutes, agenda, reportGenerator, finalBrowser, buildingCalendar].join('\n');
+const memberAccess = views.slice(views.indexOf('struct MemberAccessView: View'));
 
 assert.match(app, /minWidth:\s*720/, 'the app must fit smaller Mac displays and split-screen windows');
 assert.doesNotMatch(app, /minWidth:\s*1120/, 'the former oversized minimum must not return');
@@ -58,6 +59,12 @@ assert.ok(treasury.includes('Text("Transaction \\(i + 1)")'), 'each Mac transact
 assert.match(treasury, /LodgeCalendarDates\.displayDate[\s\S]*"Date not found"/, 'each Mac transaction row must show a readable bank date or a clear missing-date label');
 assert.match(activity, /Dashboard Activity[\s\S]*Time by area/, 'the Mac administrator view must show activity for every account and time by work area');
 assert.match(api, /treasuryRecordsRevision[\s\S]*event: treasury_changed/, 'the Mac report archive must receive live treasury revisions');
+assert.match(memberAccess, /if model\.user\?\.role == "owner"[\s\S]*Text\(privateLink\)[\s\S]*\.textSelection\(\.enabled\)/,
+  'a newly created private member link must be visible and selectable only in the owner workspace');
+assert.match(memberAccess, /\.task\(id: model\.user\?\.id\)[\s\S]*clearPrivateLink\(\)[\s\S]*\.onDisappear \{ clearPrivateLink\(\) \}/,
+  'the native private member link must clear when the account or workspace changes');
+assert.match(memberAccess, /Picker\("Invitation email"[\s\S]*Choose an address[\s\S]*invitationEmail\(for: member\) == nil/,
+  'multiple roster addresses must require an explicit email choice before inviting');
 assert.match(finalBrowser, /onChange\(of: model\.treasuryRecordsRevision\)/, 'an open native treasury history must refresh after finalization');
 assert.match(treasury, /requestLiveRefresh\(\)[\s\S]*refreshPending = true[\s\S]*consumePendingRefresh/, 'native treasury changes must be queued while the workspace is busy');
 assert.match(treasury, /refreshInFlight[\s\S]*defer \{ refreshInFlight = false[\s\S]*consumePendingRefresh/, 'the Mac treasury workspace must replay a live refresh after an in-flight request');
