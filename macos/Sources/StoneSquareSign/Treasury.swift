@@ -436,8 +436,14 @@ struct TreasuryView: View {
             ForEach(Array((workspace.draft?.accounts ?? []).enumerated()),id:\.element.id) { index,account in
                 GroupBox(account.name) { VStack(alignment:.leading,spacing:10) {
                     TextField("Account label",text:Binding(get:{workspace.draft?.accounts[index].name ?? ""},set:{workspace.draft?.accounts[index].name=$0}))
+                    Text("Before signing, compare this account with its source records and confirm that every bank-posted transaction in the report period is listed under Transactions.")
+                        .font(.callout)
+                        .fontWeight(.medium)
                     accountFields(index)
-                    Toggle("All bank activity for this account is listed. Calculate blank activity totals from the entries.",isOn:Binding(get:{workspace.draft?.accounts[index].activityComplete ?? false},set:{workspace.draft?.accounts[index].activityComplete=$0}))
+                    Toggle("I checked this account: all current-period transactions are listed.",isOn:Binding(get:{workspace.draft?.accounts[index].activityComplete ?? false},set:{workspace.draft?.accounts[index].activityComplete=$0}))
+                    Text("If there was no activity, confirm that against the bank record before checking this box. Blank totals are calculated from the listed entries only after confirmation.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button("Remove account",role:.destructive) { clearCollectionReviews("accounts");workspace.draft?.accounts.remove(at:index) }
                 }.padding(10) }
             }
@@ -451,6 +457,56 @@ struct TreasuryView: View {
     func accountPicker(_ value:Binding<String>) -> some View { Picker("Account",selection:value) { Text("Choose account").tag("");ForEach(workspace.draft?.accounts ?? []) { a in Text(a.name).tag(a.id) } } }
     func tx(_ i:Int,_ key:WritableKeyPath<TreasuryTransaction,String>) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i][keyPath:key] ?? ""},set:{workspace.draft?.transactions[i][keyPath:key]=$0}) }
     func txAmount(_ i:Int) -> Binding<String> { Binding(get:{workspace.draft?.transactions[i].amount ?? ""},set:{workspace.draft?.transactions[i].amount=$0}) }
+    func transactionKind(_ kind: String) -> String {
+        switch kind {
+        case "receipt": return "Receipt"
+        case "payment": return "Disbursement"
+        case "transfer_in": return "Transfer in"
+        case "transfer_out": return "Transfer out"
+        default: return "Type needs confirmation"
+        }
+    }
+    func transactionAccount(_ id: String) -> String {
+        workspace.draft?.accounts.first(where: { $0.id == id })?.name ?? "Account needs confirmation"
+    }
+    func transactionAmount(_ transaction: TreasuryTransaction) -> String {
+        guard let value = transaction.amount?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return "Amount needs confirmation" }
+        let unsigned = value.trimmingCharacters(in: CharacterSet(charactersIn: "+-$− "))
+        let direction = ["payment", "transfer_out"].contains(transaction.kind) ? "−" : "+"
+        return "\(direction)$\(unsigned)"
+    }
+    var transactionSummary: some View {
+        let entries = workspace.draft?.transactions ?? []
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("Current-period activity at a glance")
+                .font(.headline)
+                .padding(.bottom, 8)
+            ForEach(entries.indices, id: \.self) { index in
+                let entry = entries[index]
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(entry.date.isEmpty ? "Date needs confirmation" : LodgeCalendarDates.displayDate(entry.date))
+                            .font(.subheadline.weight(.semibold))
+                        Spacer(minLength: 8)
+                        Text(transactionAmount(entry))
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                    }
+                    Text(entry.description.isEmpty ? "Description needs confirmation" : entry.description)
+                        .font(.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("\(transactionAccount(entry.account)) · \(transactionKind(entry.kind))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 9)
+                if index < entries.count - 1 { Divider() }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10))
+    }
     var activity: some View {
         GroupBox { VStack(alignment:.leading,spacing:14) {
             HStack {
@@ -463,9 +519,10 @@ struct TreasuryView: View {
             }
             Text("Every current-period entry organized from the uploaded PDF, screenshot, pasted activity or typed notes appears here. Confirm the account, bank-posted date, description, direction and amount. These entries become the Receipts, Disbursements and Transfers sections of the report.").font(.callout).foregroundStyle(.secondary)
             if workspace.draft?.transactions.isEmpty != false {
-                Text("No current-period transactions were found. No bank-posted activity from \(workspace.draft?.periodStart ?? "the first included date") through \(workspace.draft?.periodEnd ?? "the report preparation date") appeared in the uploaded records. Earlier statements remain available under Original banking records and notes, but their transactions are not included in this report.").font(.callout).fontWeight(.semibold).foregroundStyle(.orange)
+                Text("No current-period transactions are listed in this report. Check the bank records for \(workspace.draft?.periodStart ?? "the first included date") through \(workspace.draft?.periodEnd ?? "the report preparation date"). If they show activity, add each transaction here before signing. An empty list alone does not establish that there was no activity.").font(.callout).fontWeight(.semibold).foregroundStyle(.orange)
             } else if let count=workspace.draft?.transactions.count {
                 Text("\(count) current-period \(count == 1 ? "transaction was" : "transactions were") organized from the uploaded records.").font(.callout).fontWeight(.semibold)
+                transactionSummary
             }
             ForEach((workspace.draft?.transactions ?? []).indices,id:\.self) { i in VStack(alignment:.leading, spacing: 10) {
                 HStack { Text("Transaction \(i + 1)").font(.headline); Spacer(); Text(workspace.draft?.transactions[i].date.isEmpty == false ? LodgeCalendarDates.displayDate(workspace.draft?.transactions[i].date ?? "") : "Date not found").font(.caption).foregroundStyle(.secondary) }

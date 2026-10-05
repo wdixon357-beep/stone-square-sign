@@ -7,9 +7,18 @@ struct FinalReportBrowserView: View {
         var title: String { self == .minutes ? "Meeting Minutes" : "Treasurer Reports" }
     }
     struct Record: Decodable, Identifiable {
-        struct Draft: Decodable { let meetingDate: String?; let periodEnd: String? }
-        let id: String; let status: String; let createdBy: String; let draft: Draft
+        struct Draft: Decodable {
+            struct Account: Decodable { let id: String; let name: String }
+            struct Transaction: Decodable {
+                let date: String; let account: String; let kind: String
+                let description: String; let amount: String?; let reference: String; let postedDateConfirmed: Bool?
+            }
+            let meetingDate: String?; let periodStart: String?; let periodEnd: String?
+            let accounts: [Account]?; let transactions: [Transaction]?
+        }
+        let id: String; let status: String; let createdBy: String; let draft: Draft; let submittedDraft: Draft?
         var label: String { draft.meetingDate ?? draft.periodEnd ?? "Finalized report" }
+        var signedDraft: Draft { submittedDraft ?? draft }
     }
     struct ArchiveRecord: Decodable, Identifiable {
         let id: String; let title: String; let recordDate: String?
@@ -39,6 +48,79 @@ struct FinalReportBrowserView: View {
     }
     private func displayLabel(_ record: Record) -> String {
         kind == .minutes ? MinutesDateText.minutesTitle(record.draft.meetingDate) : record.label
+    }
+    private func transactionType(_ kind: String) -> String {
+        switch kind {
+        case "receipt": return "Receipt"
+        case "payment": return "Disbursement"
+        case "transfer_in": return "Transfer in"
+        case "transfer_out": return "Transfer out"
+        default: return "Type not provided"
+        }
+    }
+    private func transactionAmount(_ transaction: Record.Draft.Transaction) -> String {
+        guard let value = transaction.amount?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return "Amount not provided" }
+        let unsigned = value.trimmingCharacters(in: CharacterSet(charactersIn: "+-$− "))
+        let direction = ["payment", "transfer_out"].contains(transaction.kind) ? "−" : "+"
+        return "\(direction)$\(unsigned)"
+    }
+    @ViewBuilder private var treasuryActivity: some View {
+        if kind == .treasury, let record = selectedCurrentRecord {
+            let draft = record.signedDraft
+            let entries = (draft.transactions ?? []).filter { transaction in
+                transaction.postedDateConfirmed == true && !transaction.date.isEmpty
+                    && (draft.periodStart.map { transaction.date >= $0 } ?? true)
+                    && (draft.periodEnd.map { transaction.date <= $0 } ?? true)
+            }.enumerated().sorted {
+                $0.element.date == $1.element.date ? $0.offset < $1.offset : $0.element.date < $1.element.date
+            }.map(\.element)
+            let accountNames = (draft.accounts ?? []).reduce(into: [String: String]()) { names, account in
+                names[account.id] = account.name
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Transactions in this signed report").font(.headline)
+                    Spacer(minLength: 8)
+                    Text("\(entries.count)").font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(SignTheme.gold.opacity(0.2), in: Capsule())
+                }
+                if entries.isEmpty {
+                    Text("This signed report has no itemized transactions. The totals alone do not show whether bank activity occurred.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(entries.indices, id: \.self) { index in
+                                let entry = entries[index]
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                        Text(entry.date.isEmpty ? "Date not provided" : LodgeCalendarDates.displayDate(entry.date))
+                                            .font(.subheadline.weight(.semibold))
+                                        Spacer(minLength: 8)
+                                        Text(transactionAmount(entry)).font(.subheadline.monospacedDigit().weight(.semibold))
+                                    }
+                                    Text(entry.description.isEmpty ? "Description not provided" : entry.description)
+                                        .font(.body).fixedSize(horizontal: false, vertical: true)
+                                    Text("\(accountNames[entry.account] ?? "Account not provided") · \(transactionType(entry.kind))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    if !entry.reference.isEmpty {
+                                        Text("Reference: \(entry.reference)").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                                if index < entries.count - 1 { Divider() }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 190)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        }
     }
 
     var body: some View {
@@ -88,8 +170,12 @@ struct FinalReportBrowserView: View {
                     } }
                 }
             } secondary: {
-                if pdf != nil { LodgeDocumentPreview(data: pdf) }
-                else { ContentUnavailableView(records.isEmpty && archives.isEmpty ? "No reports available" : "Choose a report", systemImage: "doc.text").frame(maxWidth: .infinity, maxHeight: .infinity) }
+                VStack(spacing: 8) {
+                    treasuryActivity
+                    if pdf != nil { LodgeDocumentPreview(data: pdf) }
+                    else { ContentUnavailableView(records.isEmpty && archives.isEmpty ? "No reports available" : "Choose a report", systemImage: "doc.text").frame(maxWidth: .infinity, maxHeight: .infinity) }
+                }
+                .padding(8)
             }
             if loading { ProgressView().padding(8) }
             if !message.isEmpty { Text(message).font(.callout).padding(12) }

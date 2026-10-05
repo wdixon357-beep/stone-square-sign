@@ -38,25 +38,31 @@ export async function buildTreasuryPdf({ draft, status = 'draft', preparedBy = '
   function heading(value) { room(55); y-=8;page.drawText(clean(value),{x:42,y,size:12,font:bold,color:navy});y-=8;page.drawLine({start:{x:42,y},end:{x:570,y},thickness:1,color:gold});y-=19; }
   function subheading(value) { room(34);page.drawRectangle({x:42,y:y-17,width:528,height:24,color:navy});page.drawText(clean(value),{x:50,y:y-10,size:10,font:bold,color:rgb(1,1,1)});y-=34; }
   function row(label, value, strong=false) { const lines=wrap(label,380,10,strong?bold:regular);room(lines.length*14+7);for(const [i,l] of lines.entries())page.drawText(l,{x:48,y:y-i*14,size:10,font:strong?bold:regular,color:ink});const number=clean(value);page.drawText(number,{x:562-(strong?bold:regular).widthOfTextAtSize(number,10),y,size:10,font:strong?bold:regular,color:ink});y-=lines.length*14+7; }
-  function activityTable(entries, opening) {
-    const x=[42,104,354,426,498];
-    const headers=['Date','Description','Check No.','Amount','Balance'];
-    room(25);page.drawRectangle({x:42,y:y-15,width:528,height:23,color:rgb(.93,.94,.95)});
-    headers.forEach((label,i)=>page.drawText(label,{x:x[i]+4,y:y-8,size:8.5,font:bold,color:ink}));y-=29;
+  function activityTable(entries, opening, accountName) {
+    const x=[42,91,294,375,430,500];
+    const headers=['Date','Description','Type','Reference','Amount','Balance'];
+    const tableHeader=()=>{
+      room(29);page.drawRectangle({x:42,y:y-15,width:528,height:23,color:rgb(.93,.94,.95)});
+      headers.forEach((label,i)=>page.drawText(label,{x:x[i]+3,y:y-8,size:7.6,font:bold,color:ink}));y-=29;
+    };
+    tableHeader();
     let balance=opening;
     for(const entry of entries) {
       const amount=money(entry.amount);
-      if(balance!==null&&amount!==null)balance+=['receipt','transfer_in'].includes(entry.kind)?amount:-amount;
-      const direction=entry.kind==='payment'?'Disbursement':entry.kind==='transfer_in'?'Transfer In':entry.kind==='transfer_out'?'Transfer Out':'Receipt';
-      const description=`${entry.description||'Description not provided'}${direction.startsWith('Transfer')?` (${direction})`:''}`;
-      const descLines=wrap(description,242,8.3), height=Math.max(20,descLines.length*11+5);room(height);
-      page.drawText(shortDate(entry.date),{x:x[0]+4,y,size:8.3,font:regular,color:ink});
-      descLines.forEach((line,i)=>page.drawText(line,{x:x[1]+4,y:y-i*11,size:8.3,font:regular,color:ink}));
-      page.drawText(clean(entry.reference||''),{x:x[2]+4,y,size:8.3,font:regular,color:ink});
+      const classified=['receipt','payment','transfer_in','transfer_out'].includes(entry.kind);
+      if(!classified)balance=null;
+      else if(balance!==null&&amount!==null)balance+=['receipt','transfer_in'].includes(entry.kind)?amount:-amount;
+      const direction=entry.kind==='payment'?'Disbursement':entry.kind==='transfer_in'?'Transfer In':entry.kind==='transfer_out'?'Transfer Out':entry.kind==='receipt'?'Receipt':'Needs classification';
+      const descLines=wrap(entry.description||'Description not provided',195,7.8), referenceLines=wrap(entry.reference||'',49,7.8), height=Math.max(20,descLines.length*10+6,referenceLines.length*10+6);
+      if(y-height<57){newPage();subheading(`${accountName} Account Activity (continued)`);tableHeader();}
+      page.drawText(shortDate(entry.date),{x:x[0]+3,y,size:7.8,font:regular,color:ink});
+      descLines.forEach((line,i)=>page.drawText(line,{x:x[1]+3,y:y-i*10,size:7.8,font:regular,color:ink}));
+      page.drawText(direction,{x:x[2]+3,y,size:7.8,font:regular,color:ink});
+      for(const [i,line] of referenceLines.entries())page.drawText(line,{x:x[3]+3,y:y-i*10,size:7.8,font:regular,color:ink});
       const signedAmount=amount===null?null:['payment','transfer_out'].includes(entry.kind)?-amount:amount;
       const amountText=pdfCurrency(signedAmount), balanceText=pdfCurrency(balance);
-      page.drawText(amountText,{x:x[4]-4-regular.widthOfTextAtSize(amountText,8.3),y,size:8.3,font:regular,color:ink});
-      page.drawText(balanceText,{x:570-regular.widthOfTextAtSize(balanceText,8.3),y,size:8.3,font:regular,color:ink});
+      page.drawText(amountText,{x:x[5]-3-regular.widthOfTextAtSize(amountText,7.8),y,size:7.8,font:regular,color:ink});
+      page.drawText(balanceText,{x:570-regular.widthOfTextAtSize(balanceText,7.8),y,size:7.8,font:regular,color:ink});
       y-=height;page.drawLine({start:{x:42,y:y+12},end:{x:570,y:y+12},thickness:.3,color:rgb(.82,.84,.86)});
     }
   }
@@ -121,11 +127,13 @@ export async function buildTreasuryPdf({ draft, status = 'draft', preparedBy = '
   for(const account of calc.accounts)row(`${account.name} account ending balance`,pdfCurrency(account.statement));
   row('Total cash in bank',pdfCurrency(calc.cash),true);row('Less: Total Fenced Money',pdfCurrency(calc.fenced));row('Unrestricted cash',pdfCurrency(calc.unrestricted),true);
 
-  newPage();heading(`Account Activity: ${titleDate(draft.periodEnd)}`);
+  heading(`Account Activity: ${titleDate(draft.periodEnd)}`);
+  paragraph('Itemized bank-posted transactions for the reporting period. Amounts shown with a minus sign are disbursements or transfers out.');
   for(const account of calc.accounts) {
     subheading(`${account.name} Account Activity`);
     const entries=draft.transactions.filter(t=>t.account===account.id&&t.postedDateConfirmed&&t.date&&(!draft.periodStart||t.date>=draft.periodStart)&&(!draft.periodEnd||t.date<=draft.periodEnd)).sort((a,b)=>a.date.localeCompare(b.date));
-    if(entries.length)activityTable(entries,account.opening);else paragraph(`No bank-posted activity was identified in the uploaded records from ${date(draft.periodStart)} through ${date(draft.periodEnd)} for this account.`);
+    if(entries.length){paragraph(`${entries.length} ${entries.length===1?'transaction':'transactions'} listed for this account.`);activityTable(entries,account.opening,account.name);}
+    else paragraph(`No bank-posted activity was identified in the uploaded records from ${date(draft.periodStart)} through ${date(draft.periodEnd)} for this account. If the source contained only summary totals, transaction details were not provided for this signed record.`);
   }
   if(draft.remarks){heading("Treasurer's Remarks");for(const line of draft.remarks.split('\n').filter(Boolean))paragraph(line,true);}
   if(calc.issues.length){heading('Items Requiring Review');for(const issue of calc.issues)paragraph(issue,true);}

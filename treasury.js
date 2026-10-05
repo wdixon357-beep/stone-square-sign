@@ -103,6 +103,7 @@ export function calculateTreasury(input) {
   for (const [i, f] of draft.funds.entries()) if (!accountIds.has(f.account) || money(f.amount) === null || money(f.amount) < 0) issues.push(`Review fenced fund ${i + 1}.`);
   for (const [i, o] of draft.obligations.entries()) if (!o.name || money(o.amount) === null || money(o.amount) < 0) issues.push(`Review obligation ${i + 1}.`);
   const accounts = draft.accounts.map(a => {
+    if (!a.activityComplete) issues.push(`${a.name}: confirm that every bank-posted transaction in this reporting period is listed. Add any missing receipts, disbursements or transfers before signing.`);
     for (const field of accountFields.filter(k => !['openingBalance','statementBalance','bookBalance'].includes(k))) if (money(a[field]) !== null && money(a[field]) < 0) issues.push(`${a.name}: ${field.replace(/([A-Z])/g, ' $1').toLowerCase()} must not be negative. Record the direction separately.`);
     const entries = draft.transactions.filter(t => t.account === a.id && t.postedDateConfirmed && t.date && (!draft.periodStart || t.date >= draft.periodStart) && (!draft.periodEnd || t.date <= draft.periodEnd));
     const flow = (field, kind) => {
