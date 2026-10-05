@@ -181,7 +181,12 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         config.protocolClasses = [ReportFixture.self]
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
-        ReportFixture.pdf = try Data(contentsOf: URL(fileURLWithPath: "test/sample-dispensation.pdf"))
+        let fixturePDF = PDFDocument()
+        fixturePDF.insert(PDFPage(), at: 0)
+        guard let fixtureBytes = fixturePDF.dataRepresentation() else {
+            preconditionFailure("Could not create a synthetic report PDF")
+        }
+        ReportFixture.pdf = fixtureBytes
         let secureReportApp = AppModel(session: session, savedSessionToken: "synthetic-token")
         let savedReportServer = secureReportApp.serverAddress
         secureReportApp.serverAddress = "https://sign-fixture.invalid"
