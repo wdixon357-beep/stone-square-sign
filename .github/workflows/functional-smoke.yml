@@ -16,8 +16,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: private-functional-rehearsal
-  cancel-in-progress: false
+  group: private-functional-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   synthetic-workflows:
