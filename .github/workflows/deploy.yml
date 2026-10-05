@@ -8,6 +8,8 @@
 # This replaces that trigger with one that reports. It fires Render's deploy hook, then
 # watches the live file until it actually changes, and FAILS the run if it does not. A
 # red mark on the commit is the signal that was missing.
+# The functional rehearsal below gates this hook. Render's independent auto-deploy
+# must be switched off before this becomes a complete pre-release gate.
 #
 # One time setup, by William:
 #   Render -> stone-square-sign -> Settings -> Deploy Hook -> copy the URL
@@ -33,9 +35,30 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies for private release checks
+        run: npm ci
+
+      - name: Rehearse web and shared-service workflows before publishing
+        env:
+          CI: 'true'
+          NODE_ENV: test
+          DATABASE_URL: ''
+          PGLITE_DIR: ''
+          OPENAI_API_KEY: ''
+          SMTP_HOST: ''
+          SMTP_USER: ''
+          SMTP_PASS: ''
+          ZEFFY_API_KEY: ''
+          RENDER_DEPLOY_HOOK: ''
+        run: node scripts/functional-smoke.mjs
 
       # The secrets context is not allowed in a step condition, so read it as an
       # environment variable and check it in the shell.

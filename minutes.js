@@ -92,6 +92,18 @@ const generationInstructions = MINUTES_REPORT_RULES;
 
 const generationError = message => Object.assign(new Error(message), {statusCode: 502});
 
+// Source exports can wrap a sentence across lines while the model cites the
+// same words with ordinary spaces. Resolve only whitespace differences, then
+// retain the exact original source span for every downstream evidence check.
+function exactSourceQuote(source, quote) {
+  if (source.includes(quote)) return quote;
+  const words = quote.trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return null;
+  const escaped = words.map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const match = new RegExp(escaped.join('\\s+')).exec(source);
+  return match?.[0] || null;
+}
+
 function validateGeneratedShape(value, schema, path = 'response') {
   const type = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
   const allowed = Array.isArray(schema.type) ? schema.type : [schema.type];
@@ -131,15 +143,18 @@ function checkedGeneratedDraft(response, source, localDraft) {
   for (const item of evidence) {
     const warningReference = /^warnings\[(0|[1-9]\d*)\]$/.exec(item.field);
     const existingWarning = warningReference && Object.hasOwn(generated.warnings, warningReference[1]);
-    if ((!requiredFields.has(item.field) && item.field !== 'meetingType' && !existingWarning) || !item.quote.trim() || !source.includes(item.quote)) {
+    const allowedField = requiredFields.has(item.field) || item.field === 'meetingType' || existingWarning;
+    const quote = item.quote.trim() && exactSourceQuote(source, item.quote);
+    if (!allowedField || !quote) {
+      console.warn('Minutes source reference rejected:', !allowedField ? 'invalid_field' : 'quote_not_found');
       throw generationError('Minutes generation returned a source reference that could not be verified. Please try again.');
     }
     const entries = references.get(item.field) || [];
-    const start = source.indexOf(item.quote);
+    const start = source.indexOf(quote);
     const firstLine = source.slice(0, start).split('\n').length;
-    const lastLine = firstLine + item.quote.split('\n').length - 1;
+    const lastLine = firstLine + quote.split('\n').length - 1;
     for (let line = firstLine; line <= lastLine; line++) coverage.add(line);
-    entries.push({...item, firstLine, lastLine}); references.set(item.field, entries);
+    entries.push({...item, quote, firstLine, lastLine}); references.set(item.field, entries);
   }
   if ([...requiredFields].some(field => !references.has(field))) {
     throw generationError('Minutes generation did not supply source references for all extracted content. Please try again.');
