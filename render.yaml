@@ -1,21 +1,15 @@
-# Free tier only. Two things make it free and both matter:
-#
-#   plan: free       750 instance hours a month, which is more than a month has.
-#   no disk:         a free web service cannot attach one. That is why the documents
-#                    live in Postgres as bytea instead of on the filesystem.
-#
-# The instance sleeps after 15 minutes idle and takes about a minute to wake, so the
-# first officer to open the queue in a day waits. Everyone after that does not. While
-# anyone has the queue open the live event stream keeps it awake.
-#
-# DATABASE_URL comes from Neon (neon.tech), free plan, 0.5 GB, no card. Use the
-# POOLED connection string, the one with "-pooler" in the host.
+# This Blueprint describes the existing paid Starter web service. Its automatic
+# sync is paused in Render; the GitHub deployment workflow runs the private
+# rehearsal before calling Render's deploy hook. Do not resume Blueprint sync
+# until the proposed configuration has been reviewed against the live service.
+# Documents live in Postgres rather than on the service filesystem.
+# DATABASE_URL is the pooled Neon connection string configured in Render.
 
 services:
   - type: web
     name: stone-square-sign
     runtime: node
-    plan: free
+    plan: starter
     region: ohio
     buildCommand: npm ci --omit=dev
     startCommand: node server.js
@@ -53,14 +47,14 @@ services:
       - key: WARDEN_EMAILS
         sync: false
 
-      # Gmail or Google Workspace on the Lodge domain. SMTP_PASS is a Google App
-      # Password, not the account password. Free, 500 messages a day.
+      # Namecheap Private Email is configured in Render. Preserve the existing
+      # host, port, and TLS settings instead of overwriting them on Blueprint sync.
       - key: SMTP_HOST
-        value: smtp.gmail.com
+        sync: false
       - key: SMTP_PORT
-        value: "587"
+        sync: false
       - key: SMTP_SECURE
-        value: "false"
+        sync: false
       - key: SMTP_USER
         sync: false
       - key: SMTP_PASS

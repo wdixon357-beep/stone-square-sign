@@ -18,6 +18,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mammoth from 'mammoth';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { isUniqueViolation, postgresTlsOptions } from '../db.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -26,7 +27,14 @@ const PORT = 3517;
 const SMTP_PORT = 3518;
 const BASE = `http://127.0.0.1:${PORT}`;
 const SIG = `data:image/png;base64,${fs.readFileSync(path.join(HERE, 'signature.b64'), 'utf8').trim()}`;
-const PDF = fs.readFileSync(path.join(HERE, 'sample-dispensation.pdf'));
+const samplePdf = await PDFDocument.create();
+const samplePage = samplePdf.addPage([612, 792]);
+const sampleFont = await samplePdf.embedFont(StandardFonts.Helvetica);
+samplePage.drawText('REQUEST FOR DISPENSATION', { x: 72, y: 710, size: 18, font: sampleFont });
+samplePage.drawText('Stone Square Lodge No. 22', { x: 72, y: 670, size: 12, font: sampleFont });
+samplePage.drawText('William M. McDuffie, Secretary', { x: 72, y: 610, size: 12, font: sampleFont });
+samplePage.drawText('Adrian Reese, Assistant Secretary', { x: 72, y: 580, size: 12, font: sampleFont });
+const PDF = Buffer.from(await samplePdf.save());
 const deliveredMail = [];
 const minutesTestDraft = {
   meetingDate: '2026-09-03',
