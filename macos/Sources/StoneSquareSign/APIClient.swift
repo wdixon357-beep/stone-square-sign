@@ -76,6 +76,9 @@ enum ReliableTransport {
     static func perform(session: URLSession, request: URLRequest, path: String, token: String?) async throws -> (Data, HTTPURLResponse) {
         let method = request.httpMethod ?? "GET"
         let mayRetry = method == "GET" || method == "HEAD"
+        // Activity pulses are background telemetry. A missed pulse is retried by the
+        // next scheduled pulse and must not interrupt an officer's current action.
+        let quietTelemetry = path == "/api/activity/heartbeat"
         let productionService = request.url?.host == URL(string: defaultServerAddress)?.host
         var reference: String?
         for attempt in 1...(mayRetry ? 2 : 1) {
@@ -93,12 +96,12 @@ enum ReliableTransport {
                 let payload = try? JSONDecoder().decode(APIError.self, from: data)
                 let retryable = http.statusCode >= 500 || http.statusCode == 408 || http.statusCode == 429 || payload?.retryable == true
                 reference = reference ?? payload?.incidentReference ?? newReference()
-                if mayRetry && retryable && attempt == 1 {
+                if mayRetry && retryable && attempt == 1 && !quietTelemetry {
                     ReliabilityCenter.shared.retrying(reference: reference!)
                     try? await Task.sleep(for: .seconds(2))
                     continue
                 }
-                if retryable, let reference {
+                if retryable && !quietTelemetry, let reference {
                     ReliabilityCenter.shared.failed(reference: reference)
                     if productionService { await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "open", category: "service_response") }
                 }
@@ -106,6 +109,7 @@ enum ReliableTransport {
             } catch let client as ClientError {
                 throw client
             } catch {
+                if quietTelemetry { throw ClientError.server("The activity pulse could not connect.") }
                 reference = reference ?? newReference()
                 if mayRetry && attempt == 1 {
                     ReliabilityCenter.shared.retrying(reference: reference!)

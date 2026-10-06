@@ -19,5 +19,8 @@ assert.match(server, /incidentReference: reference/);
 assert.match(mac, /final class ReliabilityCenter/);
 assert.match(mac, /ss22-pending-incidents-v1/);
 assert.match(mac, /mayRetry = method == "GET" \|\| method == "HEAD"/);
+assert.match(mac, /quietTelemetry = path == "\/api\/activity\/heartbeat"/);
+assert.match(mac, /if retryable && !quietTelemetry, let reference/);
+assert.match(mac, /if quietTelemetry \{ throw ClientError\.server\("The activity pulse could not connect\."\) \}/);
 
-console.log('PASS: web and Mac clients retry safe reads, preserve incident references, show an accessible notice, and retain only safe error metadata.');
+console.log('PASS: web and Mac clients retry safe reads, preserve incident references, show an accessible notice for user actions, and keep background Mac activity pulses quiet.');
