@@ -108,6 +108,34 @@ try {
   assert.ok(wrappedDraft.warnings.some(warning => /Source reference: New Business and Motions, lines 7 to 8/.test(warning)),
     'whitespace-only citation wrapping resolves to the exact source span without another paid request');
 
+  const unknownAttendance = response();
+  unknownAttendance.draft.officerAttendance = [{name: 'Brother Example Officer', title: 'Example Office', status: 'not_recorded'}];
+  unknownAttendance.evidence.push({field: 'officerAttendance[0].status', quote: 'A model citation absent from the meeting source.'});
+  const unknownDraft = await generateMinutesDraft(source, {generateStructured: async () => unknownAttendance});
+  assert.equal(unknownDraft.officerAttendance.find(officer => officer.name === 'Brother Example Officer')?.status, 'not_recorded');
+  assert.ok(!unknownDraft.warnings.some(warning => /Source reference: officerAttendance\[0\]/.test(warning)),
+    'a redundant citation for unknown attendance is not presented as verified evidence');
+  const statedAttendance = response();
+  statedAttendance.draft.officerAttendance = [{name: 'Brother Example Officer', title: 'Example Office', status: 'present'}];
+  statedAttendance.evidence.push({field: 'officerAttendance[0].status', quote: 'A model citation absent from the meeting source.'});
+  await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => statedAttendance}),
+    /source reference that could not be verified/,
+    'a claimed attendance status still needs a real source citation');
+
+  const unsupportedPrayer = response();
+  unsupportedPrayer.evidence.find(item => item.field === 'prayerRequested').quote = 'Prayers were requested for the families.';
+  const prayerDraft = await generateMinutesDraft(source, {generateStructured: async () => unsupportedPrayer});
+  assert.equal(prayerDraft.prayerRequested, null, 'an unsupported WM prayer request remains unconfirmed');
+  assert.ok(prayerDraft.warnings.some(warning => /cited source does not establish it/.test(warning)),
+    'the preparer sees what to confirm instead of losing the sourced draft');
+  assert.equal(prayerDraft.closingPrayerGiven, true, 'a separately supported closing prayer remains intact');
+  const conflictingPrayer = response();
+  conflictingPrayer.evidence.find(item => item.field === 'prayerRequested').quote = 'Prayers were requested for the families.';
+  conflictingPrayer.draft.sections[1].body = '- WM Dixon-Saunders asked the Chaplain to pray for the sick and distressed at closing.';
+  await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => conflictingPrayer}),
+    /claim prayerRequested without a verified source reference/,
+    'a narrative claim cannot override an unconfirmed prayer control');
+
   const visitorSource = `${source}\nVisitors: Bro. Alex Example, Example Lodge No. 99\nNone reported.`;
   const visitorResponse = response();
   visitorResponse.draft.visitors = ['Bro. Alex Example, Example Lodge No. 99'];
@@ -196,7 +224,11 @@ try {
   await rejectResponse(result => {result.evidence[0].quote = 'Meeting date: September 18, 2026';}, /could not be verified/);
   await rejectResponse(result => {result.evidence = result.evidence.filter(entry => entry.field !== 'sections[2].body');}, /all extracted content/);
   await rejectResponse(result => {result.draft.closingTime = '10:00 PM';}, /disagreed with the source/);
-  await rejectResponse(result => {result.evidence.find(entry => entry.field === 'closingPrayerGiven').quote = 'The Lodge closed at 9:00 PM.';}, /does not establish closingPrayerGiven/);
+  const unsupportedClosingPrayer = response();
+  unsupportedClosingPrayer.evidence.find(entry => entry.field === 'closingPrayerGiven').quote = 'The Lodge closed at 9:00 PM.';
+  const closingPrayerDraft = await generateMinutesDraft(source, {generateStructured: async () => unsupportedClosingPrayer});
+  assert.equal(closingPrayerDraft.closingPrayerGiven, null, 'an unsupported closing prayer remains unconfirmed');
+  assert.ok(closingPrayerDraft.warnings.some(warning => /Chaplain gave the closing prayer/.test(warning)));
   await rejectResponse(result => {result.draft.present[0] = 'Brother Missing Name';}, /not established/);
   const unsupportedOfficerAttendance = response();
   unsupportedOfficerAttendance.draft.officerAttendance = [{name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'}];

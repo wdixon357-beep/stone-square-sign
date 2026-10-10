@@ -71,6 +71,18 @@ assert.equal(sections.find(s => s.heading === 'Next Meeting').body, 'Thursday, O
 const repeated = documentSections({...draft, sections:[{heading:'Sickness and Distress', body:'The WM asked the Chaplain to give a prayer for sickness and distress at the close of the meeting.\nPrayers for Brother Stone.'}, {heading:'Closing', body:'Closed at 9:30 PM.\nThe Chaplain offered the closing prayer and prayed for the sick and distressed.'}]});
 assert.equal(repeated.find(s=>s.heading==='Sickness and Distress').body, `Prayers for Brother Stone.\n${prayerRequestText}`);
 assert.equal(repeated.at(-1).body, `${closingPrayerText}\nThe Lodge was closed at 9:30 PM.`);
+const unconfirmedPrayerSections = documentSections({...draft, prayerRequested:null, closingPrayerGiven:null, sections:[
+  {heading:'Sickness and Distress', body:`- ${prayerRequestText}`},
+  {heading:'Closing', body:`- ${closingPrayerText}`},
+]});
+assert.ok(!unconfirmedPrayerSections.some(section => section.body.includes(prayerRequestText)), 'unconfirmed prayer request is never asserted in the document');
+assert.ok(!unconfirmedPrayerSections.some(section => section.body.includes(closingPrayerText)), 'unconfirmed closing prayer is never asserted in the document');
+assert.ok(unconfirmedPrayerSections.some(section => /Prayer request: confirm/.test(section.body)));
+assert.ok(unconfirmedPrayerSections.some(section => /Closing prayer: confirm/.test(section.body)));
+const instructedPrayerSections = documentSections({...draft, prayerRequested:null, sections:[
+  {heading:'Sickness and Distress', body:'- The Worshipful Master instructed the Chaplain to offer a prayer for the sick and distressed at the end of the meeting.'},
+]});
+assert.ok(!instructedPrayerSections.some(section => /instructed the Chaplain/.test(section.body)), 'an unconfirmed paraphrase is not asserted beside the review prompt');
 const decoratedDraft = {...draft, organizerVersion:5, closingTime:'10:30 PM', nextMeeting:'October 1, 2026', sections:[
   {heading:'Sickness and Distress', body:'- The Worshipful Master asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.'},
   {heading:'Upcoming Events and Reminders', body:'- The next meeting is scheduled for <u>October 1, 2026</u>.'},
