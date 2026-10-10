@@ -12,7 +12,7 @@ const omitWholeBullets = (body, predicate) => String(body || '').split('\n').fil
   const plain = plainBullet(line);
   return plain && !/^[-*•▪]$/.test(plain) && !predicate(plain);
 }).join('\n').trim();
-const isStandardPrayerRequest = text => /^(?:The )?(?:Worshipful Master|WM)(?: Dixon-Saunders)? (?:asked|requested|directed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the (?:close|end)(?: of (?:the )?meeting)?|closing)\.?$/i.test(text);
+const isStandardPrayerRequest = text => /^(?:The )?(?:Worshipful Master|WM)(?: Dixon-Saunders)? (?:asked|requested|directed|instructed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the (?:close|end)(?: of (?:the )?meeting)?|closing)\.?$/i.test(text);
 const isEmptyEntry = value => /^(?:none(?: (?:were )?(?:recorded|reported|noted))?|no entr(?:y|ies)(?: (?:was |were )?(?:recorded|reported|noted))?|not (?:recorded|reported|applicable)|n\/?a|nil)\.?$/i.test(plainBullet(value));
 const praiseLabel = /^praise reports?\s*[:.]?\s*$/i;
 const attendanceLabel = /^attendance (?:and|&) visitors\s*[:.]?\s*$/i;
@@ -126,7 +126,7 @@ export function detectPrayerFacts(source) {
   const sentences = String(source || '').split(/\n|(?<=[.!?])\s+(?=[A-Z])/);
   const past = sentence => !/\b(?:not|never|didn't|did not|will|would|should|next meeting|previous meeting|last meeting)\b/i.test(sentence);
   return {
-    prayerRequested: sentences.some(s => past(s) && /\b(?:Worshipful Master|WM)\b.*\b(?:asked|requested|directed)\b.*\bChaplain\b.*\b(?:sick|distress)\w*/i.test(s) && /\b(?:close|closing|end of (?:the )?meeting)\b/i.test(s)) ? true : null,
+    prayerRequested: sentences.some(s => past(s) && /\b(?:Worshipful Master|WM)\b.*\b(?:asked|requested|directed|instructed)\b.*\bChaplain\b.*\b(?:sick|distress)\w*/i.test(s) && /\b(?:close|closing|end of (?:the )?meeting)\b/i.test(s)) ? true : null,
     closingPrayerGiven: sentences.some(s => past(s) && /\bChaplain\b.*\b(?:gave|offered|delivered|led)\b.*\bclosing prayer\b.*\b(?:sick|distress)\w*/i.test(s)) ? true : null,
   };
 }
@@ -150,8 +150,9 @@ export function documentSections(draft) {
   const result = sections.filter(s => !closing.includes(s));
   let sick = result.find(s => isSicknessHeading(s.heading));
   if (!sick) { sick = {heading: SICKNESS_HEADING, body: ''}; result.push(sick); }
-  // Remove only our exact standard wording when the officer changes a control.
-  if (typeof draft.prayerRequested === 'boolean') sick.body = omitWholeBullets(sick.body, isStandardPrayerRequest);
+  // The prayer control is the source of truth for this standard sentence.
+  // An unconfirmed control must not leave a contradictory claim in the PDF.
+  sick.body = omitWholeBullets(sick.body, isStandardPrayerRequest);
   if (draft.prayerRequested === true) sick.body += `\n${generatedLine(prayerRequestText)}`;
   else if (draft.prayerRequested !== false) sick.body += `\n${generatedLine('Prayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.')}`;
   if (draft.nextMeeting) {
@@ -160,8 +161,8 @@ export function documentSections(draft) {
   }
   let closingBody = closing.map(s => s.body).join('\n').trim();
   if (draft.nextMeeting) closingBody = omitWholeBullets(closingBody, text => repeatsNextMeeting(text, draft, 'Closing'));
-  if (typeof draft.prayerRequested === 'boolean') closingBody = omitWholeBullets(closingBody, isStandardPrayerRequest);
-  if (typeof draft.closingPrayerGiven === 'boolean') closingBody = omitWholeBullets(closingBody, text => /^(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer and prayed for the sick and distressed\.?$/i.test(text));
+  closingBody = omitWholeBullets(closingBody, isStandardPrayerRequest);
+  closingBody = omitWholeBullets(closingBody, text => /^(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer and prayed for the sick and distressed\.?$/i.test(text));
   // Replace an isolated closing-time statement with the reviewed time. Retain
   // any additional ceremonial or business details in the source sentence.
   if (draft.closingTime) closingBody = omitWholeBullets(closingBody, text => /^(?:(?:the )?lodge (?:was )?)?(?:closed|adjourned)(?: at [\d: .APMapm]+)?\.?$/i.test(text));

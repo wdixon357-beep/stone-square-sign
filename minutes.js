@@ -3,7 +3,7 @@ import { minutesDateParts, minutesDateValue } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { organizeMeetingSource } from './minutes-organizer.js';
-import { cleanMinutesSectionsForPresentation } from './minutes-format.js';
+import { cleanMinutesSectionsForPresentation, detectPrayerFacts } from './minutes-format.js';
 
 const nullableText = { type: ['string', 'null'] };
 
@@ -139,8 +139,14 @@ function checkedGeneratedDraft(response, source, localDraft) {
   generated.sections.forEach((section, index) => {if (section.body.trim()) requiredFields.add(`sections[${index}].body`);});
   generated.officerAttendance.forEach((entry, index) => {if (entry.status !== 'not_recorded') requiredFields.add(`officerAttendance[${index}].status`);});
   const references = new Map();
-  const coverage = new Set();
   for (const item of evidence) {
+    const unrecordedOfficer = /^officerAttendance\[(0|[1-9]\d*)\]\.status$/.exec(item.field);
+    if (unrecordedOfficer && generated.officerAttendance[Number(unrecordedOfficer[1])]?.status === 'not_recorded') {
+      // The model sometimes cites an officer whose attendance it explicitly left
+      // unknown. That citation supports no recorded fact and must not count as
+      // verified source coverage or make an otherwise usable draft fail.
+      continue;
+    }
     const warningReference = /^warnings\[(0|[1-9]\d*)\]$/.exec(item.field);
     const existingWarning = warningReference && Object.hasOwn(generated.warnings, warningReference[1]);
     const allowedField = requiredFields.has(item.field) || item.field === 'meetingType' || existingWarning;
@@ -153,7 +159,6 @@ function checkedGeneratedDraft(response, source, localDraft) {
     const start = source.indexOf(quote);
     const firstLine = source.slice(0, start).split('\n').length;
     const lastLine = firstLine + quote.split('\n').length - 1;
-    for (let line = firstLine; line <= lastLine; line++) coverage.add(line);
     entries.push({...item, quote, firstLine, lastLine}); references.set(item.field, entries);
   }
   if ([...requiredFields].some(field => !references.has(field))) {
@@ -234,7 +239,23 @@ function checkedGeneratedDraft(response, source, localDraft) {
       ? /\b(?:WM|Worshipful Master)\b[^.!?]*\b(?:did not|never)\b[^.!?]*\b(?:ask|request|direct)\b[^.!?]*\bChaplain\b[^.!?]*\b(?:sick|distress)/i
       : /\bChaplain\b[^.!?]*\b(?:did not|never)\b[^.!?]*\b(?:give|offer|deliver|lead)\b[^.!?]*\bclosing prayer\b/i;
     const supported = generated[field] === true ? quoted[field] === true : explicitNegative.test(quotesFor(field));
-    if (!supported) throw generationError(`The cited source does not establish ${field}. Review the source and try again.`);
+    if (!supported) {
+      // An unsupported prayer flag must not become a statement in the PDF.
+      // Keep the rest of the sourced draft and require the preparer to confirm
+      // this one fact, just as we do for an unsupported officer status.
+      generated[field] = null;
+      normalized[field] = null;
+      references.delete(field);
+      warnings.push(field === 'prayerRequested'
+        ? 'Confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing; the cited source does not establish it.'
+        : 'Confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed; the cited source does not establish it.');
+    }
+  }
+  for (const field of ['prayerRequested', 'closingPrayerGiven']) {
+    if (normalized[field] !== null) continue;
+    if (generated.sections.some(section => detectPrayerFacts(section.body.replace(/<[^>]*>/g, '').replace(/[*_]/g, ''))[field] === true)) {
+      throw generationError(`The generated minutes claim ${field} without a verified source reference. Review the source and try again.`);
+    }
   }
   const attendanceEstablished = (quote, name, field) => {
     const quoted = organizeMeetingSource(quote);
@@ -275,6 +296,8 @@ function checkedGeneratedDraft(response, source, localDraft) {
       throw generationError('A private review detail does not match the source. Please try again.');
     }
   });
+  const coverage = new Set([...references.values()].flatMap(entries => entries.flatMap(entry =>
+    Array.from({length: entry.lastLine - entry.firstLine + 1}, (_, offset) => entry.firstLine + offset))));
   const uncovered = source.split('\n').filter((line, index) => line.trim() && !coverage.has(index + 1)).length;
   if (uncovered) warnings.push(`Source coverage review: ${uncovered} nonempty source ${uncovered === 1 ? 'line is' : 'lines are'} not linked to extracted content. Compare the draft with the original before attestation.`);
   for (const [field, entries] of references) {
