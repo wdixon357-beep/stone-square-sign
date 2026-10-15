@@ -514,6 +514,7 @@ const clearMemberAccessInvite = () => {
 
 const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   state.user = user;
+  legacyReportBridge.request();
   clearMemberAccessInvite();
   homeAlertsLoaded = false;
   const sessionDays = Number(session?.lifetimeDays);
@@ -579,6 +580,7 @@ const refreshSessionPermissions = async () => {
     const before = JSON.stringify([state.user.role, [...(state.user.permissions || [])].sort()]);
     const after = JSON.stringify([user.role, [...(user.permissions || [])].sort()]);
     state.user = user;
+    legacyReportBridge.request();
     if (before === after) return;
     applyWorkspacePermissions(user);
     showWorkspaceSection(state.activeSection || 'home', { skipLoad: true });
@@ -595,6 +597,7 @@ const refreshSessionPermissions = async () => {
     if (error.status === 401 && state.authEpoch === authEpoch && state.user?.id === userId) {
       state.authEpoch += 1;
       state.user = null;
+      legacyReportBridge.clear();
       clearMemberAccessInvite();
       hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
       setMessage(authMessage, 'Your session is no longer authorized. Sign in again to continue.', true);
@@ -660,6 +663,63 @@ const loadSubmissionProfiles = async () => {
 };
 
 const REPORT_GENERATOR_ORIGIN = 'https://request.stonesquare22pha.org';
+
+// Legacy draft recovery stays in memory and is bound to this authenticated account.
+// Only the original report window can offer content; restoring it still needs a click.
+const legacyReportBridge = (() => {
+  const enabled = new URL(window.location?.href || 'https://stone-square-sign.onrender.com').searchParams.get('legacyReport') === '1';
+  let request = null;
+  let candidate = null;
+  let deliveredConnection = null;
+  const account = () => state.user && can('reports.create') ? {
+    userId: state.user.id,
+    email: String(state.user.email || '').trim().toLowerCase(),
+    epoch: state.authEpoch,
+  } : null;
+  const matches = current => Boolean(current && request && current.email
+    && current.userId === request.userId && current.email === request.email && current.epoch === request.epoch);
+  const clear = () => { request = null; candidate = null; deliveredConnection = null; };
+  const sanitize = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || !['officer', 'committee', 'event', 'formal'].includes(value.type)
+      || !value.fields || typeof value.fields !== 'object' || Array.isArray(value.fields)
+      || (value.phone !== undefined && (typeof value.phone !== 'string' || value.phone.length > 40))) return null;
+    const entries = Object.entries(value.fields);
+    if (!entries.length || entries.length > 40 || entries.some(([key, text]) => !/^[a-zA-Z][a-zA-Z0-9]{0,19}$/.test(key)
+      || typeof text !== 'string' || text.length > 20000)
+      || entries.reduce((length, [key, text]) => length + key.length + text.length, 0) > 120000
+      || !entries.some(([, text]) => text.trim())) return null;
+    return { type: value.type, fields: Object.fromEntries(entries), phone: value.phone || '' };
+  };
+  const deliver = connection => {
+    if (!candidate || !matches(account())) { if (candidate) clear(); return; }
+    if (!connection?.target || connection !== state.reportHandoff || connection.stagedAssertion
+      || connection.expiresAt <= Date.now() || deliveredConnection === connection) return;
+    connection.target.postMessage({ kind: 'stone-square-report-recovery', email: request.email, draft: candidate }, REPORT_GENERATOR_ORIGIN);
+    deliveredConnection = connection;
+  };
+  return {
+    clear,
+    request() {
+      const current = account();
+      if (!enabled || !window.opener || !current?.email) { clear(); return; }
+      if (matches(current)) return;
+      clear();
+      request = { ...current, requestId: crypto.randomUUID() };
+      try {
+        window.opener.postMessage({ kind: 'stone-square-legacy-report-request', email: current.email, requestId: request.requestId }, REPORT_GENERATOR_ORIGIN);
+      } catch { clear(); }
+    },
+    receive(event) {
+      if (!enabled || !window.opener || event.source !== window.opener || event.origin !== REPORT_GENERATOR_ORIGIN
+        || event.data?.kind !== 'stone-square-legacy-report-draft' || !matches(account())
+        || event.data.requestId !== request.requestId || candidate) return;
+      candidate = sanitize(event.data.draft);
+      if (candidate) deliver(state.reportHandoff);
+    },
+    deliver,
+  };
+})();
 const secureReportUrl = value => {
   const url = new URL(value);
   if (url.protocol !== 'https:' || url.origin !== REPORT_GENERATOR_ORIGIN || url.searchParams.has('assertion')) {
@@ -682,6 +742,7 @@ const postReportAssertion = (connection, assertion, expiresAt) => {
   state.reportHandoffExpiresAt = expiresAt;
   if (connection.embedded) $('reportGeneratorFrame').dataset.connected = 'true';
   setMessage($('reportGeneratorMessage'), 'Report Generator connected.');
+  legacyReportBridge.deliver(connection);
 };
 
 const renewReportHandoff = connection => {
@@ -716,6 +777,7 @@ const saveReceivedReport = async report => {
 };
 
 window.addEventListener('message', event => {
+  legacyReportBridge.receive(event);
   const connection = state.reportHandoff;
   if (!connection || event.origin !== REPORT_GENERATOR_ORIGIN || event.source !== connection.target) return;
   if (event.data?.kind === 'stone-square-report-submitted') {
@@ -3047,6 +3109,7 @@ $('resetSubmit').addEventListener('click', async () => {
 });
 
 $('logoutBtn').addEventListener('click', async () => {
+  legacyReportBridge.clear();
   state.realtimeAbort?.abort();
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   state.authEpoch += 1;
