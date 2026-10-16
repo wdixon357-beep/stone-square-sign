@@ -2553,33 +2553,8 @@ struct DocumentRow: View {
     let queueNumber: Int?
     let open: () -> Void
     let sign: () -> Void
-    @State private var pendingQueueAction: QueueAction?
-
-    private enum QueueAction {
-        case offerToBothSecretaries, submitToDistrictDeputy, resendToDistrictDeputy
-
-        var title: String {
-            switch self {
-            case .offerToBothSecretaries: return "Let either Secretary sign this dispensation?"
-            case .submitToDistrictDeputy: return "Send this dispensation to the District Deputy?"
-            case .resendToDistrictDeputy: return "Send this dispensation again?"
-            }
-        }
-        var button: String {
-            switch self {
-            case .offerToBothSecretaries: return "Add the other Secretary"
-            case .submitToDistrictDeputy: return "Send dispensation"
-            case .resendToDistrictDeputy: return "Send again"
-            }
-        }
-        var explanation: String {
-            switch self {
-            case .offerToBothSecretaries: return "The first Secretary to sign will complete the secretary step. The document and existing signatures remain unchanged."
-            case .submitToDistrictDeputy: return "This sends the completed PDF and submission note. Review the document before continuing."
-            case .resendToDistrictDeputy: return "This sends another copy of the completed PDF and submission note."
-            }
-        }
-    }
+    @State private var showOfferConfirmation = false
+    @State private var showSubmissionPacket = false
 
     private var onlyOneSecretary: Bool {
         let roles = Set(document.signers.map(\.signerRole))
@@ -2594,23 +2569,37 @@ struct DocumentRow: View {
         document.isRescinded ? .red : document.isComplete ? .green : SignTheme.navy
     }
 
+    @ViewBuilder private var deliveryStatus: some View {
+        if document.isDispensation && !document.isRescinded {
+            if let sentAt = document.submittedAt {
+                Text("Sent to the District Deputy \(LodgeDateTime.display(sentAt))")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if model.user?.role == "owner", let detail = document.submissionMessage, !detail.isEmpty {
+                Text(detail).font(.caption2.weight(.semibold))
+                    .foregroundStyle(document.submissionState == "failed" ? .red : .orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if document.isComplete {
+                Text(document.submittedError.map { "Delivery needs attention: \($0)" }
+                    ?? "Automatic delivery is waiting. Open the submission packet for details.")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     @ViewBuilder private var compactActions: some View {
         if model.user?.role != "viewer" {
             Menu("Actions") {
                 Button("View", action: open)
                 if model.user?.role == "owner" && !document.isTerminal && onlyOneSecretary {
-                    Button("Let either Secretary sign") { pendingQueueAction = .offerToBothSecretaries }
+                    Button("Let either Secretary sign") { showOfferConfirmation = true }
                 }
                 if model.user?.can("documents.sign") == true && document.needsSignature && !document.isTerminal {
                     Button("Review and sign", action: sign)
                 }
-                if model.user?.role == "owner" && document.isComplete && document.isDispensation {
-                    Button("Draft in my mail app") { Task { await model.draftToDistrictDeputy(document: document) } }
-                    if document.submittedAt == nil {
-                        Button("Send to the District Deputy") { pendingQueueAction = .submitToDistrictDeputy }
-                    } else {
-                        Button("Send again") { pendingQueueAction = .resendToDistrictDeputy }
-                    }
+                if model.user?.role == "owner" && document.isDispensation && !document.isRescinded {
+                    Button("Submission packet") { showSubmissionPacket = true }
                 }
             }
             .menuStyle(.borderlessButton)
@@ -2627,6 +2616,7 @@ struct DocumentRow: View {
                 Text(document.displayTitle).font(.headline).foregroundStyle(SignTheme.navy)
                     .fixedSize(horizontal: false, vertical: true)
                 ForEach(document.signers) { signer in SignerStatusView(signer: signer).font(.caption) }
+                deliveryStatus
                 HStack(spacing: 10) {
                     Text(statusText).font(.caption.weight(.semibold)).foregroundStyle(statusColor)
                     Spacer(minLength: 8)
@@ -2639,96 +2629,375 @@ struct DocumentRow: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-        HStack(spacing: 14) {
-            Text(document.isRescinded ? "R" : queueNumber.map(String.init) ?? "✓")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(SignTheme.navy)
-                .frame(width: 28, height: 28)
-                .background(SignTheme.gold.opacity(0.25), in: Circle())
-            Image(systemName: "doc.richtext.fill")
-                .font(.title2).foregroundStyle(.red)
-                .frame(width: 42, height: 48)
-                .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 6) {
-                Text(document.displayTitle).font(.headline).foregroundStyle(SignTheme.navy)
-                HStack {
-                    ForEach(document.signers) { signer in SignerStatusView(signer: signer) }
+            HStack(spacing: 14) {
+                Text(document.isRescinded ? "R" : queueNumber.map(String.init) ?? "✓")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(SignTheme.navy)
+                    .frame(width: 28, height: 28)
+                    .background(SignTheme.gold.opacity(0.25), in: Circle())
+                Image(systemName: "doc.richtext.fill")
+                    .font(.title2).foregroundStyle(.red)
+                    .frame(width: 42, height: 48)
+                    .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(document.displayTitle).font(.headline).foregroundStyle(SignTheme.navy)
+                    HStack {
+                        ForEach(document.signers) { signer in SignerStatusView(signer: signer) }
+                    }
+                    .font(.caption)
+                    deliveryStatus
                 }
-                .font(.caption)
-                /* Loud on failure on purpose. A dispensation that quietly did not send is one
-                 * that misses its date, which is exactly how the invitations were lost. */
-                if document.isComplete && document.isDispensation {
-                    if let sentAt = document.submittedAt {
-                        Text("Sent to the District Deputy \(LodgeDateTime.display(sentAt))")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    } else {
-                        Text(document.submittedError.map { "NOT sent to the District Deputy. \($0)" }
-                            ?? "Not yet sent to the District Deputy.")
-                            .font(.caption2.weight(.semibold)).foregroundStyle(.red)
+                Spacer()
+                Text(statusText)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .foregroundStyle(statusColor)
+                    .background(statusColor.opacity(0.11), in: Capsule())
+                if model.user?.role != "viewer" {
+                    Button("View", action: open).buttonStyle(.borderless)
+                    if model.user?.role == "owner" && !document.isTerminal && onlyOneSecretary {
+                        Button("Let either Secretary sign") { showOfferConfirmation = true }
+                            .buttonStyle(.borderless)
+                    }
+                    if model.user?.can("documents.sign") == true && document.needsSignature && !document.isTerminal {
+                        Button("Review and sign", action: sign)
+                            .buttonStyle(.borderedProminent).tint(.accentColor)
+                    }
+                    if model.user?.role == "owner" && document.isDispensation && !document.isRescinded {
+                        Button("Submission packet") { showSubmissionPacket = true }
+                            .buttonStyle(.borderless)
                     }
                 }
-            }
-            Spacer()
-            Text(document.isRescinded ? "Rescinded" : document.isComplete ? "Completed" : document.needsSignature ? "Your signature" : "Awaiting")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .foregroundStyle(document.isRescinded ? .red : document.isComplete ? .green : SignTheme.navy)
-                .background((document.isRescinded ? Color.red : document.isComplete ? Color.green : SignTheme.gold).opacity(0.11), in: Capsule())
-            if model.user?.role != "viewer" {
-                Button("View", action: open).buttonStyle(.borderless)
-                /* Only worth offering while exactly one of the two Secretaries is on it. */
-                if model.user?.role == "owner" && !document.isTerminal && onlyOneSecretary {
-                    Button("Let either Secretary sign") {
-                        pendingQueueAction = .offerToBothSecretaries
-                    }
-                    .buttonStyle(.borderless)
-                }
-                if model.user?.can("documents.sign") == true && document.needsSignature && !document.isTerminal {
-                    Button("Review and sign", action: sign)
-                        .buttonStyle(.borderedProminent).tint(.accentColor)
-                }
-                if model.user?.role == "owner" && document.isComplete && document.isDispensation {
-                    Button("Draft in my mail app") {
-                        Task { await model.draftToDistrictDeputy(document: document) }
-                    }
-                    .buttonStyle(.borderless)
-                    if document.submittedAt == nil {
-                        Button("Send to the District Deputy") {
-                            pendingQueueAction = .submitToDistrictDeputy
-                        }
-                        .buttonStyle(.borderedProminent).tint(.accentColor)
-                    } else {
-                        Button("Send again") {
-                            pendingQueueAction = .resendToDistrictDeputy
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                }
-            }
-        }.fixedSize(horizontal: true, vertical: false)
-        compactRow
+            }.fixedSize(horizontal: true, vertical: false)
+            compactRow
         }
         .padding(.vertical, 13)
-        .alert(pendingQueueAction?.title ?? "Confirm document action", isPresented: Binding(
-            get: { pendingQueueAction != nil },
-            set: { if !$0 { pendingQueueAction = nil } }
-        )) {
-            Button(pendingQueueAction?.button ?? "Continue") {
-                let action = pendingQueueAction
-                pendingQueueAction = nil
-                Task {
-                    switch action {
-                    case .offerToBothSecretaries: _ = await model.offerToBothSecretaries(documentId: document.id)
-                    case .submitToDistrictDeputy: _ = await model.submitToDistrictDeputy(documentId: document.id)
-                    case .resendToDistrictDeputy: _ = await model.submitToDistrictDeputy(documentId: document.id, resend: true)
-                    case nil: break
+        .sheet(isPresented: $showSubmissionPacket) { DispensationSubmissionPacketView(document: document) }
+        .alert("Let either Secretary sign this dispensation?", isPresented: $showOfferConfirmation) {
+            Button("Add the other Secretary") { Task { _ = await model.offerToBothSecretaries(documentId: document.id) } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The first Secretary to sign will complete the secretary step. The document and existing signatures remain unchanged.")
+        }
+    }
+}
+
+struct DispensationSubmissionPacketView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let document: LodgeDocument
+    @State private var packet: DispensationSubmissionPacket?
+    @State private var selectedReport: URL?
+    @State private var matchingReportConfirmed = false
+    @State private var busy = false
+    @State private var errorMessage = ""
+    @State private var preview: PDFDocument?
+    @State private var previewTitle = ""
+    @State private var resolutionNote = ""
+    @State private var pendingResolution: String?
+
+    private var canResolve: Bool {
+        let count = resolutionNote.trimmingCharacters(in: .whitespacesAndNewlines).count
+        return !busy && (10...600).contains(count)
+    }
+
+    // Resolve the login home so sandboxed builds do not start the chooser in the app container.
+    private var loginHome: URL {
+        URL(fileURLWithPath: NSHomeDirectoryForUser(NSUserName()) ?? NSHomeDirectory(), isDirectory: true)
+    }
+    private var desktopReports: URL {
+        loginHome.appendingPathComponent("Desktop/Stone Square Dispensation Reports", isDirectory: true)
+    }
+    private var dropboxReports: URL {
+        loginHome.appendingPathComponent("Library/CloudStorage/Dropbox/Dispensation Reports - Oct 2026", isDirectory: true)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Submission packet").font(.title2.weight(.semibold))
+                    Text(document.displayTitle).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    if let packet {
+                        packetContent(packet)
+                    } else if busy {
+                        ProgressView("Loading delivery details…")
                     }
+                    if !errorMessage.isEmpty {
+                        Label(errorMessage, systemImage: "exclamationmark.circle")
+                            .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if let preview {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .top) {
+                                Text(previewTitle).font(.headline).fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                Button("Close preview") { self.preview = nil }
+                            }
+                            PDFKitContainer(document: preview).frame(height: 400)
+                        }
+                    }
+                    Button("Refresh delivery status") { Task { await loadPacket() } }
+                        .disabled(busy)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+            }
+        }
+        .frame(minWidth: 520, idealWidth: 760, maxWidth: 900, minHeight: 500, idealHeight: 700)
+        .task { await loadPacket() }
+        .onChange(of: model.user?.id) { _, _ in dismiss() }
+        .onChange(of: model.user?.role) { _, role in if role != "owner" { dismiss() } }
+        .alert(pendingResolution == "delivered" ? "Confirm the packet was delivered?" : "Confirm no email was delivered and retry?", isPresented: Binding(
+            get: { pendingResolution != nil },
+            set: { if !$0 { pendingResolution = nil } }
+        )) {
+            Button(pendingResolution == "delivered" ? "Confirm already delivered" : "Confirm no delivery and retry") {
+                let outcome = pendingResolution
+                pendingResolution = nil
+                if let outcome { Task { await resolveDelivery(outcome: outcome) } }
+            }
+            Button("Cancel", role: .cancel) { pendingResolution = nil }
+        } message: {
+            Text(pendingResolution == "delivered"
+                 ? "This records your external verification that the District Deputy was sent this exact packet. It will not send another email. Your verification note is retained in the audit record."
+                 : "Choose this only after checking that this exact packet was not delivered. The dashboard will retry the same two attachments immediately. Your verification note is retained in the audit record.")
+        }
+    }
+
+    @ViewBuilder private func packetContent(_ packet: DispensationSubmissionPacket) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(packet.statusTitle, systemImage: packet.state == "sent" ? "checkmark.circle.fill" : "envelope")
+                .font(.headline).foregroundStyle(packet.state == "sent" ? .green : SignTheme.navy)
+                .fixedSize(horizontal: false, vertical: true)
+            if let detail = packet.message, !detail.isEmpty {
+                Text(detail).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            Text("After Adrian Reese or William McDuffie signs, the dashboard automatically emails the fully signed dispensation and its matching report to the District Deputy. Both attachments must be available before it sends.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+            Text("Recipient: \(packet.recipientName)").font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+            if let email = packet.recipientEmail, !email.isEmpty {
+                Text(email).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("The District Deputy's email is not configured. Automatic delivery is blocked.")
+                    .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        Divider()
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Email attachments").font(.headline)
+            Label(document.isComplete ? "Fully signed dispensation PDF" : "Dispensation PDF awaiting final signature", systemImage: "doc.richtext")
+                .fixedSize(horizontal: false, vertical: true)
+            Text(packet.draft?.filename ?? document.originalName)
+                .font(.callout).foregroundStyle(.secondary)
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Button("View dispensation") { Task { await showDispensation() } }.disabled(busy)
+            if let report = packet.report {
+                Label(report.filename, systemImage: "doc.text")
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                if let source = report.sourceLabel, !source.isEmpty {
+                    Text("Source: \(source)").font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("View supporting report") { Task { await showSupportingReport() } }.disabled(busy)
+            } else {
+                Label("Matching supporting report has not been attached.", systemImage: "paperclip")
+                    .foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        if packet.canAttachReport {
+            Divider()
+            VStack(alignment: .leading, spacing: 12) {
+                Text(packet.report == nil ? "Add the corresponding report" : "Replace the corresponding report")
+                    .font(.headline)
+                Text("Choose the PDF for this dispensation from either report folder. Selecting a file does not upload it.")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Button("Desktop reports") { chooseReport(in: desktopReports) }
+                    Button("Dropbox reports") { chooseReport(in: dropboxReports) }
+                }
+                .disabled(busy)
+                if let selectedReport {
+                    Label(selectedReport.lastPathComponent, systemImage: "doc.badge.plus")
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    Button("Preview selected report") { Task { await showSelectedReport() } }.disabled(busy)
+                    Toggle("I confirm this report corresponds to this dispensation.", isOn: $matchingReportConfirmed)
+                        .toggleStyle(.checkbox).fixedSize(horizontal: false, vertical: true)
+                    Text("Attaching this PDF makes it available for automatic email. If the dispensation is already fully signed, the dashboard sends both attachments immediately.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(document.isComplete ? "Attach report and send automatically" : "Attach report for automatic delivery") {
+                        Task { await uploadReport() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || !matchingReportConfirmed || packet.recipientEmail?.isEmpty != false)
                 }
             }
-            Button("Cancel", role: .cancel) { pendingQueueAction = nil }
-        } message: {
-            Text(pendingQueueAction?.explanation ?? "Review the document before continuing.")
         }
+        if let draft = packet.draft {
+            Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Email summary").font(.headline)
+                Text(draft.subject).font(.callout.weight(.semibold)).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(draft.body).font(.callout).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        if packet.state == "uncertain" {
+            Divider()
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Resolve delivery uncertainty").font(.headline)
+                Text("Check the mail service's delivery records or obtain confirmation before choosing an outcome. An interrupted request does not establish whether an email was sent. The dashboard will not automatically resend this packet while its delivery is uncertain.")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                Text("How did you verify delivery?").font(.callout.weight(.medium))
+                TextEditor(text: $resolutionNote).font(.body)
+                    .frame(height: 100).padding(6)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay { RoundedRectangle(cornerRadius: 6).stroke(.separator) }
+                    .accessibilityLabel("Delivery verification note")
+                Text("10 to 600 characters. \(resolutionNote.trimmingCharacters(in: .whitespacesAndNewlines).count) entered.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Confirm already delivered") { pendingResolution = "delivered" }
+                    .disabled(!canResolve)
+                Button {
+                    pendingResolution = "not_delivered"
+                } label: {
+                    Text("Confirmed not delivered; retry").fixedSize(horizontal: false, vertical: true)
+                }
+                .disabled(!canResolve)
+            }
+        }
+        if packet.canRetry {
+            Text("Retry uses the same two attachments. A packet already sent or awaiting delivery confirmation cannot be sent again here.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+            Button("Retry email delivery") { Task { await retryDelivery() } }
+                .buttonStyle(.borderedProminent).disabled(busy)
+        }
+    }
+
+    private func chooseReport(in directory: URL) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose the report corresponding to this dispensation"
+        panel.message = "The selected PDF will accompany this dispensation in the automatic email to the District Deputy."
+        panel.allowedContentTypes = [.pdf]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if FileManager.default.fileExists(atPath: directory.path) { panel.directoryURL = directory }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        selectedReport = url
+        matchingReportConfirmed = false
+        preview = nil
+        errorMessage = ""
+    }
+
+    @MainActor private func showSelectedReport() async {
+        guard !busy, let selectedReport else { return }
+        busy = true
+        defer { busy = false }
+        let accessed = selectedReport.startAccessingSecurityScopedResource()
+        defer { if accessed { selectedReport.stopAccessingSecurityScopedResource() } }
+        do {
+            let values = try selectedReport.resourceValues(forKeys: [.fileSizeKey])
+            guard let size = values.fileSize, size > 0, size <= 12 * 1024 * 1024 else {
+                throw ClientError.server("Choose a PDF of 12 MB or less.")
+            }
+            let data = try Data(contentsOf: selectedReport)
+            guard let loaded = PDFDocument(data: data) else { throw ClientError.server("The selected report is not a readable PDF.") }
+            preview = loaded
+            previewTitle = selectedReport.lastPathComponent
+            errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func loadPacket() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        errorMessage = ""
+        do { packet = try await model.submissionPacket(documentId: document.id) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func uploadReport() async {
+        guard !busy, matchingReportConfirmed, let selectedReport, packet?.canAttachReport == true else { return }
+        busy = true
+        defer { busy = false }
+        errorMessage = ""
+        let source = selectedReport.path.hasPrefix(dropboxReports.path + "/") ? "Dispensation Reports - Oct 2026"
+            : selectedReport.path.hasPrefix(desktopReports.path + "/") ? "Stone Square Dispensation Reports" : "Selected report PDF"
+        do {
+            packet = try await model.attachSupportingReport(documentId: document.id, url: selectedReport, sourceLabel: source)
+            self.selectedReport = nil
+            matchingReportConfirmed = false
+        } catch {
+            errorMessage = error.localizedDescription
+            // A timeout can occur after the upload was accepted. Reload instead of guessing or resending.
+            packet = try? await model.submissionPacket(documentId: document.id)
+        }
+    }
+
+    @MainActor private func retryDelivery() async {
+        guard !busy, packet?.canRetry == true else { return }
+        busy = true
+        errorMessage = ""
+        let succeeded = await model.submitToDistrictDeputy(documentId: document.id)
+        if !succeeded { errorMessage = model.message }
+        do { packet = try await model.submissionPacket(documentId: document.id) }
+        catch { errorMessage = error.localizedDescription }
+        busy = false
+    }
+
+    @MainActor private func resolveDelivery(outcome: String) async {
+        guard canResolve, packet?.state == "uncertain" else { return }
+        busy = true
+        defer { busy = false }
+        errorMessage = ""
+        do {
+            packet = try await model.resolveSubmission(documentId: document.id, outcome: outcome, note: resolutionNote)
+            resolutionNote = ""
+        } catch {
+            errorMessage = error.localizedDescription
+            // An uncertain write is read back; resolution is never retried automatically.
+            packet = try? await model.submissionPacket(documentId: document.id)
+        }
+    }
+
+    @MainActor private func showDispensation() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let data = try await model.pdfData(document: document)
+            guard let loaded = PDFDocument(data: data) else { throw ClientError.server("The dispensation is not a readable PDF.") }
+            preview = loaded
+            previewTitle = "Dispensation"
+            errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func showSupportingReport() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let data = try await model.supportingReportData(documentId: document.id)
+            guard let loaded = PDFDocument(data: data) else { throw ClientError.server("The supporting report is not a readable PDF.") }
+            preview = loaded
+            previewTitle = packet?.report?.filename ?? "Supporting report"
+            errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
     }
 }
 
@@ -2738,6 +3007,7 @@ struct PDFPreviewView: View {
     let document: LodgeDocument
     @State private var pdfDocument: PDFDocument?
     @State private var errorMessage = ""
+    @State private var showSubmissionPacket = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2747,6 +3017,9 @@ struct PDFPreviewView: View {
                     Text(document.displayTitle).font(.title2.weight(.semibold)).foregroundStyle(SignTheme.navy)
                 }
                 Spacer()
+                if model.user?.role == "owner" && document.isDispensation && !document.isRescinded {
+                    Button("Submission packet") { showSubmissionPacket = true }
+                }
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             .padding(20)
@@ -2763,6 +3036,7 @@ struct PDFPreviewView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 620, idealWidth: 920, minHeight: 540, idealHeight: 720)
+        .sheet(isPresented: $showSubmissionPacket) { DispensationSubmissionPacketView(document: document) }
         .task {
             do {
                 let data = try await model.pdfData(document: document)

@@ -1277,8 +1277,8 @@ try {
 
   /* Self serve accounts. No email is delivered in production, so an officer has to be able to
    * create his own account from one shared code rather than waiting on an invitation. */
-  /* Getting it to the District Deputy. A dispensation is not finished when it is signed, it is
-   * finished when the man who approves it has it in his hand. */
+  /* The District Deputy receives exactly one email with the signed dispensation and its
+   * explicitly associated report. Signature alone must never send an incomplete packet. */
   console.log('\nSubmission to the District Deputy');
   const beforeCount = deliveredMail.length;
   const toSubmit = await api('POST', '/api/dispensations', {
@@ -1289,6 +1289,16 @@ try {
   const early = await api('POST', `/api/documents/${submitId}/submit`, { token: wmToken });
   check('it cannot go to the District Deputy before it is signed',
     early.status === 409, JSON.stringify(early.payload));
+  const preDraft = await api('GET', `/api/documents/${submitId}/submission-draft`, { token: wmToken });
+  check('an unsigned dispensation cannot produce a submission email', preDraft.status === 409);
+  const correspondingReport = new FormData();
+  correspondingReport.append('report', new Blob([PDF], { type: 'application/pdf' }), 'Community Report – October 2026.pdf');
+  correspondingReport.append('sourceLabel', 'Stone Square Dispensation Reports');
+  const attachedReport = await api('PUT', `/api/documents/${submitId}/supporting-report`, { token: wmToken, body: correspondingReport, raw: true });
+  check('the owner associates the exact report before signing', attachedReport.status === 200
+    && attachedReport.payload.packet?.state === 'awaiting_signature', JSON.stringify(attachedReport.payload));
+  const reportDownload = await api('GET', `/api/documents/${submitId}/supporting-report`, { token: wmToken });
+  check('a report with a Unicode title can be opened without a header error', reportDownload.status === 200 && reportDownload.payload.equals(PDF));
   const finalSign = await api('POST', `/api/documents/${submitId}/sign`, {
     token: secToken, body: { consent: true, officerAddress: '722 Banning Dr., Middletown, DE 19709' },
   });
@@ -1297,8 +1307,12 @@ try {
     finalSign.payload.submitted === true, JSON.stringify(finalSign.payload).slice(0, 300));
 
   const fresh = deliveredMail.slice(beforeCount).join('\n---\n');
-  check('an email actually left the server addressed to the District Deputy',
-    /districtdeputy@example\.org/.test(fresh), fresh.slice(0, 200));
+  const deputyMessages = deliveredMail.slice(beforeCount).filter(mail => /^To: districtdeputy@example\.org$/m.test(mail));
+  check('exactly one email left the server addressed to the District Deputy',
+    deputyMessages.length === 1, fresh.slice(0, 200));
+  check('the deputy receives both PDFs in that same email', (deputyMessages[0]?.match(/Content-Type: application\/pdf/g) || []).length === 2);
+  check('the secretary response contains no owner-only report metadata', !finalSign.payload.submissionPacket?.report
+    && !finalSign.payload.submissionPacket?.recipient && !finalSign.payload.submissionPacket?.draft);
   check('it carries the signed PDF as an attachment',
     /application\/pdf/i.test(fresh) && /JVBER/.test(fresh),
     'no PDF part found in the delivered message');
@@ -1318,17 +1332,33 @@ try {
     again.status === 409, JSON.stringify(again.payload));
   const onPurpose = await api('POST', `/api/documents/${submitId}/submit`,
     { token: wmToken, body: { resend: true } });
-  check('but the Master can send it again on purpose',
-    onPurpose.status === 200, JSON.stringify(onPurpose.payload));
+  check('a stale client cannot bypass duplicate protection with resend',
+    onPurpose.status === 409, JSON.stringify(onPurpose.payload));
   const draft = await api('GET', `/api/documents/${submitId}/submission-draft`, { token: wmToken });
   check('the Master can pull a ready written draft for his own mail app',
     draft.status === 200, JSON.stringify(draft.payload).slice(0, 200));
   check('it is addressed to the District Deputy and names the attachment',
     draft.payload.draft?.to === 'districtdeputy@example.org' && /\.pdf$/.test(draft.payload.draft?.filename || ''),
     JSON.stringify(draft.payload.draft).slice(0, 200));
-  check('the draft says the same thing the server sends, so the two never drift',
+  check('the stored email contains the brief summary sent with both documents',
     /review/i.test(draft.payload.draft?.body || '') && /Request for Dispensation/i.test(draft.payload.draft?.subject || ''),
     JSON.stringify(draft.payload.draft).slice(0, 300));
+  const savedPacket = await api('GET', `/api/documents/${submitId}/submission-packet`, { token: wmToken });
+  check('the owner sees a sent packet with both attachment names', savedPacket.payload.packet?.state === 'sent'
+    && savedPacket.payload.packet?.draft?.reportFilename === 'Community Report – October 2026.pdf');
+  const emailCopy = await api('GET', `/api/documents/${submitId}/submission-email`, { token: wmToken });
+  check('the owner can download the exact two-attachment email without sending again', emailCopy.status === 200
+    && (emailCopy.payload.toString().match(/Content-Type: application\/pdf/g) || []).length === 2);
+  for (const path of ['submission-packet', 'submission-email', 'supporting-report']) {
+    check(`the secretary cannot access private submission ${path}`,
+      (await api('GET', `/api/documents/${submitId}/${path}`, { token: secToken })).status === 403);
+  }
+  check('secretaries cannot override submission delivery evidence',
+    (await api('POST', `/api/documents/${submitId}/submission-resolution`, { token: secToken,
+      body: { outcome: 'not_delivered', note: 'Attempted secretary override of delivery.' } })).status === 403);
+  check('a confirmed sent message cannot be resolved and resent by a stale client',
+    (await api('POST', `/api/documents/${submitId}/submission-resolution`, { token: wmToken,
+      body: { outcome: 'not_delivered', note: 'Attempted override of an already confirmed message.' } })).status === 409);
   const viewerDraft = await api('GET', `/api/documents/${submitId}/submission-draft`, { token: viewerToken });
   check('a viewer cannot pull the draft', viewerDraft.status === 403, String(viewerDraft.status));
   const uploadedDraft = await api('GET', `/api/documents/${docId}/submission-draft`, { token: wmToken });

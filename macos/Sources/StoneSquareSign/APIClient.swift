@@ -887,8 +887,8 @@ final class AppModel: ObservableObject {
         return success
     }
 
-    /* Sends, or re-sends, a completed dispensation to the District Deputy for review. */
-    func submitToDistrictDeputy(documentId: String, resend: Bool = false) async -> Bool {
+    /* Retries only a definitively failed, immutable two-attachment packet. */
+    func submitToDistrictDeputy(documentId: String) async -> Bool {
         guard user?.role == "owner" else {
             message = "This account cannot submit documents."
             isError = true
@@ -896,7 +896,7 @@ final class AppModel: ObservableObject {
         }
         var success = false
         await perform {
-            let body = try JSONSerialization.data(withJSONObject: ["resend": resend])
+            let body = Data("{}".utf8)
             let response: MessageResponse = try await self.request(
                 "/api/documents/\(documentId)/submit", method: "POST", body: body)
             self.message = ([response.message] + (response.notificationWarnings ?? [])).joined(separator: " ")
@@ -1210,58 +1210,76 @@ final class AppModel: ObservableObject {
         return data
     }
 
-    /* Hands a completed dispensation to the Master's own mail client as a draft, with the executed
-     * PDF genuinely attached.
-     *
-     * The web page cannot do this: mailto has no attachment field anywhere in the URL scheme, so
-     * the browser can only download the file and let him drag it in. A native app can use the
-     * macOS share sheet, which carries the file itself. If the share sheet is unavailable we fall
-     * back to the browser's behaviour rather than failing, so the Master always gets somewhere.
-     */
-    @discardableResult
-    func draftToDistrictDeputy(document: LodgeDocument) async -> Bool {
+    func submissionPacket(documentId: String) async throws -> DispensationSubmissionPacket {
         guard user?.role == "owner" else {
-            message = "This account cannot submit documents."
-            isError = true
-            return false
+            throw ClientError.server("Only the Worshipful Master can manage the submission packet.")
         }
-        var success = false
-        await perform {
-            let response: SubmissionDraftResponse = try await self.request(
-                "/api/documents/\(document.id)/submission-draft")
-            let draft = response.draft
-            let pdf = try await self.pdfData(document: document)
-            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(draft.filename)
-            try pdf.write(to: fileURL, options: .atomic)
+        let response: DispensationSubmissionPacketResponse = try await request(
+            "/api/documents/\(documentId)/submission-packet")
+        return response.packet
+    }
 
-            await MainActor.run {
-                let service = NSSharingService(named: .composeEmail)
-                service?.recipients = [draft.to]
-                service?.subject = draft.subject
-                let items: [Any] = [draft.body, fileURL]
-                if service?.canPerform(withItems: items) == true {
-                    service?.perform(withItems: items)
-                    self.message = "Draft opened for \(draft.name) with \(draft.filename) attached. Review it and send."
-                } else {
-                    /* No share sheet available. Put the PDF somewhere he can find it and open the
-                     * note anyway, so he is one drag from sending rather than stuck. */
-                    let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                    let saved = downloads?.appendingPathComponent(draft.filename)
-                    if let saved { try? pdf.write(to: saved, options: .atomic) }
-                    var components = URLComponents()
-                    components.scheme = "mailto"
-                    components.path = draft.to
-                    components.queryItems = [
-                        URLQueryItem(name: "subject", value: draft.subject),
-                        URLQueryItem(name: "body", value: draft.body),
-                    ]
-                    if let mailto = components.url { NSWorkspace.shared.open(mailto) }
-                    self.message = "\(draft.filename) is in your Downloads and the note is open. Drag the PDF in and send."
-                }
-            }
-            success = true
+    func resolveSubmission(documentId: String, outcome: String, note: String) async throws -> DispensationSubmissionPacket {
+        guard user?.role == "owner" else {
+            throw ClientError.server("Only the Worshipful Master can resolve uncertain delivery.")
         }
-        return success
+        let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard ["delivered", "not_delivered"].contains(outcome), (10...600).contains(note.count) else {
+            throw ClientError.rejected("Record how delivery was checked in 10 to 600 characters.")
+        }
+        let body = try JSONSerialization.data(withJSONObject: ["outcome": outcome, "note": note])
+        let response: DispensationSubmissionPacketResponse = try await request(
+            "/api/documents/\(documentId)/submission-resolution", method: "POST", body: body)
+        await refresh(silent: true)
+        return response.packet
+    }
+
+    func attachSupportingReport(documentId: String, url: URL, sourceLabel: String) async throws -> DispensationSubmissionPacket {
+        guard user?.role == "owner" else {
+            throw ClientError.server("Only the Worshipful Master can attach the supporting report.")
+        }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        guard values.isRegularFile == true, let size = values.fileSize,
+              size > 0, size <= 12 * 1024 * 1024 else {
+            throw ClientError.server("Choose a PDF of 12 MB or less.")
+        }
+        let report = try Data(contentsOf: url)
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        func add(_ value: String) { body.append(Data(value.utf8)) }
+        // Prevent a selected filename from changing the multipart headers.
+        let filename = url.lastPathComponent.replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: "\"", with: "_")
+            .replacingOccurrences(of: "\r", with: "_")
+            .replacingOccurrences(of: "\n", with: "_")
+        add("--\(boundary)\r\nContent-Disposition: form-data; name=\"sourceLabel\"\r\n\r\n\(sourceLabel)\r\n")
+        add("--\(boundary)\r\nContent-Disposition: form-data; name=\"report\"; filename=\"\(filename)\"\r\nContent-Type: application/pdf\r\n\r\n")
+        body.append(report)
+        add("\r\n--\(boundary)--\r\n")
+        let response: DispensationSubmissionPacketResponse = try await request(
+            "/api/documents/\(documentId)/supporting-report", method: "PUT", body: body,
+            contentType: "multipart/form-data; boundary=\(boundary)")
+        await refresh(silent: true)
+        return response.packet
+    }
+
+    func supportingReportData(documentId: String) async throws -> Data {
+        guard user?.role == "owner" else {
+            throw ClientError.server("Only the Worshipful Master can view the submission packet.")
+        }
+        guard let baseURL, let url = URL(string: "/api/documents/\(documentId)/supporting-report", relativeTo: baseURL) else {
+            throw ClientError.invalidServer
+        }
+        var request = URLRequest(url: url)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await ReliableTransport.perform(session: session, request: request,
+            path: "/api/documents/\(documentId)/supporting-report", token: token)
+        guard (200..<300).contains(response.statusCode) else {
+            throw ClientError.server("The supporting report could not be loaded.")
+        }
+        return data
     }
 
     /* Where a seat stands. Mirrors the same three way test the web page makes, so the two

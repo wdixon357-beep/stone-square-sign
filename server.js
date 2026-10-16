@@ -33,6 +33,7 @@ import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
 import { mountOfficerReportRoutes } from './officer-report-routes.js';
 import { mountCorrespondenceRoutes } from './correspondence.js';
+import { createDispensationSubmissions, initDispensationSubmissionSchema } from './dispensation-submissions.js';
 import { mountMemberFeatures } from './member-features.js';
 
 dotenv.config();
@@ -195,13 +196,14 @@ const createTransporter = () => {
     host,
     port: Number(process.env.SMTP_PORT || 587),
     secure: process.env.SMTP_SECURE === 'true',
+    connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 60_000,
     auth: { user, pass },
   });
 };
 
 const transporter = createTransporter();
 
-const sendEmail = async ({ to, subject, text, attachment }) => {
+const sendEmail = async ({ to, subject, text, attachment, attachments, messageId, raw }) => {
   if (!to) return false;
   if (!transporter) {
     if (!IS_PRODUCTION) console.log(`[mail-preview] ${to}: ${subject}`);
@@ -211,11 +213,11 @@ const sendEmail = async ({ to, subject, text, attachment }) => {
     from: process.env.MAIL_FROM,
     to,
     subject,
-    text,
-    // attachments come from the database as bytes, there is no file on disk to point at
-    attachments: attachment?.content
-      ? [{ filename: attachment.filename || 'document.pdf', content: attachment.content }]
-      : [],
+    ...(raw ? { raw, envelope: { from: transporter.options.auth.user, to: [to] } } : { text,
+      attachments: attachments || (attachment?.content
+        ? [{ filename: attachment.filename || 'document.pdf', content: attachment.content }]
+        : []) }),
+    ...(messageId ? { messageId } : {}),
   });
   return true;
 };
@@ -562,89 +564,9 @@ const addAudit = async ({
   }
 };
 
-/* Sends a fully executed dispensation to the District Deputy for review.
- *
- * Called automatically the moment the last required signature lands, and available by hand for
- * anything signed before this existed or where the first attempt failed. The outcome is written
- * to the document either way. That matters more than it looks: every invitation this app ever
- * "sent" was silently swallowed because no mail was configured, and nobody knew for weeks. A
- * dispensation that quietly fails to reach the Deputy misses its date, so this records the
- * failure and the reason where the Master will see it.
- */
-/* One place that composes the note to the District Deputy, so the copy the server sends and the
- * draft the Master opens in his own mail client are word for word the same. */
-const districtDeputyMessage = (document) => {
-  const title = document.title || document.original_name || 'Dispensation';
-  const fileName = /\.pdf$/i.test(document.original_name || '')
-    ? document.original_name
-    : `${String(title).replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 90) || 'dispensation'}.pdf`;
-  const request = document.parsed_preview
-    ? String(document.parsed_preview).split('\n')[0].slice(0, 300)
-    : title;
-  return {
-    to: DDGM_EMAIL,
-    name: DDGM_NAME,
-    filename: fileName,
-    subject: `Request for Dispensation for your review: ${title}`,
-    body: [
-      `${DDGM_NAME},`,
-      '',
-      `Attached is a Request for Dispensation from ${LODGE_NAME}, executed by the Worshipful Master and the Secretary's office.`,
-      '',
-      `Request: ${request}`,
-      '',
-      'It is submitted for your review and approval, and for onward routing to the Grand Lodge as you see fit. Please let me know if anything further is required from the Lodge.',
-      '',
-      'Respectfully and fraternally,',
-      'W. Aaron Dixon-Saunders',
-      `Worshipful Master, ${LODGE_NAME}`,
-    ].join('\n'),
-  };
-};
-
-const submitToDistrictDeputy = async (document, { actorUserId = null, baseUrl = '', ip = '', userAgent = '' } = {}) => {
-  const attemptedAt = nowIso();
-  if (!DDGM_EMAIL) {
-    const reason = 'No District Deputy email is configured, so nothing was sent.';
-    await dbRun('UPDATE documents SET submitted_error = ? WHERE id = ?', [reason, document.id]);
-    return { sent: false, reason };
-  }
-  const pdf = asBuffer(document.signed_bytes) || asBuffer(document.file_bytes);
-  if (!pdf?.length) {
-    const reason = 'The executed PDF is missing, so nothing was sent.';
-    await dbRun('UPDATE documents SET submitted_error = ? WHERE id = ?', [reason, document.id]);
-    return { sent: false, reason };
-  }
-  const { subject, body, filename: fileName, to } = districtDeputyMessage(document);
-  try {
-    const sent = await sendEmail({
-      to,
-      subject,
-      text: body,
-      attachment: { filename: fileName, content: pdf },
-    });
-    if (!sent) {
-      const reason = 'Email is not configured on the server, so nothing was sent. Add SMTP_PASS and try again.';
-      await dbRun('UPDATE documents SET submitted_error = ? WHERE id = ?', [reason, document.id]);
-      await addAudit({ userId: actorUserId, documentId: document.id, action: 'dispensation_submission_failed',
-        ip, userAgent, details: { to: DDGM_EMAIL, reason } });
-      return { sent: false, reason };
-    }
-    await dbRun(
-      'UPDATE documents SET submitted_at = ?, submitted_to = ?, submitted_error = NULL WHERE id = ?',
-      [attemptedAt, DDGM_EMAIL, document.id],
-    );
-    await addAudit({ userId: actorUserId, documentId: document.id, action: 'dispensation_submitted_to_district_deputy',
-      ip, userAgent, details: { to: DDGM_EMAIL, name: DDGM_NAME, attachedAs: fileName } });
-    return { sent: true, to: DDGM_EMAIL, name: DDGM_NAME, at: attemptedAt };
-  } catch (error) {
-    const reason = error.message || 'The mail server refused the message.';
-    await dbRun('UPDATE documents SET submitted_error = ? WHERE id = ?', [reason, document.id]);
-    await addAudit({ userId: actorUserId, documentId: document.id, action: 'dispensation_submission_failed',
-      ip, userAgent, details: { to: DDGM_EMAIL, reason } });
-    return { sent: false, reason };
-  }
-};
+const dispensationSubmissions = createDispensationSubmissions({
+  sendEmail, addAudit, recipient: { to: DDGM_EMAIL, name: DDGM_NAME }, lodgeName: LODGE_NAME, mailFrom: process.env.MAIL_FROM,
+});
 
 const requestBaseUrl = (req) =>
   String(process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
@@ -2545,7 +2467,7 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
   try {
     const rows = await dbAll(
       `SELECT d.id, d.title, d.original_name, d.status, d.created_at, d.updated_at,
-              d.completed_at, d.template_kind, d.submitted_at, d.submitted_to, d.submitted_error,
+              d.completed_at, d.template_kind, d.owner_user_id, d.submitted_at, d.submitted_to, d.submitted_error,
               d.approval_status, d.approved_by, d.approved_on, d.approval_source,
               u.name AS owner_name, u.email AS owner_email
        FROM documents d LEFT JOIN users u ON u.id = d.owner_user_id
@@ -2588,8 +2510,12 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
           needsSignature: false,
         });
       } else {
+        const packet = req.user.role === 'owner' && row.owner_user_id === req.user.id
+          && row.template_kind === 'dispensation_v1' && row.status !== 'rescinded'
+          ? await dispensationSubmissions.packet(row.id, req.user) : null;
         documents.push({
           ...row,
+          ...(packet ? { submission_state: packet.state, submission_message: packet.message } : {}),
           signers,
           needsSignature: row.status !== 'rescinded' && signers.some((signer) =>
             !signer.signed_at && !signer.superseded_at &&
@@ -3375,30 +3301,28 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
         [documentId],
       );
       await sendCompletionNotice(completedDocument, completeSigners, asBuffer(completedDocument.signed_bytes));
-      /* A dispensation is not finished when it is signed, it is finished when the District
-       * Deputy has it. Only dispensations go, and only once. */
       if (completedDocument.template_kind === 'dispensation_v1' && !completedDocument.submitted_at) {
-        submission = await submitToDistrictDeputy(completedDocument, {
-          actorUserId: req.user.id,
-          baseUrl: requestBaseUrl(req),
-          ip: req.ip,
-          userAgent: req.get('user-agent') || '',
-        });
+        try {
+          submission = await dispensationSubmissions.deliver(documentId, {
+            actorUserId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || '',
+          });
+        } catch (error) {
+          // Delivery must never undo an already captured signature.
+          console.warn('Dispensation submission could not be prepared:', error.message);
+          submission = { state: 'failed', message: 'The signature is saved. The submission needs attention in the document queue.' };
+        }
       }
     }
     broadcast('queue_changed', { reason: 'document_signed', documentId, status });
-    const submissionNote = submission
-      ? (submission.sent
-        ? ` It has been emailed to ${submission.name} for review.`
-        : ` It could NOT be emailed to the District Deputy: ${submission.reason}`)
-      : '';
+    const submissionNote = submission ? ` ${submission.message}` : '';
     res.json({
       message: status === 'completed'
         ? `Document completed. Record copies are being delivered.${submissionNote}`
         : 'Signature captured.',
       status,
-      submitted: submission ? submission.sent : null,
-      submissionError: submission && !submission.sent ? submission.reason : null,
+      submitted: submission ? submission.state === 'sent' : null,
+      submissionError: submission && ['failed', 'uncertain'].includes(submission.state) ? submission.message : null,
+      submissionPacket: submission ? { state: submission.state, message: submission.message } : null,
       nextStep: remaining === 0 ? 'No signatures remain.' : `${remaining} signature remains.`,
     });
   } catch (error) {
@@ -3406,31 +3330,7 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
   }
 });
 
-/* The draft the Master opens in his own mail client.
- *
- * Worth having even once the server can send for itself: mail from his own mailbox reaches the
- * Deputy from the address he already corresponds with, the reply comes back to him rather than to
- * a server mailbox nobody watches, and it lands in his Sent folder as the Lodge's own record.
- *
- * No attachment field exists in mailto, that is the URL scheme and not a client limitation, so the
- * clients download the executed PDF alongside opening the draft. */
-app.get('/api/documents/:id/submission-draft', requireAuth, requireOwner, async (req, res, next) => {
-  try {
-    const document = await dbGet('SELECT * FROM documents WHERE id = ?', [req.params.id]);
-    if (!document) return res.status(404).json({ error: 'Document not found.' });
-    if (document.owner_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only the document owner can draft this submission.' });
-    }
-    if (document.template_kind !== 'dispensation_v1') {
-      return res.status(409).json({ error: 'Only dispensations go to the District Deputy.' });
-    }
-    const draft = districtDeputyMessage(document);
-    if (!draft.to) return res.status(409).json({ error: 'No District Deputy email is configured.' });
-    return res.json({ draft: { ...draft, alreadySent: document.submitted_at || null } });
-  } catch (error) {
-    return next(error);
-  }
-});
+dispensationSubmissions.mount(app, { requireAuth, requireOwner, upload, broadcast, rateLimit });
 
 const APPROVAL_STATUSES = new Set(['approved', 'disapproved', 'withdrawn', 'pending']);
 /* Text message is here because it is what this District actually does. Both of Cooke's
@@ -3553,39 +3453,6 @@ app.get('/api/approvals', requireAuth, (req, res, next) => {
   }
 });
 
-/* Sends, or re-sends, a completed dispensation to the District Deputy by hand. Needed for
- * anything that was signed before this existed, and for the day the mail server has a bad hour. */
-app.post('/api/documents/:id/submit', requireAuth, requireOwner, rateLimit({ key: 'submit-ddgm', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
-  try {
-    const document = await dbGet('SELECT * FROM documents WHERE id = ?', [req.params.id]);
-    if (!document) return res.status(404).json({ error: 'Document not found.' });
-    if (document.owner_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Only the document owner can submit this document.' });
-    }
-    if (document.status === 'rescinded') return res.status(409).json({ error: 'This document was rescinded.' });
-    if (document.status !== 'completed') {
-      return res.status(409).json({ error: 'Every signature has to be on it before it goes to the District Deputy.' });
-    }
-    const force = req.body?.resend === true;
-    if (document.submitted_at && !force) {
-      return res.status(409).json({
-        error: `This was already sent to the District Deputy on ${document.submitted_at}. Send it again only if you mean to.`,
-      });
-    }
-    const result = await submitToDistrictDeputy(document, {
-      actorUserId: req.user.id,
-      baseUrl: requestBaseUrl(req),
-      ip: req.ip,
-      userAgent: req.get('user-agent') || '',
-    });
-    broadcast('queue_changed', { reason: 'document_submitted', documentId: document.id });
-    if (!result.sent) return res.status(502).json({ error: result.reason });
-    return res.json({ message: `Sent to ${result.name} for review, with the signed PDF attached.` });
-  } catch (error) {
-    return next(error);
-  }
-});
-
 app.post('/api/documents/:id/rescind', requireAuth, requireOwner, rateLimit({ key: 'rescind', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
   try {
     const reason = String(req.body?.reason || '').trim().slice(0, 500);
@@ -3594,6 +3461,8 @@ app.post('/api/documents/:id/rescind', requireAuth, requireOwner, rateLimit({ ke
       if (!document) throw httpError(404, 'Document not found.');
       if (document.owner_user_id !== req.user.id) throw httpError(403, 'Only the document owner can rescind this document.');
       if (document.status === 'rescinded') throw httpError(409, 'This document has already been rescinded.');
+      const delivery = await dbGet('SELECT delivery_state FROM dispensation_submissions WHERE document_id = ? FOR UPDATE', [document.id]);
+      if (delivery?.delivery_state === 'sending') throw httpError(409, 'This dispensation is being emailed. Wait for delivery to finish before rescinding it.');
       const rescindedAt = nowIso();
       await dbRun('UPDATE documents SET status = ?, updated_at = ? WHERE id = ?', ['rescinded', rescindedAt, document.id]);
       await addAudit({
@@ -3754,6 +3623,7 @@ app.use((error, req, res, _next) => {
 validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
+await initDispensationSubmissionSchema();
 await ensureBrotherSelfServiceAccess();
 await grantTreasuryDuesAccessOnce();
 await initializeBuildingCalendar();
@@ -3761,6 +3631,8 @@ await initAgendaSchema();
 await initTreasurySchema();
 await initGenerationSchema();
 await initActivitySchema();
+
+dispensationSubmissions.startWorker(broadcast);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Stone Square Sign is running at http://localhost:${PORT}`);

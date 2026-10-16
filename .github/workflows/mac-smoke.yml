@@ -53,6 +53,7 @@ jobs:
           node test/mac-session.mjs
           node test/mac-minutes-dates.mjs
           node test/mac-report.mjs
+          node test/mac-submission.mjs
 
       - name: Compile the complete Mac app
         run: node test/mac-compiles.mjs

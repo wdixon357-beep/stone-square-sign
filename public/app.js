@@ -2768,12 +2768,14 @@ const renderDocuments = async () => {
         signButton.addEventListener('click', () => openSignerModal(doc.id, doc.title));
         actions.appendChild(signButton);
       }
-      /* A completed dispensation is not done until the District Deputy has it. Say plainly
-       * whether it went, because a silent failure is how one misses its date. */
-      if (!['viewer', 'warden'].includes(state.user?.role) && doc.status === 'completed' && doc.template_kind === 'dispensation_v1') {
+      /* Keep the required report and delivery state visible in the queue. */
+      if (state.user?.role === 'owner' && doc.status !== 'rescinded' && doc.template_kind === 'dispensation_v1') {
         const note = window.document.createElement('p');
         note.className = 'queue-submission';
-        if (doc.submitted_at) {
+        if (doc.submission_message) {
+          note.textContent = doc.submission_message;
+          if (['awaiting_report', 'failed', 'uncertain'].includes(doc.submission_state)) note.classList.add('queue-submission-warn');
+        } else if (doc.submitted_at) {
           note.textContent = `Sent to the District Deputy ${new Date(doc.submitted_at).toLocaleString()}`;
         } else {
           note.textContent = doc.submitted_error
@@ -2783,56 +2785,30 @@ const renderDocuments = async () => {
         }
         article.querySelector('.doc-main').appendChild(note);
       }
-      if (state.user?.role === 'owner' && doc.status === 'completed'
+      if (state.user?.role === 'owner' && doc.status !== 'rescinded'
           && doc.template_kind === 'dispensation_v1') {
-        /* Opens his own mail client with the note already written, and downloads the executed PDF
-         * at the same time so it is sitting in Downloads ready to drag in. mailto has no
-         * attachment field, so the download is the closest thing to attaching it for him. */
-        const draftButton = window.document.createElement('button');
-        draftButton.className = 'secondary compact';
-        draftButton.textContent = 'Draft in my mail app';
-        draftButton.addEventListener('click', async () => {
-          try {
-            const { draft } = await apiFetch(`/api/documents/${doc.id}/submission-draft`);
-            const blob = await apiFetch(`/api/documents/${doc.id}/file`);
-            const url = URL.createObjectURL(blob);
-            const link = window.document.createElement('a');
-            link.href = url;
-            link.download = draft.filename;
-            window.document.body.appendChild(link);
-            link.click();
-            link.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 30000);
-            setMessage(docMessage,
-              `${draft.filename} has been downloaded. Your mail app is opening with the note written. Drag the PDF in and send.`);
-            window.location.href = `mailto:${encodeURIComponent(draft.to)}`
-              + `?subject=${encodeURIComponent(draft.subject)}`
-              + `&body=${encodeURIComponent(draft.body)}`;
-          } catch (error) {
-            setMessage(docMessage, error.message, true);
+        const deliveryButton = window.document.createElement('button');
+        deliveryButton.className = 'secondary compact';
+        deliveryButton.textContent = 'Report and delivery';
+        deliveryButton.setAttribute('aria-expanded', 'false');
+        let deliveryPanel;
+        deliveryButton.addEventListener('click', async () => {
+          if (deliveryPanel) {
+            deliveryPanel.hidden = !deliveryPanel.hidden;
+            deliveryButton.setAttribute('aria-expanded', String(!deliveryPanel.hidden));
+            return;
           }
-        });
-        actions.appendChild(draftButton);
-      }
-      if (state.user?.role === 'owner' && doc.status === 'completed'
-          && doc.template_kind === 'dispensation_v1') {
-        const sendButton = window.document.createElement('button');
-        sendButton.className = doc.submitted_at ? 'secondary compact' : 'primary compact';
-        sendButton.textContent = doc.submitted_at ? 'Send again' : 'Send to the District Deputy';
-        sendButton.addEventListener('click', async () => {
-          if (doc.submitted_at
-              && !window.confirm('This already went to the District Deputy. Send it to him again?')) return;
+          deliveryButton.disabled = true;
           try {
-            const payload = await apiFetch(`/api/documents/${doc.id}/submit`, {
-              method: 'POST', body: JSON.stringify({ resend: Boolean(doc.submitted_at) }),
-            });
-            setNotificationMessage(docMessage, payload.message || 'Sent to the District Deputy.', payload);
-            await renderDocuments();
-          } catch (error) {
-            setMessage(docMessage, error.message, true);
-          }
+            const { renderDispensationSubmission } = await import(`/dispensation-submission.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`);
+            deliveryPanel = window.document.createElement('div');
+            article.appendChild(deliveryPanel);
+            deliveryButton.setAttribute('aria-expanded', 'true');
+            await renderDispensationSubmission(deliveryPanel, { document: doc, apiFetch, previewPdf: showPdfBlob });
+          } catch (error) { setMessage(docMessage, error.message, true); }
+          finally { deliveryButton.disabled = false; }
         });
-        actions.appendChild(sendButton);
+        actions.appendChild(deliveryButton);
       }
       /* Only worth offering while exactly one of the two Secretaries is on it. */
       const secretaryRoles = ['secretary', 'assistant_secretary'];
