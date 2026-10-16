@@ -86,6 +86,19 @@ final class SubmissionFixture: URLProtocol {
         precondition(!lockedPacket.canSaveSupportingReport)
         print("PASS: native states preserve historical attempts and show disabled sending even when an older service omits the delivery flag")
 
+        let documentDecoder = JSONDecoder()
+        documentDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let documentJSON = #"{"id":"corrected-fixture","title":"Synthetic dispensation","original_name":"fixture.pdf","status":"completed","created_at":"2026-10-16T18:00:00.000Z","updated_at":"2026-10-16T20:00:00.000Z","signers":[],"needs_signature":false,"template_kind":"dispensation_v1","submitted_at":"2026-10-16T19:00:00.000Z","submitted_to":"deputy@example.invalid"}"#
+        let legacyDocument = try documentDecoder.decode(LodgeDocument.self, from: Data(documentJSON.utf8))
+        precondition(legacyDocument.signatureCorrectedAt == nil)
+        precondition(legacyDocument.submittedAt == "2026-10-16T19:00:00.000Z")
+        var correctedJSON = try JSONSerialization.jsonObject(with: Data(documentJSON.utf8)) as! [String: Any]
+        correctedJSON["signature_corrected_at"] = "2026-10-16T20:00:00.000Z"
+        let correctedDocument = try documentDecoder.decode(LodgeDocument.self, from: JSONSerialization.data(withJSONObject: correctedJSON))
+        precondition(correctedDocument.signatureCorrectedAt == "2026-10-16T20:00:00.000Z")
+        precondition(correctedDocument.submittedAt == legacyDocument.submittedAt && correctedDocument.submittedTo == legacyDocument.submittedTo)
+        print("PASS: native signature correction metadata decodes with legacy compatibility and preserves the earlier PDF email history")
+
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("sign-native-packet-" + UUID().uuidString)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         defer { try? FileManager.default.removeItem(at:directory) }

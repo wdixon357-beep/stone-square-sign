@@ -2516,7 +2516,8 @@ app.get('/api/documents', requireAuth, async (req, res, next) => {
           ? await dispensationSubmissions.packet(row.id, req.user) : null;
         documents.push({
           ...row,
-          ...(packet ? { submission_state: packet.state, submission_message: packet.message } : {}),
+          ...(packet ? { submission_state: packet.state, submission_message: packet.message,
+            signature_corrected_at: packet.correction?.correctedAt || null } : {}),
           signers,
           needsSignature: row.status !== 'rescinded' && signers.some((signer) =>
             !signer.signed_at && !signer.superseded_at &&

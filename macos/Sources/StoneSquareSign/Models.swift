@@ -126,6 +126,7 @@ struct LodgeDocument: Codable, Identifiable {
     let submittedAt: String?
     let submittedTo: String?
     let submittedError: String?
+    var signatureCorrectedAt: String? = nil
     var submissionState: String? = nil
     var submissionMessage: String? = nil
 

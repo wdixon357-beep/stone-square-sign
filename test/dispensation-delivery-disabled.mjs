@@ -74,6 +74,22 @@ try {
   }
   const packet = await request('submission-packet');
   assert.equal((await packet.json()).packet.automaticDeliveryEnabled, false);
+  const signer = await dbRun(`INSERT INTO document_signers(document_id,user_id,signer_role,signer_name,signed_at,signature_bytes)
+    VALUES (?,?,'worshipful_master','Fixture Owner',?,?)`, ['completed', owner.id, timestamp, bytes]);
+  await dbRun(`INSERT INTO owner_signature_revisions(id,document_id,owner_user_id,wm_signer_id,
+    before_pdf_bytes,before_signature_bytes,before_pdf_sha256,before_signature_sha256,
+    after_pdf_sha256,after_signature_sha256,source_sha256,original_file_sha256,original_signed_at,
+    authorization_note,corrected_at,details_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ['fixture-revision', 'completed', owner.id, signer.lastID, bytes, bytes, digest, digest, digest,
+      digest, digest, digest, timestamp, 'Fixture owner authorized the visual correction.', timestamp, '{}']);
+  const correctedPacket = await service.packet('completed', owner);
+  assert.equal(correctedPacket.correction.correctedAt, timestamp);
+  assert.equal(correctedPacket.correction.previousDeliveryAppliesToPreviousPdf, true);
+  assert.equal(correctedPacket.correction.correctedPdfSha256, digest);
+  assert.equal(correctedPacket.correction.currentPdfSha256, undefined, 'A revision hash must not claim to include a later secretary signature.');
+  assert.match(correctedPacket.message, /Earlier email history refers to the previous PDF/);
+  assert.equal(correctedPacket.automaticDeliveryEnabled, false);
+  assert.equal(correctedPacket.draft, null, 'Signature corrections never recreate an outgoing email.');
   const savedReport = await request('supporting-report');
   assert.equal(savedReport.status, 200); assert.deepEqual(Buffer.from(await savedReport.arrayBuffer()), bytes);
   assert.equal((await request('submit', { method: 'POST', headers: { 'x-fixture-user': '' } })).status, 401);

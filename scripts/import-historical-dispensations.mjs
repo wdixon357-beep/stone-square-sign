@@ -61,9 +61,7 @@ try {
   await dbRun(
     `INSERT INTO profile_signatures (user_id, signature_bytes, signature_type, style_name, updated_at)
      VALUES (?, ?, 'drawn', 'historical-docusign-original', ?)
-     ON CONFLICT(user_id) DO UPDATE SET signature_bytes = excluded.signature_bytes,
-       signature_type = excluded.signature_type, style_name = excluded.style_name,
-       updated_at = excluded.updated_at`,
+     ON CONFLICT(user_id) DO NOTHING`,
     [owner.id, signature, new Date().toISOString()],
   );
 

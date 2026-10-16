@@ -53,6 +53,13 @@ hashes, message IDs, and audit history preserved. Automatic queue processing,
 retry, delivery-resolution, and email generation endpoints are disconnected.
 Synthetic tests use an isolated database and mail server.
 
+Visual corrections to the owner's signature preserve the earlier executed PDF and
+captured signature in an append-only revision archive. Only the owner's matching
+signature image can change. Other signers, original files, approvals, attestation
+dates, and earlier delivery evidence remain intact. The queue identifies corrected
+PDFs so an earlier email submission is not mistaken for delivery of the revision.
+Historical imports never replace an existing saved signature profile.
+
 ## Report Generator
 
 Home and the sidebar open the shared Report Generator inside the web dashboard and

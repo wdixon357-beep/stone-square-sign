@@ -2571,8 +2571,16 @@ struct DocumentRow: View {
 
     @ViewBuilder private var deliveryStatus: some View {
         if document.isDispensation && !document.isRescinded {
+            if model.user?.role == "owner", let correctedAt = document.signatureCorrectedAt {
+                Text("Signature corrected. Earlier email history refers to the previous PDF.")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Corrected \(LodgeDateTime.display(correctedAt))")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let sentAt = document.submittedAt {
-                Text("Email submission recorded \(LodgeDateTime.display(sentAt))")
+                Text("\(model.user?.role == "owner" && document.signatureCorrectedAt != nil ? "Earlier PDF email submission recorded" : "Email submission recorded") \(LodgeDateTime.display(sentAt))")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if model.user?.role == "owner", let detail = document.submissionMessage, !detail.isEmpty {

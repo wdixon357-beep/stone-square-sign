@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 import { PDFDocument } from 'pdf-lib';
 import { dbGet, dbRun, dbAll, withTransaction } from './db.js';
+import { initOwnerSignatureRevisionSchema } from './owner-signature-revisions.js';
 
 export const MAX_SUPPORTING_REPORT_BYTES = 12 * 1024 * 1024;
 export const DISPENSATION_DELIVERY_DISABLED_MESSAGE = 'Automatic emailing to the District Deputy is turned off. Download the signed dispensation and supporting report, review them, and send them from your email app.';
@@ -40,6 +41,7 @@ async function markStaleDeliveries(audit) {
 }
 
 export async function initDispensationSubmissionSchema() {
+  await initOwnerSignatureRevisionSchema();
   await dbRun(`CREATE TABLE IF NOT EXISTS dispensation_submissions (
     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     report_bytes BYTEA, report_filename TEXT, report_sha256 TEXT, source_label TEXT,
@@ -90,6 +92,8 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
 
   async function packet(id, user) {
     const document = await documentFor(id, user);
+    const correction = await dbGet(`SELECT corrected_at, before_pdf_sha256, after_pdf_sha256
+      FROM owner_signature_revisions WHERE document_id = ? ORDER BY corrected_at DESC, id DESC LIMIT 1`, [id]);
     const row = await dbGet(`SELECT report_filename, report_sha256, source_label, report_added_at,
       message_json, prepared_at, delivery_state, delivery_error, message_id, sent_at, attempted_at
       , delivery_confirmed_at, delivery_confirmation_outcome
@@ -119,8 +123,10 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       delivery: { sentAt: row?.sent_at || document.submitted_at || null, to: draft?.to || document.submitted_to || null,
         messageId: row?.message_id || null, confirmedAt: row?.delivery_confirmed_at || null,
         confirmationOutcome: row?.delivery_confirmation_outcome || null, attemptedAt: row?.attempted_at || null },
-      message: automaticDeliveryEnabled ? messages[state]
-        : `${state === 'sent' ? 'A previous email submission is recorded. This does not confirm receipt. ' : ['sending', 'uncertain'].includes(state) ? 'A previous delivery attempt remains unconfirmed. ' : ''}${DISPENSATION_DELIVERY_DISABLED_MESSAGE}`,
+      correction: correction ? { correctedAt: correction.corrected_at, previousPdfSha256: correction.before_pdf_sha256,
+        correctedPdfSha256: correction.after_pdf_sha256, previousDeliveryAppliesToPreviousPdf: true } : null,
+      message: `${correction ? 'The Worshipful Master signature was corrected. Earlier email history refers to the previous PDF. ' : ''}${automaticDeliveryEnabled ? messages[state]
+        : `${state === 'sent' ? 'A previous email submission is recorded. This does not confirm receipt. ' : ['sending', 'uncertain'].includes(state) ? 'A previous delivery attempt remains unconfirmed. ' : ''}${DISPENSATION_DELIVERY_DISABLED_MESSAGE}`}`,
     };
   }
 
