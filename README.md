@@ -39,8 +39,12 @@ Different matching files wait for the owner to select the correct report. Identi
 copies in both folders are treated as one report. Run
 `node scripts/sync-dispensation-reports.mjs` for a read-only preview; `--apply` uploads
 eligible reports using the owner's existing Mac session. The installer
-`zsh scripts/install-dispensation-report-sync.sh` checks those folders every minute
-while this Mac is awake. Once uploaded, the service holds the report in the database
+`zsh scripts/install-dispensation-report-sync.sh` can check those folders every minute
+while this Mac is awake, provided macOS permits the background process to read the
+existing app session and the report folders. The installer disables the job if its
+first run fails. Do not broaden system access to make it work; use the dashboard
+file chooser instead. Dropbox cloud files also require an active Dropbox sync
+client. Once uploaded, the service holds the report in the database
 and can send after signing even when the Mac is asleep.
 
 The saved delivery packet is immutable, with attachment hashes, a fixed message ID,

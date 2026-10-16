@@ -2894,7 +2894,9 @@ struct DispensationSubmissionPacketView: View {
         panel.allowedContentTypes = [.pdf]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        if FileManager.default.fileExists(atPath: directory.path) { panel.directoryURL = directory }
+        // NSOpenPanel grants access after selection. A sandboxed preflight can
+        // report a real folder as missing and reopen the previous directory.
+        panel.directoryURL = directory
         guard panel.runModal() == .OK, let url = panel.url else { return }
         selectedReport = url
         matchingReportConfirmed = false

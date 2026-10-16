@@ -28,4 +28,11 @@ chmod 600 "$PLIST"
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 launchctl bootstrap "$DOMAIN" "$PLIST"
 launchctl kickstart "$DOMAIN/$LABEL"
-print 'Dispensation report folder sync is installed. Only the two designated report folders are scanned.'
+sleep 2
+if launchctl print "$DOMAIN/$LABEL" | grep -q 'last exit code = 1'; then
+  launchctl bootout "$DOMAIN/$LABEL"
+  mv "$PLIST" "$PLIST.disabled"
+  print -u2 'Background folder access is unavailable. The job was disabled; attach reports through the dashboard file chooser.'
+  exit 1
+fi
+print 'Dispensation report folder sync is installed. Verify its first run in the local report-sync log.'
