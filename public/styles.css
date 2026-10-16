@@ -281,6 +281,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .status.partially_signed { color: #88621d; background: rgba(199,154,66,.15); }
 .status.rescinded { color: #9b2727; background: #f9e8e6; }
 .doc-actions { min-width: 112px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.dispensation-delivery { grid-column: 1 / -1; min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: #f6f8fb; overflow-wrap: anywhere; }
+.dispensation-delivery[hidden] { display: none; }
+.dispensation-delivery h4 { margin: 0 0 12px; color: var(--navy); font-size: 16px; }
+.dispensation-delivery p, .delivery-attachments { font-size: 13px; line-height: 1.6; }
+.delivery-attachments { padding-left: 20px; }
+.dispensation-delivery .delivery-status { font-weight: 600; }
+.dispensation-delivery pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; }
+.dispensation-delivery details { margin-top: 14px; }
+.dispensation-delivery summary { cursor: pointer; padding: 10px 0; font-size: 13px; font-weight: 600; }
+.delivery-report-form { display: grid; gap: 12px; margin-top: 16px; }
+.delivery-report-form label { display: grid; gap: 8px; font-size: 13px; font-weight: 600; }
+.delivery-report-form input { width: 100%; min-width: 0; box-sizing: border-box; }
+.delivery-report-form button { justify-self: start; max-width: 100%; white-space: normal; }
+.delivery-source-hint { color: var(--muted); }
 .empty-state { padding: 50px 20px; text-align: center; border-top: 1px solid var(--line); color: var(--muted); }
 .empty-state span { color: var(--gold); font-size: 32px; }
 .empty-state h3 { color: var(--navy); margin: 8px 0 4px; }

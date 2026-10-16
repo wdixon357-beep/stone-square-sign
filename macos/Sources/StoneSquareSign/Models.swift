@@ -126,6 +126,8 @@ struct LodgeDocument: Codable, Identifiable {
     let submittedAt: String?
     let submittedTo: String?
     let submittedError: String?
+    var submissionState: String? = nil
+    var submissionMessage: String? = nil
 
     var displayTitle: String { title?.isEmpty == false ? title! : originalName }
     var isComplete: Bool { status == "completed" }
@@ -384,8 +386,7 @@ func lodgeMoney(_ cents: Int) -> String {
 }
 
 
-/* The note to the District Deputy, composed by the server so the copy it sends itself and the
- * draft the Master opens in his own mail client are word for word the same. */
+/* The service owns the two-attachment packet and its delivery state for both clients. */
 struct SubmissionDraft: Codable {
     let to: String
     let name: String
@@ -393,9 +394,54 @@ struct SubmissionDraft: Codable {
     let subject: String
     let body: String
     let alreadySent: String?
+    var reportFilename: String? = nil
+    var preparedAt: String? = nil
 }
 
 struct SubmissionDraftResponse: Codable { let draft: SubmissionDraft }
+
+struct SubmissionRecipient: Codable {
+    let to: String
+    let name: String
+}
+
+struct SupportingDispensationReport: Codable {
+    let filename: String
+    let sha256: String
+    let sourceLabel: String?
+}
+
+struct DispensationSubmissionDelivery: Codable {
+    let attemptedAt: String?
+}
+
+struct DispensationSubmissionPacket: Codable {
+    let state: String
+    let report: SupportingDispensationReport?
+    let draft: SubmissionDraft?
+    let recipient: SubmissionRecipient?
+    let message: String?
+    var delivery: DispensationSubmissionDelivery? = nil
+
+    var recipientEmail: String? { recipient?.to ?? draft?.to }
+    var recipientName: String { recipient?.name ?? draft?.name ?? "District Deputy" }
+    var canAttachReport: Bool { ["awaiting_signature", "awaiting_report"].contains(state) }
+    var canRetry: Bool { state == "failed" }
+    var statusTitle: String {
+        switch state {
+        case "awaiting_signature": return "Waiting for the secretary's signature"
+        case "awaiting_report": return "Supporting report needed"
+        case "ready": return "Ready for automatic delivery"
+        case "sending": return "Sending both attachments"
+        case "sent": return "Sent to the District Deputy"
+        case "failed": return "Email delivery needs attention"
+        case "uncertain": return "Delivery confirmation needed"
+        default: return "Delivery status unavailable"
+        }
+    }
+}
+
+struct DispensationSubmissionPacketResponse: Codable { let packet: DispensationSubmissionPacket }
 
 
 /* What the District Deputy decided about a dispensation, and how the decision arrived.

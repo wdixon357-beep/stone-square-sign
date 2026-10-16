@@ -192,20 +192,23 @@ check('both clients can open a document already sent to one Secretary',
   && /Let either Secretary sign/.test(read('public/app.js'))
   && /Let either Secretary sign/.test(macViews));
 
-check('both clients can send a signed dispensation to the District Deputy',
-  read('public/app.js').includes('/submit')
+check('both clients use the shared two-attachment dispensation delivery packet',
+  read('public/dispensation-submission.js').includes('/submission-packet')
+  && read('public/dispensation-submission.js').includes('/supporting-report')
+  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/submission-packet')
+  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/supporting-report')
+  && /Report and delivery/.test(read('public/app.js'))
+  && /Submission packet/.test(macViews));
+check('both clients retain failed-delivery visibility and safe retry',
+  read('public/dispensation-submission.js').includes("packet.state === 'failed'")
+  && read('public/dispensation-submission.js').includes('/submit')
   && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/submit')
-  && /Send to the District Deputy/.test(read('public/app.js'))
-  && /Send to the District Deputy/.test(macViews));
-check('both clients say plainly when a dispensation did NOT reach the District Deputy',
-  /NOT sent to the District Deputy/.test(read('public/app.js'))
-  && /NOT sent to the District Deputy/.test(macViews));
-
-check('both clients can open a draft to the District Deputy in the Master\'s own mail app',
-  read('public/app.js').includes('/submission-draft')
-  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/submission-draft')
-  && /Draft in my mail app/.test(read('public/app.js'))
-  && /Draft in my mail app/.test(macViews));
+  && /failed/.test(macViews));
+check('neither client exposes the old one-attachment email draft or resend shortcut',
+  !read('public/app.js').includes('Draft in my mail app')
+  && !macViews.includes('Draft in my mail app')
+  && !read('public/app.js').includes('Send again')
+  && !macViews.includes('case .resendToDistrictDeputy'));
 
 check('both clients show an invited officer as pending rather than still needing one',
   /Pending, invited and not signed in yet/.test(read('public/app.js'))

@@ -18,6 +18,7 @@ const excluded = new Set([
   'mac-session.mjs',
   'mac-minutes-dates.mjs',
   'mac-report.mjs',
+  'mac-submission.mjs',
 ]);
 const selected = commands.filter(command => !excluded.has(path.basename(command)));
 if (selected.length < 35 || !selected.includes('node test/e2e.mjs') ||

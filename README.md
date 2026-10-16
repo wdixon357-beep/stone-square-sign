@@ -22,6 +22,33 @@ executed PDF by email and the document is marked complete.
 - The document as uploaded is kept separately from the executed copy, so the original
   is always recoverable.
 
+## Dispensation delivery with a supporting report
+
+The owner attaches the corresponding report PDF using **Report and delivery** on
+the website or **Submission packet** on the Mac. Once Adrian Reese or William
+McDuffie signs, the shared service emails the configured District Deputy a short
+summary, the fully signed dispensation, and that report. If the signature arrives
+first, delivery waits for the report. Historical submissions are never resent
+automatically. The queue shows missing reports and delivery failures.
+
+The optional local companion reads only `Desktop/Stone Square Dispensation Reports`
+and `Library/CloudStorage/Dropbox/Dispensation Reports - Oct 2026`. It associates a
+PDF only when the filename contains the document ID, or the filename/report heading
+contains the exact event name and calendar date for one outstanding dispensation.
+Different matching files wait for the owner to select the correct report. Identical
+copies in both folders are treated as one report. Run
+`node scripts/sync-dispensation-reports.mjs` for a read-only preview; `--apply` uploads
+eligible reports using the owner's existing Mac session. The installer
+`zsh scripts/install-dispensation-report-sync.sh` checks those folders every minute
+while this Mac is awake. Once uploaded, the service holds the report in the database
+and can send after signing even when the Mac is asleep.
+
+The saved delivery packet is immutable, with attachment hashes, a fixed message ID,
+and an audit history. Concurrent signature/upload actions cannot send it twice.
+Definite mail failures allow an owner retry. If the mail service's result is unknown,
+the owner must verify receipt and record a note before confirming delivery or
+authorizing a retry. Synthetic tests use an isolated database and mail server.
+
 ## Report Generator
 
 Home and the sidebar open the shared Report Generator inside the web dashboard and
