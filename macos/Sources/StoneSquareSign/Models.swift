@@ -411,12 +411,17 @@ struct SupportingDispensationReport: Codable {
     let sourceLabel: String?
 }
 
+struct DispensationSubmissionDelivery: Codable {
+    let attemptedAt: String?
+}
+
 struct DispensationSubmissionPacket: Codable {
     let state: String
     let report: SupportingDispensationReport?
     let draft: SubmissionDraft?
     let recipient: SubmissionRecipient?
     let message: String?
+    var delivery: DispensationSubmissionDelivery? = nil
 
     var recipientEmail: String? { recipient?.to ?? draft?.to }
     var recipientName: String { recipient?.name ?? draft?.name ?? "District Deputy" }

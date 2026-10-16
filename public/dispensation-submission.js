@@ -30,7 +30,8 @@ export async function renderDispensationSubmission(container, { document: record
     // Read the shared record before offering the same action again.
     try {
       const latest = (await apiFetch(`/api/documents/${record.id}/submission-packet`)).packet;
-      if (latest.state !== packet.state || latest.report?.sha256 !== packet.report?.sha256) {
+      if (latest.state !== packet.state || latest.report?.sha256 !== packet.report?.sha256
+          || latest.delivery?.attemptedAt !== packet.delivery?.attemptedAt) {
         await renderDispensationSubmission(container, { document: record, apiFetch, previewPdf });
         return true;
       }
@@ -128,7 +129,7 @@ export async function renderDispensationSubmission(container, { document: record
       delivered.disabled = true; notDelivered.disabled = true;
       try {
         await apiFetch(`/api/documents/${record.id}/submission-resolution`, {
-          method: 'POST', body: JSON.stringify({ outcome, note: note.value.trim() }),
+          method: 'POST', body: JSON.stringify({ outcome, note: note.value.trim(), expectedAttemptedAt: packet.delivery?.attemptedAt }),
         });
         await renderDispensationSubmission(container, { document: record, apiFetch, previewPdf });
       } catch (error) {

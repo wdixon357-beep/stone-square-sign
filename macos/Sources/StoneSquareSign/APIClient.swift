@@ -1219,7 +1219,7 @@ final class AppModel: ObservableObject {
         return response.packet
     }
 
-    func resolveSubmission(documentId: String, outcome: String, note: String) async throws -> DispensationSubmissionPacket {
+    func resolveSubmission(documentId: String, outcome: String, note: String, expectedAttemptedAt: String?) async throws -> DispensationSubmissionPacket {
         guard user?.role == "owner" else {
             throw ClientError.server("Only the Worshipful Master can resolve uncertain delivery.")
         }
@@ -1227,7 +1227,10 @@ final class AppModel: ObservableObject {
         guard ["delivered", "not_delivered"].contains(outcome), (10...600).contains(note.count) else {
             throw ClientError.rejected("Record how delivery was checked in 10 to 600 characters.")
         }
-        let body = try JSONSerialization.data(withJSONObject: ["outcome": outcome, "note": note])
+        guard let expectedAttemptedAt, !expectedAttemptedAt.isEmpty else {
+            throw ClientError.rejected("Refresh delivery status before resolving this packet.")
+        }
+        let body = try JSONSerialization.data(withJSONObject: ["outcome": outcome, "note": note, "expectedAttemptedAt": expectedAttemptedAt])
         let response: DispensationSubmissionPacketResponse = try await request(
             "/api/documents/\(documentId)/submission-resolution", method: "POST", body: body)
         await refresh(silent: true)

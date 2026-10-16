@@ -113,7 +113,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       draft: draft ? { ...draft, preparedAt: row.prepared_at } : null,
       delivery: { sentAt: row?.sent_at || document.submitted_at || null, to: draft?.to || document.submitted_to || null,
         messageId: row?.message_id || null, confirmedAt: row?.delivery_confirmed_at || null,
-        confirmationOutcome: row?.delivery_confirmation_outcome || null },
+        confirmationOutcome: row?.delivery_confirmation_outcome || null, attemptedAt: row?.attempted_at || null },
       message: messages[state],
     };
   }
@@ -172,8 +172,11 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
         return null;
       }
       const token = crypto.randomUUID();
+      // Timestamp doubles as the client-visible attempt revision. Advance it even
+      // when two owner-authorized attempts happen in the same millisecond.
+      const attemptedAt = new Date(Math.max(Date.now(), (Date.parse(row.attempted_at) || 0) + 1)).toISOString();
       await dbRun(`UPDATE dispensation_submissions SET delivery_state = 'sending', delivery_token = ?,
-        attempted_at = ?, delivery_error = NULL, updated_at = ? WHERE document_id = ?`, [token, now(), now(), id]);
+        attempted_at = ?, delivery_error = NULL, updated_at = ? WHERE document_id = ?`, [token, attemptedAt, now(), id]);
       return { document, row, token, draft: JSON.parse(row.message_json) };
     });
     if (!claimed) return packet(id);
@@ -234,7 +237,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     return deliver(id, context);
   }
 
-  async function resolveDelivery(id, user, outcome, note, context = {}) {
+  async function resolveDelivery(id, user, outcome, note, context = {}, expectedAttemptedAt) {
     if (!['delivered', 'not_delivered'].includes(outcome)) throw error(400, 'Confirm whether both documents were delivered or were not delivered.');
     const explanation = String(note || '').trim();
     if (explanation.length < 10 || explanation.length > 600) throw error(400, 'Add a verification note of 10 to 600 characters before resolving delivery.');
@@ -245,6 +248,9 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       const stale = row?.delivery_state === 'sending' && Date.parse(row.attempted_at) < Date.now() - 300_000;
       if (document.status !== 'completed' || !row?.message_raw || !(row.delivery_state === 'uncertain' || stale)) {
         throw error(409, 'Only an uncertain completed submission can be resolved.');
+      }
+      if (!expectedAttemptedAt || expectedAttemptedAt !== row.attempted_at) {
+        throw error(409, 'This delivery attempt changed. Reload the submission and verify the latest attempt before resolving it.');
       }
       const verifiedAt = now();
       await dbRun(`UPDATE dispensation_submissions SET delivery_state = ?, delivery_token = NULL,
@@ -257,7 +263,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
         await dbRun('UPDATE documents SET submitted_at = ?, submitted_to = ?, submitted_error = NULL WHERE id = ?', [verifiedAt, draft.to, id]);
       }
       await recordAudit(id, 'dispensation_submission_delivery_resolved', context,
-        { outcome, verificationNote: explanation, verifiedAt, messageId: row.message_id,
+        { outcome, verificationNote: explanation, verifiedAt, messageId: row.message_id, attemptedAt: row.attempted_at,
           signedSha256: row.signed_sha256, reportSha256: row.report_sha256, ownerConfirmed: true });
     });
     return outcome === 'not_delivered' ? deliver(id, context, { retry: true }) : packet(id, user);
@@ -335,7 +341,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     }));
     app.post('/api/documents/:id/submission-resolution', ...owner,
       rateLimit({ key: 'resolve-ddgm', maximum: 20, windowMs: 60 * 60 * 1000 }), route(async (req, res) => {
-        const result = await resolveDelivery(req.params.id, req.user, req.body?.outcome, req.body?.note, context(req));
+        const result = await resolveDelivery(req.params.id, req.user, req.body?.outcome, req.body?.note, context(req), req.body?.expectedAttemptedAt);
         broadcast('queue_changed', { reason: 'dispensation_submission_resolved', documentId: req.params.id });
         res.json({ packet: result, message: result.message });
       }));

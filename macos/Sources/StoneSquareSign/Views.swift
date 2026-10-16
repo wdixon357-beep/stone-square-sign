@@ -2698,7 +2698,7 @@ struct DispensationSubmissionPacketView: View {
 
     private var canResolve: Bool {
         let count = resolutionNote.trimmingCharacters(in: .whitespacesAndNewlines).count
-        return !busy && (10...600).contains(count)
+        return !busy && (10...600).contains(count) && packet?.delivery?.attemptedAt?.isEmpty == false
     }
 
     // Resolve the login home so sandboxed builds do not start the chooser in the app container.
@@ -2926,8 +2926,16 @@ struct DispensationSubmissionPacketView: View {
         busy = true
         defer { busy = false }
         errorMessage = ""
-        do { packet = try await model.submissionPacket(documentId: document.id) }
+        do { applyPacket(try await model.submissionPacket(documentId: document.id)) }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func applyPacket(_ latest: DispensationSubmissionPacket) {
+        if packet?.delivery?.attemptedAt != latest.delivery?.attemptedAt {
+            resolutionNote = ""
+            pendingResolution = nil
+        }
+        packet = latest
     }
 
     @MainActor private func uploadReport() async {
@@ -2965,12 +2973,20 @@ struct DispensationSubmissionPacketView: View {
         defer { busy = false }
         errorMessage = ""
         do {
-            packet = try await model.resolveSubmission(documentId: document.id, outcome: outcome, note: resolutionNote)
+            let latest = try await model.resolveSubmission(documentId: document.id, outcome: outcome, note: resolutionNote,
+                expectedAttemptedAt: packet?.delivery?.attemptedAt)
+            applyPacket(latest)
             resolutionNote = ""
         } catch {
             errorMessage = error.localizedDescription
-            // An uncertain write is read back; resolution is never retried automatically.
-            packet = try? await model.submissionPacket(documentId: document.id)
+            // A lost response may hide a new delivery attempt. Verification of the previous attempt cannot authorize another retry.
+            if let latest = try? await model.submissionPacket(documentId: document.id) {
+                applyPacket(latest)
+            } else {
+                packet = nil
+                resolutionNote = ""
+                pendingResolution = nil
+            }
         }
     }
 

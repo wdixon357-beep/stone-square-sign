@@ -94,7 +94,8 @@ try {
   assert.equal((await service.packet('ambiguous', owner)).state, 'uncertain');
   await assert.rejects(service.resolveDelivery('ambiguous', owner, 'delivered', 'short'), /10 to 600/);
   await assert.rejects(service.resolveDelivery('ambiguous', other, 'delivered', 'Confirmed by recipient.'), /Only the document owner/);
-  const confirmed = await service.resolveDelivery('ambiguous', owner, 'delivered', 'The District Deputy confirmed receipt of both PDFs.', { actorUserId: owner.id });
+  const confirmed = await service.resolveDelivery('ambiguous', owner, 'delivered', 'The District Deputy confirmed receipt of both PDFs.',
+    { actorUserId: owner.id }, (await service.packet('ambiguous', owner)).delivery.attemptedAt);
   assert.equal(confirmed.state, 'sent'); assert.equal(confirmed.delivery.confirmationOutcome, 'delivered');
   assert.match(confirmed.message, /You confirmed/); assert.equal(deliveries.length, 4, 'Owner confirmation does not send another message.');
   await assert.rejects(service.resolveDelivery('ambiguous', owner, 'not_delivered', 'Duplicate confirmation attempt.'), /Only an uncertain/);
@@ -102,7 +103,8 @@ try {
   transport = async () => { throw new Error('Connection ended after DATA'); };
   await attach('confirmed-retry');
   transport = async message => { deliveries.push(message); return true; };
-  assert.equal((await service.resolveDelivery('confirmed-retry', owner, 'not_delivered', 'Checked with the District Deputy: neither PDF arrived.', { actorUserId: owner.id })).state, 'sent');
+  assert.equal((await service.resolveDelivery('confirmed-retry', owner, 'not_delivered', 'Checked with the District Deputy: neither PDF arrived.',
+    { actorUserId: owner.id }, (await service.packet('confirmed-retry', owner)).delivery.attemptedAt)).state, 'sent');
   assert.equal(deliveries.length, 5, 'Only explicit owner verification authorizes retry after uncertainty.');
   await dbRun(`UPDATE dispensation_submissions SET delivery_state = 'sending', attempted_at = ?, sent_at = NULL WHERE document_id = ?`, [new Date().toISOString(), 'confirmed-retry']);
   await dbRun('UPDATE documents SET submitted_at = NULL WHERE id = ?', ['confirmed-retry']);
@@ -114,6 +116,28 @@ try {
   assert.equal((await dbGet('SELECT delivery_state FROM dispensation_submissions WHERE document_id = ?', ['confirmed-retry'])).delivery_state, 'uncertain');
   assert.equal(deliveries.length, 5, 'A delivery interrupted shortly before startup becomes uncertain after its lease expires, without another email.');
   assert.ok(recoveryEvents.some(event => event.data.reason === 'dispensation_submission_interrupted'));
+  await make('replay-fence', 'completed');
+  let ambiguousAttempts = 0;
+  transport = async () => { ambiguousAttempts += 1; throw new Error('Lost DATA acknowledgement'); };
+  await attach('replay-fence');
+  const futureAttempt = new Date(Date.now() + 10_000).toISOString();
+  await dbRun('UPDATE dispensation_submissions SET attempted_at = ? WHERE document_id = ?', [futureAttempt, 'replay-fence']);
+  const firstUncertain = await service.packet('replay-fence', owner);
+  const verification = 'Confirmed with the District Deputy that neither attachment arrived.';
+  await assert.rejects(service.resolveDelivery('replay-fence', owner, 'not_delivered', verification), /delivery attempt changed/);
+  const secondUncertain = await service.resolveDelivery('replay-fence', owner, 'not_delivered', verification,
+    { actorUserId: owner.id }, firstUncertain.delivery.attemptedAt);
+  assert.equal(secondUncertain.state, 'uncertain');
+  assert.equal(ambiguousAttempts, 2);
+  assert.ok(secondUncertain.delivery.attemptedAt > firstUncertain.delivery.attemptedAt,
+    'A retry advances its visible revision even when the clock has not advanced.');
+  await assert.rejects(service.resolveDelivery('replay-fence', owner, 'not_delivered', verification,
+    { actorUserId: owner.id }, firstUncertain.delivery.attemptedAt), /delivery attempt changed/);
+  assert.equal(ambiguousAttempts, 2, 'Replaying a confirmation after a lost retry response cannot send a third email.');
+  const latest = await service.packet('replay-fence', owner);
+  assert.equal((await service.resolveDelivery('replay-fence', owner, 'delivered',
+    'The District Deputy has now confirmed receipt of both attachments.', { actorUserId: owner.id }, latest.delivery.attemptedAt)).state, 'sent');
+  assert.equal(ambiguousAttempts, 2, 'The latest verified attempt can be resolved without another email.');
   assert.ok(audit.some(event => event.action === 'dispensation_supporting_report_associated'));
   assert.ok(audit.some(event => event.action === 'dispensation_submission_packet_prepared'));
   assert.ok(audit.some(event => event.action === 'dispensation_submitted_to_district_deputy' && event.details.attachments.length === 2));

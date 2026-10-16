@@ -8,7 +8,7 @@ final class SubmissionFixture: URLProtocol {
     static var packetState = "awaiting_report"
     static var owner = true
     static var packet: String {
-        #"{"packet":{"state":"\#(packetState)","recipient":{"name":"District Deputy Fixture","to":"deputy@example.invalid"},"report":null,"draft":null,"message":"Fixture delivery state"}}"#
+        #"{"packet":{"state":"\#(packetState)","recipient":{"name":"District Deputy Fixture","to":"deputy@example.invalid"},"report":null,"draft":null,"message":"Fixture delivery state","delivery":{"attemptedAt":"2026-10-16T19:00:00.000Z"}}}"#
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -119,15 +119,21 @@ final class SubmissionFixture: URLProtocol {
 
         let beforeInvalidResolution = SubmissionFixture.requests.count
         do {
-            _ = try await model.resolveSubmission(documentId:"fixture",outcome:"not_delivered",note:"short")
+            _ = try await model.resolveSubmission(documentId:"fixture",outcome:"not_delivered",note:"short",expectedAttemptedAt:"2026-10-16T19:00:00.000Z")
             preconditionFailure("Resolution needs a substantive verification note")
         } catch ClientError.rejected { }
         precondition(SubmissionFixture.requests.count == beforeInvalidResolution)
+        do {
+            _ = try await model.resolveSubmission(documentId:"fixture",outcome:"not_delivered",note:"Verified no delivery in logs.",expectedAttemptedAt:nil)
+            preconditionFailure("Resolution must identify the exact delivery attempt")
+        } catch ClientError.rejected { }
+        precondition(SubmissionFixture.requests.count == beforeInvalidResolution)
         SubmissionFixture.packetState = "sent"
-        let resolved = try await model.resolveSubmission(documentId:"fixture",outcome:"delivered",note:"  Checked delivery logs: fixture packet accepted.  ")
+        let resolved = try await model.resolveSubmission(documentId:"fixture",outcome:"delivered",note:"  Checked delivery logs: fixture packet accepted.  ",expectedAttemptedAt:packet.delivery?.attemptedAt)
         precondition(resolved.state == "sent")
         let resolutionBody = try JSONSerialization.jsonObject(with:SubmissionFixture.resolutionBodies[0]) as! [String:String]
         precondition(resolutionBody["outcome"] == "delivered")
+        precondition(resolutionBody["expectedAttemptedAt"] == "2026-10-16T19:00:00.000Z")
         precondition(resolutionBody["note"] == "Checked delivery logs: fixture packet accepted.")
         precondition(SubmissionFixture.requests.filter { $0.url!.path.hasSuffix("/submission-resolution") }.count == 1)
         print("PASS: native uncertain-delivery resolution requires a verification note and performs one explicit resolution write")
@@ -140,7 +146,7 @@ final class SubmissionFixture: URLProtocol {
         catch ClientError.server { }
         do { _ = try await model.supportingReportData(documentId:"fixture"); preconditionFailure("Secretary must not open owner packet report") }
         catch ClientError.server { }
-        do { _ = try await model.resolveSubmission(documentId:"fixture",outcome:"delivered",note:"Checked delivery logs."); preconditionFailure("Secretary must not resolve owner packet") }
+        do { _ = try await model.resolveSubmission(documentId:"fixture",outcome:"delivered",note:"Checked delivery logs.",expectedAttemptedAt:packet.delivery?.attemptedAt); preconditionFailure("Secretary must not resolve owner packet") }
         catch ClientError.server { }
         precondition(SubmissionFixture.requests.count == beforeDenied)
         print("PASS: native secretary and non-owner packet management is denied before network activity")
