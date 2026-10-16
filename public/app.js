@@ -2731,6 +2731,10 @@ const renderDocuments = async () => {
       ? `${awaiting} document${awaiting === 1 ? '' : 's'} awaiting action`
       : 'Open the dispensation queue';
     const list = $('docList');
+    const editingDeliveries = new Map(state.user?.role === 'owner'
+      ? [...list.children].filter(row => row.dataset.ownerId === String(state.user.id)
+        && row.querySelector('.dispensation-delivery[data-preserve-refresh="true"]'))
+        .map(row => [row.dataset.documentId, row]) : []);
     list.innerHTML = '';
     if (!documents.length) {
       list.innerHTML = '<div class="empty-state"><span>◇</span><h3>The queue is clear</h3><p>New dispensation requests will appear here automatically.</p></div>';
@@ -2739,8 +2743,16 @@ const renderDocuments = async () => {
     let queueNumber = 0;
     documents.forEach((doc) => {
       if (!['completed', 'rescinded'].includes(doc.status)) queueNumber += 1;
+      if (editingDeliveries.has(doc.id) && doc.status !== 'rescinded') {
+        // A live signature elsewhere must not discard a selected report or an
+        // unfinished delivery verification note. Refresh after that edit ends.
+        list.appendChild(editingDeliveries.get(doc.id));
+        return;
+      }
       const article = window.document.createElement('article');
       article.className = 'doc-row';
+      article.dataset.documentId = doc.id;
+      article.dataset.ownerId = String(state.user.id);
       const signerHtml = doc.signers.map((signer) =>
         `<span class="signer ${signer.signed_at ? 'signed' : ''}">${signer.signed_at ? '✓' : '○'} ${escapeMarkup(signer.signer_name)}</span>`).join('');
       const status = doc.status === 'rescinded'
@@ -2802,6 +2814,7 @@ const renderDocuments = async () => {
           try {
             const { renderDispensationSubmission } = await import(`/dispensation-submission.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`);
             deliveryPanel = window.document.createElement('div');
+            deliveryPanel.addEventListener('delivery-updated', scheduleQueueRefresh);
             article.appendChild(deliveryPanel);
             deliveryButton.setAttribute('aria-expanded', 'true');
             await renderDispensationSubmission(deliveryPanel, { document: doc, apiFetch, previewPdf: showPdfBlob });

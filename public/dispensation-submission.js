@@ -4,6 +4,7 @@
 export async function renderDispensationSubmission(container, { document: record, apiFetch, previewPdf }) {
   container.replaceChildren();
   container.className = 'dispensation-delivery';
+  container.dataset.preserveRefresh = 'false';
   const element = (tag, text, className) => {
     const node = document.createElement(tag);
     if (text) node.textContent = text;
@@ -23,6 +24,7 @@ export async function renderDispensationSubmission(container, { document: record
     status.classList.add('error');
     return;
   }
+  const fullySigned = packet.state !== 'awaiting_signature';
   status.textContent = packet.message;
   status.dataset.state = packet.state;
   const recoverWrite = async error => {
@@ -33,6 +35,7 @@ export async function renderDispensationSubmission(container, { document: record
       if (latest.state !== packet.state || latest.report?.sha256 !== packet.report?.sha256
           || latest.delivery?.attemptedAt !== packet.delivery?.attemptedAt) {
         await renderDispensationSubmission(container, { document: record, apiFetch, previewPdf });
+        container.dispatchEvent(new CustomEvent('delivery-updated', { bubbles: true }));
         return true;
       }
     } catch { /* Preserve the original failure if the readback is unavailable. */ }
@@ -43,7 +46,7 @@ export async function renderDispensationSubmission(container, { document: record
     container.append(element('p', `Recipient: ${packet.recipient?.name || packet.draft?.name || 'District Deputy'} <${packet.recipient?.to || packet.draft?.to || packet.delivery.to}>`));
   }
   const attachments = element('ul', null, 'delivery-attachments');
-  attachments.append(element('li', record.status === 'completed' ? 'Fully signed dispensation PDF' : 'Dispensation PDF, awaiting secretary signature'));
+  attachments.append(element('li', fullySigned ? 'Fully signed dispensation PDF' : 'Dispensation PDF, awaiting secretary signature'));
   attachments.append(element('li', packet.report ? `Supporting report: ${packet.report.filename}` : 'Supporting report: not attached yet'));
   container.append(attachments);
   if (packet.report) {
@@ -70,12 +73,13 @@ export async function renderDispensationSubmission(container, { document: record
     const label = element('label', packet.report ? 'Replace the supporting report PDF' : 'Attach the corresponding report PDF');
     const file = element('input');
     file.type = 'file'; file.accept = 'application/pdf,.pdf'; file.required = true;
+    file.addEventListener('change', () => { container.dataset.preserveRefresh = String(Boolean(file.files?.length)); });
     label.append(file);
-    const instructions = element('p', record.status === 'completed'
+    const instructions = element('p', fullySigned
       ? 'This dispensation is signed. Attaching its report will automatically email both PDFs to the District Deputy.'
       : 'Once Adrian Reese or William McDuffie signs, both PDFs will be emailed automatically to the District Deputy.');
     const source = element('p', 'Choose the matching report from “Stone Square Dispensation Reports” on your Desktop or “Dispensation Reports - Oct 2026” in Dropbox.', 'delivery-source-hint');
-    const save = element('button', record.status === 'completed' ? 'Attach report and email both PDFs' : 'Save supporting report', 'primary compact');
+    const save = element('button', fullySigned ? 'Attach report and email both PDFs' : 'Save supporting report', 'primary compact');
     save.type = 'submit';
     form.append(label, source, instructions, save);
     form.addEventListener('submit', async event => {
@@ -86,12 +90,14 @@ export async function renderDispensationSubmission(container, { document: record
         return;
       }
       save.disabled = true; file.disabled = true;
+      container.dataset.preserveRefresh = 'true';
       status.textContent = 'Saving the supporting report…';
       const data = new FormData();
       data.append('report', file.files[0]); data.append('sourceLabel', 'Dashboard file selection');
       try {
         await apiFetch(`/api/documents/${record.id}/supporting-report`, { method: 'PUT', body: data });
         await renderDispensationSubmission(container, { document: record, apiFetch, previewPdf });
+        container.dispatchEvent(new CustomEvent('delivery-updated', { bubbles: true }));
       } catch (error) {
         if (!await recoverWrite(error)) { save.disabled = false; file.disabled = false; }
       }
@@ -106,6 +112,7 @@ export async function renderDispensationSubmission(container, { document: record
       try {
         await apiFetch(`/api/documents/${record.id}/submit`, { method: 'POST', body: '{}' });
         await renderDispensationSubmission(container, { document: record, apiFetch, previewPdf });
+        container.dispatchEvent(new CustomEvent('delivery-updated', { bubbles: true }));
       } catch (error) { if (!await recoverWrite(error)) retry.disabled = false; }
     });
     container.append(retry);
@@ -116,6 +123,7 @@ export async function renderDispensationSubmission(container, { document: record
     const label = element('label', 'Delivery confirmation note');
     const note = element('textarea');
     note.required = true; note.minLength = 10; note.maxLength = 600; note.rows = 3;
+    note.addEventListener('input', () => { container.dataset.preserveRefresh = String(Boolean(note.value)); });
     label.append(note);
     const delivered = element('button', 'Confirm already delivered', 'secondary compact');
     delivered.type = 'submit'; delivered.dataset.outcome = 'delivered';
@@ -127,11 +135,13 @@ export async function renderDispensationSubmission(container, { document: record
       const outcome = event.submitter?.dataset.outcome;
       if (!outcome || note.value.trim().length < 10) return;
       delivered.disabled = true; notDelivered.disabled = true;
+      container.dataset.preserveRefresh = 'true';
       try {
         await apiFetch(`/api/documents/${record.id}/submission-resolution`, {
           method: 'POST', body: JSON.stringify({ outcome, note: note.value.trim(), expectedAttemptedAt: packet.delivery?.attemptedAt }),
         });
         await renderDispensationSubmission(container, { document: record, apiFetch, previewPdf });
+        container.dispatchEvent(new CustomEvent('delivery-updated', { bubbles: true }));
       } catch (error) {
         if (!await recoverWrite(error)) { delivered.disabled = false; notDelivered.disabled = false; }
       }
