@@ -197,13 +197,14 @@ check('both clients use the shared two-attachment dispensation delivery packet',
   && read('public/dispensation-submission.js').includes('/supporting-report')
   && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/submission-packet')
   && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/supporting-report')
-  && /Report and delivery/.test(read('public/app.js'))
+  && /Submission packet/.test(read('public/app.js'))
   && /Submission packet/.test(macViews));
-check('both clients retain failed-delivery visibility and safe retry',
-  read('public/dispensation-submission.js').includes("packet.state === 'failed'")
-  && read('public/dispensation-submission.js').includes('/submit')
-  && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('/submit')
-  && /failed/.test(macViews));
+check('both clients keep District Deputy automatic sending off and require a safe archive capability',
+  read('public/dispensation-submission.js').includes('packet.automaticDeliveryEnabled === false')
+  && read('public/dispensation-submission.js').includes('Automatic District Deputy email is turned off')
+  && read('macos/Sources/StoneSquareSign/Models.swift').includes('automaticDeliveryEnabled == false')
+  && macViews.includes('Automatic email sending is off')
+  && !macViews.includes('Retry delivery of both PDFs'));
 check('neither client exposes the old one-attachment email draft or resend shortcut',
   !read('public/app.js').includes('Draft in my mail app')
   && !macViews.includes('Draft in my mail app')

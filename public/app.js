@@ -2788,11 +2788,11 @@ const renderDocuments = async () => {
           note.textContent = doc.submission_message;
           if (['awaiting_report', 'failed', 'uncertain'].includes(doc.submission_state)) note.classList.add('queue-submission-warn');
         } else if (doc.submitted_at) {
-          note.textContent = `Sent to the District Deputy ${new Date(doc.submitted_at).toLocaleString()}`;
+          note.textContent = `Email submission recorded ${new Date(doc.submitted_at).toLocaleString()}. Receipt is not confirmed.`;
         } else {
           note.textContent = doc.submitted_error
             ? `NOT sent to the District Deputy. ${doc.submitted_error}`
-            : 'Not yet sent to the District Deputy.';
+            : 'Automatic email sending is off. Review and send the documents through your email app.';
           note.classList.add('queue-submission-warn');
         }
         article.querySelector('.doc-main').appendChild(note);
@@ -2801,7 +2801,7 @@ const renderDocuments = async () => {
           && doc.template_kind === 'dispensation_v1') {
         const deliveryButton = window.document.createElement('button');
         deliveryButton.className = 'secondary compact';
-        deliveryButton.textContent = 'Report and delivery';
+        deliveryButton.textContent = 'Submission packet';
         deliveryButton.setAttribute('aria-expanded', 'false');
         let deliveryPanel;
         deliveryButton.addEventListener('click', async () => {

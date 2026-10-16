@@ -4,6 +4,7 @@ import { PDFDocument } from 'pdf-lib';
 import { dbGet, dbRun, dbAll, withTransaction } from './db.js';
 
 export const MAX_SUPPORTING_REPORT_BYTES = 12 * 1024 * 1024;
+export const DISPENSATION_DELIVERY_DISABLED_MESSAGE = 'Automatic emailing to the District Deputy is turned off. Download the signed dispensation and supporting report, review them, and send them from your email app.';
 const hash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const buffer = (value) => value == null ? null : Buffer.from(value);
 const now = () => new Date().toISOString();
@@ -67,7 +68,10 @@ export async function validateSupportingReport(bytes) {
   }
 }
 
-export function createDispensationSubmissions({ sendEmail, addAudit, recipient, lodgeName, mailFrom }) {
+export function createDispensationSubmissions({ sendEmail, addAudit, recipient, lodgeName, mailFrom, automaticDeliveryEnabled = false }) {
+  // Sending is disconnected by default. Production never opts in; the opt-in is
+  // retained solely for isolated transport regression tests of historical code.
+  automaticDeliveryEnabled = automaticDeliveryEnabled === true;
   const configuredRecipient = () => ({ to: plain(recipient.to, 254), name: plain(recipient.name || 'District Deputy Grand Master', 120) });
   const recordAudit = (documentId, action, context = {}, details = {}) => addAudit({
     documentId, action, userId: context.actorUserId || null, ip: context.ip || '',
@@ -93,9 +97,10 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     const draft = row?.message_json ? JSON.parse(row.message_json) : null;
     const historicalSent = document.submitted_at && !row?.sent_at;
     const stale = row?.delivery_state === 'sending' && Date.parse(row.attempted_at) < Date.now() - 300_000;
-    const state = historicalSent ? 'sent' : document.status !== 'completed' ? 'awaiting_signature'
+    const recordedState = historicalSent ? 'sent' : document.status !== 'completed' ? 'awaiting_signature'
       : stale ? 'uncertain'
       : !row?.report_sha256 ? 'awaiting_report' : row.delivery_state || 'ready';
+    const state = !automaticDeliveryEnabled && !['sent', 'sending', 'uncertain'].includes(recordedState) ? 'disabled' : recordedState;
     const messages = {
       awaiting_signature: 'The signed dispensation and corresponding report will be emailed to the District Deputy after either secretary signs.',
       awaiting_report: 'The secretary has signed. Add the corresponding report PDF to email both documents to the District Deputy.',
@@ -108,13 +113,14 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       uncertain: row?.delivery_error || 'Delivery could not be confirmed. Check before sending again to avoid a duplicate.',
     };
     return {
-      state, recipient: draft ? { to: draft.to, name: draft.name } : configuredRecipient(),
+      state, automaticDeliveryEnabled, reportLocked: Boolean(draft || document.submitted_at), recipient: draft ? { to: draft.to, name: draft.name } : configuredRecipient(),
       report: row?.report_sha256 ? { filename: row.report_filename, sha256: row.report_sha256, sourceLabel: row.source_label || '', addedAt: row.report_added_at } : null,
-      draft: draft ? { ...draft, preparedAt: row.prepared_at } : null,
+      draft: automaticDeliveryEnabled && draft ? { ...draft, preparedAt: row.prepared_at } : null,
       delivery: { sentAt: row?.sent_at || document.submitted_at || null, to: draft?.to || document.submitted_to || null,
         messageId: row?.message_id || null, confirmedAt: row?.delivery_confirmed_at || null,
         confirmationOutcome: row?.delivery_confirmation_outcome || null, attemptedAt: row?.attempted_at || null },
-      message: messages[state],
+      message: automaticDeliveryEnabled ? messages[state]
+        : `${state === 'sent' ? 'A previous email submission is recorded. This does not confirm receipt. ' : ['sending', 'uncertain'].includes(state) ? 'A previous delivery attempt remains unconfirmed. ' : ''}${DISPENSATION_DELIVERY_DISABLED_MESSAGE}`,
     };
   }
 
@@ -159,6 +165,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
   }
 
   async function deliver(id, context = {}, { retry = false } = {}) {
+    if (!automaticDeliveryEnabled) return packet(id);
     const claimed = await withTransaction(async () => {
       const document = await dbGet('SELECT * FROM documents WHERE id = ? FOR UPDATE', [id]);
       if (!document || document.template_kind !== 'dispensation_v1' || document.status !== 'completed' || document.submitted_at) return null;
@@ -238,6 +245,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
   }
 
   async function resolveDelivery(id, user, outcome, note, context = {}, expectedAttemptedAt) {
+    if (!automaticDeliveryEnabled) throw error(409, DISPENSATION_DELIVERY_DISABLED_MESSAGE);
     if (!['delivered', 'not_delivered'].includes(outcome)) throw error(400, 'Confirm whether both documents were delivered or were not delivered.');
     const explanation = String(note || '').trim();
     if (explanation.length < 10 || explanation.length > 600) throw error(400, 'Add a verification note of 10 to 600 characters before resolving delivery.');
@@ -271,6 +279,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
 
   let scanning = false;
   async function runPending(broadcast = () => {}) {
+    if (!automaticDeliveryEnabled) return;
     if (scanning) return;
     scanning = true;
     try {
@@ -288,6 +297,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     } finally { scanning = false; }
   }
   function startWorker(broadcast) {
+    if (!automaticDeliveryEnabled) return () => {};
     const scan = () => runPending(broadcast).catch(cause => console.warn('Dispensation submission queue:', cause.message));
     void scan();
     const timer = setInterval(scan, 60_000);
@@ -317,11 +327,13 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
         `inline; filename="${asciiName}"; filename*=UTF-8''${encodedName}`).send(buffer(row.report_bytes));
     }));
     app.get('/api/documents/:id/submission-draft', ...owner, route(async (req, res) => {
+      if (!automaticDeliveryEnabled) throw error(409, DISPENSATION_DELIVERY_DISABLED_MESSAGE);
       const result = await packet(req.params.id, req.user);
       if (!result.draft || result.state === 'awaiting_signature') throw error(409, 'The fully signed dispensation and corresponding report are required before an email can be prepared.');
       res.json({ draft: { ...result.draft, alreadySent: result.delivery.sentAt } });
     }));
     app.get('/api/documents/:id/submission-email', ...owner, route(async (req, res) => {
+      if (!automaticDeliveryEnabled) throw error(409, DISPENSATION_DELIVERY_DISABLED_MESSAGE);
       const document = await documentFor(req.params.id, req.user);
       const row = await dbGet(`SELECT s.message_raw, (d.signed_bytes IS NOT NULL) AS has_signed
         FROM dispensation_submissions s JOIN documents d ON d.id = s.document_id WHERE s.document_id = ?`, [req.params.id]);
@@ -330,6 +342,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     }));
     app.post('/api/documents/:id/submit', ...owner,
       rateLimit({ key: 'submit-ddgm', maximum: 20, windowMs: 60 * 60 * 1000 }), route(async (req, res) => {
+      if (!automaticDeliveryEnabled) throw error(409, DISPENSATION_DELIVERY_DISABLED_MESSAGE);
       const document = await documentFor(req.params.id, req.user);
       if (document.status !== 'completed') throw error(409, 'Either secretary must sign before this dispensation can be submitted.');
       const before = await packet(document.id, req.user);
@@ -346,5 +359,5 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
         res.json({ packet: result, message: result.message });
       }));
   }
-  return { packet, deliver, attachReport, resolveDelivery, mount, runPending, startWorker };
+  return { automaticDeliveryEnabled, packet, deliver, attachReport, resolveDelivery, mount, runPending, startWorker };
 }

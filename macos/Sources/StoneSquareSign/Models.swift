@@ -422,21 +422,20 @@ struct DispensationSubmissionPacket: Codable {
     let recipient: SubmissionRecipient?
     let message: String?
     var delivery: DispensationSubmissionDelivery? = nil
+    var automaticDeliveryEnabled: Bool? = nil
+    var reportLocked: Bool? = nil
 
     var recipientEmail: String? { recipient?.to ?? draft?.to }
     var recipientName: String { recipient?.name ?? draft?.name ?? "District Deputy" }
-    var canAttachReport: Bool { ["awaiting_signature", "awaiting_report"].contains(state) }
-    var canRetry: Bool { state == "failed" }
+    var canSaveSupportingReport: Bool {
+        automaticDeliveryEnabled == false && reportLocked != true
+            && ["disabled", "awaiting_signature", "awaiting_report", "failed"].contains(state)
+    }
     var statusTitle: String {
         switch state {
-        case "awaiting_signature": return "Waiting for the secretary's signature"
-        case "awaiting_report": return "Supporting report needed"
-        case "ready": return "Ready for automatic delivery"
-        case "sending": return "Sending both attachments"
-        case "sent": return "Sent to the District Deputy"
-        case "failed": return "Email delivery needs attention"
-        case "uncertain": return "Delivery confirmation needed"
-        default: return "Delivery status unavailable"
+        case "sent": return "Email submission recorded"
+        case "sending", "uncertain": return "Previous email attempt needs verification"
+        default: return "Automatic email sending is off"
         }
     }
 }

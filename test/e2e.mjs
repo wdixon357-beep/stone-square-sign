@@ -1277,9 +1277,9 @@ try {
 
   /* Self serve accounts. No email is delivered in production, so an officer has to be able to
    * create his own account from one shared code rather than waiting on an invitation. */
-  /* The District Deputy receives exactly one email with the signed dispensation and its
-   * explicitly associated report. Signature alone must never send an incomplete packet. */
-  console.log('\nSubmission to the District Deputy');
+  /* District Deputy sending is disconnected. Signatures and saved reports remain
+   * available without emailing anything to the Deputy, including from stale clients. */
+  console.log('\nDistrict Deputy sending is off');
   const beforeCount = deliveredMail.length;
   const toSubmit = await api('POST', '/api/dispensations', {
     token: wmToken,
@@ -1296,33 +1296,33 @@ try {
   correspondingReport.append('sourceLabel', 'Stone Square Dispensation Reports');
   const attachedReport = await api('PUT', `/api/documents/${submitId}/supporting-report`, { token: wmToken, body: correspondingReport, raw: true });
   check('the owner associates the exact report before signing', attachedReport.status === 200
-    && attachedReport.payload.packet?.state === 'awaiting_signature', JSON.stringify(attachedReport.payload));
+    && attachedReport.payload.packet?.state === 'disabled'
+    && attachedReport.payload.packet?.automaticDeliveryEnabled === false, JSON.stringify(attachedReport.payload));
   const reportDownload = await api('GET', `/api/documents/${submitId}/supporting-report`, { token: wmToken });
   check('a report with a Unicode title can be opened without a header error', reportDownload.status === 200 && reportDownload.payload.equals(PDF));
   const finalSign = await api('POST', `/api/documents/${submitId}/sign`, {
     token: secToken, body: { consent: true, officerAddress: '722 Banning Dr., Middletown, DE 19709' },
   });
   check('the Secretary signs it', finalSign.status === 200, JSON.stringify(finalSign.payload).slice(0, 200));
-  check('signing reports that it went to the District Deputy',
-    finalSign.payload.submitted === true, JSON.stringify(finalSign.payload).slice(0, 300));
+  check('signing reports that District Deputy sending is disabled',
+    finalSign.payload.submitted === false && finalSign.payload.submissionPacket?.state === 'disabled', JSON.stringify(finalSign.payload).slice(0, 300));
 
   const fresh = deliveredMail.slice(beforeCount).join('\n---\n');
   const deputyMessages = deliveredMail.slice(beforeCount).filter(mail => /^To: districtdeputy@example\.org$/m.test(mail));
-  check('exactly one email left the server addressed to the District Deputy',
-    deputyMessages.length === 1, fresh.slice(0, 200));
-  check('the deputy receives both PDFs in that same email', (deputyMessages[0]?.match(/Content-Type: application\/pdf/g) || []).length === 2);
+  check('no email leaves the server addressed to the District Deputy',
+    deputyMessages.length === 0, fresh.slice(0, 200));
+  check('saving the corresponding report does not prepare a Deputy email', attachedReport.payload.packet?.draft === null);
   check('the secretary response contains no owner-only report metadata', !finalSign.payload.submissionPacket?.report
     && !finalSign.payload.submissionPacket?.recipient && !finalSign.payload.submissionPacket?.draft);
   check('it carries the signed PDF as an attachment',
     /application\/pdf/i.test(fresh) && /JVBER/.test(fresh),
     'no PDF part found in the delivered message');
-  check('it asks him to review it',
-    /review/i.test(fresh) && /Request for Dispensation/i.test(fresh));
+  check('signing clearly instructs the owner to send the packet manually',
+    /turned off/.test(finalSign.payload.message) && /email app/.test(finalSign.payload.message));
 
   const submittedDoc = await api('GET', `/api/documents/${submitId}`, { token: wmToken });
-  check('the document records when it went and to whom',
-    Boolean(submittedDoc.payload.document.submitted_at)
-    && submittedDoc.payload.document.submitted_to === 'districtdeputy@example.org',
+  check('the document is never marked as submitted when sending is off',
+    !submittedDoc.payload.document.submitted_at && !submittedDoc.payload.document.submitted_to,
     JSON.stringify({ at: submittedDoc.payload.document.submitted_at, to: submittedDoc.payload.document.submitted_to }));
   check('and records no failure', !submittedDoc.payload.document.submitted_error,
     String(submittedDoc.payload.document.submitted_error));
@@ -1335,20 +1335,17 @@ try {
   check('a stale client cannot bypass duplicate protection with resend',
     onPurpose.status === 409, JSON.stringify(onPurpose.payload));
   const draft = await api('GET', `/api/documents/${submitId}/submission-draft`, { token: wmToken });
-  check('the Master can pull a ready written draft for his own mail app',
-    draft.status === 200, JSON.stringify(draft.payload).slice(0, 200));
-  check('it is addressed to the District Deputy and names the attachment',
-    draft.payload.draft?.to === 'districtdeputy@example.org' && /\.pdf$/.test(draft.payload.draft?.filename || ''),
-    JSON.stringify(draft.payload.draft).slice(0, 200));
-  check('the stored email contains the brief summary sent with both documents',
-    /review/i.test(draft.payload.draft?.body || '') && /Request for Dispensation/i.test(draft.payload.draft?.subject || ''),
-    JSON.stringify(draft.payload.draft).slice(0, 300));
+  check('the disabled email generator refuses draft requests',
+    draft.status === 409, JSON.stringify(draft.payload).slice(0, 200));
+  check('the disabled draft request explains that automatic email is off', /turned off/.test(draft.payload.error));
+  check('stale resend requests explain that automatic email is off', /turned off/.test(onPurpose.payload.error));
   const savedPacket = await api('GET', `/api/documents/${submitId}/submission-packet`, { token: wmToken });
-  check('the owner sees a sent packet with both attachment names', savedPacket.payload.packet?.state === 'sent'
-    && savedPacket.payload.packet?.draft?.reportFilename === 'Community Report – October 2026.pdf');
+  check('the owner sees sending off and the saved corresponding report', savedPacket.payload.packet?.state === 'disabled'
+    && savedPacket.payload.packet?.automaticDeliveryEnabled === false
+    && savedPacket.payload.packet?.report?.filename === 'Community Report – October 2026.pdf'
+    && savedPacket.payload.packet?.draft === null);
   const emailCopy = await api('GET', `/api/documents/${submitId}/submission-email`, { token: wmToken });
-  check('the owner can download the exact two-attachment email without sending again', emailCopy.status === 200
-    && (emailCopy.payload.toString().match(/Content-Type: application\/pdf/g) || []).length === 2);
+  check('the disconnected email generator refuses email downloads', emailCopy.status === 409 && /turned off/.test(emailCopy.payload.error));
   for (const path of ['submission-packet', 'submission-email', 'supporting-report']) {
     check(`the secretary cannot access private submission ${path}`,
       (await api('GET', `/api/documents/${submitId}/${path}`, { token: secToken })).status === 403);

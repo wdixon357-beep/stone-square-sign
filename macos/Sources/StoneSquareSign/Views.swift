@@ -2572,7 +2572,7 @@ struct DocumentRow: View {
     @ViewBuilder private var deliveryStatus: some View {
         if document.isDispensation && !document.isRescinded {
             if let sentAt = document.submittedAt {
-                Text("Sent to the District Deputy \(LodgeDateTime.display(sentAt))")
+                Text("Email submission recorded \(LodgeDateTime.display(sentAt))")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if model.user?.role == "owner", let detail = document.submissionMessage, !detail.isEmpty {
@@ -2580,8 +2580,7 @@ struct DocumentRow: View {
                     .foregroundStyle(document.submissionState == "failed" ? .red : .orange)
                     .fixedSize(horizontal: false, vertical: true)
             } else if document.isComplete {
-                Text(document.submittedError.map { "Delivery needs attention: \($0)" }
-                    ?? "Automatic delivery is waiting. Open the submission packet for details.")
+                Text("Automatic email sending is off. Review and send the signed PDF and supporting report manually.")
                     .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -2693,13 +2692,6 @@ struct DispensationSubmissionPacketView: View {
     @State private var errorMessage = ""
     @State private var preview: PDFDocument?
     @State private var previewTitle = ""
-    @State private var resolutionNote = ""
-    @State private var pendingResolution: String?
-
-    private var canResolve: Bool {
-        let count = resolutionNote.trimmingCharacters(in: .whitespacesAndNewlines).count
-        return !busy && (10...600).contains(count) && packet?.delivery?.attemptedAt?.isEmpty == false
-    }
 
     // Resolve the login home so sandboxed builds do not start the chooser in the app container.
     private var loginHome: URL {
@@ -2730,7 +2722,7 @@ struct DispensationSubmissionPacketView: View {
                     if let packet {
                         packetContent(packet)
                     } else if busy {
-                        ProgressView("Loading delivery details…")
+                        ProgressView("Loading saved documents…")
                     }
                     if !errorMessage.isEmpty {
                         Label(errorMessage, systemImage: "exclamationmark.circle")
@@ -2747,7 +2739,7 @@ struct DispensationSubmissionPacketView: View {
                             PDFKitContainer(document: preview).frame(height: 400)
                         }
                     }
-                    Button("Refresh delivery status") { Task { await loadPacket() } }
+                    Button("Refresh saved documents") { Task { await loadPacket() } }
                         .disabled(busy)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2758,51 +2750,41 @@ struct DispensationSubmissionPacketView: View {
         .task { await loadPacket() }
         .onChange(of: model.user?.id) { _, _ in dismiss() }
         .onChange(of: model.user?.role) { _, role in if role != "owner" { dismiss() } }
-        .alert(pendingResolution == "delivered" ? "Confirm the packet was delivered?" : "Confirm no email was delivered and retry?", isPresented: Binding(
-            get: { pendingResolution != nil },
-            set: { if !$0 { pendingResolution = nil } }
-        )) {
-            Button(pendingResolution == "delivered" ? "Confirm already delivered" : "Confirm no delivery and retry") {
-                let outcome = pendingResolution
-                pendingResolution = nil
-                if let outcome { Task { await resolveDelivery(outcome: outcome) } }
-            }
-            Button("Cancel", role: .cancel) { pendingResolution = nil }
-        } message: {
-            Text(pendingResolution == "delivered"
-                 ? "This records your external verification that the District Deputy was sent this exact packet. It will not send another email. Your verification note is retained in the audit record."
-                 : "Choose this only after checking that this exact packet was not delivered. The dashboard will retry the same two attachments immediately. Your verification note is retained in the audit record.")
-        }
     }
 
     @ViewBuilder private func packetContent(_ packet: DispensationSubmissionPacket) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(packet.statusTitle, systemImage: packet.state == "sent" ? "checkmark.circle.fill" : "envelope")
-                .font(.headline).foregroundStyle(packet.state == "sent" ? .green : SignTheme.navy)
+            Label("Automatic email sending is off", systemImage: "envelope")
+                .font(.headline).foregroundStyle(SignTheme.navy)
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Review the signed dispensation and corresponding report, save the PDFs, and send them through your email app. Signing a dispensation does not send it to the District Deputy.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+            if ["sent", "sending", "uncertain"].contains(packet.state) {
+                Text(packet.statusTitle).font(.callout.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let detail = packet.message, !detail.isEmpty {
                 Text(detail).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
-            Text("After Adrian Reese or William McDuffie signs, the dashboard automatically emails the fully signed dispensation and its matching report to the District Deputy. Both attachments must be available before it sends.")
-                .font(.callout).fixedSize(horizontal: false, vertical: true)
             Text("Recipient: \(packet.recipientName)").font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
             if let email = packet.recipientEmail, !email.isEmpty {
                 Text(email).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("The District Deputy's email is not configured. Automatic delivery is blocked.")
-                    .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text("The District Deputy's email is not configured.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         Divider()
         VStack(alignment: .leading, spacing: 12) {
-            Text("Email attachments").font(.headline)
+            Text("Saved documents").font(.headline)
             Label(document.isComplete ? "Fully signed dispensation PDF" : "Dispensation PDF awaiting final signature", systemImage: "doc.richtext")
                 .fixedSize(horizontal: false, vertical: true)
             Text(packet.draft?.filename ?? document.originalName)
                 .font(.callout).foregroundStyle(.secondary)
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             Button("View dispensation") { Task { await showDispensation() } }.disabled(busy)
+            Button("Save dispensation PDF") { Task { await saveDispensation() } }.disabled(busy)
             if let report = packet.report {
                 Label(report.filename, systemImage: "doc.text")
                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
@@ -2811,17 +2793,18 @@ struct DispensationSubmissionPacketView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Button("View supporting report") { Task { await showSupportingReport() } }.disabled(busy)
+                Button("Save supporting report PDF") { Task { await saveSupportingReport() } }.disabled(busy)
             } else {
                 Label("Matching supporting report has not been attached.", systemImage: "paperclip")
                     .foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
-        if packet.canAttachReport {
+        if packet.canSaveSupportingReport {
             Divider()
             VStack(alignment: .leading, spacing: 12) {
-                Text(packet.report == nil ? "Add the corresponding report" : "Replace the corresponding report")
+                Text(packet.report == nil ? "Save the corresponding report" : "Replace the saved report")
                     .font(.headline)
-                Text("Choose the PDF for this dispensation from either report folder. Selecting a file does not upload it.")
+                Text("Choose the matching PDF to keep with this dispensation. Saving a report does not send an email.")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
                     Button("Desktop reports") { chooseReport(in: desktopReports) }
@@ -2834,68 +2817,21 @@ struct DispensationSubmissionPacketView: View {
                     Button("Preview selected report") { Task { await showSelectedReport() } }.disabled(busy)
                     Toggle("I confirm this report corresponds to this dispensation.", isOn: $matchingReportConfirmed)
                         .toggleStyle(.checkbox).fixedSize(horizontal: false, vertical: true)
-                    Text("Attaching this PDF makes it available for automatic email. If the dispensation is already fully signed, the dashboard sends both attachments immediately.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button(document.isComplete ? "Attach report and send automatically" : "Attach report for automatic delivery") {
-                        Task { await uploadReport() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(busy || !matchingReportConfirmed || packet.recipientEmail?.isEmpty != false)
+                    Button("Save supporting report") { Task { await saveReportToPacket() } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(busy || !matchingReportConfirmed)
                 }
             }
-        }
-        if let draft = packet.draft {
-            Divider()
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Email summary").font(.headline)
-                Text(draft.subject).font(.callout.weight(.semibold)).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(draft.body).font(.callout).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        if packet.state == "uncertain" {
-            Divider()
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Resolve delivery uncertainty").font(.headline)
-                Text("Check the mail service's delivery records or obtain confirmation before choosing an outcome. An interrupted request does not establish whether an email was sent. The dashboard will not automatically resend this packet while its delivery is uncertain.")
-                    .font(.callout).fixedSize(horizontal: false, vertical: true)
-                Text("How did you verify delivery?").font(.callout.weight(.medium))
-                TextEditor(text: $resolutionNote).font(.body)
-                    .frame(height: 100).padding(6)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                    .overlay { RoundedRectangle(cornerRadius: 6).stroke(.separator) }
-                    .accessibilityLabel("Delivery verification note")
-                Text("10 to 600 characters. \(resolutionNote.trimmingCharacters(in: .whitespacesAndNewlines).count) entered.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Confirm already delivered") { pendingResolution = "delivered" }
-                    .disabled(!canResolve)
-                Button {
-                    pendingResolution = "not_delivered"
-                } label: {
-                    Text("Confirmed not delivered; retry").fixedSize(horizontal: false, vertical: true)
-                }
-                .disabled(!canResolve)
-            }
-        }
-        if packet.canRetry {
-            Text("Retry uses the same two attachments. A packet already sent or awaiting delivery confirmation cannot be sent again here.")
-                .font(.callout).fixedSize(horizontal: false, vertical: true)
-            Button("Retry email delivery") { Task { await retryDelivery() } }
-                .buttonStyle(.borderedProminent).disabled(busy)
         }
     }
 
     private func chooseReport(in directory: URL) {
         let panel = NSOpenPanel()
         panel.title = "Choose the report corresponding to this dispensation"
-        panel.message = "The selected PDF will accompany this dispensation in the automatic email to the District Deputy."
+        panel.message = "This saves the PDF with the dispensation for manual review. It does not send an email."
         panel.allowedContentTypes = [.pdf]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        // NSOpenPanel grants access after selection. A sandboxed preflight can
-        // report a real folder as missing and reopen the previous directory.
         panel.directoryURL = directory
         guard panel.runModal() == .OK, let url = panel.url else { return }
         selectedReport = url
@@ -2923,25 +2859,8 @@ struct DispensationSubmissionPacketView: View {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    @MainActor private func loadPacket() async {
-        guard !busy else { return }
-        busy = true
-        defer { busy = false }
-        errorMessage = ""
-        do { applyPacket(try await model.submissionPacket(documentId: document.id)) }
-        catch { errorMessage = error.localizedDescription }
-    }
-
-    @MainActor private func applyPacket(_ latest: DispensationSubmissionPacket) {
-        if packet?.delivery?.attemptedAt != latest.delivery?.attemptedAt {
-            resolutionNote = ""
-            pendingResolution = nil
-        }
-        packet = latest
-    }
-
-    @MainActor private func uploadReport() async {
-        guard !busy, matchingReportConfirmed, let selectedReport, packet?.canAttachReport == true else { return }
+    @MainActor private func saveReportToPacket() async {
+        guard !busy, matchingReportConfirmed, let selectedReport, packet?.canSaveSupportingReport == true else { return }
         busy = true
         defer { busy = false }
         errorMessage = ""
@@ -2953,43 +2872,54 @@ struct DispensationSubmissionPacketView: View {
             matchingReportConfirmed = false
         } catch {
             errorMessage = error.localizedDescription
-            // A timeout can occur after the upload was accepted. Reload instead of guessing or resending.
+            // A lost upload response does not authorize a second write.
             packet = try? await model.submissionPacket(documentId: document.id)
         }
     }
 
-    @MainActor private func retryDelivery() async {
-        guard !busy, packet?.canRetry == true else { return }
-        busy = true
-        errorMessage = ""
-        let succeeded = await model.submitToDistrictDeputy(documentId: document.id)
-        if !succeeded { errorMessage = model.message }
-        do { packet = try await model.submissionPacket(documentId: document.id) }
-        catch { errorMessage = error.localizedDescription }
-        busy = false
-    }
-
-    @MainActor private func resolveDelivery(outcome: String) async {
-        guard canResolve, packet?.state == "uncertain" else { return }
+    @MainActor private func loadPacket() async {
+        guard !busy else { return }
         busy = true
         defer { busy = false }
         errorMessage = ""
+        do { packet = try await model.submissionPacket(documentId: document.id) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func saveDispensation() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
         do {
-            let latest = try await model.resolveSubmission(documentId: document.id, outcome: outcome, note: resolutionNote,
-                expectedAttemptedAt: packet?.delivery?.attemptedAt)
-            applyPacket(latest)
-            resolutionNote = ""
-        } catch {
-            errorMessage = error.localizedDescription
-            // A lost response may hide a new delivery attempt. Verification of the previous attempt cannot authorize another retry.
-            if let latest = try? await model.submissionPacket(documentId: document.id) {
-                applyPacket(latest)
-            } else {
-                packet = nil
-                resolutionNote = ""
-                pendingResolution = nil
-            }
+            let data = try await model.pdfData(document: document)
+            try savePDF(data, filename: document.originalName)
+            errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func saveSupportingReport() async {
+        guard !busy, let report = packet?.report else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let data = try await model.supportingReportData(documentId: document.id)
+            try savePDF(data, filename: report.filename)
+            errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func savePDF(_ data: Data, filename: String) throws {
+        guard PDFDocument(data: data) != nil else {
+            throw ClientError.server("The saved document is not a readable PDF.")
         }
+        let panel = NSSavePanel()
+        panel.title = "Save a PDF for manual review and email"
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = URL(fileURLWithPath: filename).lastPathComponent
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let accessed = destination.startAccessingSecurityScopedResource()
+        defer { if accessed { destination.stopAccessingSecurityScopedResource() } }
+        try data.write(to: destination, options: .atomic)
     }
 
     @MainActor private func showDispensation() async {

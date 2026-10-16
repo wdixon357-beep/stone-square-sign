@@ -566,6 +566,7 @@ const addAudit = async ({
 
 const dispensationSubmissions = createDispensationSubmissions({
   sendEmail, addAudit, recipient: { to: DDGM_EMAIL, name: DDGM_NAME }, lodgeName: LODGE_NAME, mailFrom: process.env.MAIL_FROM,
+  automaticDeliveryEnabled: false,
 });
 
 const requestBaseUrl = (req) =>
@@ -3303,9 +3304,9 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       await sendCompletionNotice(completedDocument, completeSigners, asBuffer(completedDocument.signed_bytes));
       if (completedDocument.template_kind === 'dispensation_v1' && !completedDocument.submitted_at) {
         try {
-          submission = await dispensationSubmissions.deliver(documentId, {
+          submission = dispensationSubmissions.automaticDeliveryEnabled ? await dispensationSubmissions.deliver(documentId, {
             actorUserId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || '',
-          });
+          }) : await dispensationSubmissions.packet(documentId);
         } catch (error) {
           // Delivery must never undo an already captured signature.
           console.warn('Dispensation submission could not be prepared:', error.message);
@@ -3632,7 +3633,7 @@ await initTreasurySchema();
 await initGenerationSchema();
 await initActivitySchema();
 
-dispensationSubmissions.startWorker(broadcast);
+if (dispensationSubmissions.automaticDeliveryEnabled) dispensationSubmissions.startWorker(broadcast);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Stone Square Sign is running at http://localhost:${PORT}`);

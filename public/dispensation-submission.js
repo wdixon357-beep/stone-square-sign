@@ -1,6 +1,6 @@
-/* The same delivery packet is used by the website and the native Mac app.
- * A report is associated with one document explicitly, before either signature
- * completion or the report upload releases the two-attachment email. */
+/* The same packet is used by the website and the native Mac app.
+ * Saving a corresponding report is separate from sending an email. The shared
+ * service must explicitly enable delivery before any sending controls appear. */
 export async function renderDispensationSubmission(container, { document: record, apiFetch, previewPdf }) {
   container.replaceChildren();
   container.className = 'dispensation-delivery';
@@ -11,7 +11,7 @@ export async function renderDispensationSubmission(container, { document: record
     if (className) node.className = className;
     return node;
   };
-  const heading = element('h4', 'District Deputy delivery');
+  const heading = element('h4', 'District Deputy submission');
   const status = element('p', 'Loading delivery details…', 'delivery-status');
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
@@ -24,9 +24,14 @@ export async function renderDispensationSubmission(container, { document: record
     status.classList.add('error');
     return;
   }
-  const fullySigned = packet.state !== 'awaiting_signature';
+  const automaticDeliveryEnabled = packet.automaticDeliveryEnabled === true;
+  const fullySigned = record.status === 'completed';
   status.textContent = packet.message;
   status.dataset.state = packet.state;
+  if (!automaticDeliveryEnabled) {
+    const notice = element('p', 'Automatic District Deputy email is turned off. Review the signed dispensation and corresponding event proposal report, download both PDFs, and send them manually from your email client. Saving a supporting report here does not send email.', 'delivery-manual-notice');
+    container.append(notice);
+  }
   const recoverWrite = async error => {
     // A connection can end after the server accepts an upload or confirmation.
     // Read the shared record before offering the same action again.
@@ -60,7 +65,7 @@ export async function renderDispensationSubmission(container, { document: record
     });
     container.append(view);
   }
-  if (packet.draft?.body) {
+  if (automaticDeliveryEnabled && packet.draft?.body) {
     const details = element('details');
     details.append(element('summary', 'Email summary and attachments'));
     details.append(element('p', packet.draft.subject), element('pre', packet.draft.body));
@@ -68,18 +73,22 @@ export async function renderDispensationSubmission(container, { document: record
   }
   // An already prepared delivery packet is immutable. A late duplicate upload
   // must not silently replace the report that was emailed.
-  if (!['sent', 'sending', 'failed', 'uncertain'].includes(packet.state) && !packet.draft?.preparedAt) {
+  // An older server can still auto-send on upload. Require an explicit safe-save
+  // capability before presenting an upload as an archive-only action.
+  if (packet.automaticDeliveryEnabled === false && !packet.reportLocked && !['sent', 'sending', 'failed', 'uncertain'].includes(packet.state) && !packet.draft?.preparedAt) {
     const form = element('form', null, 'delivery-report-form');
     const label = element('label', packet.report ? 'Replace the supporting report PDF' : 'Attach the corresponding report PDF');
     const file = element('input');
     file.type = 'file'; file.accept = 'application/pdf,.pdf'; file.required = true;
     file.addEventListener('change', () => { container.dataset.preserveRefresh = String(Boolean(file.files?.length)); });
     label.append(file);
-    const instructions = element('p', fullySigned
+    const instructions = element('p', !automaticDeliveryEnabled
+      ? 'Save the matching report with this dispensation for review and download. Nothing will be emailed.'
+      : fullySigned
       ? 'This dispensation is signed. Attaching its report will automatically email both PDFs to the District Deputy.'
       : 'Once Adrian Reese or William McDuffie signs, both PDFs will be emailed automatically to the District Deputy.');
     const source = element('p', 'Choose the matching report from “Stone Square Dispensation Reports” on your Desktop or “Dispensation Reports - Oct 2026” in Dropbox.', 'delivery-source-hint');
-    const save = element('button', fullySigned ? 'Attach report and email both PDFs' : 'Save supporting report', 'primary compact');
+    const save = element('button', automaticDeliveryEnabled && fullySigned ? 'Attach report and email both PDFs' : 'Save supporting report', 'primary compact');
     save.type = 'submit';
     form.append(label, source, instructions, save);
     form.addEventListener('submit', async event => {
@@ -104,7 +113,7 @@ export async function renderDispensationSubmission(container, { document: record
     });
     container.append(form);
   }
-  if (packet.state === 'failed') {
+  if (automaticDeliveryEnabled && packet.state === 'failed') {
     const retry = element('button', 'Retry delivery of both PDFs', 'primary compact');
     retry.type = 'button';
     retry.addEventListener('click', async () => {
@@ -117,7 +126,7 @@ export async function renderDispensationSubmission(container, { document: record
     });
     container.append(retry);
   }
-  if (packet.state === 'uncertain') {
+  if (automaticDeliveryEnabled && packet.state === 'uncertain') {
     const form = element('form', null, 'delivery-report-form');
     const instruction = element('p', 'Check with the District Deputy before resolving this delivery. Record what you confirmed below. A retry is permitted only after you confirm the email was not received.');
     const label = element('label', 'Delivery confirmation note');

@@ -8,7 +8,7 @@ final class SubmissionFixture: URLProtocol {
     static var packetState = "awaiting_report"
     static var owner = true
     static var packet: String {
-        #"{"packet":{"state":"\#(packetState)","recipient":{"name":"District Deputy Fixture","to":"deputy@example.invalid"},"report":null,"draft":null,"message":"Fixture delivery state","delivery":{"attemptedAt":"2026-10-16T19:00:00.000Z"}}}"#
+        #"{"packet":{"state":"\#(packetState)","automaticDeliveryEnabled":false,"recipient":{"name":"District Deputy Fixture","to":"deputy@example.invalid"},"report":null,"draft":null,"message":"Fixture delivery state","delivery":{"attemptedAt":"2026-10-16T19:00:00.000Z"}}}"#
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -61,19 +61,30 @@ final class SubmissionFixture: URLProtocol {
         let model = AppModel(session: session, savedSessionToken: "test-only-not-a-real-token")
         model.user = User(id:9998,email:"owner@example.invalid",name:"Fixture Owner",role:"owner",hasSignature:true)
         let packet = try await model.submissionPacket(documentId:"fixture")
-        precondition(packet.state == "awaiting_report" && packet.canAttachReport && !packet.canRetry)
+        precondition(packet.state == "awaiting_report" && packet.canSaveSupportingReport)
+        precondition(packet.automaticDeliveryEnabled == false)
         precondition(packet.recipientEmail == "deputy@example.invalid")
         precondition(SubmissionFixture.requests.count == 1 && SubmissionFixture.requests[0].httpMethod == "GET")
         print("PASS: opening the native packet is read-only and displays the configured deputy before attachment")
 
-        for state in ["awaiting_signature", "awaiting_report", "ready", "sending", "sent", "failed", "uncertain", "unknown"] {
+        for state in ["disabled", "awaiting_signature", "awaiting_report", "ready", "sending", "sent", "failed", "uncertain", "unknown"] {
             SubmissionFixture.packetState = state
             let value = try await model.submissionPacket(documentId:"fixture")
-            precondition(value.canAttachReport == ["awaiting_signature","awaiting_report"].contains(state))
-            precondition(value.canRetry == (state == "failed"))
-            if state == "ready" { precondition(value.statusTitle == "Ready for automatic delivery") }
+            precondition(value.canSaveSupportingReport == ["disabled","awaiting_signature","awaiting_report","failed"].contains(state))
+            if state == "sent" { precondition(value.statusTitle == "Email submission recorded") }
+            else if ["sending","uncertain"].contains(state) {
+                precondition(value.statusTitle == "Previous email attempt needs verification")
+            } else { precondition(value.statusTitle == "Automatic email sending is off") }
         }
-        print("PASS: native packet state prevents replacement or retry of sending, sent, uncertain, and unknown deliveries")
+        let olderPacket = try JSONDecoder().decode(DispensationSubmissionPacket.self, from:Data(#"{"state":"ready"}"#.utf8))
+        precondition(olderPacket.automaticDeliveryEnabled != true && olderPacket.statusTitle == "Automatic email sending is off")
+        for json in [#"{"state":"awaiting_report"}"#, #"{"state":"awaiting_report","automaticDeliveryEnabled":true}"#] {
+            let unsafeArchive = try JSONDecoder().decode(DispensationSubmissionPacket.self, from:Data(json.utf8))
+            precondition(!unsafeArchive.canSaveSupportingReport)
+        }
+        let lockedPacket = try JSONDecoder().decode(DispensationSubmissionPacket.self, from:Data(#"{"state":"disabled","automaticDeliveryEnabled":false,"reportLocked":true}"#.utf8))
+        precondition(!lockedPacket.canSaveSupportingReport)
+        print("PASS: native states preserve historical attempts and show disabled sending even when an older service omits the delivery flag")
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("sign-native-packet-" + UUID().uuidString)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)

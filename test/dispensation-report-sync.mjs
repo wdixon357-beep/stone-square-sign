@@ -18,6 +18,7 @@ assert.equal(matchingDocumentIds({ filename: 'Food Bank Mobile Pantry December 7
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ss22-report-sync-'));
 let puts = 0;
 let reportOnServer = null;
+let automaticDeliveryEnabled = false;
 let role = 'owner';
 const fakeFetch = async (url, options) => {
   assert.equal(options.headers.Authorization, 'Bearer fixture-token');
@@ -26,7 +27,7 @@ const fakeFetch = async (url, options) => {
   let body;
   if (route === '/api/auth/me') body = { user: { role } };
   else if (route === '/api/documents') body = { documents: [record] };
-  else if (route.endsWith('/submission-packet')) body = { packet: { state: 'awaiting_signature', report: reportOnServer } };
+  else if (route.endsWith('/submission-packet')) body = { packet: { state: 'disabled', automaticDeliveryEnabled, report: reportOnServer } };
   else if (route.endsWith('/supporting-report') && options.method === 'PUT') {
     assert.equal(options.body.get('report').type, 'application/pdf');
     assert.equal(options.body.get('sourceLabel'), path.basename(directory));
@@ -44,6 +45,13 @@ try {
   assert.equal(puts, 0); assert.equal(preview.waiting[0].reason, 'Exact match ready to attach.');
   const applied = await syncReports({ ...settings, apply: true });
   assert.equal(puts, 1); assert.equal(applied.uploaded.length, 1);
+  for (const capability of [undefined, true]) {
+    automaticDeliveryEnabled = capability;
+    const blocked = await syncReports({ ...settings, apply: true });
+    assert.equal(puts, 1, 'Older or enabled servers cannot receive an archive upload that might trigger email.');
+    assert.match(blocked.waiting[0].reason, /Automatic sending must be confirmed off/);
+  }
+  automaticDeliveryEnabled = false;
   reportOnServer = { sha256: 'different-existing-report' };
   const conflict = await syncReports({ ...settings, apply: true });
   assert.equal(puts, 1); assert.match(conflict.waiting[0].reason, /different report/);

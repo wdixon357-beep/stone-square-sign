@@ -1,5 +1,5 @@
 // Local companion: only the two owner-designated folders are read. The hosted
-// service sends after signature completion using its durable report copy.
+// service archives the report for manual review. Automatic sending is disconnected.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -97,6 +97,10 @@ export async function syncReports({ apply = false, folders = reportFolders, base
       continue;
     }
     if (!apply) { result.waiting.push({ documentId: id, filename: report.filename, reason: 'Exact match ready to attach.' }); continue; }
+    if (packet.automaticDeliveryEnabled !== false || packet.reportLocked) {
+      result.waiting.push({ documentId: id, filename: report.filename, reason: 'Safe report archiving is unavailable. Automatic sending must be confirmed off and the packet must be unlocked.' });
+      continue;
+    }
     const data = new FormData();
     data.append('report', new Blob([report.bytes], { type: 'application/pdf' }), report.filename);
     data.append('sourceLabel', report.sourceLabel);

@@ -19,6 +19,7 @@ const audit = [];
 const deliveries = [];
 let transport = async message => { deliveries.push(message); return true; };
 const service = createDispensationSubmissions({ sendEmail: message => transport(message),
+  automaticDeliveryEnabled: true,
   addAudit: async event => audit.push(event), recipient: { to: 'district@example.org', name: 'District Deputy Jones' },
   lodgeName: 'Stone Square Lodge No. 22', mailFrom: 'master@example.org' });
 async function make(id, status = 'pending', submitted = false) {

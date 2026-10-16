@@ -1,10 +1,20 @@
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
+import assert from 'node:assert/strict';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 if (process.platform !== 'darwin') { console.log('Mac submission tests require macOS.'); process.exit(0); }
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const views=readFileSync(path.join(root,'macos/Sources/StoneSquareSign/Views.swift'),'utf8');
+const packetView=views.slice(views.indexOf('struct DispensationSubmissionPacketView: View'),views.indexOf('struct PDFPreviewView: View'));
+for(const forbidden of ['model.submitToDistrictDeputy','model.resolveSubmission','Retry email delivery','Attach report and send automatically','dashboard automatically emails']) {
+ assert.ok(!packetView.includes(forbidden),`Native packet must not expose delivery control: ${forbidden}`);
+}
+for(const required of ['Automatic email sending is off','Save dispensation PDF','Save supporting report PDF','Save supporting report','Saving a report does not send an email.']) {
+ assert.ok(packetView.includes(required),`Native manual review must retain: ${required}`);
+}
+console.log('PASS: native packet exposes manual review, archive and PDF saving with no email or retry controls');
 const scratch=mkdtempSync(path.join(tmpdir(),'sign-submission-test-'));
 try {
  const binary=path.join(scratch,'submission-test');

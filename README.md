@@ -22,14 +22,15 @@ executed PDF by email and the document is marked complete.
 - The document as uploaded is kept separately from the executed copy, so the original
   is always recoverable.
 
-## Dispensation delivery with a supporting report
+## Dispensation records and manual email
 
-The owner attaches the corresponding report PDF using **Report and delivery** on
-the website or **Submission packet** on the Mac. Once Adrian Reese or William
-McDuffie signs, the shared service emails the configured District Deputy a short
-summary, the fully signed dispensation, and that report. If the signature arrives
-first, delivery waits for the report. Historical submissions are never resent
-automatically. The queue shows missing reports and delivery failures.
+Automatic emailing to the District Deputy is disconnected. A secretary's signature,
+a supporting report upload, a queued packet, or a retry from an older client cannot
+send a dispensation. The owner can save a supporting report alongside its
+dispensation, review and download both PDFs, and send them through their email app.
+The website and native Mac app display that sending is off. Previous submission
+timestamps, stored packets, signatures, and audit history are retained. A recorded
+submission does not establish receipt in the recipient's inbox.
 
 The optional local companion reads only `Desktop/Stone Square Dispensation Reports`
 and `Library/CloudStorage/Dropbox/Dispensation Reports - Oct 2026`. It associates a
@@ -44,14 +45,13 @@ while this Mac is awake, provided macOS permits the background process to read t
 existing app session and the report folders. The installer disables the job if its
 first run fails. Do not broaden system access to make it work; use the dashboard
 file chooser instead. Dropbox cloud files also require an active Dropbox sync
-client. Once uploaded, the service holds the report in the database
-and can send after signing even when the Mac is asleep.
+client. Once uploaded, the service holds the report in the database for manual
+review and download. Uploading or signing does not email the District Deputy.
 
-The saved delivery packet is immutable, with attachment hashes, a fixed message ID,
-and an audit history. Concurrent signature/upload actions cannot send it twice.
-Definite mail failures allow an owner retry. If the mail service's result is unknown,
-the owner must verify receipt and record a note before confirming delivery or
-authorizing a retry. Synthetic tests use an isolated database and mail server.
+Previously prepared delivery packets remain immutable, with their attachment
+hashes, message IDs, and audit history preserved. Automatic queue processing,
+retry, delivery-resolution, and email generation endpoints are disconnected.
+Synthetic tests use an isolated database and mail server.
 
 ## Report Generator
 
