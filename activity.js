@@ -39,13 +39,12 @@ const safeIncidentArea=value=>Object.hasOwn(WORK_AREAS,value)?WORK_AREAS[value]:
 export async function recordAppIncident({reference,userId,client,area,path,method,status,category,state}){
  const ref=/^SS22-[A-Z0-9]{6,16}$/.test(String(reference||''))?String(reference):incidentReference();
  const now=iso(),nextState=state==='recovered'?'recovered':'open';
- const existing=await dbGet('SELECT id FROM app_incidents WHERE reference=?',[ref]);
- if(existing){
-  await dbRun('UPDATE app_incidents SET state=?,last_seen_at=?,recovered_at=CASE WHEN ? = \'recovered\' THEN ? ELSE recovered_at END WHERE reference=?',[nextState,now,nextState,now,ref]);
- }else{
-  await dbRun(`INSERT INTO app_incidents (reference,user_id,client,area,request_path,request_method,status_code,category,state,first_seen_at,last_seen_at,recovered_at)
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,userId||null,String(client||'Unknown client').slice(0,60),safeIncidentArea(area),safeIncidentPath(path),String(method||'GET').toUpperCase().slice(0,10),Number.isInteger(Number(status))?Number(status):null,String(category||'request_failed').replace(/[^a-z0-9_-]/ig,'').slice(0,60)||'request_failed',nextState,now,now,nextState==='recovered'?now:null]);
- }
+ // Replayed client reports may arrive together. Preserve the original incident
+ // identity and metadata while atomically updating only its observed state.
+ await dbRun(`INSERT INTO app_incidents (reference,user_id,client,area,request_path,request_method,status_code,category,state,first_seen_at,last_seen_at,recovered_at)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+   ON CONFLICT(reference) DO UPDATE SET state=EXCLUDED.state,last_seen_at=EXCLUDED.last_seen_at,
+    recovered_at=CASE WHEN EXCLUDED.state='recovered' THEN EXCLUDED.recovered_at ELSE app_incidents.recovered_at END`,[ref,userId||null,String(client||'Unknown client').slice(0,60),safeIncidentArea(area),safeIncidentPath(path),String(method||'GET').toUpperCase().slice(0,10),Number.isInteger(Number(status))?Number(status):null,String(category||'request_failed').replace(/[^a-z0-9_-]/ig,'').slice(0,60)||'request_failed',nextState,now,now,nextState==='recovered'?now:null]);
  return ref;
 }
 export async function startActivitySession(userId,hash,req){const now=iso();await dbRun('INSERT INTO activity_sessions (user_id,auth_hash,started_at,first_seen_at,last_seen_at,client) VALUES (?,?,?,?,?,?) ON CONFLICT(auth_hash) DO NOTHING',[userId,hash,now,now,now,clientName(req)]);}
