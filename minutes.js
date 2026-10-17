@@ -3,7 +3,7 @@ import { minutesDateParts, minutesDateValue } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { organizeMeetingSource } from './minutes-organizer.js';
-import { cleanMinutesSectionsForPresentation, detectPrayerFacts } from './minutes-format.js';
+import { cleanMinutesSectionsForPresentation, detectPrayerFacts, UNCITED_PRESIDING_WARNING } from './minutes-format.js';
 
 const nullableText = { type: ['string', 'null'] };
 
@@ -123,12 +123,22 @@ function validateGeneratedShape(value, schema, path = 'response') {
 
 function checkedGeneratedDraft(response, source, localDraft) {
   validateGeneratedShape(response, MINUTES_GENERATION_SCHEMA);
-  const {draft: generated, evidence} = response;
+  const {evidence} = response;
+  const generated = {...response.draft};
+  const warnings = ['Organized with GPT-5.6 Luna; source verification is required.', ...generated.warnings];
   if (generated.officerAttendance.some(entry => !entry.name.trim())) {
     throw generationError('Minutes generation returned an invalid officer attendance name. Please try again.');
   }
   if (generated.income.length || generated.expenses.length || generated.actionItems.length) {
     throw generationError('Minutes generation included unsupported transaction or action tables. Please try again.');
+  }
+  // Missing evidence must not leave an invented presiding officer in an
+  // otherwise sourced draft or force an identical cached response to fail.
+  // Retain a persistent reminder that blocks attestation until it is entered.
+  // A supplied but invalid citation still fails the strict checks below.
+  if (generated.presiding?.trim() && !evidence.some(item => item.field === 'presiding')) {
+    generated.presiding = null;
+    warnings.push(UNCITED_PRESIDING_WARNING);
   }
   const requiredFields = new Set();
   for (const field of ['meetingDate', 'degree', 'openingTime', 'closingTime', 'prayerRequested', 'closingPrayerGiven', 'presiding', 'quorum', 'nextMeeting']) {
@@ -164,7 +174,6 @@ function checkedGeneratedDraft(response, source, localDraft) {
   if ([...requiredFields].some(field => !references.has(field))) {
     throw generationError('Minutes generation did not supply source references for all extracted content. Please try again.');
   }
-  const warnings = ['Organized with GPT-5.6 Luna; source verification is required.', ...generated.warnings];
   const quotesFor = field => (references.get(field) || []).map(entry => entry.quote).join('\n');
   // Exact quotes alone do not establish that a paraphrase is faithful. Reject
   // these recognizable violations rather than silently publishing bad prose.

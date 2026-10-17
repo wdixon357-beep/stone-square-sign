@@ -1768,6 +1768,9 @@ const officerAttendanceEditor = (entry) => {
 };
 
 const minutesAttendanceIssues = (draft = collectMinutesDraft()) => [
+  draft.warnings?.includes('Confirm the presiding officer before attestation: the generated name had no source reference and has been left unconfirmed.')
+    && !String(draft.presiding || '').trim()
+    && 'Enter and verify the presiding officer from the meeting record before attesting.',
   !draft.attendanceReview?.officerRoll && 'Confirm that you reviewed the complete officer roll.',
   draft.officerAttendance?.some((officer) => officer.status === 'not_recorded')
     && 'Choose Present, Excused, or Absent for every officer.',

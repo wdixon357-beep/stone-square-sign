@@ -52,6 +52,7 @@ jobs:
         run: |
           node test/mac-session.mjs
           node test/mac-minutes-dates.mjs
+          node test/minutes-presiding-parity.mjs
           node test/mac-report.mjs
           node test/mac-submission.mjs
 

@@ -12,10 +12,12 @@ name: Monitor and recover production
 
 on:
   schedule:
-    # 6am to midnight Eastern Daylight Time: check every ten minutes.
-    - cron: "*/10 10-23,0-3 * * *"
-    # Midnight to 6am Eastern Daylight Time: check every thirty minutes.
-    - cron: "0,30 4-9 * * *"
+    # 6am to midnight Eastern Daylight Time: process-only checks between hourly runs.
+    - cron: "10,20,30,40,50 10-23,0-3 * * *"
+    # Midnight to 6am Eastern Daylight Time: one process-only check between hourly runs.
+    - cron: "30 4-9 * * *"
+    # The scheduled event, rather than its delayed runner start time, selects readiness.
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -33,6 +35,8 @@ jobs:
       - name: Check the dashboard and recover a stopped web process
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          MONITOR_SCHEDULE: ${{ github.event.schedule }}
+          MONITOR_EVENT: ${{ github.event_name }}
         run: |
           BASE="https://stone-square-sign.onrender.com"
           check() {
@@ -74,9 +78,9 @@ jobs:
             done
           fi
 
-          # Check the database once an hour. Testing it every ten minutes would keep
-          # Neon's compute awake continuously and create avoidable usage.
-          if [ "$(date -u +%M)" != "00" ]; then
+          # An hourly event still checks readiness if GitHub starts it late. Manual
+          # runs also check it; frequent process-only events do not wake the database.
+          if [ "$MONITOR_SCHEDULE" != "0 * * * *" ] && [ "$MONITOR_EVENT" != "workflow_dispatch" ]; then
             echo "Web process check complete. The hourly database readiness check is not due on this run."
             exit 0
           fi

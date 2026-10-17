@@ -34,6 +34,10 @@ struct MinutesDraft: Codable, Equatable {
     var attendanceReview: MinutesAttendanceReview?
     var income: [MinutesFinance]; var expenses: [MinutesFinance]
     var sections: [MinutesSection]; var warnings: [String]; var sensitiveReview: [String]; var actionItems: [String]
+    var presidingReviewComplete: Bool {
+        !warnings.contains("Confirm the presiding officer before attestation: the generated name had no source reference and has been left unconfirmed.")
+            || !(presiding ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 struct MinutesChange: Codable, Hashable { let field: String; let before: String; let after: String }
 struct MinutesRecord: Codable, Identifiable {
@@ -436,6 +440,7 @@ struct MeetingMinutesView: View {
     private var attendanceReady: Bool {
         guard let draft = workspace.draft, let review = draft.attendanceReview else { return false }
         return review.officerRoll && review.otherPresent && review.otherExcused
+            && draft.presidingReviewComplete
             && draft.officerAttendance.allSatisfy { ["present", "excused", "absent"].contains($0.status) }
     }
     private func openRequestedSignedMinutes() {

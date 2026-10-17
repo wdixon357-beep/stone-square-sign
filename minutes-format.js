@@ -6,6 +6,7 @@ import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 // supplies a motion, an outcome, a name, or a time missing from the record.
 export const prayerRequestText = 'WM Dixon-Saunders asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.';
 export const closingPrayerText = 'The Chaplain gave the closing prayer and prayed for the sick and distressed.';
+export const UNCITED_PRESIDING_WARNING = 'Confirm the presiding officer before attestation: the generated name had no source reference and has been left unconfirmed.';
 
 const plainBullet = value => emphasisRuns(String(value || '').replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim()).map(run => run.text).join('').trim();
 const omitWholeBullets = (body, predicate) => String(body || '').split('\n').filter(line => {
@@ -112,6 +113,8 @@ export function attendanceReviewIssues(draft = {}) {
     && !CURRENT_OFFICERS.some((officer) => namesMatch(entry.name, officer.name))
     && !['present', 'excused', 'absent'].includes(entry.status));
   return [
+    draft.warnings?.includes(UNCITED_PRESIDING_WARNING) && !String(draft.presiding || '').trim()
+      && 'Enter and verify the presiding officer from the meeting record before attesting.',
     !review.officerRoll && 'Confirm that you reviewed the complete officer roll.',
     unresolved.length && `Record Present, Excused, or Absent for every Lodge officer. Still incomplete: ${unresolved.map((officer) => officer.name).join(', ')}.`,
     unresolvedAdditional.length && `Record Present, Excused, or Absent for each added officer or pro tem entry. Still incomplete: ${unresolvedAdditional.map((entry) => entry.name).join(', ')}.`,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { attendanceReviewIssues, sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText } from '../minutes-format.js';
+import { attendanceReviewIssues, sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText, UNCITED_PRESIDING_WARNING } from '../minutes-format.js';
 import { normalizeMinutesDraft } from '../minutes.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { buildMinutesDocx, minutesFileName } from '../minutes-document.js';
@@ -128,6 +128,15 @@ const completeAttendance = normalizeMinutesDraft({
   attendanceReview: {officerRoll:true, otherPresent:true, otherExcused:true},
 });
 assert.deepEqual(attendanceReviewIssues(completeAttendance), [], 'all attendance groups can be explicitly completed');
+assert.equal(completeAttendance.presiding, null, 'previously optional presiding stays optional for unaffected drafts');
+const missingPresidingReview = normalizeMinutesDraft({...completeAttendance, warnings:[UNCITED_PRESIDING_WARNING]});
+assert.deepEqual(attendanceReviewIssues(missingPresidingReview), ['Enter and verify the presiding officer from the meeting record before attesting.'],
+  'a repaired uncited presiding name requires a focused review even after all attendance is confirmed');
+assert.deepEqual(attendanceReviewIssues(normalizeMinutesDraft(JSON.parse(JSON.stringify(missingPresidingReview)))),
+  attendanceReviewIssues(missingPresidingReview), 'the gate survives a saved-draft round trip');
+assert.deepEqual(attendanceReviewIssues({...missingPresidingReview, presiding:'  '}), attendanceReviewIssues(missingPresidingReview));
+assert.deepEqual(attendanceReviewIssues({...missingPresidingReview, presiding:'Verified Acting Officer'}), [],
+  'entering the actual presiding officer resolves the new review requirement');
 const missing = documentSections(normalizeMinutesDraft({})).map(s => s.body).join('\n');
 assert.doesNotMatch(missing, /The Chaplain gave|The Worshipful Master asked|Lodge was closed at/);
 const declined = documentSections({...draft, prayerRequested:false, closingPrayerGiven:false}).map(s=>s.body).join('\n');
