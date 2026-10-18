@@ -616,12 +616,29 @@ try {
     && /Other Brothers Excused/.test(incompleteAttendance.payload.error));
   revisedDraft.officerAttendance = revisedDraft.officerAttendance.map((officer) => ({...officer, status:'present'}));
   revisedDraft.attendanceReview = {officerRoll:true, otherPresent:true, otherExcused:true};
+  const incompleteCoverage = structuredClone(revisedDraft);
+  incompleteCoverage.officerAttendanceVersion = 1;
+  Object.assign(incompleteCoverage.officerAttendance.find(officer => officer.title === 'Senior Warden'), {
+    status:'excused', stationCoverage:'filled', actingName:'PM Mobley', actingWholeMeeting:false,
+  });
+  const attemptedDowngrade = await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken, body:{draft:incompleteCoverage}});
+  check('a client cannot downgrade the required station coverage review', attemptedDowngrade.status === 200
+    && attemptedDowngrade.payload.minutes.draft.officerAttendanceVersion === 2);
+  const invalidCoverageAttestation = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
+  check('partial coverage cannot be attested without confirming the regular officer arrived', invalidCoverageAttestation.status === 409
+    && /partial assignment requires confirmation/.test(invalidCoverageAttestation.payload.error));
+  Object.assign(revisedDraft.officerAttendance.find(officer => officer.title === 'Senior Warden'), {
+    status:'arrived_late', stationCoverage:'filled', actingName:'PM Mobley', actingWholeMeeting:false,
+  });
   const savedMinutes = await api('PUT', `/api/minutes/${minutesId}`, {
     token: asstToken, body: { draft: revisedDraft },
   });
   check('Adrian can correct and save the generated draft',
     savedMinutes.status === 200
       && savedMinutes.payload.minutes.draft.sections[0].body.includes('officers were examined'));
+  const savedCoverage = savedMinutes.payload.minutes.draft.officerAttendance.find(officer => officer.title === 'Senior Warden');
+  check('saving retains the regular officer, covering Brother and partial duration', savedCoverage.name === 'Xavier M. White'
+    && savedCoverage.status === 'arrived_late' && savedCoverage.actingName === 'PM Mobley' && savedCoverage.actingWholeMeeting === false);
   const alertStreamAbort = new AbortController();
   const ownerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${wmToken}` }, signal: alertStreamAbort.signal });
   const viewerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${viewerToken}` }, signal: alertStreamAbort.signal });
@@ -738,9 +755,10 @@ try {
   check('the signed distribution copy carries attendance without claiming Lodge approval',
     draftDocx.status === 200 && /WM REVIEWED AND SIGNED/.test(draftText)
       && !/DRAFT|APPROVED BY THE LODGE/.test(draftText)
-      && /Name[\s\S]*Title[\s\S]*P[\s\S]*A[\s\S]*E[\s\S]*NR/.test(draftText)
-      && /William M. McDuffie[\s\S]*Secretary[\s\S]*X/.test(draftText)
-      && /Adrian Reese[\s\S]*Assistant Secretary[\s\S]*X/.test(draftText)
+      && /Name[\s\S]*Office[\s\S]*Attendance[\s\S]*Station coverage/.test(draftText)
+      && /William M. McDuffie[\s\S]*Secretary[\s\S]*Present/.test(draftText)
+      && /Adrian Reese[\s\S]*Assistant Secretary[\s\S]*Present/.test(draftText)
+      && /PM Mobley served pro tem until Xavier M\. White arrived\./.test(draftText)
       && !/LODGE INCOME/.test(draftText) && !/Community Partner/.test(draftText)
       && /Adrian Reese/.test(draftText) && /Worshipful Master/.test(draftText));
   const distributedMinutes = await api('POST', `/api/minutes/${minutesId}/mark-distributed`, { token: asstToken });

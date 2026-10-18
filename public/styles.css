@@ -243,8 +243,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-confirmation { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; color: var(--navy); font-size: 12px; font-weight: 650; line-height: 1.45; }
 .minutes-confirmation input { width: 17px; height: 17px; min-width: 17px; margin: 1px 0 0; }
 .minutes-visitors-field { margin-top: 4px; }
-.minutes-officer-attendance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.minutes-officer-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 135px; align-items: center; gap: 7px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+.minutes-officer-attendance { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 8px; }
+.minutes-officer-row { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.minutes-officer-identity { display: grid; grid-template-columns: minmax(0, 1fr) minmax(125px, .8fr); gap: 8px; min-width: 0; }
+.minutes-officer-name { grid-column: 1 / -1; }
+.minutes-officer-field { display: grid; align-content: start; gap: 5px; min-width: 0; margin: 0; }
+.minutes-officer-field > span { color: var(--navy); font-size: 11px; font-weight: 750; line-height: 1.4; overflow-wrap: anywhere; }
+.minutes-officer-coverage { display: grid; gap: 10px; min-width: 0; padding-top: 11px; border-top: 1px solid var(--line); }
+.minutes-officer-replacement { display: grid; gap: 10px; min-width: 0; }
+.minutes-officer-conflict { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--gold-soft); border-radius: 8px; background: #fffaf0; }
+.minutes-officer-clear { justify-self: start; }
+.minutes-officer-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .minutes-officer-row input { margin: 0; padding: 8px 9px; }
 .minutes-officer-row select { margin: 0; padding: 8px 10px; }
 .minutes-add-row { justify-self: start; margin-top: 2px; }
@@ -377,7 +386,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
   .builder-grid { grid-template-columns: 1fr; }
   .minutes-meta-grid, .minutes-attendance-grid { grid-template-columns: 1fr; }
   .minutes-officer-attendance, .minutes-finance-grid { grid-template-columns: 1fr; }
-  .minutes-officer-row { grid-template-columns: 1fr; }
+  .minutes-officer-row { grid-template-columns: minmax(0, 1fr); }
+  .minutes-officer-identity { grid-template-columns: minmax(0, 1fr); }
   .minutes-row { grid-template-columns: 42px minmax(0, 1fr); }
   .minutes-available-notice { align-items: stretch; flex-direction: column; }
   .minutes-available-notice button { width: 100%; }

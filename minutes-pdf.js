@@ -3,6 +3,7 @@ import { formatMinutesDate } from './public/minutes-dates.js';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
+import { attendanceLabel, stationCoverageText } from './public/minutes-attendance.js';
 
 import {
   additionalPresent, nonOfficerExcused, officerAttendanceRows,
@@ -260,9 +261,12 @@ export const buildMinutesPdf = async ({
     ['Quorum', clean(draft.quorum) || 'Needs review'],
   ], [155, 367], { size: 9 });
   ruleHeading('Officers Present, Excused and Absent');
-  table(['Officer', 'Office', 'Attendance'], officerAttendanceRows(draft).map(officer => [
-    officer.name, officer.title, ({present: 'Present', absent: 'Absent', excused: 'Excused'})[officer.status] || 'Not recorded',
-  ]), [220, 200, 102], { size: 8 });
+  const coverageEnabled = Number(draft.officerAttendanceVersion) >= 2;
+  table(coverageEnabled ? ['Officer', 'Office', 'Attendance', 'Station coverage'] : ['Officer', 'Office', 'Attendance'],
+    officerAttendanceRows(draft).map(officer => [
+      officer.name, officer.title, attendanceLabel(officer),
+      ...(coverageEnabled ? [stationCoverageText(officer)] : []),
+    ]), coverageEnabled ? [155, 105, 76, 186] : [220, 200, 102], { size: 8 });
   const additional = additionalPresent(draft);
   if (additional.length) { ruleHeading('Other Brothers Present'); bullets(additional.join('\n')); }
   const excused = nonOfficerExcused(draft);

@@ -119,6 +119,76 @@ function treasuryReading(lines) {
   return notRead && read ? 'unconfirmed' : notRead ? 'not_read' : read ? 'read' : 'unconfirmed';
 }
 
+// Interpret only explicit station service and arrival statements. A mentioned
+// Brother, a roster title, or an unfilled template never establishes attendance.
+const escapePattern = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const officeShortName = title => ({'Worshipful Master':'WM', 'Senior Warden':'SW', 'Junior Warden':'JW',
+  'Senior Deacon':'SD', 'Junior Deacon':'JD', 'Senior Steward':'SS', 'Junior Steward':'JS',
+  'Assistant Secretary':'AS', 'Assistant Treasurer':'AT'})[title];
+const officerNamePattern = officer => {
+  const tokens = officer.name.replace(/\b(?:Bro(?:ther)?|PM|HPM|Jr|Sr|II|III|IV)\.?\b/gi, '').match(/[\p{L}]+(?:[-'][\p{L}]+)*/gu) || [];
+  const substantive = tokens.filter(token => token.length > 1);
+  const first = substantive[0], last = substantive.at(-1);
+  if (!first || !last) return escapePattern(officer.name);
+  const office = [officer.title, officeShortName(officer.title)].filter(Boolean).map(escapePattern).join('|');
+  return `(?:${escapePattern(first)}(?:\\s+[\\p{L}]+\\.?)?\\s+${escapePattern(last)}|(?:${office})\\s+${escapePattern(last)})`;
+};
+
+export const officerNameMatches = (name, officer) => Boolean(String(name || '').trim() && String(name || '').trim().toLowerCase() === String(officer.name || '').trim().toLowerCase())
+  || namesMatch(name, officer.name)
+  || new RegExp(`^(?:(?:Bro(?:ther)?\\.?|PM|HPM)\\s+)?${officerNamePattern(officer)}$`, 'iu').test(String(name || '').trim());
+
+export function extractOfficerCoverage(source, roster = CURRENT_OFFICERS) {
+  const lines = String(source || '').replace(/\r/g, '').split('\n').flatMap(sentenceParts).map(line => clean(line)).filter(Boolean);
+  return roster.map(officer => {
+    const row = {...officer, status:'not_recorded', stationCoverage:null, actingName:null, actingWholeMeeting:null};
+    const person = officerNamePattern(officer);
+    const office = escapePattern(officer.title);
+    const actor = String.raw`((?:(?:PM|HPM|Bro(?:ther)?\.?|Past Master)\s+)?[\p{L}][\p{L}.'-]*(?:\s+[\p{L}][\p{L}.'-]*){0,3})`;
+    const service = new RegExp(String.raw`(?:^|[.;]\s*|,\s*)${actor}\s+(?:(?:sat in|served|acted)\s+(?:as|for)\s+(?:the\s+)?${office}|filled\s+(?:the\s+)?${office}\s+(?:station|chair))\b([^!?]*)`, 'iu');
+    const statusPattern = new RegExp(String.raw`\b${person}\s+(?:(?:was|is|had been)\s+)?(excused|absent|present)\b`, 'iu');
+    const deniedArrivalPattern = new RegExp(String.raw`\b${person}\s+(?:(?:did not\s+arrive|never\s+arrived?)|was not present|did not attend)\b`, 'iu');
+    const latePattern = new RegExp(String.raw`\b${person}\s+(?:(?:had|has)\s+)?(?:arrived late|came (?:in )?late|joined (?:the )?meeting late)\b`, 'iu');
+    const coveredUntilArrival = new RegExp(String.raw`\b(?:until|before)\s+${person}\s+(?:(?:had|has)\s+)?(?:arrived|joined (?:the )?meeting|came in)\b`, 'iu');
+    const coveredUntilCausalArrival = new RegExp(String.raw`\b(?:because|when|once)\s+${person}\s+(?:(?:did|had|has)\s+)?(?:arrived?|joined (?:the )?meeting|came in)\b`, 'iu');
+    const coveredUntilOfficeArrival = new RegExp(String.raw`\b(?:until|before)\s+(?:the\s+)?(?:regular|elected)\s+${office}\s+arrived\b`, 'iu');
+    const vacantPattern = new RegExp(String.raw`\b(?:the\s+)?${office}\s+(?:station|chair)\s+(?:(?:was|remained|stayed)\s+)?(?:left\s+)?(?:vacant|unfilled)\b`, 'iu');
+    const statuses = new Set();
+    const coverageFacts = [];
+    let deniedArrival = false;
+    for (const line of lines) {
+      if (/\b(?:will|would|should|could|next meeting|previous meeting|last meeting)\b/i.test(line)) continue;
+      const status = statusPattern.exec(line);
+      if (status && !new RegExp(String.raw`\b(?:not|never)\s+${status[1]}\b`, 'i').test(line)) statuses.add(status[1].toLowerCase());
+      if (deniedArrivalPattern.test(line)) deniedArrival = true;
+      const late = latePattern.test(line);
+      if (late) statuses.add('arrived_late');
+      const match = service.exec(line);
+      if (match) {
+        const actingName = match[1].trim();
+        const suffix = match[2];
+        const partial = /\b(?:not|never|didn't|wasn't|part|portion)\b/i.test(suffix);
+        const arrived = coveredUntilArrival.test(suffix) || coveredUntilOfficeArrival.test(suffix)
+          || partial && coveredUntilCausalArrival.test(suffix);
+        const whole = !partial && /\b(?:for (?:the )?(?:whole|entire) meeting|throughout (?:the )?meeting|(?:the )?(?:whole|entire) meeting)\b/i.test(suffix);
+        if (!officerNameMatches(actingName, officer) && !/\b(?:not|never)\s+(?:sat in|served|acted|filled)\b/i.test(line)) {
+          coverageFacts.push({stationCoverage:'filled', actingName, actingWholeMeeting:arrived ? false : whole ? true : null});
+          if (arrived) statuses.add('arrived_late');
+        }
+      }
+      const vacant = vacantPattern.test(line);
+      if (vacant) coverageFacts.push({stationCoverage:'vacant', actingName:null, actingWholeMeeting:null});
+    }
+    // A later arrival resolves an opening absence. Other contradictory statuses
+    // and conflicting occupants remain unconfirmed for the secretary's review.
+    row.status = statuses.has('arrived_late') && !deniedArrival ? 'arrived_late' : statuses.has('arrived_late') ? 'not_recorded' : statuses.size === 1 ? [...statuses][0] : 'not_recorded';
+    const unique = [...new Map(coverageFacts.map(fact => [JSON.stringify(fact), fact])).values()];
+    if (unique.length === 1) Object.assign(row, unique[0]);
+    if (deniedArrival && row.actingWholeMeeting === false) row.actingWholeMeeting = null;
+    return row;
+  });
+}
+
 export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   const rawLines = source.split('\n');
   const lines = rawLines.map(clean).filter(Boolean);
@@ -258,14 +328,16 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   if (!attendance.present.length) warnings.push('Confirm the attendance list. Speaking or being mentioned does not establish attendance.');
   if (type === 'transcript') warnings.push('Unstructured speech may need editing. The organizer preserves wording and does not infer missing decisions.');
   for (const person of attendance.present) if (attendance.excused.some(other => namesMatch(person, other))) warnings.push(`${person} appears as both present and excused. Confirm the roll.`);
-  const officerAttendance = CURRENT_OFFICERS.map(officer => ({...officer,
-    status: attendance.excused.some(name => namesMatch(name, officer.name)) ? 'excused'
-      : attendance.present.some(name => namesMatch(name, officer.name)) ? 'present'
-        : attendance.absent.some(name => namesMatch(name, officer.name)) ? 'absent' : 'not_recorded'}));
+  const explicitOfficerAttendance = extractOfficerCoverage(source);
+  const officerAttendance = explicitOfficerAttendance.map(officer => ({...officer,
+    status: officer.status !== 'not_recorded' ? officer.status
+      : attendance.excused.some(name => namesMatch(name, officer.name)) ? 'excused'
+        : attendance.present.some(name => namesMatch(name, officer.name)) ? 'present'
+          : attendance.absent.some(name => namesMatch(name, officer.name)) ? 'absent' : 'not_recorded'}));
   const otherPresent = attendance.present.filter((name) => !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name)));
   const otherExcused = attendance.excused.filter((name) => !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name)));
   return {
-    organizerVersion: 5, sourceType: type, meetingDate: day,
+    organizerVersion: 5, officerAttendanceVersion: 2, sourceType: type, meetingDate: day,
     ...detectPrayerFacts(source),
     meetingType: /\bmeeting type\s*:\s*([^\n.]+)/i.exec(source)?.[1]?.trim() || 'Stated Communication',
     degree, openingTime, closingTime,

@@ -2157,7 +2157,11 @@ app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, 
     if (row.status !== 'draft' && !masterReview) {
       return res.status(409).json({ error: 'Reopen these minutes before changing an attested or official record.' });
     }
-    const draft = normalizeMinutesDraft(req.body.draft);
+    // A client cannot downgrade the required review by sending an old version.
+    // Only untouched, already-attested legacy records retain the older gate.
+    const requireStationCoverage = !masterReview || Number(JSON.parse(row.draft_json).officerAttendanceVersion) >= 2;
+    const draft = normalizeMinutesDraft(requireStationCoverage
+      ? {...req.body.draft, officerAttendanceVersion:2} : req.body.draft);
     if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     const time = nowIso();
     const changes = masterReview ? minutesChanges(JSON.parse(row.submitted_draft_json || row.draft_json), draft) : [];
@@ -2187,21 +2191,23 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
       return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
     }
     const draft = JSON.parse(row.draft_json);
+    draft.officerAttendanceVersion = 2;
     const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
     if (reviewIssues.length) return res.status(409).json({ error: reviewIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     const time = nowIso();
+    const attestedDraftJson = JSON.stringify(draft);
     const attestation = await withTransaction(async () => {
       const result = await dbRun(
       `UPDATE meeting_minutes SET status = 'awaiting_master_attestation', submitted_for_review_at = ?,
-       preparer_attested_at = ?, submitted_draft_json = ?, preparer_signature_bytes = ?, master_changes_json = '[]',
+       preparer_attested_at = ?, draft_json = ?, submitted_draft_json = ?, preparer_signature_bytes = ?, master_changes_json = '[]',
        updated_by_user_id = ?, updated_at = ? WHERE id = ? AND status = 'draft' AND updated_at = ?`,
-      [time, time, row.draft_json, asBuffer(signature.signature_bytes), req.user.id, time, row.id, row.updated_at],
+      [time, time, attestedDraftJson, attestedDraftJson, asBuffer(signature.signature_bytes), req.user.id, time, row.id, row.updated_at],
     );
       if (result.changes) await dbRun(
         `INSERT INTO meeting_minutes_attestations (id, minutes_id, user_id, phase, draft_json, signature_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [crypto.randomUUID(), row.id, req.user.id, 'preparer', row.draft_json, asBuffer(signature.signature_bytes), time],
+        [crypto.randomUUID(), row.id, req.user.id, 'preparer', attestedDraftJson, asBuffer(signature.signature_bytes), time],
       );
       return result;
     });

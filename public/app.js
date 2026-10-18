@@ -8,6 +8,8 @@ const CLIENT_BUILD_VERSION = (() => {
 
 let minutesDates;
 const minutesDatesReady = import(`/minutes-dates.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`).then(module => { minutesDates = module; });
+let minutesAttendance;
+const minutesAttendanceReady = import(`/minutes-attendance.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`).then(module => { minutesAttendance = module; });
 
 const state = {
   legacyToken: localStorage.getItem('stone-square-sign-token') || '',
@@ -35,6 +37,7 @@ const state = {
   editingMinutesUpdatedAt: null,
   minutesPreviewUrl: '',
   minutesEditorDirty: false,
+  minutesOfficerAttendanceEdited: false,
   minutesRecordsRefreshPending: false,
   reportHandoffExpiresAt: 0,
   reportHandoff: null,
@@ -1275,9 +1278,28 @@ const collectMinutesFinance = (id) => [...$(id).querySelectorAll('.minutes-finan
   amount: row.querySelector('[data-field="amount"]').value.trim() || null,
 })).filter((row) => Object.values(row).some(Boolean));
 
+const collectMinutesOfficerAttendance = () => [...$('minutesOfficerAttendance').querySelectorAll('.minutes-officer-row')].map((row) => {
+  const entry = {
+  name: row.querySelector('[data-field="name"]').value.trim(),
+  title: row.querySelector('[data-field="title"]').value.trim(),
+  status: row.querySelector('[data-field="status"]').value,
+  stationCoverage: row.querySelector('[data-field="stationCoverage"]').value || null,
+  actingName: row.querySelector('[data-field="actingName"]').value.trim() || null,
+  actingWholeMeeting: row.querySelector('[data-field="actingWholeMeeting"]').value === '' ? null
+    : row.querySelector('[data-field="actingWholeMeeting"]').value === 'true',
+  };
+  return { ...entry, ...minutesAttendance.normalizeOfficerCoverage(entry) };
+}).filter((row) => row.name);
+
+// A preparer completes the new attendance review. Opening an older attested record
+// for the Master's review must not silently replace its original review standard.
+const minutesOfficerAttendanceVersion = () => Number(currentMinutes()?.draft.officerAttendanceVersion) >= 2
+  || currentMinutes()?.status === 'draft' || state.minutesOfficerAttendanceEdited ? 2 : 1;
+
 const collectMinutesDraft = () => ({
   organizerVersion: currentMinutes()?.draft.organizerVersion || 2,
   sourceType: currentMinutes()?.draft.sourceType || 'transcript',
+  officerAttendanceVersion: minutesOfficerAttendanceVersion(),
   meetingDate: minutesDates.minutesDateValue($('minutesMeetingDate').value) || null,
   meetingType: $('minutesMeetingType').value === 'other'
     ? $('minutesMeetingTypeOther').value.trim()
@@ -1298,11 +1320,7 @@ const collectMinutesDraft = () => ({
     otherPresent: $('minutesOtherPresentConfirmed').checked,
     otherExcused: $('minutesOtherExcusedConfirmed').checked,
   },
-  officerAttendance: [...$('minutesOfficerAttendance').querySelectorAll('.minutes-officer-row')].map((row) => ({
-    name: row.querySelector('[data-field="name"]').value.trim(),
-    title: row.querySelector('[data-field="title"]').value.trim(),
-    status: row.querySelector('select').value,
-  })).filter((row) => row.name),
+  officerAttendance: collectMinutesOfficerAttendance(),
   income: collectMinutesFinance('minutesIncome'),
   expenses: collectMinutesFinance('minutesExpenses'),
   sections: [...$('minutesSections').querySelectorAll('.minutes-section-card')].map((card) => ({
@@ -1739,31 +1757,106 @@ const sectionEditor = (section, index) => {
 };
 
 const officerAttendanceEditor = (entry) => {
+  const normalized = { ...entry, ...minutesAttendance.normalizeOfficerCoverage(entry) };
   const row = document.createElement('div');
   row.className = 'minutes-officer-row';
-  const name = document.createElement('input');
-  name.type = 'text';
-  name.dataset.field = 'name';
-  name.placeholder = 'Officer name';
-  name.value = entry.name || '';
-  const title = document.createElement('input');
-  title.type = 'text';
-  title.dataset.field = 'title';
-  title.placeholder = 'Office or pro tem role';
-  title.value = entry.title || '';
-  const select = document.createElement('select');
-  [['not_recorded', 'Needs confirmation'], ['present', 'Present'], ['excused', 'Excused'], ['absent', 'Absent']]
-    .forEach(([value, text]) => {
+  const identity = document.createElement('div');
+  identity.className = 'minutes-officer-identity';
+  const field = (text, control) => {
+    const label = document.createElement('label');
+    label.className = 'minutes-officer-field';
+    const caption = document.createElement('span');
+    caption.textContent = text;
+    label.append(caption, control);
+    return label;
+  };
+  const input = (key, placeholder, value) => {
+    const control = document.createElement('input');
+    control.type = 'text'; control.dataset.field = key;
+    control.placeholder = placeholder; control.value = value || '';
+    return control;
+  };
+  const picker = (key, choices, selected) => {
+    const control = document.createElement('select'); control.dataset.field = key;
+    choices.forEach(([value, text]) => {
       const option = document.createElement('option');
-      option.value = value;
-      option.textContent = text;
-      option.selected = value === entry.status;
-      select.append(option);
+      option.value = value; option.textContent = text;
+      option.selected = value === selected; control.append(option);
     });
-  [name, title, select].forEach((field) => field.addEventListener(field === select ? 'change' : 'input', () => {
+    control.value = selected;
+    return control;
+  };
+  const name = input('name', 'Officer name', normalized.name);
+  const title = input('title', 'Office or pro tem role', normalized.title);
+  const status = picker('status', [
+    ['not_recorded', 'Needs confirmation'], ['present', 'Present'],
+    ['arrived_late', 'Arrived later'], ['excused', 'Excused'], ['absent', 'Absent'],
+  ], normalized.status || 'not_recorded');
+  const nameField = field('Regular officer', name);
+  nameField.classList.add('minutes-officer-name');
+  identity.append(nameField, field('Office', title), field('Attendance', status));
+
+  const coverage = document.createElement('div');
+  coverage.className = 'minutes-officer-coverage';
+  const stationCoverage = picker('stationCoverage', [
+    ['', 'Choose station coverage'], ['filled', 'Covered by another Brother'], ['vacant', 'Left vacant'],
+  ], normalized.stationCoverage || '');
+  const actingName = input('actingName', "Brother's name", normalized.actingName);
+  const actingWholeMeeting = picker('actingWholeMeeting', [
+    ['', 'Choose Yes or No'], ['true', 'Yes'], ['false', 'No, officer arrived'],
+  ], typeof normalized.actingWholeMeeting === 'boolean' ? String(normalized.actingWholeMeeting) : '');
+  const replacement = document.createElement('div');
+  replacement.className = 'minutes-officer-replacement';
+  const arrivalHint = document.createElement('p');
+  arrivalHint.className = 'minutes-officer-hint';
+  arrivalHint.textContent = 'Select No only when the regular officer arrived and took over. First choose Arrived later above.';
+  replacement.append(field('Brother who filled the station', actingName), field('Served the whole meeting?', actingWholeMeeting), arrivalHint);
+  const conflict = document.createElement('div');
+  conflict.className = 'minutes-officer-conflict';
+  const conflictNote = document.createElement('p');
+  conflictNote.className = 'minutes-officer-hint';
+  conflictNote.textContent = 'These station details conflict with this attendance choice. Confirm the correct attendance above, or clear the station details.';
+  const clearCoverage = document.createElement('button');
+  clearCoverage.type = 'button'; clearCoverage.className = 'secondary small minutes-officer-clear';
+  clearCoverage.textContent = 'Clear conflicting coverage';
+  conflict.append(conflictNote, clearCoverage);
+  coverage.append(conflict, field('While this officer was not in the station', stationCoverage), replacement);
+  const updateCoverage = () => {
+    const coverageApplies = ['arrived_late', 'absent', 'excused'].includes(status.value);
+    const hasCoverage = Boolean(stationCoverage.value || actingName.value.trim() || actingWholeMeeting.value !== '');
+    coverage.classList.toggle('hidden', !coverageApplies && !hasCoverage);
+    conflict.classList.toggle('hidden', coverageApplies || !hasCoverage);
+    replacement.classList.toggle('hidden', !coverageApplies || stationCoverage.value !== 'filled');
+    // The No option records a specific fact, rather than inferring a late arrival.
+    actingWholeMeeting.querySelector('option[value="false"]').disabled = status.value !== 'arrived_late';
+    arrivalHint.classList.toggle('hidden', status.value === 'arrived_late');
+  };
+  const changed = () => {
     $('minutesOfficerRollConfirmed').checked = false;
-  }));
-  row.append(name, title, select);
+    state.minutesOfficerAttendanceEdited = true;
+  };
+  [name, title, actingName].forEach(control => control.addEventListener('input', changed));
+  status.addEventListener('change', () => {
+    if (!['arrived_late', 'absent', 'excused'].includes(status.value)) {
+      stationCoverage.value = ''; actingName.value = ''; actingWholeMeeting.value = '';
+    } else if (status.value !== 'arrived_late' && actingWholeMeeting.value === 'false') {
+      actingWholeMeeting.value = '';
+    }
+    changed(); updateCoverage();
+  });
+  stationCoverage.addEventListener('change', () => {
+    actingName.value = ''; actingWholeMeeting.value = '';
+    changed(); updateCoverage();
+  });
+  actingWholeMeeting.addEventListener('change', changed);
+  clearCoverage.addEventListener('click', () => {
+    stationCoverage.value = ''; actingName.value = ''; actingWholeMeeting.value = '';
+    changed(); updateCoverage();
+    state.minutesEditorDirty = true;
+    scheduleMinutesPreview();
+  });
+  row.append(identity, coverage);
+  updateCoverage();
   return row;
 };
 
@@ -1773,7 +1866,8 @@ const minutesAttendanceIssues = (draft = collectMinutesDraft()) => [
     && 'Enter and verify the presiding officer from the meeting record before attesting.',
   !draft.attendanceReview?.officerRoll && 'Confirm that you reviewed the complete officer roll.',
   draft.officerAttendance?.some((officer) => officer.status === 'not_recorded')
-    && 'Choose Present, Excused, or Absent for every officer.',
+    && 'Choose Present, Arrived later, Excused or Absent for every officer.',
+  ...(Number(draft.officerAttendanceVersion) >= 2 ? minutesAttendance.attendanceCoverageIssues(draft) : []),
   !draft.attendanceReview?.otherPresent && 'Confirm the Other Brothers Present list, including when it is blank.',
   !draft.attendanceReview?.otherExcused && 'Confirm the Other Brothers Excused list, including when it is blank.',
 ].filter(Boolean);
@@ -1852,7 +1946,7 @@ const updateMinutesEditorControls = (item) => {
   const editable = item.status === 'draft' || (item.status === 'awaiting_master_attestation' && role === 'owner');
   $('minutesEditorStatus').textContent = `${MINUTES_STATUS[item.status] || item.status} · ${item.draft.sourceType === 'compiled_notes' ? 'Compiled meeting notes' : 'Transcript'}`;
   $('reorganizeMinutes').classList.toggle('hidden', item.status !== 'draft');
-  document.querySelectorAll('.remove-section').forEach(button => { button.disabled = !editable; });
+  document.querySelectorAll('.remove-section, .minutes-officer-clear').forEach(button => { button.disabled = !editable; });
   $('saveMinutes').classList.toggle('hidden', !editable);
   $('saveExitMinutes').classList.toggle('hidden', !editable);
   $('submitMinutesReview').classList.toggle('hidden', item.status !== 'draft'
@@ -1881,6 +1975,7 @@ const openMinutesEditor = (id) => {
   if (!item) return;
   state.editingMinutesId = id;
   state.editingMinutesUpdatedAt = item.updatedAt;
+  state.minutesOfficerAttendanceEdited = false;
   const draft = item.draft;
   $('minutesMeetingDate').value = minutesDates.formatMinutesDate(draft.meetingDate);
   $('minutesMeetingDateCalendar').value = minutesDates.minutesDateParts(draft.meetingDate)?.iso || '';
@@ -2530,6 +2625,7 @@ $('refreshMinutesPreview').addEventListener('click', refreshMinutesPreview);
 $('addMinutesOfficer').addEventListener('click', () => {
   $('minutesOfficerAttendance').append(officerAttendanceEditor({ status: 'not_recorded' }));
   $('minutesOfficerRollConfirmed').checked = false;
+  state.minutesOfficerAttendanceEdited = true;
   state.minutesEditorDirty = true;
 });
 $('minutesPresent').addEventListener('input', () => { $('minutesOtherPresentConfirmed').checked = false; });
@@ -3650,7 +3746,7 @@ $('dispensationForm').addEventListener('invalid', (event) => {
 }, true);
 
 const initialize = async () => {
-  try { await minutesDatesReady; } catch { setMessage(authMessage, 'The minutes date controls could not load. Reload this page to reconnect.', true); return; }
+  try { await Promise.all([minutesDatesReady, minutesAttendanceReady]); } catch { setMessage(authMessage, 'The minutes controls could not load. Reload this page to reconnect.', true); return; }
   const inviteEmail = new URLSearchParams(window.location.search).get('email');
   if (inviteEmail) $('registerEmail').value = inviteEmail;
   try {

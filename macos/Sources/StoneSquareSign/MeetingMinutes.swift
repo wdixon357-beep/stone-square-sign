@@ -14,7 +14,71 @@ private func minutesStatusLabel(_ status: String) -> String {
 }
 
 struct MinutesSection: Codable, Equatable { var heading: String; var body: String }
-struct MinutesAttendance: Codable, Equatable { var name: String; var title: String; var status: String }
+struct MinutesAttendance: Codable, Equatable {
+    var name: String
+    var title: String
+    var status: String
+    var stationCoverage: String? = nil
+    var actingName: String? = nil
+    var actingWholeMeeting: Bool? = nil
+
+    var requiresStationCoverage: Bool { ["excused", "absent", "arrived_late"].contains(status) }
+    var hasStationCoverageValues: Bool {
+        stationCoverage != nil || !(actingName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || actingWholeMeeting != nil
+    }
+    func reviewComplete(requiringCoverage: Bool) -> Bool {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              ["present", "excused", "absent", "arrived_late"].contains(status) else { return false }
+        guard requiringCoverage else { return true }
+        let coverage = ["filled", "vacant"].contains(stationCoverage ?? "") ? stationCoverage : nil
+        let hasActingName = !(actingName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard requiresStationCoverage else { return coverage == nil && !hasActingName && actingWholeMeeting == nil }
+        guard let coverage else { return false }
+        if coverage == "vacant" { return !hasActingName && actingWholeMeeting == nil }
+        guard !(actingName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !Self.sameOfficer(actingName ?? "", name),
+              let actingWholeMeeting else { return false }
+        return actingWholeMeeting || status == "arrived_late"
+    }
+    private static func sameOfficer(_ left: String, _ right: String) -> Bool {
+        func tokens(_ value: String) -> [String] {
+            value.lowercased()
+                .replacingOccurrences(of: #"\b(?:past\s+master|brother|bro|pm|hpm|jr|sr|ii|iii|iv)\b"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"[^a-z]+"#, with: " ", options: .regularExpression)
+                .split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { $0.count > 1 }
+        }
+        let a = tokens(left), b = tokens(right)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        func isOfficeAlias(_ value: String) -> Bool {
+            value.trimmingCharacters(in: .whitespacesAndNewlines).range(
+                of: #"^(?:wm|sw|jw|sd|jd|ss|js)\.?\s+[a-z'-]+\.?$"#,
+                options: [.regularExpression, .caseInsensitive]
+            ) != nil
+        }
+        let officeAlias = (isOfficeAlias(left) || isOfficeAlias(right)) && a.last == b.last
+        return a.joined() == b.joined()
+            || (a.count >= 2 && b.count >= 2 && a.first == b.first && a.last == b.last)
+            || officeAlias
+    }
+    mutating func setStatus(_ value: String) {
+        guard status != value else { return }
+        status = value
+        if !requiresStationCoverage {
+            stationCoverage = nil; actingName = nil; actingWholeMeeting = nil
+        } else if value != "arrived_late", actingWholeMeeting == false {
+            actingWholeMeeting = nil
+        }
+    }
+    mutating func setCoverage(_ value: String?) {
+        stationCoverage = value
+        if value != "filled" { actingName = nil; actingWholeMeeting = nil }
+    }
+    mutating func setWholeMeeting(_ value: Bool?) {
+        actingWholeMeeting = value
+        // Choosing this answer explicitly records the regular officer's arrival.
+        if value == false { status = "arrived_late" }
+    }
+}
 struct MinutesAttendanceReview: Codable, Equatable {
     var officerRoll: Bool = false
     var otherPresent: Bool = false
@@ -25,6 +89,7 @@ struct MinutesFinance: Codable, Equatable {
 }
 struct MinutesDraft: Codable, Equatable {
     var organizerVersion: Int?
+    var officerAttendanceVersion: Int?
     var sourceType: String?
     var meetingDate: String?; var meetingType: String; var degree: String?
     var openingTime: String?; var closingTime: String?; var presiding: String?; var quorum: String?; var nextMeeting: String?
@@ -301,7 +366,13 @@ final class MinutesWorkspace: ObservableObject {
         }
     }
     func save() async {
-        guard let record = selected, let draft else { return }
+        guard let record = selected, var draft else { return }
+        if record.status == "draft", (draft.officerAttendanceVersion ?? 0) < 2 {
+            draft.officerAttendanceVersion = 2
+            var review = draft.attendanceReview ?? MinutesAttendanceReview()
+            review.officerRoll = false
+            draft.attendanceReview = review
+        }
         busy = true; defer { busy = false }
         do {
             let body = try JSONEncoder().encode(MinutesSavePayload(draft: draft, expectedUpdatedAt: record.updatedAt))
@@ -419,6 +490,9 @@ struct MeetingMinutesView: View {
     }
     private func attendanceConfirmation(_ key: WritableKeyPath<MinutesAttendanceReview, Bool>) -> Binding<Bool> {
         Binding(get: { workspace.draft?.attendanceReview?[keyPath: key] ?? false }, set: { value in
+            if key == \.officerRoll, workspace.selected?.status == "draft" {
+                workspace.draft?.officerAttendanceVersion = 2
+            }
             var review = workspace.draft?.attendanceReview ?? MinutesAttendanceReview()
             review[keyPath: key] = value
             workspace.draft?.attendanceReview = review
@@ -433,15 +507,19 @@ struct MeetingMinutesView: View {
         })
     }
     private func resetOfficerConfirmation() {
+        if workspace.selected?.status == "draft" { workspace.draft?.officerAttendanceVersion = 2 }
         var review = workspace.draft?.attendanceReview ?? MinutesAttendanceReview()
         review.officerRoll = false
         workspace.draft?.attendanceReview = review
+    }
+    private var stationCoverageRequired: Bool {
+        workspace.selected?.status == "draft" || (workspace.draft?.officerAttendanceVersion ?? 0) >= 2
     }
     private var attendanceReady: Bool {
         guard let draft = workspace.draft, let review = draft.attendanceReview else { return false }
         return review.officerRoll && review.otherPresent && review.otherExcused
             && draft.presidingReviewComplete
-            && draft.officerAttendance.allSatisfy { ["present", "excused", "absent"].contains($0.status) }
+            && draft.officerAttendance.allSatisfy { $0.reviewComplete(requiringCoverage: stationCoverageRequired) }
     }
     private func openRequestedSignedMinutes() {
         guard let id = model.requestedMinutesRecordID,
@@ -690,18 +768,13 @@ struct MeetingMinutesView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             Label("Required before submission", systemImage: attendanceReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                                 .font(.caption.weight(.bold)).foregroundStyle(attendanceReady ? Color.green : SignTheme.gold)
-                            Text("Complete every officer status and confirm both other-Brother lists. The draft cannot be sent to the Worshipful Master until this review is complete.").font(.caption).foregroundStyle(.secondary)
-                            Text("Officers present, excused and absent").font(.headline).foregroundStyle(SignTheme.navy)
+                            Text("Confirm every officer's attendance and both other-Brother lists. For an excused, absent or late-arriving officer, record who covered the station or confirm that it remained vacant.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Text("Officers present, excused, absent or arriving late").font(.headline).foregroundStyle(SignTheme.navy)
                             ForEach(workspace.draft?.officerAttendance.indices ?? 0..<0, id: \.self) { i in
-                                HStack {
-                                    VStack(alignment: .leading) { TextField("Officer name", text: Binding(get: { workspace.draft?.officerAttendance[i].name ?? "" }, set: { workspace.draft?.officerAttendance[i].name = $0; resetOfficerConfirmation() })); TextField("Office or pro tem role", text: Binding(get: { workspace.draft?.officerAttendance[i].title ?? "" }, set: { workspace.draft?.officerAttendance[i].title = $0; resetOfficerConfirmation() })).font(.caption).foregroundStyle(.secondary) }
-                                    Spacer()
-                                    Picker("Attendance", selection: Binding(get: { workspace.draft?.officerAttendance[i].status ?? "not_recorded" }, set: { workspace.draft?.officerAttendance[i].status = $0; resetOfficerConfirmation() })) {
-                                        Text("Needs confirmation").tag("not_recorded"); Text("Present").tag("present"); Text("Excused").tag("excused"); Text("Absent").tag("absent")
-                                    }.labelsHidden().frame(width: 120)
-                                }.padding(.vertical, 3)
+                                officerAttendanceEditor(i)
                             }
-                            Toggle("I reviewed the complete officer roll and confirmed every status.", isOn: attendanceConfirmation(\.officerRoll))
+                            Toggle("I reviewed the complete officer roll, including station coverage and late arrivals.", isOn: attendanceConfirmation(\.officerRoll))
                             Divider()
                             namesEditor("Other Brothers present", binding: attendanceNames(\.present, confirmation: \.otherPresent))
                             Toggle("I confirmed this list, including if no other Brothers were present.", isOn: attendanceConfirmation(\.otherPresent))
@@ -732,6 +805,82 @@ struct MeetingMinutesView: View {
                 Text(workspace.previewMessage).font(.caption).foregroundStyle(.secondary)
                 LodgeDocumentPreview(data: workspace.pdf)
             }.padding(14)
+        }
+    }
+    private func officerText(_ index: Int, key: WritableKeyPath<MinutesAttendance, String>) -> Binding<String> {
+        Binding(get: { workspace.draft?.officerAttendance[index][keyPath: key] ?? "" }, set: { value in
+            workspace.draft?.officerAttendance[index][keyPath: key] = value
+            resetOfficerConfirmation()
+        })
+    }
+    @ViewBuilder private func officerAttendanceEditor(_ index: Int) -> some View {
+        if let row = workspace.draft?.officerAttendance[index] {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(row.title.isEmpty ? "Officer or acting officer" : row.title)
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(SignTheme.navy)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField("Officer name", text: officerText(index, key: \.name))
+                    .accessibilityLabel("Officer name for \(row.title)")
+                TextField("Office", text: officerText(index, key: \.title))
+                    .font(.caption)
+                Picker("Attendance", selection: Binding(get: { workspace.draft?.officerAttendance[index].status ?? "not_recorded" }, set: { value in
+                    workspace.draft?.officerAttendance[index].setStatus(value)
+                    resetOfficerConfirmation()
+                })) {
+                    Text("Needs confirmation").tag("not_recorded")
+                    Text("Present").tag("present")
+                    Text("Excused").tag("excused")
+                    Text("Absent").tag("absent")
+                    Text("Arrived later").tag("arrived_late")
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                if (row.requiresStationCoverage && stationCoverageRequired) || row.hasStationCoverageValues {
+                    if !row.requiresStationCoverage && row.hasStationCoverageValues {
+                        Text("This attendance status conflicts with the station coverage. Confirm a later arrival, or clear the coverage below.")
+                            .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        Button("Clear conflicting coverage") {
+                            workspace.draft?.officerAttendance[index].setCoverage(nil)
+                            resetOfficerConfirmation()
+                        }
+                    }
+                    stationCoverageEditor(index, row: row)
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+    private func stationCoverageEditor(_ index: Int, row: MinutesAttendance) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            Text("Station coverage").font(.caption.weight(.semibold))
+            Picker("Was the station filled?", selection: Binding(get: { workspace.draft?.officerAttendance[index].stationCoverage ?? "" }, set: { value in
+                workspace.draft?.officerAttendance[index].setCoverage(value.isEmpty ? nil : value)
+                resetOfficerConfirmation()
+            })) {
+                Text("Choose coverage").tag("")
+                Text("Another Brother served").tag("filled")
+                Text("Station remained vacant").tag("vacant")
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            if row.stationCoverage == "filled" {
+                TextField("Brother who filled the station", text: Binding(get: { workspace.draft?.officerAttendance[index].actingName ?? "" }, set: { value in
+                    workspace.draft?.officerAttendance[index].actingName = value.isEmpty ? nil : value
+                    resetOfficerConfirmation()
+                }))
+                Text("Did that Brother serve for the whole meeting?").font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                Picker("Whole meeting", selection: Binding(get: { workspace.draft?.officerAttendance[index].actingWholeMeeting.map { $0 ? "yes" : "no" } ?? "" }, set: { value in
+                    workspace.draft?.officerAttendance[index].setWholeMeeting(value.isEmpty ? nil : value == "yes")
+                    resetOfficerConfirmation()
+                })) {
+                    Text("Choose an answer").tag("")
+                    Text("Yes, the whole meeting").tag("yes")
+                    Text("No, the regular officer arrived").tag("no")
+                }.labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
+                Text("Selecting No records that the regular officer arrived and took the station.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
     private var metadata: some View {

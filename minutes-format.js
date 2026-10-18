@@ -1,6 +1,7 @@
 import { formatMinutesDate, minutesDateParts } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
+import { attendanceCoverageIssues } from './public/minutes-attendance.js';
 
 // One presentation model for the live PDF and Word record. Formatting never
 // supplies a motion, an outcome, a name, or a time missing from the record.
@@ -107,17 +108,18 @@ export function attendanceReviewIssues(draft = {}) {
   const rows = Array.isArray(draft.officerAttendance) ? draft.officerAttendance : [];
   const unresolved = CURRENT_OFFICERS.filter((officer) => {
     const row = rows.find((entry) => namesMatch(entry?.name, officer.name));
-    return !row || !['present', 'excused', 'absent'].includes(row.status);
+    return !row || !['present', 'arrived_late', 'excused', 'absent'].includes(row.status);
   });
   const unresolvedAdditional = rows.filter((entry) => entry?.name
     && !CURRENT_OFFICERS.some((officer) => namesMatch(entry.name, officer.name))
-    && !['present', 'excused', 'absent'].includes(entry.status));
+    && !['present', 'arrived_late', 'excused', 'absent'].includes(entry.status));
   return [
     draft.warnings?.includes(UNCITED_PRESIDING_WARNING) && !String(draft.presiding || '').trim()
       && 'Enter and verify the presiding officer from the meeting record before attesting.',
     !review.officerRoll && 'Confirm that you reviewed the complete officer roll.',
-    unresolved.length && `Record Present, Excused, or Absent for every Lodge officer. Still incomplete: ${unresolved.map((officer) => officer.name).join(', ')}.`,
-    unresolvedAdditional.length && `Record Present, Excused, or Absent for each added officer or pro tem entry. Still incomplete: ${unresolvedAdditional.map((entry) => entry.name).join(', ')}.`,
+    unresolved.length && `Record Present, Arrived later, Excused, or Absent for every Lodge officer. Still incomplete: ${unresolved.map((officer) => officer.name).join(', ')}.`,
+    unresolvedAdditional.length && `Record attendance for each added officer or pro tem entry. Still incomplete: ${unresolvedAdditional.map((entry) => entry.name).join(', ')}.`,
+    ...attendanceCoverageIssues(draft),
     !review.otherPresent && 'Confirm the Other Brothers Present list, including when no other Brothers were present.',
     !review.otherExcused && 'Confirm the Other Brothers Excused list, including when no other Brothers were excused.',
   ].filter(Boolean);

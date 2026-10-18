@@ -1,3 +1,5 @@
+import { normalizeOfficerCoverage, attendanceLabel, sameAttendancePerson } from './public/minutes-attendance.js';
+
 export const CURRENT_OFFICERS = [
   { name: 'W. Aaron Dixon-Saunders', title: 'Worshipful Master' },
   { name: 'Xavier M. White', title: 'Senior Warden' },
@@ -29,12 +31,14 @@ export const namesMatch = (left, right) => {
 
 export const officerAttendanceRows = (draft) => {
   const statedRows = Array.isArray(draft.officerAttendance) ? draft.officerAttendance : [];
+  const comparableOffice = value => String(value || '').toLowerCase().replace(/\b(?:acting|pro tem)\b/g, '').replace(/[^a-z]/g, '');
   const regularRows = CURRENT_OFFICERS.map((officer) => {
   const stated = (draft.officerAttendance || []).find((entry) => namesMatch(entry.name, officer.name));
     if (stated && stated.status !== 'not_recorded') return {
       name: stated.name || officer.name,
       title: stated.title || officer.title,
       status: stated.status || 'not_recorded',
+      ...normalizeOfficerCoverage(stated),
     };
   if ((draft.present || []).some((name) => namesMatch(name, officer.name))) return { ...officer, status: 'present' };
   if ((draft.excused || []).some((name) => namesMatch(name, officer.name))) return { ...officer, status: 'excused' };
@@ -42,25 +46,29 @@ export const officerAttendanceRows = (draft) => {
   });
   const additionalRows = statedRows.filter((entry) => (
     entry.name && !CURRENT_OFFICERS.some((officer) => namesMatch(entry.name, officer.name))
+    && !statedRows.some(officer => officer.stationCoverage === 'filled' && sameAttendancePerson(officer.actingName, entry.name)
+      && (!entry.title || /^(?:officer or )?pro tem$/i.test(entry.title.trim())
+        || comparableOffice(officer.title) === comparableOffice(entry.title)))
   )).map((entry) => ({
     name: entry.name,
     title: entry.title || 'Officer or pro tem',
     status: entry.status || 'not_recorded',
+    ...normalizeOfficerCoverage(entry),
   }));
   return [...regularRows, ...additionalRows];
 };
 
 export const additionalPresent = (draft) => (draft.present || []).filter((name) => (
   !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name))
+  && !(draft.officerAttendance || []).some(officer => officer.stationCoverage === 'filled' && officer.actingName
+    && (namesMatch(name, officer.actingName) || comparableName(name) === comparableName(officer.actingName)))
 ));
 
 export const nonOfficerExcused = (draft) => (draft.excused || []).filter((name) => (
   !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name))
 ));
 
-export const statusLabel = (status) => ({
-  present: 'Present', absent: 'Absent', excused: 'Excused', not_recorded: 'Not recorded',
-}[status] || 'Not recorded');
+export const statusLabel = attendanceLabel;
 
 export const financeRows = (items = []) => items.map((item) => ({
   date: item.date || '',

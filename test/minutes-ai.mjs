@@ -144,14 +144,14 @@ try {
     'whitespace-only citation wrapping resolves to the exact source span without another paid request');
 
   const unknownAttendance = response();
-  unknownAttendance.draft.officerAttendance = [{name: 'Brother Example Officer', title: 'Example Office', status: 'not_recorded'}];
+  unknownAttendance.draft.officerAttendance = [{name: 'Brother Example Officer', title: 'Example Office', status:'not_recorded',stationCoverage:null,actingName:null,actingWholeMeeting:null}];
   unknownAttendance.evidence.push({field: 'officerAttendance[0].status', quote: 'A model citation absent from the meeting source.'});
   const unknownDraft = await generateMinutesDraft(source, {generateStructured: async () => unknownAttendance});
   assert.equal(unknownDraft.officerAttendance.find(officer => officer.name === 'Brother Example Officer')?.status, 'not_recorded');
   assert.ok(!unknownDraft.warnings.some(warning => /Source reference: officerAttendance\[0\]/.test(warning)),
     'a redundant citation for unknown attendance is not presented as verified evidence');
   const statedAttendance = response();
-  statedAttendance.draft.officerAttendance = [{name: 'Brother Example Officer', title: 'Example Office', status: 'present'}];
+  statedAttendance.draft.officerAttendance = [{name: 'Brother Example Officer', title: 'Example Office', status:'present',stationCoverage:null,actingName:null,actingWholeMeeting:null}];
   statedAttendance.evidence.push({field: 'officerAttendance[0].status', quote: 'A model citation absent from the meeting source.'});
   await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => statedAttendance}),
     /source reference that could not be verified/,
@@ -266,15 +266,15 @@ try {
   assert.ok(closingPrayerDraft.warnings.some(warning => /Chaplain gave the closing prayer/.test(warning)));
   await rejectResponse(result => {result.draft.present[0] = 'Brother Missing Name';}, /not established/);
   const unsupportedOfficerAttendance = response();
-  unsupportedOfficerAttendance.draft.officerAttendance = [{name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'}];
+  unsupportedOfficerAttendance.draft.officerAttendance = [{name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present',stationCoverage:null,actingName:null,actingWholeMeeting:null}];
   unsupportedOfficerAttendance.evidence.push({field:'officerAttendance[0].status',quote:'Presiding: WM Dixon-Saunders'});
   const attendanceReviewDraft = await generateMinutesDraft(source, {generateStructured:async()=>unsupportedOfficerAttendance});
   assert.equal(attendanceReviewDraft.officerAttendance[0].status,'not_recorded');
   assert.ok(attendanceReviewDraft.warnings.some(warning=>/Confirm attendance for WM Dixon-Saunders/.test(warning)));
   const duplicateOfficerAttendance = response();
   duplicateOfficerAttendance.draft.officerAttendance = [
-    {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'},
-    {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'},
+    {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present',stationCoverage:null,actingName:null,actingWholeMeeting:null},
+    {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present',stationCoverage:null,actingName:null,actingWholeMeeting:null},
   ];
   duplicateOfficerAttendance.evidence.push(
     {field:'officerAttendance[0].status',quote:'Present: WM Dixon-Saunders'},
@@ -285,8 +285,8 @@ try {
   assert.equal(duplicateAttendanceDraft.officerAttendance[1].status,'not_recorded');
   await rejectResponse(result => {
     result.draft.officerAttendance = [
-      {name:'   ',title:'',status:'present'},
-      {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present'},
+      {name:'   ',title:'',status:'present',stationCoverage:null,actingName:null,actingWholeMeeting:null},
+      {name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present',stationCoverage:null,actingName:null,actingWholeMeeting:null},
     ];
   }, /invalid officer attendance name/);
   await rejectResponse(result => {result.draft.income = [{date:null, reference:null, party:null, description:'Unsupported receipt', amount:'100'}];}, /unsupported transaction/);

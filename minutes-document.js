@@ -5,6 +5,7 @@ import {
 } from 'docx';
 import { readFile } from 'node:fs/promises';
 import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
+import { attendanceLabel, stationCoverageText } from './public/minutes-attendance.js';
 
 import {
   additionalPresent, nonOfficerExcused, officerAttendanceRows,
@@ -71,7 +72,17 @@ const detailsTable = (draft) => new Table({
   ],
 });
 
-const officerTable = (draft) => new Table({
+const officerTable = (draft) => Number(draft.officerAttendanceVersion) >= 2 ? new Table({
+  width: { size: 100, type: WidthType.PERCENTAGE },
+  columnWidths: [2300, 1600, 1200, 3100],
+  rows: [
+    new TableRow({ tableHeader: true, children: ['Name', 'Office', 'Attendance', 'Station coverage']
+      .map(text => cell(text, {bold: true, fill: LIGHT_GRAY})) }),
+    ...officerAttendanceRows(draft).map(officer => new TableRow({cantSplit: true,
+      children: [officer.name, officer.title, attendanceLabel(officer), stationCoverageText(officer)].map(text => cell(text)),
+    })),
+  ],
+}) : new Table({
   width: { size: 100, type: WidthType.PERCENTAGE },
   columnWidths: [2800, 2500, 600, 600, 600, 700],
   rows: [

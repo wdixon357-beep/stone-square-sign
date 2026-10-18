@@ -2,7 +2,8 @@ import { MINUTES_REPORT_RULES } from './report-rules.js';
 import { minutesDateParts, minutesDateValue } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
-import { organizeMeetingSource } from './minutes-organizer.js';
+import { organizeMeetingSource, extractOfficerCoverage, officerNameMatches } from './minutes-organizer.js';
+import { normalizeOfficerCoverage, sameAttendancePerson } from './public/minutes-attendance.js';
 import { cleanMinutesSectionsForPresentation, detectPrayerFacts, UNCITED_PRESIDING_WARNING } from './minutes-format.js';
 
 const nullableText = { type: ['string', 'null'] };
@@ -30,10 +31,12 @@ export const MINUTES_SCHEMA = {
     officerAttendance: {
       type: 'array',
       items: {
-        type: 'object', additionalProperties: false, required: ['name', 'title', 'status'],
+        type: 'object', additionalProperties: false, required: ['name', 'title', 'status', 'stationCoverage', 'actingName', 'actingWholeMeeting'],
         properties: {
           name: { type: 'string', minLength: 1 }, title: { type: 'string' },
-          status: { type: 'string', enum: ['present', 'absent', 'excused', 'not_recorded'] },
+          status: { type: 'string', enum: ['present', 'absent', 'excused', 'arrived_late', 'not_recorded'] },
+          stationCoverage: { type: ['string', 'null'], enum: ['filled', 'vacant', null] },
+          actingName: nullableText, actingWholeMeeting: { type: ['boolean', 'null'] },
         },
       },
     },
@@ -91,6 +94,11 @@ export const MINUTES_GENERATION_SCHEMA = {
 const generationInstructions = MINUTES_REPORT_RULES;
 
 const generationError = message => Object.assign(new Error(message), {statusCode: 502});
+const otherAttendanceNames = (list, officerAttendance, attendanceVersion) => list.filter((name) => (
+  !officerAttendance.some((officer) => attendanceVersion < 2 ? namesMatch(name, officer.name)
+    : officerNameMatches(name, officer) || officer.actingName && sameAttendancePerson(name, officer.actingName))
+));
+
 
 // Source exports can wrap a sentence across lines while the model cites the
 // same words with ordinary spaces. Resolve only whitespace differences, then
@@ -124,7 +132,7 @@ function validateGeneratedShape(value, schema, path = 'response') {
 function checkedGeneratedDraft(response, source, localDraft) {
   validateGeneratedShape(response, MINUTES_GENERATION_SCHEMA);
   const {evidence} = response;
-  const generated = {...response.draft};
+  const generated = structuredClone(response.draft);
   const warnings = ['Organized with GPT-5.6 Luna; source verification is required.', ...generated.warnings];
   if (generated.officerAttendance.some(entry => !entry.name.trim())) {
     throw generationError('Minutes generation returned an invalid officer attendance name. Please try again.');
@@ -147,7 +155,12 @@ function checkedGeneratedDraft(response, source, localDraft) {
   if (generated.meetingType !== 'Stated Communication') requiredFields.add('meetingType');
   for (const field of ['present', 'excused', 'visitors', 'sensitiveReview']) generated[field].forEach((_, index) => requiredFields.add(`${field}[${index}]`));
   generated.sections.forEach((section, index) => {if (section.body.trim()) requiredFields.add(`sections[${index}].body`);});
-  generated.officerAttendance.forEach((entry, index) => {if (entry.status !== 'not_recorded') requiredFields.add(`officerAttendance[${index}].status`);});
+  generated.officerAttendance.forEach((entry, index) => {
+    if (entry.status !== 'not_recorded') requiredFields.add(`officerAttendance[${index}].status`);
+    for (const field of ['stationCoverage', 'actingName', 'actingWholeMeeting']) {
+      if (entry[field] !== null && entry[field] !== '') requiredFields.add(`officerAttendance[${index}].${field}`);
+    }
+  });
   const references = new Map();
   for (const item of evidence) {
     const unrecordedOfficer = /^officerAttendance\[(0|[1-9]\d*)\]\.status$/.exec(item.field);
@@ -222,7 +235,7 @@ function checkedGeneratedDraft(response, source, localDraft) {
       warnings.push(`Motion source review: line ${index + 1} mentions a motion or vote but is not linked to a minutes section.`);
     }
   });
-  const normalized = normalizeMinutesDraft({...generated, sourceType: localDraft.sourceType, organizerVersion: localDraft.organizerVersion});
+  const normalized = normalizeMinutesDraft({...generated, officerAttendanceVersion: 2, sourceType: localDraft.sourceType, organizerVersion: localDraft.organizerVersion});
   const comparable = value => String(value || '').toLowerCase().replace(/[.\s]/g, '');
   for (const field of ['meetingDate', 'degree', 'openingTime', 'closingTime', 'quorum']) {
     if (!generated[field]) continue;
@@ -270,6 +283,7 @@ function checkedGeneratedDraft(response, source, localDraft) {
     const quoted = organizeMeetingSource(quote);
     if ((quoted[field] || []).some(stated => namesMatch(stated, name))) return true;
     if (!quote.toLowerCase().includes(name.toLowerCase()) || /\b(?:next|previous|last) (?:meeting|year)|\b(?:will|would|should)\b/i.test(quote)) return false;
+    if (field === 'arrived_late') return extractOfficerCoverage(quote).some(officer => officerNameMatches(name, officer) && officer.status === 'arrived_late');
     const label = {present: /\b(?:was present|were present|in attendance|attended)\b/i, excused: /\bexcused\b/i, absent: /\babsent\b/i, visitors: /\b(?:visitors?|guests?|visiting)\b/i}[field];
     if (field === 'present' && /\b(?:not present|not in attendance|did not attend|absent|excused)\b/i.test(quote)) return false;
     if (field === 'excused' && /\bnot excused\b/i.test(quote) || field === 'absent' && /\bnot absent\b/i.test(quote)) return false;
@@ -281,25 +295,54 @@ function checkedGeneratedDraft(response, source, localDraft) {
       if (!attendanceEstablished(quote, name, field)) throw generationError(`An extracted ${field} entry is not established by its source reference. Please try again.`);
     });
   }
-  const sameOfficer = (left, right) => namesMatch(left.name, right.name)
-    || left.title && right.title && left.title.toLowerCase() === right.title.toLowerCase();
+  const sameOfficer = (left, right) => officerNameMatches(left.name, right);
   for (const [index, entry] of generated.officerAttendance.entries()) {
-    if (entry.status === 'not_recorded') continue;
-    const quote = quotesFor(`officerAttendance[${index}].status`);
-    if (!attendanceEstablished(quote, entry.name, entry.status)) {
-      // A transcript often mentions an officer speaking without providing a roll
-      // call. That mention cannot establish attendance, but it also should not
-      // discard an otherwise usable minutes draft. Keep the officer on the roster,
-      // reset only the unsupported status, and make the required review explicit.
-      entry.status = 'not_recorded';
-      warnings.push(`Confirm attendance for ${entry.name}: the source mentions the officer but does not establish an attendance status.`);
+    const field = key => `officerAttendance[${index}].${key}`;
+    const rosterOfficer = CURRENT_OFFICERS.find(officer => officerNameMatches(entry.name, officer));
+    const referenceOfficer = rosterOfficer || entry;
+    if (entry.status !== 'not_recorded') {
+      const quote = quotesFor(field('status'));
+      const explicit = extractOfficerCoverage(quote, [referenceOfficer])[0];
+      if (!(explicit.status === entry.status || attendanceEstablished(quote, entry.name, entry.status))) {
+        entry.status = 'not_recorded';
+        references.delete(field('status'));
+        warnings.push(`Confirm attendance for ${entry.name}: the source mentions the officer but does not establish an attendance status.`);
+      }
+    }
+    for (const key of ['stationCoverage', 'actingName', 'actingWholeMeeting']) {
+      if (entry[key] === null || entry[key] === '') continue;
+      const explicit = extractOfficerCoverage(quotesFor(field(key)), [referenceOfficer])[0];
+      const supported = key === 'actingName'
+        ? explicit.actingName?.toLowerCase() === entry.actingName.trim().toLowerCase()
+        : explicit[key] === entry[key];
+      if (!supported || key === 'actingName' && officerNameMatches(entry.actingName, referenceOfficer)
+        || key === 'actingWholeMeeting' && entry.actingWholeMeeting === false && entry.status !== 'arrived_late') {
+        entry[key] = null;
+        references.delete(field(key));
+        warnings.push(`Confirm ${referenceOfficer.title || entry.name} station coverage: the source does not establish ${key}.`);
+      }
+    }
+    // A covering Brother cannot be treated as a sourced assignment without a
+    // sourced link to this officer's station, even when his name occurs nearby.
+    if (entry.stationCoverage !== 'filled') {
+      entry.actingName = null;
+      entry.actingWholeMeeting = null;
+      references.delete(field('actingName'));
+      references.delete(field('actingWholeMeeting'));
     }
   }
   for (const normalizedEntry of normalized.officerAttendance) {
-    const generatedEntries = generated.officerAttendance.filter((entry) => sameOfficer(entry, normalizedEntry));
+    const generatedEntries = generated.officerAttendance.filter(entry => sameOfficer(entry, normalizedEntry));
     if (!generatedEntries.length) continue;
-    normalizedEntry.status = generatedEntries.find((entry) => entry.status !== 'not_recorded')?.status || 'not_recorded';
+    const chosen = generatedEntries.find(entry => entry.status !== 'not_recorded') || generatedEntries[0];
+    normalizedEntry.status = chosen.status;
+    Object.assign(normalizedEntry, normalizeOfficerCoverage(chosen));
   }
+  // Reconcile the other-Brother lists after unsupported assignments are
+  // cleared. An invented assignment must not erase independently sourced
+  // presence or excusal that was removed during the initial normalization.
+  normalized.present = otherAttendanceNames(generated.present.map(name => name.trim()).filter(Boolean), normalized.officerAttendance, 2);
+  normalized.excused = otherAttendanceNames(generated.excused.map(name => name.trim()).filter(Boolean), normalized.officerAttendance, 2);
   generated.sensitiveReview.forEach((detail, index) => {
     if (!source.includes(detail) || !quotesFor(`sensitiveReview[${index}]`).includes(detail)) {
       throw generationError('A private review detail does not match the source. Please try again.');
@@ -365,34 +408,40 @@ const normalizeSections = (value, draft = {}) => {
 };
 
 export const normalizeMinutesDraft = (value = {}) => {
+  const attendanceVersion = Number(value.officerAttendanceVersion) >= 2 ? 2 : 1;
   const rawPresent = Array.isArray(value.present) ? value.present.map(item => String(item).trim()).filter(Boolean) : [];
   const rawExcused = Array.isArray(value.excused) ? value.excused.map(item => String(item).trim()).filter(Boolean) : [];
   const statedRows = Array.isArray(value.officerAttendance) ? value.officerAttendance.map((entry) => ({
     name: String(entry?.name || '').trim(),
     title: String(entry?.title || '').trim(),
-    status: ['present', 'absent', 'excused', 'not_recorded'].includes(entry?.status)
+    ...normalizeOfficerCoverage(entry),
+    status: ['present', 'absent', 'excused', 'arrived_late', 'not_recorded'].includes(entry?.status)
       ? entry.status : 'not_recorded',
   })).filter((entry) => entry.name) : [];
-  const sameOfficer = (entry, officer) => namesMatch(entry.name, officer.name)
-    || entry.title && officer.title && entry.title.toLowerCase() === officer.title.toLowerCase();
+  const sameOfficer = (entry, officer) => attendanceVersion >= 2 ? officerNameMatches(entry.name, officer)
+    : namesMatch(entry.name, officer.name)
+      || entry.title && officer.title && entry.title.toLowerCase() === officer.title.toLowerCase();
   const officerAttendance = CURRENT_OFFICERS.map((officer) => {
     const stated = statedRows.find((entry) => sameOfficer(entry, officer));
     const inferred = rawPresent.some((name) => namesMatch(name, officer.name)) ? 'present'
       : rawExcused.some((name) => namesMatch(name, officer.name)) ? 'excused' : 'not_recorded';
     return {
-      name: stated?.name || officer.name,
+      // Expand office/surname aliases, while retaining an officer's explicit
+      // full-name spelling and office corrections made in the editor.
+      name: attendanceVersion >= 2 && stated && !namesMatch(stated.name, officer.name)
+        ? officer.name : stated?.name || officer.name,
       title: stated?.title || officer.title,
+      ...normalizeOfficerCoverage(stated),
       status: stated?.status && stated.status !== 'not_recorded' ? stated.status : inferred,
     };
   });
   officerAttendance.push(...statedRows.filter((entry) => (
     !CURRENT_OFFICERS.some((officer) => sameOfficer(entry, officer))
   )));
-  const otherNames = list => list.filter((name) => (
-    !officerAttendance.some((officer) => namesMatch(name, officer.name))
-  ));
+  const otherNames = list => otherAttendanceNames(list, officerAttendance, attendanceVersion);
   return {
   organizerVersion: value.organizerVersion || 1,
+  officerAttendanceVersion: attendanceVersion,
   sourceType: value.sourceType === 'compiled_notes' ? 'compiled_notes' : 'transcript',
   meetingDate: minutesDateValue(value.meetingDate) || null,
   meetingType: /^(?:regular )?stated communication$/i.test(String(value.meetingType || ''))
@@ -445,7 +494,7 @@ export const generateMinutesDraft = async (transcript, {
   if (source.length < 100) throw Object.assign(new Error('The transcript is too short to create reliable minutes.'), { statusCode: 400 });
   if (source.length > 500_000) throw Object.assign(new Error('The transcript is too long. Upload the Plaud text export for one meeting.'), { statusCode: 400 });
 
-  if (testResponse) return normalizeMinutesDraft(JSON.parse(testResponse));
+  if (testResponse) return normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2});
   const localDraft = organizeMeetingSource(source, { sourceType });
   if (typeof generateStructured === 'function') {
     const response = await generateStructured({
