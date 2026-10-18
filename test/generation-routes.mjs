@@ -72,7 +72,7 @@ async function officer(owner, role) {
 }
 const bankingForm = (intent = 'save') => {const form = new FormData(); form.set('sourceText', notes); form.set('intent', intent); return form;};
 const fixtureForCycle = report => {const draft=structuredClone(completeTreasuryFixture);Object.assign(draft,{previousMeetingDate:report.draft.previousMeetingDate,periodStart:report.draft.periodStart,periodEnd:report.draft.periodEnd});draft.transactions.forEach(row=>row.date=report.draft.periodStart);return draft;};
-const minutesForm = () => {const form = new FormData(); form.set('transcriptText', minutesSource); return form;};
+const minutesForm = (source = minutesSource) => {const form = new FormData(); form.set('transcriptText', source); return form;};
 
 await writeFile(loaderFile, `
 import {appendFile, readFile, access} from 'node:fs/promises';
@@ -111,6 +111,12 @@ const fetchImpl = async (url, options) => {
     draft.sections.forEach((section,index)=>{if(section.body.trim())add('sections['+index+'].body');});
     draft.officerAttendance.forEach((entry,index)=>{if(entry.status!=='not_recorded')add('officerAttendance['+index+'].status');});
     result={draft,evidence};
+    if (mode === 'procedural_omission' || mode === 'unsupported_second') {
+      const body = '- The minutes of the previous meeting were reviewed. The source states that the minutes were approved as submitted, but it does not identify a mover, seconder, vote method or tally.';
+      draft.sections = [{heading:'Reading of the Minutes',body:body + (mode === 'unsupported_second' ? ' Brother Example seconded the motion.' : '')}];
+      result.evidence = evidence.filter(item=>!item.field.startsWith('sections['));
+      result.evidence.push({field:'sections[0].body',quote:input.source});
+    }
   } else {
     const empty=()=>({value:null,evidence:''});
     result={periodStart:empty(),periodEnd:empty(),presentedOn:empty(),bankName:empty(),accounts:[],transactions:[],funds:[],obligations:[],remarks:empty()};
@@ -275,6 +281,48 @@ try {
   const unknownResult = await api('/api/reports/organize',warden.token,'POST',unknownInput);
   const duplicateResult = await api('/api/reports/organize',warden.token,'POST',unknownInput);
   check('Unconfirmed and duplicate Warden requests hide charge and allowance details', unknownResult.status >= 500 && duplicateResult.status === 409 && [unknownResult, duplicateResult].every(item => !/GPT|Terra|Luna|OpenAI|charge|monthly|allowance|\$5/i.test(item.data.error)));
+
+  // A separate isolated server exercises the Assistant Secretary's actual
+  // creation/reopen path without inheriting the previous suite's rate bucket.
+  await stop();
+  await start(true);
+  owner = await registerOwner();
+  const assistant = await officer(owner, 'assistant_secretary');
+  const omissionSource = 'Meeting date: September 17, 2026\nPresent: Brother Example Officer\nThe Lodge opened on the Third Degree at 7:30 PM.\nMinutes of the previous meeting were reviewed.\nConclusion: Both were approved as submitted.\nThe Lodge closed at 9:00 PM.';
+  await control({mode:'procedural_omission'});
+  const beforeOmission = await providerCalls();
+  const omission = await api('/api/minutes/generate', assistant.token, 'POST', minutesForm(omissionSource));
+  assert.equal(omission.status,201,JSON.stringify(omission.data));
+  const savedOmission = omission.data.minutes;
+  check('Assistant Secretary can create a sourced draft that explicitly leaves mover and seconder unknown',
+    savedOmission.status==='draft' && savedOmission.draft.sections.some(section=>section.body.includes('does not identify a mover, seconder')) && await providerCalls()===beforeOmission+1);
+  const reopenedOmission = (await api('/api/minutes', assistant.token)).data.minutes.find(item=>item.id===savedOmission.id);
+  check('Assistant Secretary can reopen the saved minutes with unknown procedural details intact',
+    reopenedOmission?.draft.sections.some(section=>section.body.includes('does not identify a mover, seconder')) && reopenedOmission.preparerAttestedAt==null && reopenedOmission.masterAttestedAt==null);
+  const beforeOmissionReview = await providerCalls();
+  check('Generation leaves attendance confirmation and attestation with the officer',
+    (await api(`/api/minutes/${savedOmission.id}/preparer-attest`,assistant.token,'POST',{expectedUpdatedAt:savedOmission.updatedAt})).status===409 && await providerCalls()===beforeOmissionReview);
+  const cachedOmission = await api(`/api/minutes/${savedOmission.id}/reorganize`,assistant.token,'POST',{expectedUpdatedAt:savedOmission.updatedAt});
+  check('Identical sourced organization reuses the verified cached result without a second paid call',
+    cachedOmission.status===200 && await providerCalls()===beforeOmissionReview);
+  const recordsBeforeUnsupported = (await api('/api/minutes',assistant.token)).data.minutes.length;
+  await control({mode:'unsupported_second'});
+  const unsupportedSource = omissionSource+'\nA separate proposal was discussed.';
+  const unsupported = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(unsupportedSource));
+  check('A nearby unknown-seconder statement cannot hide a fabricated affirmative second',
+    unsupported.status===502 && /^SS22-[A-Z0-9]+$/.test(unsupported.data.incidentReference||'') && /unsupported second/.test(unsupported.data.error));
+  const currentActivity = (await api('/api/admin/activity',owner.token)).data;
+  const captured = currentActivity.incidents.find(incident=>incident.reference===unsupported.data.incidentReference);
+  check('The exact generation failure is recorded server-side with its actor, status and safe category',
+    captured?.userId===assistant.user.id && captured.status===502 && captured.path==='/api/minutes/generate' && captured.category==='MINUTES_UNSUPPORTED_SECOND');
+  check('The failure log contains no pasted source or provider payload',
+    !JSON.stringify(captured).includes(unsupportedSource) && !JSON.stringify(captured).includes('Brother Example'));
+  check('Rejected generation preserves the earlier saved draft without saving a substitute',
+    (await api('/api/minutes',assistant.token)).data.minutes.length===recordsBeforeUnsupported && (await api('/api/minutes',assistant.token)).data.minutes.find(item=>item.id===savedOmission.id).updatedAt===savedOmission.updatedAt);
+  const beforeUnsupportedRetry = await providerCalls();
+  const unsupportedRetry = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(unsupportedSource));
+  check('Retrying a rejected cached interpretation does not make a silent paid retry',
+    unsupportedRetry.status===502 && await providerCalls()===beforeUnsupportedRetry);
   console.log(`${passed} generation route checks passed with an isolated mocked provider.`);
 } finally {
   await stop();

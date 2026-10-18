@@ -3614,7 +3614,25 @@ mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: reques
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
 
-app.use((error, req, res, _next) => {
+// Only fixed application machine codes belong in incident categories. Error
+// messages, provider details and arbitrary library codes can contain source data.
+const serverIncidentCategory = (error, requestPath) => {
+  const knownCodes = new Set([
+    'MINUTES_SOURCE_VERIFICATION_FAILED', 'MINUTES_UNSUPPORTED_SECOND',
+    'MINUTES_UNSUPPORTED_UNANIMOUS_VOTE', 'MINUTES_UNSUPPORTED_APPROVAL',
+    'MINUTES_UNSUPPORTED_REJECTION', 'MINUTES_UNSUPPORTED_TABLING', 'MINUTES_UNSUPPORTED_WITHDRAWAL',
+    'GENERATION_INVALID_RESPONSE', 'GENERATION_USAGE_UNKNOWN', 'GENERATION_ALREADY_PENDING',
+    'GENERATION_BUDGET_PAUSED', 'GENERATION_MONTHLY_LIMIT', 'GENERATION_SOURCE_TOO_LARGE', 'GENERATION_REQUEST_REJECTED',
+  ]);
+  if (typeof error?.code === 'string' && knownCodes.has(error.code)) return error.code;
+  return /^\/api\/minutes(?:\/|$)/.test(requestPath) && Number.isInteger(error?.statusCode)
+    ? 'minutes_verification' : 'server_error';
+};
+const serverIncidentArea = requestPath => ({
+  minutes: 'minutes', treasury: 'treasury', building: 'building', agenda: 'agenda', reports: 'reports', dues: 'dues',
+}[String(requestPath || '').split('/')[2]] || 'Dashboard');
+
+app.use(async (error, req, res, _next) => {
   console.error(error);
   if (error instanceof multer.MulterError) {
     return res.status(400).json({
@@ -3627,11 +3645,18 @@ app.use((error, req, res, _next) => {
       || error.message === 'Upload notes or a transcript as a TXT, DOCX, or PDF file.') {
     return res.status(400).json({ error: error.message });
   }
-  if (Number.isInteger(error.statusCode)) {
+  const knownStatus = Number.isInteger(error.statusCode);
+  if (knownStatus && (error.statusCode < 500 || error.statusCode > 599)) {
     return res.status(error.statusCode).json({ error: error.message });
   }
+  const status = knownStatus ? error.statusCode : 500;
   const reference = `SS22-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-  void recordAppIncident({reference,userId:req.user?.id,client:clientName(req),area:'Dashboard',path:req.path,method:req.method,status:500,category:error?.name||'server_error',state:'open'}).catch(incidentError=>console.error('Could not record incident',incidentError));
+  try {
+    // Finish the server record before a client can replay the reference with a
+    // generic category, preserving the verified cause in the first observation.
+    await recordAppIncident({reference,userId:req.user?.id,client:clientName(req),area:serverIncidentArea(req.path),path:req.path,method:req.method,status,category:serverIncidentCategory(error,req.path),state:'open'});
+  } catch (incidentError) { console.error('Could not record incident',incidentError); }
+  if (knownStatus) return res.status(status).json({error:error.message,incidentReference:reference});
   res.status(500).json({ error: 'The dashboard could not complete that request.', incidentReference: reference, retryable: true, retryAfterSeconds: 10 });
 });
 

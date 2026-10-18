@@ -93,7 +93,7 @@ export const MINUTES_GENERATION_SCHEMA = {
 
 const generationInstructions = MINUTES_REPORT_RULES;
 
-const generationError = message => Object.assign(new Error(message), {statusCode: 502});
+const generationError = (message, code = 'MINUTES_SOURCE_VERIFICATION_FAILED') => Object.assign(new Error(message), {statusCode: 502, code});
 const otherAttendanceNames = (list, officerAttendance, attendanceVersion) => list.filter((name) => (
   !officerAttendance.some((officer) => attendanceVersion < 2 ? namesMatch(name, officer.name)
     : officerNameMatches(name, officer) || officer.actingName && sameAttendancePerson(name, officer.actingName))
@@ -128,6 +128,36 @@ function validateGeneratedShape(value, schema, path = 'response') {
     for (const [key, child] of Object.entries(value)) validateGeneratedShape(child, schema.properties[key], `${path}.${key}`);
   } else if (type === 'array') value.forEach((item, index) => validateGeneratedShape(item, schema.items, `${path}[${index}]`));
 }
+
+// A statement that a procedural detail is missing is not a claim that the
+// procedure occurred. Mask only bounded omission grammar, never an entire
+// section, so a nearby affirmative assertion still needs its own evidence.
+function proceduralClaims(value) {
+  const field = String.raw`(?:(?:named|recorded)\s+)?(?:mover|seconder|second|vote(?:\s+(?:method|tally|count|result|outcome))?|tally|count|result|outcome|approval|rejection|tabling|withdrawal|unanimity|unanimous(?:\s+vote)?)`;
+  const item = String.raw`(?:(?:the|a|an|any|its)\s+)?${field}`;
+  const fields = String.raw`${item}(?:\s*(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)${item})*`;
+  const unknown = String.raw`(?:not\s+(?:recorded|identified|named|specified|provided|stated|known|confirmed|established|clear)|unrecorded|unidentified|unknown|unconfirmed|unclear)`;
+  const omission = String.raw`\b(?:(?:the|this)\s+)?(?:source|record|transcript|notes|minutes|excerpt|summary|it)\s+(?:(?:does|do|did)\s+not|doesn't|don't|didn't)\s+(?:identify|name|record|specify|state|include|provide|establish|confirm|indicate)`;
+  const subject = String.raw`(?:(?:the|a)\s+)?(?:(?!(?:but|and|or|however)\b)[a-z][a-z'-]*\s+){0,6}?(?:motion|proposal|resolution|vote)`;
+  const verb = String.raw`(?:unanimously\s+(?:approved|adopted|passed|carried)|(?:seconded|approved|adopted|passed|carried|rejected|defeated|failed|tabled|withdrawn)(?:\s+unanimously)?|unanimous)\b`;
+  const verbs = String.raw`${verb}(?:\s*(?:,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)${verb})*`;
+  const action = String.raw`${subject}\s+(?:(?:was|were|is|had been|has been)\s+)?(?:properly\s+)?${verbs}`;
+  return String(value || '').replace(/[’]/g, "'")
+    .replace(new RegExp(String.raw`\bneither\s+${item}(?:\s*,\s*${item})*\s+nor\s+${item}\s+(?:was|were|is|are)\s+(?:recorded|identified|named|specified|provided|stated|confirmed|established)\b`, 'gi'), ' ')
+    .replace(new RegExp(String.raw`\b(?:(?:it|this)\s+(?:is|was|remains?)\s+)?(?:unknown|unclear|unconfirmed|not clear)\s+(?:whether|if)\s+${action}`, 'gi'), ' ')
+    .replace(new RegExp(String.raw`\b(?:whether|if)\s+${action}\s+(?:(?:was|were|is|are|remains?)\s+)?${unknown}\b`, 'gi'), ' ')
+    .replace(new RegExp(String.raw`${omission}\s+(?:(?:whether|if)\s+${action}|who\s+(?:moved|seconded)|${fields})`, 'gi'), ' ')
+    .replace(new RegExp(String.raw`\b${fields}\s+(?:(?:was|were|is|are|remains?|has been|have been)\s+)?${unknown}\b`, 'gi'), ' ')
+    .replace(new RegExp(String.raw`\bno\s+${field}\s+(?:(?:was|were|is|are|has been|have been)\s+)?(?:recorded|identified|named|specified|provided|stated|confirmed|established)\b`, 'gi'), ' ')
+    .replace(new RegExp(String.raw`\b(?:${field}|seconded(?:\s+by)?)\s*:\s*${unknown}\b`, 'gi'), ' ')
+    // Neither/nor describes explicit non-occurrence, not a missing detail.
+    // Expand only procedural verbs so each negative claim still needs evidence.
+    .replace(new RegExp(String.raw`\bneither\s+${verb}(?:\s*(?:,\s*(?:nor\s+)?|\s+nor\s+)${verb})+`, 'gi'),
+      clause => (clause.match(new RegExp(verb, 'gi')) || []).map(action => `not ${action}`).join(' '));
+}
+const withoutNegatedFact = (text, pattern) => pattern ? text.replace(new RegExp(pattern.source, 'gi'), ' ') : text;
+const negatedProcedure = (verbs, extra = '') => new RegExp(String.raw`\b(?:(?:not|never|wasn't|isn't|weren't)\s+(?:yet\s+)?(?:been\s+)?(?:properly\s+)?(?:unanimously\s+)?(?:${verbs})|(?:no one|nobody|no brother|no member|no person)\s+(?:${verbs})${extra ? `|${extra}` : ''})\b`, 'i');
+
 
 function checkedGeneratedDraft(response, source, localDraft) {
   validateGeneratedShape(response, MINUTES_GENERATION_SCHEMA);
@@ -202,30 +232,40 @@ function checkedGeneratedDraft(response, source, localDraft) {
     if (/treasur/i.test(section.heading) && /(?:[$£€]\s*\d|\b\d[\d,.]*\s*(?:dollars?|cents?)\b|\b(?:balance|receipts|disbursements|income|expenses|total)\s*(?:was|were|of|is|:)?\s*\d)/i.test(body)) {
       throw generationError('The generated minutes included treasury figures. The minutes should record the report reading status without amounts. Please try again.');
     }
+    const statedClaims = proceduralClaims(body), citedClaims = proceduralClaims(quote);
     const noVote = /\b(?:no vote was taken|no recorded (?:vote|decision)|motion (?:was )?(?:not approved|rejected|defeated))\b/i;
     const approved = /\b(?:(?:motion|proposal|resolution)\s+(?:was\s+)?(?:approved|adopted|passed|carried)|approved unanimously|unanimously approved)\b/i;
-    if (noVote.test(quote) && approved.test(body) && !approved.test(quote)) {
-      throw generationError('The generated decision conflicts with its source reference. Review the recorded motion outcome and try again.');
+    if (noVote.test(quote) && approved.test(statedClaims) && !approved.test(citedClaims)) {
+      throw generationError('The generated decision conflicts with its source reference. Review the recorded motion outcome and try again.', 'MINUTES_UNSUPPORTED_APPROVAL');
     }
     const proceduralFacts = [
-      {label: 'second', stated: /\b(?:seconded|seconder|seconding|second by|a second was (?:made|offered))\b/i, supported: /\b(?:seconded|seconder|seconding|second by|a second was (?:made|offered))\b/i},
-      {label: 'unanimous vote', stated: /\bunanimous(?:ly)?\b/i, supported: /\bunanimous(?:ly)?\b|\ball (?:in favor|ayes?)\b[^.!?]*\b(?:none|no one|zero) opposed\b/i},
-      {label: 'approval', stated: /\b(?:approved|adopted|passed|carried)\b/i, supported: /\b(?:approved|adopted|passed|carried|all in favor)\b/i},
-      {label: 'rejection', stated: /\b(?:rejected|defeated|failed)\b/i, supported: /\b(?:rejected|defeated|failed)\b/i},
-      {label: 'tabling', stated: /\btabled\b/i, supported: /\btabled\b/i},
-      {label: 'withdrawal', stated: /\bwithdrawn|withdrew\b/i, supported: /\bwithdrawn|withdrew\b/i},
+      {label: 'second', stated: /\b(?:seconded|seconder|seconding|second by|a second was (?:made|offered))\b/i, supported: /\b(?:seconded|seconder|seconding|second by|a second was (?:made|offered))\b/i,
+        negated: negatedProcedure('seconded', String.raw`did not second|no second(?:er)?\s+(?:(?:was|were)\s+)?(?:made|offered|given|received)|received no second`)},
+      {label: 'unanimous vote', stated: /\bunanimous(?:ly)?\b/i, supported: /\bunanimous(?:ly)?\b|\ball (?:in favor|ayes?)\b[^.!?]*\b(?:none|no one|zero) opposed\b/i,
+        negated: negatedProcedure('unanimous(?:ly)?')},
+      {label: 'approval', stated: /\b(?:approved|adopted|passed|carried)\b/i, supported: /\b(?:approved|adopted|passed|carried|all in favor)\b/i,
+        negated: negatedProcedure('approved|adopted|passed|carried')},
+      {label: 'rejection', stated: /\b(?:rejected|defeated|failed)\b/i, supported: /\b(?:rejected|defeated|failed)\b/i,
+        negated: negatedProcedure('rejected|defeated|failed')},
+      {label: 'tabling', stated: /\btabled\b/i, supported: /\btabled\b/i,
+        negated: negatedProcedure('tabled')},
+      {label: 'withdrawal', stated: /\bwithdrawn|withdrew\b/i, supported: /\bwithdrawn|withdrew\b/i,
+        negated: negatedProcedure('withdrawn|withdrew', 'did not withdraw')},
     ];
-    if (/\b(?:motion|moved|seconded)\b/i.test(`${body}\n${quote}`)) {
+    const states = fact => fact.stated.test(withoutNegatedFact(statedClaims, fact.negated));
+    const supports = fact => fact.supported.test(withoutNegatedFact(citedClaims, fact.negated));
+    if (/\b(?:motion|moved|seconded|seconder|vote)\b/i.test(`${body}\n${quote}`)) {
       for (const fact of proceduralFacts) {
-        if (fact.stated.test(body) && !fact.supported.test(quote)) {
-          throw generationError(`The generated motion claims an unsupported ${fact.label}. Review the cited transcript and try again.`);
+        if (states(fact) && !supports(fact)
+          || fact.negated.test(statedClaims) && !fact.negated.test(citedClaims)) {
+          throw generationError(`The generated motion claims an unsupported ${fact.label}. Review the cited transcript and try again.`, `MINUTES_UNSUPPORTED_${fact.label.toUpperCase().replace(/ /g, '_')}`);
         }
       }
-      if (proceduralFacts[0].supported.test(quote) && !proceduralFacts[0].stated.test(body)) {
+      if (supports(proceduralFacts[0]) && !states(proceduralFacts[0])) {
         warnings.push(`Confirm ${section.heading}: a second appears in the cited source but is absent from the draft motion.`);
       }
-      if (proceduralFacts.slice(1).some(fact => fact.supported.test(quote))
-        && !proceduralFacts.slice(1).some(fact => fact.stated.test(body))) {
+      if (proceduralFacts.slice(1).some(supports)
+        && !proceduralFacts.slice(1).some(states)) {
         warnings.push(`Confirm ${section.heading}: the cited source records a motion outcome that is absent from the draft.`);
       }
       if (noVote.test(quote) && !noVote.test(body)) {

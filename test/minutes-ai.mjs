@@ -208,6 +208,76 @@ try {
   await rejectResponse(result => {
     result.draft.sections[2].body = 'The Community Supper motion was seconded. No vote was taken.';
   }, /unsupported second/);
+  // A missing procedural detail is not an affirmative claim. Keep unknowns
+  // usable while checking each nearby recorded action independently.
+  const proceduralDraft = async (body, quote, expectedCode) => {
+    const result = response();
+    const originalQuote = result.evidence.find(item => item.field === 'sections[2].body').quote;
+    result.draft.sections[2].body = body;
+    result.evidence.find(item => item.field === 'sections[2].body').quote = quote;
+    const inputSource = source.replace(originalQuote, quote);
+    if (expectedCode) {
+      await assert.rejects(generateMinutesDraft(inputSource, {generateStructured:async()=>result}),
+        error => error.statusCode === 502 && error.code === expectedCode,
+        `Unsupported procedural claim remains blocked: ${body}`);
+    } else {
+      const output = await generateMinutesDraft(inputSource, {generateStructured:async()=>result});
+      assert.ok(output.sections.some(section => section.body.includes(body.replace(/^- /,'')) || section.body === body));
+      return output;
+    }
+  };
+  await proceduralDraft('- The minutes of the previous meeting were reviewed. The source states that the minutes were approved as submitted, but it does not identify a mover, seconder, vote method or tally.',
+    'Minutes of the previous meeting were reviewed.\nConclusion: Both were approved as submitted.');
+  await proceduralDraft('- A motion passed to form a planning committee. The source does not identify the mover, seconder or vote tally.',
+    'A motion passed to form a planning committee.');
+  for (const unknown of [
+    'The source does not identify the mover, seconder or vote tally.',
+    'The mover and seconder were not recorded.',
+    'No seconder was identified.',
+    'The seconder is unknown.',
+    'Seconder: not recorded.',
+    'The source does not state whether the motion was unanimous.',
+    'The source does not record who seconded.',
+    'It is unclear whether the motion was seconded.',
+    'Neither the mover nor the seconder is identified in the source.',
+    'The source does not identify whether the motion was approved unanimously.',
+    'Whether the repair motion was seconded is not recorded.',
+  ]) await proceduralDraft(`- The motion was discussed. ${unknown}`, 'The motion was discussed.');
+  for (const mixed of [
+    'The source does not identify a mover, seconder or vote tally. Brother Example seconded the motion.',
+    'No seconder was identified, but Brother Example seconded the motion.',
+    'The seconder is unknown; the motion was seconded.',
+    'The source does not identify the mover and seconder, and the motion was seconded.',
+  ]) await proceduralDraft(`- ${mixed}`, 'The motion was discussed.', 'MINUTES_UNSUPPORTED_SECOND');
+  for (const quote of ['No seconder was identified.', 'The source does not record a seconder.', 'The motion was not seconded.',
+    'No one seconded the repair motion.', 'No Brother seconded the repair motion.',
+    'The source does not establish whether the repair motion was seconded.',
+    "The motion wasn't seconded.", 'The motion was not properly seconded.']) {
+    await proceduralDraft('- Brother Example seconded the motion.', quote, 'MINUTES_UNSUPPORTED_SECOND');
+  }
+  await proceduralDraft('- The motion was seconded, but no vote was recorded.', 'The motion was seconded.');
+  await proceduralDraft('- The motion was not seconded.', 'The motion was not seconded.');
+  await proceduralDraft('- The source does not identify the seconder. The motion was approved unanimously.',
+    'The motion was approved.', 'MINUTES_UNSUPPORTED_UNANIMOUS_VOTE');
+  for (const [claim, code] of [
+    ['approved','APPROVAL'], ['rejected','REJECTION'], ['tabled','TABLING'], ['withdrawn','WITHDRAWAL'],
+  ]) {
+    await proceduralDraft(`- The source does not identify the seconder. The motion was ${claim}.`,
+      'The motion was discussed.', `MINUTES_UNSUPPORTED_${code}`);
+    await proceduralDraft(`- The motion was ${claim}.`, `The motion was not ${claim}.`, `MINUTES_UNSUPPORTED_${code}`);
+    await proceduralDraft(`- The motion was ${claim}.`, `No one ${claim} the motion.`, `MINUTES_UNSUPPORTED_${code}`);
+    await proceduralDraft(`- The motion was ${claim}.`, `The motion wasn't ${claim}.`, `MINUTES_UNSUPPORTED_${code}`);
+  }
+  await proceduralDraft('- It is unclear whether the repair motion was seconded or approved.', 'The repair motion was discussed.');
+  await proceduralDraft('- The source does not establish whether the repair motion was seconded, approved or tabled.', 'The repair motion was discussed.');
+  await proceduralDraft('- The repair motion was approved.', 'It is unclear whether the repair motion was seconded or approved.', 'MINUTES_UNSUPPORTED_APPROVAL');
+  await proceduralDraft('- The repair motion was seconded and approved.', 'The repair motion was neither seconded nor approved.', 'MINUTES_UNSUPPORTED_SECOND');
+  await proceduralDraft('- The repair motion was neither seconded nor approved.', 'The repair motion was neither seconded nor approved.');
+  await proceduralDraft('- The repair motion was neither seconded nor approved.', 'The repair motion was discussed.', 'MINUTES_UNSUPPORTED_SECOND');
+  await proceduralDraft('- It is unclear whether the repair motion was seconded or approved, but Brother Example seconded the motion.', 'The repair motion was discussed.', 'MINUTES_UNSUPPORTED_SECOND');
+  await proceduralDraft('- The repair motion was seconded, but no vote was recorded.', 'The repair motion was seconded.');
+  await proceduralDraft('- It is unclear whether the motion was approved.', 'The motion was discussed; no vote was taken.');
+  await proceduralDraft('- The motion was approved.', 'The motion was discussed; no vote was taken.', 'MINUTES_UNSUPPORTED_APPROVAL');
   const citedSecond = response();
   const secondLine = 'Community Supper: Fish and two sides were proposed. The motion was seconded.';
   citedSecond.evidence.find(item => item.field === 'sections[2].body').quote = `${secondLine}\nNo vote was taken. Volunteers will confirm the menu.`;
