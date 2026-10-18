@@ -1027,6 +1027,11 @@ const transcriptFromUpload = async (file) => {
   return file.buffer.toString('utf8');
 };
 
+// Upgrade only an unsigned working copy. Captured attestation snapshots and
+// pending/final records retain the format in which they were submitted.
+const workingMinutesDraft = (row, value = JSON.parse(row.draft_json)) => normalizeMinutesDraft({
+  ...value, ...(row.status === 'draft' ? {closingFormatVersion: 2} : {}),
+});
 const minutesForResponse = (row) => ({
   createdByUserId: row.created_by_user_id,
   sourceUploadedByUserId: row.source_uploaded_by_user_id || row.created_by_user_id,
@@ -1039,7 +1044,7 @@ const minutesForResponse = (row) => ({
   id: row.id,
   meetingDate: row.meeting_date,
   sourceName: row.source_name,
-  draft: normalizeMinutesDraft(JSON.parse(row.draft_json)),
+  draft: workingMinutesDraft(row),
   status: row.status,
   createdBy: row.created_by_name,
   updatedBy: row.updated_by_name,
@@ -2162,6 +2167,7 @@ app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, 
     const requireStationCoverage = !masterReview || Number(JSON.parse(row.draft_json).officerAttendanceVersion) >= 2;
     const draft = normalizeMinutesDraft(requireStationCoverage
       ? {...req.body.draft, officerAttendanceVersion:2} : req.body.draft);
+    if (row.status === 'draft' || Number(JSON.parse(row.draft_json).closingFormatVersion) >= 2) draft.closingFormatVersion = 2;
     if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     const time = nowIso();
     const changes = masterReview ? minutesChanges(JSON.parse(row.submitted_draft_json || row.draft_json), draft) : [];
@@ -2192,6 +2198,7 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     }
     const draft = JSON.parse(row.draft_json);
     draft.officerAttendanceVersion = 2;
+    draft.closingFormatVersion = 2;
     const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
     if (reviewIssues.length) return res.status(409).json({ error: reviewIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
@@ -2412,7 +2419,7 @@ app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next
   const row=await getMinutesRow(req.params.id);
   const mayOpenWorking=Boolean(row&&hasPermission(req.user,'minutes.prepare')&&canOpenWorkingMinutes(req.user,row));
   if(!row||(!mayOpenWorking&&!finalMinutes(row)))return res.status(404).json({error:'Finished meeting minutes not found.'});
-  let draft=normalizeMinutesDraft(JSON.parse(row.draft_json));
+  let draft=workingMinutesDraft(row);
   let captured={};
   if(finalMinutes(row)){
     const snapshot=await publishedMinutesSnapshot(row);
@@ -2432,9 +2439,9 @@ app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,
       const row = await getMinutesRow(req.params.id);
       if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
       if (!canOpenWorkingMinutes(req.user, row)) return res.status(404).json({ error: 'Meeting minutes not found.' });
-      const savedDraft = normalizeMinutesDraft(JSON.parse(row.draft_json));
+      const savedDraft = workingMinutesDraft(row);
       const draft = (row.status === 'draft' || (row.status === 'awaiting_master_attestation' && req.user.role === 'owner')) && req.body?.draft
-        ? normalizeMinutesDraft(req.body.draft) : savedDraft;
+        ? workingMinutesDraft(row, req.body.draft) : savedDraft;
       if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
       const bytes = await buildMinutesPdf(await minutesArtifactContext(row, draft));
       res.setHeader('Cache-Control', 'no-store');
@@ -2451,7 +2458,7 @@ app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, 
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (!canOpenWorkingMinutes(req.user, row) && !finalMinutes(row)) return res.status(404).json({ error: 'Meeting minutes not found.' });
-    let draft = normalizeMinutesDraft(JSON.parse(row.draft_json));
+    let draft = workingMinutesDraft(row);
     let captured = {};
     if (finalMinutes(row)) {
       const snapshot = await publishedMinutesSnapshot(row);

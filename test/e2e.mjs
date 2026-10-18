@@ -594,10 +594,20 @@ try {
       && !minutesForOfficerBeforeSigning.payload.minutes.some((m) => m.id === minutesId)
       && privatePdfBeforeSigning.status === 404);
   const minutesPreview = await api('POST', `/api/minutes/${minutesId}/preview`, {
-    token: asstToken, body: { draft: generatedMinutes.payload.minutes.draft },
+    token: asstToken, body: { draft: {...generatedMinutes.payload.minutes.draft, closingFormatVersion:1,
+      sections:[...generatedMinutes.payload.minutes.draft.sections, {heading:'Sickness and Distress',
+        body:'WM Dixon-Saunders asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.'}] } },
   });
   check('the generated minutes open as an in app PDF preview of the meeting template',
     minutesPreview.status === 200 && minutesPreview.payload.subarray(0, 4).toString() === '%PDF');
+  const {PDFParse: ClosingPreviewParser} = await import('pdf-parse');
+  const closingPreviewParser = new ClosingPreviewParser({data:minutesPreview.payload});
+  try {
+    const previewText = (await closingPreviewParser.getText()).text;
+    check('an older client cannot restore the retired WM prayer request in an unsigned preview',
+      !/asked the Chaplain|Prayer request: confirm/.test(previewText)
+      && /Chaplain gave the closing prayer/.test(previewText) && /9:04 PM/.test(previewText));
+  } finally {await closingPreviewParser.destroy();}
   const viewerMinutesPreview = await api('POST', `/api/minutes/${minutesId}/preview`, {
     token: viewerToken, body: { draft: generatedMinutes.payload.minutes.draft },
   });
@@ -792,10 +802,16 @@ try {
   const secretaryMinutesId = secretaryDraft.payload.minutes?.id;
   const secretaryReadyDraft = structuredClone(secretaryDraft.payload.minutes.draft);
   secretaryReadyDraft.officerAttendance = secretaryReadyDraft.officerAttendance.map((officer) => ({...officer, status:'present'}));
+  secretaryReadyDraft.prayerRequested = null;
+  secretaryReadyDraft.closingFormatVersion = 1; // An older client cannot keep the retired draft requirement.
   secretaryReadyDraft.attendanceReview = {officerRoll:true, otherPresent:true, otherExcused:true};
   await api('PUT', `/api/minutes/${secretaryMinutesId}`, { token: secToken, body: { draft: secretaryReadyDraft } });
   const beforeSecretaryNotice = deliveredMail.length;
   const secretarySubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
+  check('a secretary can attest without the retired WM prayer-request question', secretarySubmission.status === 200
+    && secretarySubmission.payload.minutes.draft.prayerRequested === null
+    && secretarySubmission.payload.minutes.draft.closingFormatVersion === 2
+    && secretarySubmission.payload.minutes.submittedDraft.closingFormatVersion === 2);
   const secretaryPending = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('McDuffie submission creates the same dated alert and immediate email', secretarySubmission.status === 200
     && secretaryPending.payload.alerts.some(a => a.id === secretaryMinutesId && a.submittedBy === 'William M. McDuffie' && a.title.includes('September 3, 2026'))

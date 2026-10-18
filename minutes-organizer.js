@@ -337,7 +337,7 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   const otherPresent = attendance.present.filter((name) => !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name)));
   const otherExcused = attendance.excused.filter((name) => !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name)));
   return {
-    organizerVersion: 5, officerAttendanceVersion: 2, sourceType: type, meetingDate: day,
+    organizerVersion: 5, officerAttendanceVersion: 2, closingFormatVersion: 2, sourceType: type, meetingDate: day,
     ...detectPrayerFacts(source),
     meetingType: /\bmeeting type\s*:\s*([^\n.]+)/i.exec(source)?.[1]?.trim() || 'Stated Communication',
     degree, openingTime, closingTime,

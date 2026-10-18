@@ -133,6 +133,9 @@ function checkedGeneratedDraft(response, source, localDraft) {
   validateGeneratedShape(response, MINUTES_GENERATION_SCHEMA);
   const {evidence} = response;
   const generated = structuredClone(response.draft);
+  // Retain this nullable wire field for older provider schemas only. It is no
+  // longer a recorded fact or a preparer confirmation in new minutes.
+  generated.prayerRequested = null;
   const warnings = ['Organized with GPT-5.6 Luna; source verification is required.', ...generated.warnings];
   if (generated.officerAttendance.some(entry => !entry.name.trim())) {
     throw generationError('Minutes generation returned an invalid officer attendance name. Please try again.');
@@ -149,7 +152,7 @@ function checkedGeneratedDraft(response, source, localDraft) {
     warnings.push(UNCITED_PRESIDING_WARNING);
   }
   const requiredFields = new Set();
-  for (const field of ['meetingDate', 'degree', 'openingTime', 'closingTime', 'prayerRequested', 'closingPrayerGiven', 'presiding', 'quorum', 'nextMeeting']) {
+  for (const field of ['meetingDate', 'degree', 'openingTime', 'closingTime', 'closingPrayerGiven', 'presiding', 'quorum', 'nextMeeting']) {
     if (generated[field] !== null && generated[field] !== '') requiredFields.add(field);
   }
   if (generated.meetingType !== 'Stated Communication') requiredFields.add('meetingType');
@@ -163,6 +166,9 @@ function checkedGeneratedDraft(response, source, localDraft) {
   });
   const references = new Map();
   for (const item of evidence) {
+    // An obsolete field supports no displayed fact and must not count toward
+    // source coverage or block a draft. All recorded facts still need evidence.
+    if (item.field === 'prayerRequested') continue;
     const unrecordedOfficer = /^officerAttendance\[(0|[1-9]\d*)\]\.status$/.exec(item.field);
     if (unrecordedOfficer && generated.officerAttendance[Number(unrecordedOfficer[1])]?.status === 'not_recorded') {
       // The model sometimes cites an officer whose attendance it explicitly left
@@ -235,7 +241,7 @@ function checkedGeneratedDraft(response, source, localDraft) {
       warnings.push(`Motion source review: line ${index + 1} mentions a motion or vote but is not linked to a minutes section.`);
     }
   });
-  const normalized = normalizeMinutesDraft({...generated, officerAttendanceVersion: 2, sourceType: localDraft.sourceType, organizerVersion: localDraft.organizerVersion});
+  const normalized = normalizeMinutesDraft({...generated, officerAttendanceVersion: 2, closingFormatVersion: 2, sourceType: localDraft.sourceType, organizerVersion: localDraft.organizerVersion});
   const comparable = value => String(value || '').toLowerCase().replace(/[.\s]/g, '');
   for (const field of ['meetingDate', 'degree', 'openingTime', 'closingTime', 'quorum']) {
     if (!generated[field]) continue;
@@ -254,12 +260,10 @@ function checkedGeneratedDraft(response, source, localDraft) {
     }
     if (!known) warnings.push(`Confirm ${field}: the source was cited, but this value needs officer verification.`);
   }
-  for (const field of ['prayerRequested', 'closingPrayerGiven']) {
+  for (const field of ['closingPrayerGiven']) {
     if (generated[field] === null) continue;
     const quoted = organizeMeetingSource(quotesFor(field));
-    const explicitNegative = field === 'prayerRequested'
-      ? /\b(?:WM|Worshipful Master)\b[^.!?]*\b(?:did not|never)\b[^.!?]*\b(?:ask|request|direct)\b[^.!?]*\bChaplain\b[^.!?]*\b(?:sick|distress)/i
-      : /\bChaplain\b[^.!?]*\b(?:did not|never)\b[^.!?]*\b(?:give|offer|deliver|lead)\b[^.!?]*\bclosing prayer\b/i;
+    const explicitNegative = /\bChaplain\b[^.!?]*\b(?:did not|never)\b[^.!?]*\b(?:give|offer|deliver|lead)\b[^.!?]*\bclosing prayer\b/i;
     const supported = generated[field] === true ? quoted[field] === true : explicitNegative.test(quotesFor(field));
     if (!supported) {
       // An unsupported prayer flag must not become a statement in the PDF.
@@ -268,12 +272,10 @@ function checkedGeneratedDraft(response, source, localDraft) {
       generated[field] = null;
       normalized[field] = null;
       references.delete(field);
-      warnings.push(field === 'prayerRequested'
-        ? 'Confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing; the cited source does not establish it.'
-        : 'Confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed; the cited source does not establish it.');
+      warnings.push('Confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed; the cited source does not establish it.');
     }
   }
-  for (const field of ['prayerRequested', 'closingPrayerGiven']) {
+  for (const field of ['closingPrayerGiven']) {
     if (normalized[field] !== null) continue;
     if (generated.sections.some(section => detectPrayerFacts(section.body.replace(/<[^>]*>/g, '').replace(/[*_]/g, ''))[field] === true)) {
       throw generationError(`The generated minutes claim ${field} without a verified source reference. Review the source and try again.`);
@@ -442,6 +444,7 @@ export const normalizeMinutesDraft = (value = {}) => {
   return {
   organizerVersion: value.organizerVersion || 1,
   officerAttendanceVersion: attendanceVersion,
+  closingFormatVersion: Number(value.closingFormatVersion) >= 2 ? 2 : 1,
   sourceType: value.sourceType === 'compiled_notes' ? 'compiled_notes' : 'transcript',
   meetingDate: minutesDateValue(value.meetingDate) || null,
   meetingType: /^(?:regular )?stated communication$/i.test(String(value.meetingType || ''))
@@ -478,7 +481,9 @@ export const normalizeMinutesDraft = (value = {}) => {
     amount: entry?.amount ? String(entry.amount).trim() : null,
   })) : [],
   sections: normalizeSections(value.sections, {...value, visitors: normalizeVisitors(value.visitors)}),
-  warnings: Array.isArray(value.warnings) ? value.warnings.map(String).filter(Boolean) : [],
+  warnings: Array.isArray(value.warnings) ? value.warnings.map(String).filter(warning => warning
+    && !(Number(value.closingFormatVersion) >= 2
+      && /^Confirm whether the Worshipful Master asked the Chaplain to (?:pray for the sick and distressed|offer a prayer for sickness and distress) at (?:closing|the close of the meeting)(?:[.;].*)?$/i.test(warning))) : [],
   sensitiveReview: Array.isArray(value.sensitiveReview)
     ? value.sensitiveReview.map(String).filter(Boolean) : [],
   actionItems: Array.isArray(value.actionItems) ? value.actionItems.map(String).filter(Boolean) : [],
@@ -494,7 +499,7 @@ export const generateMinutesDraft = async (transcript, {
   if (source.length < 100) throw Object.assign(new Error('The transcript is too short to create reliable minutes.'), { statusCode: 400 });
   if (source.length > 500_000) throw Object.assign(new Error('The transcript is too long. Upload the Plaud text export for one meeting.'), { statusCode: 400 });
 
-  if (testResponse) return normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2});
+  if (testResponse) return normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2});
   const localDraft = organizeMeetingSource(source, { sourceType });
   if (typeof generateStructured === 'function') {
     const response = await generateStructured({

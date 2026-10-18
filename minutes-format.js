@@ -15,6 +15,7 @@ const omitWholeBullets = (body, predicate) => String(body || '').split('\n').fil
   return plain && !/^[-*•▪]$/.test(plain) && !predicate(plain);
 }).join('\n').trim();
 const isStandardPrayerRequest = text => /^(?:The )?(?:Worshipful Master|WM)(?: Dixon-Saunders)? (?:asked|requested|directed|instructed) (?:the )?Chaplain to (?:(?:give|offer|say) a prayer|pray) for (?:sickness and distress|the sick and distressed) at (?:the (?:close|end)(?: of (?:the )?meeting)?|closing)\.?$/i.test(text);
+const isObsoletePrayerPrompt = text => /^Prayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing\.?$/i.test(text);
 const isEmptyEntry = value => /^(?:none(?: (?:were )?(?:recorded|reported|noted))?|no entr(?:y|ies)(?: (?:was |were )?(?:recorded|reported|noted))?|not (?:recorded|reported|applicable)|n\/?a|nil)\.?$/i.test(plainBullet(value));
 const praiseLabel = /^praise reports?\s*[:.]?\s*$/i;
 const attendanceLabel = /^attendance (?:and|&) visitors\s*[:.]?\s*$/i;
@@ -22,7 +23,7 @@ const visitorPlaceholder = /^(?:(?:additional )?(?:brothers|brethren)(?: and vis
 
 // Use the same cleanup for editable drafts and documents made from historical
 // snapshots. Return new objects; neither saved nor attested records are changed.
-export function cleanMinutesSectionsForPresentation(sections, {visitors = [], present = [], excused = [], officerAttendance = [], quorum = ''} = {}) {
+export function cleanMinutesSectionsForPresentation(sections, {visitors = [], present = [], excused = [], officerAttendance = [], quorum = '', closingFormatVersion = 1} = {}) {
   const input = Array.isArray(sections) ? sections : [];
   const meaningfulVisitor = value => {
     const text = plainBullet(value);
@@ -40,6 +41,7 @@ export function cleanMinutesSectionsForPresentation(sections, {visitors = [], pr
   }));
   const cleanBody = value => String(value || '').replace(/\r/g, '').split('\n').flatMap(line => {
     const text = plainBullet(line);
+    if (Number(closingFormatVersion) >= 2 && (isStandardPrayerRequest(text) || isObsoletePrayerPrompt(text))) return [];
     if (!text || /^[-*•▪]$/.test(text) || isEmptyEntry(text) || praiseLabel.test(text)) return [];
     if (!hasVisitors && (attendanceLabel.test(text) || /^visitors?\s*[:.]?$/i.test(text) || visitorPlaceholder.test(text))) return [];
     const visitor = /^visitors?\s*:\s*(.+)$/i.exec(text);
@@ -98,7 +100,6 @@ export function preparerOffice(name, role) {
 export function closingReviewIssues(draft) {
   return [
     !String(draft.closingTime || '').trim() && 'Enter the closing time.',
-    typeof draft.prayerRequested !== 'boolean' && 'Confirm whether the Worshipful Master requested prayer for the sick and distressed.',
     typeof draft.closingPrayerGiven !== 'boolean' && 'Confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.',
   ].filter(Boolean);
 }
@@ -155,11 +156,15 @@ export function documentSections(draft) {
   const result = sections.filter(s => !closing.includes(s));
   let sick = result.find(s => isSicknessHeading(s.heading));
   if (!sick) { sick = {heading: SICKNESS_HEADING, body: ''}; result.push(sick); }
-  // The prayer control is the source of truth for this standard sentence.
-  // An unconfirmed control must not leave a contradictory claim in the PDF.
+  // Older records used a separate prayer-request control. Their renderer keeps
+  // its original behavior; new minutes omit that routine request entirely.
   sick.body = omitWholeBullets(sick.body, isStandardPrayerRequest);
-  if (draft.prayerRequested === true) sick.body += `\n${generatedLine(prayerRequestText)}`;
-  else if (draft.prayerRequested !== false) sick.body += `\n${generatedLine('Prayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.')}`;
+  // Keep the original presentation of already-attested records. Current drafts
+  // no longer ask for, print or require a separate routine WM prayer request.
+  if (Number(draft.closingFormatVersion) < 2 || !draft.closingFormatVersion) {
+    if (draft.prayerRequested === true) sick.body += `\n${generatedLine(prayerRequestText)}`;
+    else if (draft.prayerRequested !== false) sick.body += `\n${generatedLine('Prayer request: confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing.')}`;
+  }
   if (draft.nextMeeting) {
     for (const section of result) section.body = omitWholeBullets(section.body, text => repeatsNextMeeting(text, draft, section.heading));
     result.push({heading: 'Next Meeting', body: generatedLine(formatMinutesDate(draft.nextMeeting))});

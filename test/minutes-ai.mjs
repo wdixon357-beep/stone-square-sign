@@ -93,12 +93,12 @@ try {
   assert.equal(calls, 1);
   assert.equal(draft.meetingDate, '2026-09-17');
   assert.equal(draft.closingTime, '9:00 PM');
-  assert.equal(draft.prayerRequested, true);
+  assert.equal(draft.prayerRequested, null, 'new minutes do not collect a routine WM prayer request');
   assert.equal(draft.closingPrayerGiven, true);
   assert.ok(draft.sections.some(section => section.heading === 'Sickness and Distress'));
   assert.match(draft.sections.find(section => section.heading === 'New Business and Motions').body, /Community Supper[^]*Fish and two sides[^]*No vote was taken/);
   assert.ok(draft.warnings.some(warning => /Source reference: New Business and Motions, lines 7 to 8/.test(warning)));
-  assert.ok(draft.warnings.some(warning => /Source coverage review: 2 nonempty source lines/.test(warning)));
+  assert.ok(draft.warnings.some(warning => /Source coverage review: 3 nonempty source lines/.test(warning)));
   assert.ok(draft.warnings.includes('Confirm the unassigned scheduling note before attestation.'));
   assert.ok(draft.warnings.includes('Organized with GPT-5.6 Luna; source verification is required.'));
   assert.ok(!draft.warnings.some(warning => warning.includes('Prayers were requested for the families.')), 'references expose line numbers rather than repeating source details');
@@ -129,7 +129,7 @@ try {
   invalidPresidingReference.evidence.find(item => item.field === 'presiding').quote = 'A presiding source quote absent from the notes.';
   await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => invalidPresidingReference}),
     /source reference that could not be verified/, 'a supplied invalid reference is still rejected');
-  for (const missingField of ['meetingDate', 'prayerRequested', 'sections[2].body', 'present[0]']) {
+  for (const missingField of ['meetingDate', 'closingPrayerGiven', 'sections[2].body', 'present[0]']) {
     const anotherMissingReference = structuredClone(cachedPresidingResult);
     anotherMissingReference.evidence = anotherMissingReference.evidence.filter(item => item.field !== missingField);
     await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => anotherMissingReference}),
@@ -161,15 +161,20 @@ try {
   unsupportedPrayer.evidence.find(item => item.field === 'prayerRequested').quote = 'Prayers were requested for the families.';
   const prayerDraft = await generateMinutesDraft(source, {generateStructured: async () => unsupportedPrayer});
   assert.equal(prayerDraft.prayerRequested, null, 'an unsupported WM prayer request remains unconfirmed');
-  assert.ok(prayerDraft.warnings.some(warning => /cited source does not establish it/.test(warning)),
-    'the preparer sees what to confirm instead of losing the sourced draft');
+  assert.ok(!prayerDraft.warnings.some(warning => /Confirm whether the Worshipful Master/.test(warning)),
+    'an obsolete hidden confirmation must not remain in new minutes');
   assert.equal(prayerDraft.closingPrayerGiven, true, 'a separately supported closing prayer remains intact');
   const conflictingPrayer = response();
   conflictingPrayer.evidence.find(item => item.field === 'prayerRequested').quote = 'Prayers were requested for the families.';
   conflictingPrayer.draft.sections[1].body = '- WM Dixon-Saunders asked the Chaplain to pray for the sick and distressed at closing.';
-  await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => conflictingPrayer}),
-    /claim prayerRequested without a verified source reference/,
-    'a narrative claim cannot override an unconfirmed prayer control');
+  const routineRequestDraft = await generateMinutesDraft(source, {generateStructured: async () => conflictingPrayer});
+  assert.ok(!routineRequestDraft.sections.some(section => /asked the Chaplain/.test(section.body)),
+    'routine WM prayer-request boilerplate is omitted from new section content');
+  const missingObsoleteReference = response();
+  missingObsoleteReference.evidence = missingObsoleteReference.evidence.filter(item => item.field !== 'prayerRequested');
+  const noObsoleteReferenceDraft = await generateMinutesDraft(source, {generateStructured: async () => missingObsoleteReference});
+  assert.equal(noObsoleteReferenceDraft.closingPrayerGiven, true);
+  assert.equal(noObsoleteReferenceDraft.prayerRequested, null);
 
   const visitorSource = `${source}\nVisitors: Bro. Alex Example, Example Lodge No. 99\nNone reported.`;
   const visitorResponse = response();

@@ -120,7 +120,7 @@ const unconfirmedClosing = documentSections({...decoratedDraft, closingTime:'', 
 assert.ok(unconfirmedClosing.at(-1).body.includes('The Lodge closed at <u>10:30 PM</u>.'), 'no reviewed closing time means no removal of source closing text');
 assert.equal(detectPrayerFacts('The Worshipful Master asked the Chaplain to pray for the sick and distressed during the discussion.').prayerRequested, null);
 assert.deepEqual(closingReviewIssues(draft), []);
-assert.equal(closingReviewIssues({}).length, 3);
+assert.equal(closingReviewIssues({}).length, 2);
 const incompleteAttendance = normalizeMinutesDraft({});
 assert.ok(attendanceReviewIssues(incompleteAttendance).length >= 4, 'an unreviewed officer roll and both other-Brother lists block submission');
 const completeAttendance = normalizeMinutesDraft({

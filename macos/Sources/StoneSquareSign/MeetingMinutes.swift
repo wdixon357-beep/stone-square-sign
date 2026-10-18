@@ -90,6 +90,7 @@ struct MinutesFinance: Codable, Equatable {
 struct MinutesDraft: Codable, Equatable {
     var organizerVersion: Int?
     var officerAttendanceVersion: Int?
+    var closingFormatVersion: Int?
     var sourceType: String?
     var meetingDate: String?; var meetingType: String; var degree: String?
     var openingTime: String?; var closingTime: String?; var presiding: String?; var quorum: String?; var nextMeeting: String?
@@ -367,6 +368,7 @@ final class MinutesWorkspace: ObservableObject {
     }
     func save() async {
         guard let record = selected, var draft else { return }
+        if record.status == "draft" { draft.closingFormatVersion = 2 }
         if record.status == "draft", (draft.officerAttendanceVersion ?? 0) < 2 {
             draft.officerAttendanceVersion = 2
             var review = draft.attendanceReview ?? MinutesAttendanceReview()
@@ -901,8 +903,7 @@ struct MeetingMinutesView: View {
                 MinutesDateField(title: "Next meeting date", value: text(\.nextMeeting), preservingDetails: true)
                 Divider()
                 Text("Prayer and closing").font(.headline).foregroundStyle(SignTheme.navy)
-                Text("Confirm the prayer details for this meeting. The closing section uses the closing time above.").font(.caption).foregroundStyle(.secondary)
-                prayerPicker("Worshipful Master requested prayer for the sick and distressed at closing", key: \.prayerRequested)
+                Text("Confirm the Chaplain's closing prayer for this meeting. The closing section uses the closing time above.").font(.caption).foregroundStyle(.secondary)
                 prayerPicker("Chaplain gave the closing prayer and prayed for the sick and distressed", key: \.closingPrayerGiven)
             }.textFieldStyle(.roundedBorder).padding(10)
         }

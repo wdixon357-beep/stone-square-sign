@@ -1300,6 +1300,7 @@ const collectMinutesDraft = () => ({
   organizerVersion: currentMinutes()?.draft.organizerVersion || 2,
   sourceType: currentMinutes()?.draft.sourceType || 'transcript',
   officerAttendanceVersion: minutesOfficerAttendanceVersion(),
+  closingFormatVersion: currentMinutes()?.status === 'draft' ? 2 : currentMinutes()?.draft.closingFormatVersion || 1,
   meetingDate: minutesDates.minutesDateValue($('minutesMeetingDate').value) || null,
   meetingType: $('minutesMeetingType').value === 'other'
     ? $('minutesMeetingTypeOther').value.trim()
@@ -1307,7 +1308,7 @@ const collectMinutesDraft = () => ({
   degree: $('minutesDegree').value.trim() || null,
   openingTime: $('minutesOpeningTime').value.trim() || null,
   closingTime: $('minutesClosingTime').value.trim() || null,
-  prayerRequested: $('minutesPrayerRequested').value === '' ? null : $('minutesPrayerRequested').value === 'true',
+  prayerRequested: currentMinutes()?.draft.prayerRequested ?? null,
   closingPrayerGiven: $('minutesClosingPrayerGiven').value === '' ? null : $('minutesClosingPrayerGiven').value === 'true',
   presiding: $('minutesPresiding').value.trim() || null,
   quorum: $('minutesQuorum').value.trim() || null,
@@ -1993,7 +1994,6 @@ const openMinutesEditor = (id) => {
   $('minutesDegree').value = legacyDegrees[draft.degree] || draft.degree || '';
   $('minutesOpeningTime').value = draft.openingTime || '';
   $('minutesClosingTime').value = draft.closingTime || '';
-  $('minutesPrayerRequested').value = typeof draft.prayerRequested === 'boolean' ? String(draft.prayerRequested) : '';
   $('minutesClosingPrayerGiven').value = typeof draft.closingPrayerGiven === 'boolean' ? String(draft.closingPrayerGiven) : '';
   $('minutesPresiding').value = draft.presiding || '';
   $('minutesQuorum').value = /^(yes|quorum present|established)$/i.test(draft.quorum || '') ? 'Yes'
