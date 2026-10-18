@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CryptoKit
 
 import LocalAuthentication
 import Security
@@ -26,11 +27,16 @@ enum ClientError: LocalizedError {
     }
 }
 
+enum ReliabilityPresentation { case foreground, background }
+
 struct ReliabilityNotice: Identifiable {
     let id = UUID()
     let title: String
     let message: String
     let recovered: Bool
+    var path: String? = nil
+    var background = false
+    var requestKey: String? = nil
 }
 
 @MainActor
@@ -38,27 +44,129 @@ final class ReliabilityCenter: ObservableObject {
     static let shared = ReliabilityCenter()
     @Published var notice: ReliabilityNotice?
     private var dismissal: Task<Void, Never>?
+    private struct Failure {
+        var notice: ReliabilityNotice
+        var references: Set<String>
+        let reference: String
+        var dismissed = false
+        let order: Int
+    }
+    private var failures: [String: Failure] = [:]
+    private var sequence = 0
+    private var activeContext: String?
+    private var sessionScoped = false
+    private var contextEpoch = 0
 
-    func retrying(reference: String) {
+    func resetSession(context: String?) {
         dismissal?.cancel()
-        notice = ReliabilityNotice(title: "Oops, something went wrong.", message: "The dashboard is reconnecting now. Incident \(reference).", recovered: false)
+        failures.removeAll(); notice = nil
+        activeContext = context; sessionScoped = true; contextEpoch += 1
+    }
+    func begin(context: String) -> Int? {
+        if sessionScoped { return activeContext == context ? contextEpoch : nil }
+        if activeContext != context {
+            dismissal?.cancel(); failures.removeAll(); notice = nil
+            activeContext = context; contextEpoch += 1
+        }
+        return contextEpoch
+    }
+    func isCurrent(context: String, epoch: Int?) -> Bool {
+        epoch != nil && activeContext == context && contextEpoch == epoch
     }
 
-    func failed(reference: String, queued: Bool = false) {
+    static func area(for path: String?) -> String {
+        let path = path?.split(separator: "?").first.map(String.init) ?? ""
+        switch path {
+        case "/api/building/alerts": return "Building Request reminders"
+        case "/api/minutes/review-alerts", "/api/minutes/completion-alerts": return "Meeting Minutes reminders"
+        case "/api/treasury/alerts": return "Treasurer Report reminders"
+        default:
+            if path.hasPrefix("/api/building") { return "Building Requests" }
+            if path.hasPrefix("/api/minutes") { return "Meeting Minutes" }
+            if path.hasPrefix("/api/treasury") { return "Treasurer Reports" }
+            return "Dashboard"
+        }
+    }
+    private func key(path: String?, method: String, reference: String?) -> String? {
+        if let path { return "\(method.uppercased()) \(path.split(separator: "?").first.map(String.init) ?? path)" }
+        return reference.map { "incident \($0)" }
+    }
+    private func showNextFailure() {
+        notice = failures.values.filter { !$0.dismissed }.sorted {
+            if $0.notice.background != $1.notice.background { return !$0.notice.background }
+            return $0.order < $1.order
+        }.first?.notice
+    }
+
+    func retrying(reference: String, path: String? = nil, method: String = "GET", presentation: ReliabilityPresentation = .foreground) {
+        let background = presentation == .background
+        let requestKey = key(path: path, method: method, reference: reference)
+        // A passive poll must not replace an outstanding action failure or keep
+        // reopening a reminder outage that the user has already dismissed.
+        if background, requestKey.flatMap({ failures[$0] }) != nil { return }
+        if background, let notice, !notice.recovered { return }
+        dismissal?.cancel()
+        notice = ReliabilityNotice(
+            title: background ? "Refreshing \(Self.area(for: path))" : "Oops, something went wrong.",
+            message: "The dashboard is reconnecting now. Incident \(reference).", recovered: false,
+            path: path, background: background, requestKey: requestKey)
+    }
+
+    func failed(reference: String, queued: Bool = false, path: String? = nil, method: String = "GET", presentation: ReliabilityPresentation = .foreground) {
+        let background = presentation == .background
+        let requestKey = key(path: path, method: method, reference: reference)!
+        if background, var previous = failures[requestKey] {
+            previous.references.insert(reference)
+            failures[requestKey] = previous
+            return
+        }
         dismissal?.cancel()
         let detail = queued
             ? "The incident is saved on this Mac and will be reported when the connection returns."
             : "The incident was recorded. The hosted monitor checks the service again within 30 minutes."
-        notice = ReliabilityNotice(title: "This action could not be completed.", message: "Incident \(reference). \(detail)", recovered: false)
+        let failureNotice = ReliabilityNotice(
+            title: background ? "\(Self.area(for: path)) could not refresh." : "This action could not be completed.",
+            message: "\(background ? "Previously loaded information is retained. " : "")Incident \(reference). \(detail)", recovered: false,
+            path: path, background: background, requestKey: requestKey)
+        var references = failures[requestKey]?.references ?? []
+        references.insert(reference)
+        sequence += 1
+        failures[requestKey] = Failure(notice: failureNotice, references: references, reference: reference, order: sequence)
+        if !background || notice == nil || notice?.recovered == true || notice?.requestKey == requestKey {
+            notice = failureNotice
+        }
     }
 
-    func recovered(reference: String) {
+    @discardableResult
+    func recovered(reference: String? = nil, path: String? = nil, method: String = "GET", presentation: ReliabilityPresentation = .foreground) -> [String] {
+        guard let requestKey = key(path: path, method: method, reference: reference) else { return [] }
+        let previous = failures.removeValue(forKey: requestKey)
+        var references = previous?.references ?? []
+        if let reference { references.insert(reference) }
+        // Success on another path cannot establish recovery of this failure.
+        guard notice?.requestKey == requestKey, previous?.dismissed != true else { return references.sorted() }
         dismissal?.cancel()
-        notice = ReliabilityNotice(title: "The dashboard is back online.", message: "You can continue. Incident \(reference) recovered automatically.", recovered: true)
-        dismissal = Task { try? await Task.sleep(for: .seconds(6)); if !Task.isCancelled { self.notice = nil } }
+        let background = previous?.notice.background ?? (presentation == .background)
+        let recoveredNotice = ReliabilityNotice(
+            title: background ? "\(Self.area(for: path)) refreshed successfully." : "\(Self.area(for: path)) connection restored.",
+            message: "\(background ? "This area refreshed successfully." : "You can continue in this area.") Incident \(reference ?? previous?.reference ?? "recorded") recovered automatically.",
+            recovered: true, path: path, background: background, requestKey: requestKey)
+        notice = recoveredNotice
+        dismissal = Task {
+            try? await Task.sleep(for: .seconds(6))
+            if !Task.isCancelled, self.notice?.id == recoveredNotice.id { self.showNextFailure() }
+        }
+        return references.sorted()
     }
 
-    func dismiss() { dismissal?.cancel(); notice = nil }
+    func dismiss() {
+        dismissal?.cancel()
+        if let requestKey = notice?.requestKey, var failure = failures[requestKey] {
+            failure.dismissed = true
+            failures[requestKey] = failure
+        }
+        showNextFailure()
+    }
 }
 
 @MainActor
@@ -70,13 +178,23 @@ enum ReliableTransport {
         let status: Int
         let state: String
         let category: String
+        var context: String? = nil
     }
     private static let pendingKey = "ss22-pending-incidents-v1"
 
-    static func perform(session: URLSession, request: URLRequest, path: String, token: String?) async throws -> (Data, HTTPURLResponse) {
+    static func contextFingerprint(url: URL?, token: String?) -> String? {
+        guard let url, let host = url.host?.lowercased() else { return nil }
+        let scheme = url.scheme?.lowercased() ?? "https"
+        let origin = "\(scheme)://\(host):\(url.port ?? (scheme == "https" ? 443 : 80))"
+        return SHA256.hash(data: Data("\(origin)\n\(token ?? "anonymous")".utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func perform(session: URLSession, request: URLRequest, path: String, token: String?, presentation: ReliabilityPresentation = .foreground) async throws -> (Data, HTTPURLResponse) {
         let method = request.httpMethod ?? "GET"
         let mayRetry = method == "GET" || method == "HEAD"
         let productionService = request.url?.host == URL(string: defaultServerAddress)?.host
+        let context = contextFingerprint(url: request.url, token: token) ?? "invalid-origin"
+        let epoch = ReliabilityCenter.shared.begin(context: context)
         var reference: String?
         for attempt in 1...(mayRetry ? 2 : 1) {
             do {
@@ -84,9 +202,12 @@ enum ReliableTransport {
                 guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
                 if (200..<300).contains(http.statusCode) {
                     if productionService { await flushQueuedReports(session: session, request: request, token: token) }
-                    if let reference {
-                        ReliabilityCenter.shared.recovered(reference: reference)
-                        if productionService { await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "recovered", category: "temporary_connection") }
+                    let recoveredReferences = ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch)
+                        ? ReliabilityCenter.shared.recovered(reference: reference, path: path, method: method, presentation: presentation) : []
+                    if productionService {
+                        for recoveredReference in recoveredReferences {
+                            await report(session: session, request: request, token: token, reference: recoveredReference, path: path, status: http.statusCode, state: "recovered", category: "temporary_connection")
+                        }
                     }
                     return (data, http)
                 }
@@ -94,12 +215,16 @@ enum ReliableTransport {
                 let retryable = http.statusCode >= 500 || http.statusCode == 408 || http.statusCode == 429 || payload?.retryable == true
                 reference = reference ?? payload?.incidentReference ?? newReference()
                 if mayRetry && retryable && attempt == 1 {
-                    ReliabilityCenter.shared.retrying(reference: reference!)
+                    if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
+                        ReliabilityCenter.shared.retrying(reference: reference!, path: path, method: method, presentation: presentation)
+                    }
                     try? await Task.sleep(for: .seconds(2))
                     continue
                 }
                 if retryable, let reference {
-                    ReliabilityCenter.shared.failed(reference: reference)
+                    if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
+                        ReliabilityCenter.shared.failed(reference: reference, path: path, method: method, presentation: presentation)
+                    }
                     if productionService { await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "open", category: "service_response") }
                 }
                 return (data, http)
@@ -108,12 +233,16 @@ enum ReliableTransport {
             } catch {
                 reference = reference ?? newReference()
                 if mayRetry && attempt == 1 {
-                    ReliabilityCenter.shared.retrying(reference: reference!)
+                    if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
+                        ReliabilityCenter.shared.retrying(reference: reference!, path: path, method: method, presentation: presentation)
+                    }
                     try? await Task.sleep(for: .seconds(2))
                     continue
                 }
-                ReliabilityCenter.shared.failed(reference: reference!, queued: productionService)
-                if productionService { queue(PendingIncident(reference: reference!, path: path, method: method, status: 0, state: "open", category: "network_error")) }
+                if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
+                    ReliabilityCenter.shared.failed(reference: reference!, queued: productionService, path: path, method: method, presentation: presentation)
+                }
+                if productionService { queue(PendingIncident(reference: reference!, path: path, method: method, status: 0, state: "open", category: "network_error", context: context)) }
                 throw ClientError.server("The dashboard could not connect. Incident \(reference!).")
             }
         }
@@ -125,27 +254,28 @@ enum ReliableTransport {
     }
 
     private static func report(session: URLSession, request: URLRequest, token: String?, reference: String, path: String, status: Int, state: String, category: String) async {
-        let incident = PendingIncident(reference: reference, path: path, method: request.httpMethod ?? "GET", status: status, state: state, category: category)
+        let incident = PendingIncident(reference: reference, path: path, method: request.httpMethod ?? "GET", status: status, state: state, category: category, context: contextFingerprint(url: request.url, token: token))
         if !(await send(session: session, request: request, token: token, incident: incident)) { queue(incident) }
     }
 
     private static func send(session: URLSession, request: URLRequest, token: String?, incident: PendingIncident) async -> Bool {
-        guard let token, let base = request.url, let url = URL(string: "/api/activity/incidents", relativeTo: base) else { return false }
+        guard let token, let context = incident.context,
+              context == contextFingerprint(url: request.url, token: token),
+              let base = request.url, let url = URL(string: "/api/activity/incidents", relativeTo: base) else { return false }
         var report = URLRequest(url: url)
         report.httpMethod = "POST"
         report.timeoutInterval = 12
         report.setValue("application/json", forHTTPHeaderField: "Content-Type")
         report.setValue("mac", forHTTPHeaderField: "X-Stone-Square-Client")
         report.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        report.httpBody = try? JSONSerialization.data(withJSONObject: ["reference": incident.reference, "path": incident.path.split(separator: "?").first.map(String.init) ?? incident.path, "method": incident.method, "status": incident.status, "category": incident.category, "state": incident.state, "area": "Dashboard"])
+        report.httpBody = try? JSONSerialization.data(withJSONObject: ["reference": incident.reference, "path": incident.path.split(separator: "?").first.map(String.init) ?? incident.path, "method": incident.method, "status": incident.status, "category": incident.category, "state": incident.state, "area": ReliabilityCenter.area(for: incident.path)])
         guard let (_, response) = try? await session.data(for: report), let http = response as? HTTPURLResponse else { return false }
         return (200..<300).contains(http.statusCode)
     }
 
     private static func queue(_ incident: PendingIncident) {
-        var pending = queued().filter { $0.reference != incident.reference || $0.state != incident.state }
+        var pending = queued().filter { $0.reference != incident.reference || $0.state != incident.state || $0.context != incident.context }
         pending.append(incident)
-        if pending.count > 20 { pending.removeFirst(pending.count - 20) }
         if let data = try? JSONEncoder().encode(pending) { UserDefaults.standard.set(data, forKey: pendingKey) }
     }
 
@@ -155,10 +285,17 @@ enum ReliableTransport {
     }
 
     private static func flushQueuedReports(session: URLSession, request: URLRequest, token: String?) async {
-        var remaining: [PendingIncident] = []
+        let context = contextFingerprint(url: request.url, token: token)
+        var delivered: Set<String> = []
         for incident in queued() {
-            if !(await send(session: session, request: request, token: token, incident: incident)) { remaining.append(incident) }
+            // Older entries have no trustworthy account context. Retain them,
+            // but never attribute them to the next person who signs in.
+            guard let incidentContext = incident.context, incidentContext == context else { continue }
+            if await send(session: session, request: request, token: token, incident: incident) {
+                delivered.insert("\(incident.reference)|\(incident.state)|\(incidentContext)")
+            }
         }
+        let remaining = queued().filter { !delivered.contains("\($0.reference)|\($0.state)|\($0.context ?? "unknown")") }
         if let data = try? JSONEncoder().encode(remaining) { UserDefaults.standard.set(data, forKey: pendingKey) }
     }
 }
@@ -452,14 +589,23 @@ final class AppModel: ObservableObject {
     @Published var requestedMinutesRecordID: String?
     #if DEBUG
     @Published var serverAddress: String {
-        didSet { UserDefaults.standard.set(serverAddress, forKey: "server-address") }
+        didSet {
+            UserDefaults.standard.set(serverAddress, forKey: "server-address")
+            ReliabilityCenter.shared.resetSession(context: ReliableTransport.contextFingerprint(url: baseURL, token: token))
+        }
     }
     #else
     @Published private(set) var serverAddress = defaultServerAddress
     #endif
 
     private let session: URLSession
-    private var token: String?
+    private var token: String? {
+        didSet {
+            if oldValue != token {
+                ReliabilityCenter.shared.resetSession(context: ReliableTransport.contextFingerprint(url: baseURL, token: token))
+            }
+        }
+    }
     private var liveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
     private var candidateTrackerAuthenticated = false
@@ -484,6 +630,7 @@ final class AppModel: ObservableObject {
          * Keychain no longer recognises the app that owns the item. Touch ID is now a convenience
          * on top of a session that persists, not the only way back in. */
         token = savedSessionToken
+        ReliabilityCenter.shared.resetSession(context: ReliableTransport.contextFingerprint(url: baseURL, token: token))
     }
 
     var baseURL: URL? {
@@ -503,6 +650,9 @@ final class AppModel: ObservableObject {
     }
 
     private func applyAuthenticatedSession(_ session: SignInSession?, user: User, freshLogin: Bool) {
+        if self.user?.id != user.id {
+            ReliabilityCenter.shared.resetSession(context: ReliableTransport.contextFingerprint(url: baseURL, token: token))
+        }
         let key = sessionNoticeDismissalKey(for: user)
         if freshLogin { UserDefaults.standard.removeObject(forKey: key) }
         signInSession = session
@@ -524,7 +674,8 @@ final class AppModel: ObservableObject {
         _ path: String,
         method: String = "GET",
         body: Data? = nil,
-        contentType: String = "application/json"
+        contentType: String = "application/json",
+        presentation: ReliabilityPresentation = .foreground
     ) async throws -> T {
         guard let baseURL, let url = URL(string: path, relativeTo: baseURL) else {
             throw ClientError.invalidServer
@@ -535,7 +686,7 @@ final class AppModel: ObservableObject {
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("mac", forHTTPHeaderField: "X-Stone-Square-Client")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, http) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token)
+        let (data, http) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token, presentation: presentation)
         guard (200..<300).contains(http.statusCode) else {
             let payload = try? decoder.decode(APIError.self, from: data)
             let message = [payload?.error ?? "Request failed with status \(http.statusCode).", payload?.incidentReference.map { "Incident \($0)." }].compactMap { $0 }.joined(separator: " ")
@@ -692,10 +843,10 @@ final class AppModel: ObservableObject {
         do {
             var alerts: [MinutesReviewAlert] = []
             if user.role == "owner" {
-                let review: MinutesReviewAlertsPayload = try await request("/api/minutes/review-alerts")
+                let review: MinutesReviewAlertsPayload = try await request("/api/minutes/review-alerts", presentation: .background)
                 alerts.append(contentsOf: review.alerts)
             }
-            let completion: MinutesReviewAlertsPayload = try await request("/api/minutes/completion-alerts")
+            let completion: MinutesReviewAlertsPayload = try await request("/api/minutes/completion-alerts", presentation: .background)
             alerts.append(contentsOf: completion.alerts)
             guard token == currentToken, self.user?.id == user.id else { return }
             minutesReviewAlerts = alerts
@@ -714,7 +865,7 @@ final class AppModel: ObservableObject {
         guard let user, user.can("treasury.prepare") else { treasuryAlerts = []; return }
         let currentToken = token
         do {
-            let response: TreasuryAlertsPayload = try await request("/api/treasury/alerts")
+            let response: TreasuryAlertsPayload = try await request("/api/treasury/alerts", presentation: .background)
             guard token == currentToken, self.user?.id == user.id else { return }
             treasuryAlerts = response.alerts
         } catch { /* Preserve waiting alerts if connectivity is temporarily unavailable. */ }
@@ -724,7 +875,7 @@ final class AppModel: ObservableObject {
         guard let user, user.can("building.view") else { buildingAlerts = []; return }
         let currentToken = token
         do {
-            let response: BuildingAlertsResponse = try await request("/api/building/alerts")
+            let response: BuildingAlertsResponse = try await request("/api/building/alerts", presentation: .background)
             guard token == currentToken, self.user?.id == user.id else { return }
             buildingAlerts = response.alerts
         } catch { /* Preserve action reminders during temporary connectivity loss. */ }
@@ -741,7 +892,7 @@ final class AppModel: ObservableObject {
         let currentToken = token
         if currentToken != nil {
             do {
-                let account: MeResponse = try await request("/api/auth/me")
+                let account: MeResponse = try await request("/api/auth/me", presentation: silent ? .background : .foreground)
                 guard currentToken == token else { return }
                 user = account.user
             } catch {
@@ -758,13 +909,13 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            let response: DocumentsResponse = try await request("/api/documents")
+            let response: DocumentsResponse = try await request("/api/documents", presentation: silent ? .background : .foreground)
             documents = response.documents
             if user?.role == "owner" {
-                let officerResponse: OfficersResponse = try await request("/api/officers")
+                let officerResponse: OfficersResponse = try await request("/api/officers", presentation: silent ? .background : .foreground)
                 officers = officerResponse.officers
                 pendingInvitations = officerResponse.pending ?? []
-                let profileResponse: SubmissionProfilesResponse = try await request("/api/submission-profiles")
+                let profileResponse: SubmissionProfilesResponse = try await request("/api/submission-profiles", presentation: silent ? .background : .foreground)
                 submissionProfiles = profileResponse.profiles
             }
         } catch {
@@ -1374,6 +1525,7 @@ final class AppModel: ObservableObject {
     }
 
     func signOut(localOnly: Bool = false) {
+        ReliabilityCenter.shared.resetSession(context: ReliableTransport.contextFingerprint(url: baseURL, token: nil))
         signInSession = nil
         showSignInNotice = false
         liveTask?.cancel()

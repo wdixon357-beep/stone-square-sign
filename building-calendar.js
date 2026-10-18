@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
-import { hasPermission } from './access-control.js';
+import { hasPermission, resolvePermissions } from './access-control.js';
+import { createBuildingAlertCache } from './building-alert-cache.js';
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode});
 const DATE=/^\d{4}-\d{2}-\d{2}$/;const TIME=/^(?:[01]\d|2[0-3]):[0-5]\d$/;
 export function validDate(value){return typeof value==='string'&&DATE.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;}
@@ -40,7 +41,11 @@ export async function initializeBuildingCalendar(){
 const showEvent=(r,editable)=>({...JSON.parse(r.event_json),id:r.id,revision:String(r.revision),editable});
 const audit=(req,action,details)=>dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',[req.user.id,action,req.ip,JSON.stringify(details),new Date().toISOString()]);
 const PORTAL='https://request.stonesquare22pha.org';
-export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildingEmail=async()=>false}){
+export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildingEmail=async()=>false,alertCache=createBuildingAlertCache()}){
+ const alertKey=req=>JSON.stringify([req.user.id,req.user.role,resolvePermissions(req.user)]);
+ let lastObservation=0;
+ const observationStamp=()=>{lastObservation=Math.max(Date.now(),lastObservation+1);return new Date(lastObservation).toISOString();};
+ const mutatePortal=async(...args)=>{alertCache.clear();try{return await remote(...args);}finally{alertCache.clear();}};
  const permit=key=>(req,res,next)=>hasPermission(req.user,key)?next():res.status(403).json({error:'This area or action is not enabled for your account.'});
  const remote=async(path,req,body)=>{
   const response=await fetcher(PORTAL+path,{method:body?'POST':'GET',redirect:'error',signal:AbortSignal.timeout(18000),headers:{Authorization:`Bearer ${req.authRawToken}`,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
@@ -53,14 +58,15 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   try{const response=await fetcher(PORTAL+'/api/calendar?from='+from+'&to='+to,{redirect:'error',signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error();const data=await response.json();if(!Array.isArray(data.busy))throw Error();return {busy:data.busy,warning:data.warning||null};}
   catch{return {busy:[],warning:'Building availability could not be fully checked. Your request will need a conflict review before approval.'};}
  };
- const syncRequests=async requests=>{
-  const now=new Date().toISOString();
+ const syncRequests=async(requests,observedAt=observationStamp())=>{
+  const now=observedAt;
   for(const request of requests){
    if(typeof request?.id!=='string'||!request.id||request.id.length>100||!['awaiting_secretary_attestation','fully_executed'].includes(request.agreementStatus))continue;
    const roles=Array.isArray(request.attestationRoles)?request.attestationRoles.filter(role=>['secretary','assistant_secretary'].includes(role)):['secretary'];
    await dbRun(`INSERT INTO building_workflow_records (request_id,organization,event_date,agreement_status,attestation_roles_json,portal_revision,updated_at)
      VALUES (?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET organization=excluded.organization,event_date=excluded.event_date,
-     agreement_status=excluded.agreement_status,attestation_roles_json=excluded.attestation_roles_json,portal_revision=excluded.portal_revision,updated_at=excluded.updated_at`,
+     agreement_status=excluded.agreement_status,attestation_roles_json=excluded.attestation_roles_json,portal_revision=excluded.portal_revision,updated_at=excluded.updated_at
+     WHERE building_workflow_records.updated_at<=excluded.updated_at`,
     [request.id,String(request.organization||'').slice(0,250),String(request.date||'').slice(0,10),request.agreementStatus,JSON.stringify(roles),String(request.revision||''),now]);
   }
  };
@@ -72,10 +78,16 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   const byId=new Map(records.map(record=>[record.request_id,record]));
   return requests.map(request=>{const record=byId.get(request.id),current=record?.filed_revision===String(request.revision||'');return {...request,filedCompletedAt:current?record.filed_at:null,filedCompletedBy:current?record.filed_by:null};});
  };
- const listRequests=async req=>{
+ const loadRequests=async req=>{
+  const observedAt=observationStamp();
   const payload=await remote('/api/reservation?list&dashboard=1',req);
   if(!Array.isArray(payload.requests)||payload.store===false)throw fail(503,'Building request storage is temporarily unavailable.');
-  await syncRequests(payload.requests);
+  return {payload,observedAt};
+ };
+ const listRequests=async(req,{background=false}={})=>{
+  const key=alertKey(req);
+  const {payload,observedAt}=await alertCache.read(key,()=>loadRequests(req),{fresh:!background});
+  await syncRequests(payload.requests,observedAt);
   let visible=payload.requests;
   if(req.user.role==='assistant_secretary'){
    const known=await dbAll("SELECT * FROM building_workflow_records WHERE agreement_status='awaiting_secretary_attestation'");
@@ -103,7 +115,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   if(calendar.busy.some(e=>body.bookings.some(b=>b.date===e.date)&&e.status!=='denied'&&!e.allDay&&(!e.start||!e.end)))calendar.warning=[calendar.warning,'Some calendar entries have incomplete times and need review before approval.'].filter(Boolean).join(' ');
   if(conflict)throw fail(409,'The building calendar shows a booking or pending hold on '+conflict.date+'. Choose another time.');
   if(calendar.warning&&req.body.acknowledgeAvailabilityWarning!==true)throw fail(400,'Availability is incomplete. Review and acknowledge the warning before submitting.');
-  const result=await remote('/api/reservation',req,body);
+  const result=await mutatePortal('/api/reservation',req,body);
   if(!result.ok||!Array.isArray(result.refs)||!result.refs.length)throw fail(502,'The request outcome could not be confirmed. Keep this form and try again to retrieve its reference.');
   await audit(req,'building_request_submitted',{refs:result.refs,dates:body.bookings.map(b=>b.date)});
   res.status(201).json(result);
@@ -112,7 +124,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
  app.get('/api/building/alerts',requireAuth,permit('building.view'),async(req,res,next)=>{try{
   // Refresh the authenticated portal view first. The small local record also lets
   // Adrian see a pending McDuffie-only agreement without granting signing rights.
-  await listRequests(req);
+  await listRequests(req,{background:true});
   const rows=await dbAll(`SELECT request_id,organization,event_date,agreement_status,attestation_roles_json,portal_revision,filed_revision
     FROM building_workflow_records WHERE agreement_status IN ('awaiting_secretary_attestation','fully_executed') ORDER BY event_date,request_id`);
   const alerts=rows.flatMap(row=>{
@@ -136,7 +148,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
    if(!signature?.signature_bytes)throw fail(409,'Save your signature profile before approving this agreement.');
    signatureData='data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64');
   }
-  const payload=await remote('/api/reservation?dashboard=1&decide='+encodeURIComponent(req.params.id),req,{decision,note:String(note||'').slice(0,3000),revision,authorization,signatureData});
+  const payload=await mutatePortal('/api/reservation?dashboard=1&decide='+encodeURIComponent(req.params.id),req,{decision,note:String(note||'').slice(0,3000),revision,authorization,signatureData});
   if(payload.request)await syncRequests([payload.request]);
   await audit(req,'building_request_decided',{id:req.params.id,decision});
   const notificationWarnings=[];
@@ -153,7 +165,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   if(!['secretary','assistant_secretary'].includes(req.user.role))throw fail(403,'This attestation is assigned to a Secretary officer.');
   const {revision}=req.body||{};if(typeof revision!=='string'||!revision)throw fail(400,'Review the current agreement before attesting.');
   const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=?',[req.user.id]);if(!signature?.signature_bytes)throw fail(409,'Save your signature profile before attesting.');
-  const payload=await remote('/api/reservation?dashboard=1&attest='+encodeURIComponent(req.params.id),req,{revision,signatureData:'data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64')});
+  const payload=await mutatePortal('/api/reservation?dashboard=1&attest='+encodeURIComponent(req.params.id),req,{revision,signatureData:'data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64')});
   if(payload.request)await syncRequests([payload.request]);
   await audit(req,'building_agreement_attested',{id:req.params.id});
   const notificationWarnings=[];

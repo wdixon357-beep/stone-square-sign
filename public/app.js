@@ -248,28 +248,59 @@ window.setInterval(checkForWebUpdate, 30000);
 
 const newIncidentReference = () => `SS22-${Array.from(crypto.getRandomValues(new Uint8Array(4)), value => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
 let reliabilityNoticeTimer;
-const showReliabilityNotice = ({ title, message, recovered = false, dismissAfter = 0 }) => {
+let reliabilityNoticeSourceKey = '';
+const showReliabilityNotice = ({ title, message, recovered = false, dismissAfter = 0, sourceKey = '' }) => {
+  reliabilityNoticeSourceKey = sourceKey;
   window.clearTimeout(reliabilityNoticeTimer);
   $('reliabilityNoticeTitle').textContent = title;
   $('reliabilityNoticeMessage').textContent = message;
   $('reliabilityNoticeIcon').textContent = recovered ? '✓' : '!';
   $('reliabilityNotice').classList.toggle('recovered', recovered);
   show($('reliabilityNotice'));
-  if (dismissAfter) reliabilityNoticeTimer = window.setTimeout(() => hide($('reliabilityNotice')), dismissAfter);
+  if (dismissAfter) reliabilityNoticeTimer = window.setTimeout(() => {
+    reliabilityNoticeSourceKey = ''; hide($('reliabilityNotice'));
+  }, dismissAfter);
 };
-$('dismissReliabilityNotice')?.addEventListener?.('click', () => hide($('reliabilityNotice')));
+$('dismissReliabilityNotice')?.addEventListener?.('click', () => {
+  reliabilityNoticeSourceKey = ''; hide($('reliabilityNotice'));
+});
+const incidentActor = () => ({
+  actorUserId: state.user?.id == null ? null : String(state.user.id),
+  actorOrigin: typeof location.origin === 'string' && location.origin !== 'null' ? location.origin : null,
+});
+const incidentMatchesCurrentActor = incident => {
+  const current = incidentActor();
+  return current.actorUserId !== null && current.actorOrigin !== null
+    && incident.actorUserId != null && String(incident.actorUserId) === current.actorUserId
+    && incident.actorOrigin === current.actorOrigin;
+};
 const incidentQueueKey = 'ss22-pending-incidents-v1';
 const queuedIncidents = () => { try { return JSON.parse(localStorage.getItem(incidentQueueKey) || '[]'); } catch { return []; } };
 const queueIncident = incident => {
-  try { localStorage.setItem(incidentQueueKey, JSON.stringify([...queuedIncidents().filter(item => item.reference !== incident.reference), incident].slice(-20))); } catch {}
+  try {
+    const pending = queuedIncidents();
+    const previous = pending.find(item => item.reference === incident.reference);
+    // Retrying or closing an existing incident never changes its originating
+    // actor. Legacy entries without identity remain unattributed, not adopted.
+    const actor = previous
+      ? {actorUserId: previous.actorUserId ?? null, actorOrigin: previous.actorOrigin ?? null}
+      : Object.hasOwn(incident, 'actorUserId') || Object.hasOwn(incident, 'actorOrigin')
+        ? {actorUserId: incident.actorUserId ?? null, actorOrigin: incident.actorOrigin ?? null}
+        : incidentActor();
+    const entry = {...incident, ...actor};
+    // Remove only the replaced version of this event, never another actor's or
+    // an unattributed legacy event merely to make room in the outbox.
+    localStorage.setItem(incidentQueueKey, JSON.stringify([...pending.filter(item => item.reference !== incident.reference), entry]));
+  } catch {}
+
 };
 const sendIncident = async incident => {
-  if (!state.user) { queueIncident(incident); return false; }
+  if (!incidentMatchesCurrentActor(incident)) return false;
   try {
     const response = await fetch('/api/activity/incidents', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', 'X-Stone-Square-Client': 'web', ...(state.legacyToken ? { Authorization: `Bearer ${state.legacyToken}` } : {}) },
-      body: JSON.stringify(incident),
+      body: JSON.stringify(Object.fromEntries(Object.entries(incident).filter(([key]) => key !== 'actorOrigin'))),
     });
     return response.ok;
   } catch { return false; }
@@ -279,22 +310,80 @@ const flushQueuedIncidents = async () => {
   if (flushingIncidents || !state.user) return;
   flushingIncidents = true;
   try {
-    const pending = queuedIncidents(), remaining = [];
-    for (const incident of pending) if (!await sendIncident(incident)) remaining.push(incident);
+    const pending = queuedIncidents(), delivered = new Map();
+    for (const incident of pending) if (await sendIncident(incident)) delivered.set(incident.reference, JSON.stringify(incident));
+    // A successful request may queue recovery while its earlier failure is
+    // still being delivered. Remove only the exact events this flush sent.
+    const latest = queuedIncidents();
+    const remaining = latest.filter(incident => delivered.get(incident.reference) !== JSON.stringify(incident));
     localStorage.setItem(incidentQueueKey, JSON.stringify(remaining));
   } catch {} finally { flushingIncidents = false; }
 };
-const incidentPayload = ({ reference, path, method, status, category, state: incidentState }) => ({
+const incidentPayload = ({ reference, path, method, status, category, state: incidentState, area, actor }) => ({
   reference, path: String(path || location.pathname).split('?')[0], method, status: Number(status) || 0,
-  category, state: incidentState, area: state.activeSection || 'home',
+  category, state: incidentState, area: area || state.activeSection || 'home',
+  ...(actor ?? incidentActor()),
 });
 
+
+// The reminder feed polls independently of the page the Brother is using. Its
+// failure belongs to Building Requests, and a later successful poll resolves
+// only that feed's incident. Keep this state in memory within the current login.
+const buildingReminderIncidents = new Map();
+const buildingReminderKey = (userId, authEpoch, method, path) => `${location.origin || 'unknown-origin'}:${userId ?? 'guest'}:${authEpoch || 0}:${method}:${String(path).split('?')[0]}`;
+const clearStaleBuildingReminderNotice = () => {
+  const currentKey = buildingReminderKey(state.user?.id, state.authEpoch, 'GET', '/api/building/alerts');
+  if (reliabilityNoticeSourceKey && reliabilityNoticeSourceKey !== currentKey) {
+    window.clearTimeout(reliabilityNoticeTimer);
+    reliabilityNoticeSourceKey = ''; hide($('reliabilityNotice'));
+  }
+  for (const key of buildingReminderIncidents.keys()) if (key !== currentKey) buildingReminderIncidents.delete(key);
+};
+const showBuildingReminderFailure = (key, reference) => {
+  const incident = buildingReminderIncidents.get(key) || { reference, notified: false };
+  buildingReminderIncidents.set(key, incident);
+  const anotherNoticeIsVisible = !$('reliabilityNotice').classList.contains('hidden')
+    && reliabilityNoticeSourceKey !== key;
+  if (!incident.notified && !anotherNoticeIsVisible) {
+    incident.notified = true;
+    showReliabilityNotice({
+      title: 'Building Requests reminders are unavailable.',
+      message: `The background reminder check could not refresh. Any previously loaded reminders are retained. Incident ${incident.reference} was recorded.`,
+      sourceKey: key,
+    });
+  }
+  return incident.reference;
+};
+const recoverBuildingReminder = (key, reference, path, method, status) => {
+  const incident = buildingReminderIncidents.get(key);
+  const recoveredReference = incident?.reference || reference;
+  if (recoveredReference) {
+    queueIncident(incidentPayload({reference: recoveredReference, path, method, status, category: 'temporary_connection', state: 'recovered', area: 'building'}));
+  }
+  buildingReminderIncidents.delete(key);
+  if (incident && reliabilityNoticeSourceKey === key && !$('reliabilityNotice').classList.contains('hidden')) {
+    showReliabilityNotice({
+      title: 'Building Requests reminders are available again.',
+      message: `The reminder check completed successfully. Incident ${incident.reference} recovered.`,
+      recovered: true, dismissAfter: 6000, sourceKey: key,
+    });
+  }
+  void flushQueuedIncidents();
+};
+
 const apiFetch = async (path, init = {}, onSuccessResponse) => {
+  clearStaleBuildingReminderNotice();
   webUpdateRequests += 1;
   try {
   const method = String(init.method || 'GET').toUpperCase();
   const mayRetry = method === 'GET' || method === 'HEAD';
-  let incidentReference = '';
+  const passiveBuildingReminders = method === 'GET' && String(path).split('?')[0] === '/api/building/alerts';
+  const requestUserId = state.user?.id, requestAuthEpoch = state.authEpoch;
+  const requestActor = incidentActor();
+  const reminderKey = passiveBuildingReminders ? buildingReminderKey(requestUserId, requestAuthEpoch, method, path) : '';
+  const currentReminderContext = () => state.user?.id === requestUserId && state.authEpoch === requestAuthEpoch
+    && incidentActor().actorOrigin === requestActor.actorOrigin;
+  let incidentReference = passiveBuildingReminders ? buildingReminderIncidents.get(reminderKey)?.reference || '' : '';
   for (let attempt = 1; attempt <= (mayRetry ? 2 : 1); attempt += 1) {
     try {
       const response = await fetch(path, {
@@ -311,8 +400,10 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
       const payload = type.includes('application/json') ? await response.json() : await response.blob();
       if (response.ok) {
         if (onSuccessResponse) onSuccessResponse(response);
-        if (incidentReference) {
-          const recovered = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'temporary_connection', state: 'recovered' });
+        if (passiveBuildingReminders) {
+          if (currentReminderContext()) recoverBuildingReminder(reminderKey, incidentReference, path, method, response.status);
+        } else if (incidentReference) {
+          const recovered = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'temporary_connection', state: 'recovered', actor: requestActor });
           queueIncident(recovered); void flushQueuedIncidents();
           showReliabilityNotice({ title: 'The dashboard is back online.', message: `You can continue. Incident ${incidentReference} recovered automatically.`, recovered: true, dismissAfter: 6000 });
         } else void flushQueuedIncidents();
@@ -321,27 +412,31 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
       const retryable = response.status >= 500 || response.status === 408 || response.status === 429 || payload?.retryable === true;
       incidentReference ||= payload?.incidentReference || newIncidentReference();
       if (mayRetry && retryable && attempt === 1) {
-        showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is retrying now. Incident ${incidentReference}.` });
+        if (!passiveBuildingReminders) showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is retrying now. Incident ${incidentReference}.` });
         await delay(Math.min(3000, Math.max(1000, Number(payload?.retryAfterSeconds || 2) * 1000)));
         continue;
       }
-      if (retryable) {
-        const open = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'service_response', state: 'open' });
+      if (retryable && (!passiveBuildingReminders || currentReminderContext())) {
+        if (passiveBuildingReminders) incidentReference = showBuildingReminderFailure(reminderKey, incidentReference);
+        const open = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'service_response', state: 'open', actor: requestActor, ...(passiveBuildingReminders ? {area: 'building'} : {}) });
         queueIncident(open); void flushQueuedIncidents();
-        showReliabilityNotice({ title: 'This action could not be completed.', message: `Incident ${incidentReference} was recorded. The hosted monitor checks the service again within 30 minutes.` });
+        if (!passiveBuildingReminders) showReliabilityNotice({ title: 'This action could not be completed.', message: `Incident ${incidentReference} was recorded. The hosted monitor checks the service again within 30 minutes.` });
       }
       throw Object.assign(new Error(payload?.error || 'The request could not be completed.'), { status: response.status, incidentReference });
     } catch (error) {
       if (Number.isInteger(error?.status)) throw error;
       incidentReference ||= newIncidentReference();
       if (mayRetry && attempt === 1) {
-        showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is reconnecting now. Incident ${incidentReference}.` });
+        if (!passiveBuildingReminders) showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is reconnecting now. Incident ${incidentReference}.` });
         await delay(1800);
         continue;
       }
-      const open = incidentPayload({ reference: incidentReference, path, method, status: 0, category: navigator.onLine ? 'network_error' : 'offline', state: 'open' });
-      queueIncident(open);
-      showReliabilityNotice({ title: navigator.onLine ? 'This action could not be completed.' : 'This device is offline.', message: `Incident ${incidentReference} is saved. The dashboard will report it when the connection returns; the hosted monitor checks again within 30 minutes.` });
+      if (!passiveBuildingReminders || currentReminderContext()) {
+        if (passiveBuildingReminders) incidentReference = showBuildingReminderFailure(reminderKey, incidentReference);
+        const open = incidentPayload({ reference: incidentReference, path, method, status: 0, category: navigator.onLine ? 'network_error' : 'offline', state: 'open', actor: requestActor, ...(passiveBuildingReminders ? {area: 'building'} : {}) });
+        queueIncident(open);
+        if (!passiveBuildingReminders) showReliabilityNotice({ title: navigator.onLine ? 'This action could not be completed.' : 'This device is offline.', message: `Incident ${incidentReference} is saved. The dashboard will report it when the connection returns; the hosted monitor checks again within 30 minutes.` });
+      }
       throw Object.assign(new Error(`The dashboard could not connect. Incident ${incidentReference}.`), { incidentReference });
     }
   }

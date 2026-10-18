@@ -27,6 +27,8 @@ try {
   const flexible = { id:'SSL-EITHER', organization:'Synthetic chapter', date:'2026-10-16', status:'approved', revision:'f1', agreementStatus:'awaiting_secretary_attestation', attestationRoles:['secretary','assistant_secretary'], requesterNotified:false, attestedBy:null };
   const requests = [old, flexible];
   const emails = [];
+  const portalReads = new Map();
+  let heldAttestation = null;
   const app = express(); app.use(express.json());
   mountBuildingCalendar(app, {
     requireAuth: async (req,res,next) => {
@@ -39,8 +41,9 @@ try {
       const query = new URL(url).searchParams;
       const userId = Number(String(options.headers.Authorization).replace('Bearer user',''));
       const role = userId === owner ? 'owner' : userId === secretary ? 'secretary' : 'assistant_secretary';
-      if (query.has('list')) return Response.json({store:true,requests:requests.filter(request => role !== 'assistant_secretary' || request.attestationRoles.includes('assistant_secretary'))});
+      if (query.has('list')) { portalReads.set(userId,(portalReads.get(userId)||0)+1); return Response.json({store:true,requests:requests.filter(request => role !== 'assistant_secretary' || request.attestationRoles.includes('assistant_secretary'))}); }
       if (query.has('attest')) {
+        if(heldAttestation) {await heldAttestation.promise;throw new Error('Synthetic uncertain portal outcome');}
         const request = requests.find(item => item.id === query.get('attest'));
         if (!request.attestationRoles.includes(role)) return Response.json({error:'This signed agreement names McDuffie.'},{status:403});
         request.agreementStatus='fully_executed';request.revision='v2';request.attestedBy={name:role==='secretary'?'William M. McDuffie':'Adrian Reese',title:role==='secretary'?'Secretary':'Assistant Secretary',at:new Date().toISOString()};request.requesterNotified=true;
@@ -55,6 +58,8 @@ try {
   const api=async(path,id,body)=>{const response=await fetch(origin+path,{method:body?'POST':'GET',headers:{'x-test-user':String(id),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});return {status:response.status,data:await response.json()};};
 
   assert.equal((await api('/api/building/alerts',owner)).data.alerts.length,0);
+  await Promise.all(Array.from({length:12},()=>api('/api/building/alerts',owner)));
+  assert.equal(portalReads.get(owner),1,'Repeated owner reminder polls do not download all agreements');
   const secretaryAlerts=(await api('/api/building/alerts',secretary)).data.alerts;
   assert.equal(secretaryAlerts.length,2);
   assert.ok(secretaryAlerts.every(alert=>alert.kind==='attestation_pending'));
@@ -84,7 +89,21 @@ try {
   assert.equal((await api('/api/building/requests/SSL-OLD/file-completed',owner,{revision:'v2'})).status,200);
   const audits=await dbAll("SELECT action FROM audit_events WHERE action='building_agreement_filed_completed'");
   assert.equal(audits.length,1);
-  console.log('PASS building attestation alerts, signer boundary, owner filing, and idempotency.');
+  // A failed or uncertain portal mutation still invalidates snapshots read
+  // while it was in flight. Rechecking must reach the source again.
+  let releaseAttestation;heldAttestation={promise:new Promise(resolve=>{releaseAttestation=resolve;})};
+  const failedAttestation=api('/api/building/requests/SSL-EITHER/attest',assistant,{revision:'f1'});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  await api('/api/building/alerts',assistant);
+  const readsDuringAttempt=portalReads.get(assistant);
+  releaseAttestation();assert.equal((await failedAttestation).status,500);heldAttestation=null;
+  await api('/api/building/alerts',assistant);
+  assert.equal(portalReads.get(assistant),readsDuringAttempt+1,'Uncertain mutation invalidates concurrent reminders in finally');
+  await dbRun('UPDATE users SET permissions_json=? WHERE id=?',[JSON.stringify([]),assistant]);
+  const readsBeforeRevoked=portalReads.get(assistant);
+  assert.equal((await api('/api/building/alerts',assistant)).status,403,'Cached reminders never bypass current access checks');
+  assert.equal(portalReads.get(assistant),readsBeforeRevoked);
+  console.log('PASS building attestation alerts, signer boundary, owner filing, idempotency, cached polling and access revocation.');
 } finally {
   if (listener) await new Promise(resolve=>listener.close(resolve));
   await close();

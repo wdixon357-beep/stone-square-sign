@@ -51,6 +51,7 @@ jobs:
       - name: Exercise synthetic native sessions, minutes, and reports
         run: |
           node test/mac-session.mjs
+          node test/mac-reliability.mjs
           node test/mac-minutes-dates.mjs
           node test/mac-minutes-attendance.mjs
           node test/mac-minutes-closing.mjs

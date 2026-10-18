@@ -41,10 +41,12 @@ export async function recordAppIncident({reference,userId,client,area,path,metho
  const now=iso(),nextState=state==='recovered'?'recovered':'open';
  // Replayed client reports may arrive together. Preserve the original incident
  // identity and metadata while atomically updating only its observed state.
- await dbRun(`INSERT INTO app_incidents (reference,user_id,client,area,request_path,request_method,status_code,category,state,first_seen_at,last_seen_at,recovered_at)
+ const recorded=await dbRun(`INSERT INTO app_incidents (reference,user_id,client,area,request_path,request_method,status_code,category,state,first_seen_at,last_seen_at,recovered_at)
    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
    ON CONFLICT(reference) DO UPDATE SET state=EXCLUDED.state,last_seen_at=EXCLUDED.last_seen_at,
-    recovered_at=CASE WHEN EXCLUDED.state='recovered' THEN EXCLUDED.recovered_at ELSE app_incidents.recovered_at END`,[ref,userId||null,String(client||'Unknown client').slice(0,60),safeIncidentArea(area),safeIncidentPath(path),String(method||'GET').toUpperCase().slice(0,10),Number.isInteger(Number(status))?Number(status):null,String(category||'request_failed').replace(/[^a-z0-9_-]/ig,'').slice(0,60)||'request_failed',nextState,now,now,nextState==='recovered'?now:null]);
+    recovered_at=CASE WHEN EXCLUDED.state='recovered' THEN EXCLUDED.recovered_at ELSE app_incidents.recovered_at END
+    WHERE app_incidents.user_id IS NOT DISTINCT FROM EXCLUDED.user_id`,[ref,userId||null,String(client||'Unknown client').slice(0,60),safeIncidentArea(area),safeIncidentPath(path),String(method||'GET').toUpperCase().slice(0,10),Number.isInteger(Number(status))?Number(status):null,String(category||'request_failed').replace(/[^a-z0-9_-]/ig,'').slice(0,60)||'request_failed',nextState,now,now,nextState==='recovered'?now:null]);
+ if(!recorded.changes)throw Object.assign(new Error('This incident belongs to a different sign-in. Keep it queued for the original account.'),{statusCode:409});
  return ref;
 }
 export async function startActivitySession(userId,hash,req){const now=iso();await dbRun('INSERT INTO activity_sessions (user_id,auth_hash,started_at,first_seen_at,last_seen_at,client) VALUES (?,?,?,?,?,?) ON CONFLICT(auth_hash) DO NOTHING',[userId,hash,now,now,now,clientName(req)]);}
@@ -79,6 +81,10 @@ export function mountActivityRoutes(app,{requireAuth,requireOwner,rateLimit}){
   res.json({ok:true});
  }));
  app.post('/api/activity/incidents',requireAuth,rateLimit({key:'activity-incidents',maximum:120,windowMs:3600000}),route(async(req,res)=>{
+  // Cookies can change in another tab while this tab still displays the former
+  // account. Never attribute that tab's queued event to the newer sign-in.
+  if(Object.hasOwn(req.body||{},'actorUserId')&&String(req.body.actorUserId)!==String(req.user.id))
+   return res.status(409).json({error:'Your sign-in changed. Keep this incident queued for its original account.'});
   const reference=await recordAppIncident({reference:req.body?.reference,userId:req.user.id,client:clientName(req),area:req.body?.area,path:req.body?.path,method:req.body?.method,status:req.body?.status,category:req.body?.category,state:req.body?.state});
   res.status(201).json({reference});
  }));

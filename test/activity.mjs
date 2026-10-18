@@ -45,6 +45,12 @@ try{
  const openIncident=incidentActivity.incidents.find(item=>item.reference===incidentReference);
  check('WM error log identifies the user, area and safe route',openIncident?.actor==='QA treasurer'&&openIncident.area==='Meeting Minutes'&&openIncident.path==='/api/minutes/:record'&&openIncident.state==='open');
  check('Error log excludes query strings and submitted record content',!JSON.stringify(incidentActivity).includes('never-store-this')&&!JSON.stringify(incidentActivity).includes('private transcript'));
+ check('An originating actor matching the current sign-in is accepted',(await api('/api/activity/incidents',treasurer.token,'POST',{reference:'SS22-ACTOROK1',actorUserId:String(treasurer.user.id),path:'/api/building/alerts',status:503,state:'open'})).status===201);
+ check('A cookie changed in another tab cannot misattribute an old queued event',(await api('/api/activity/incidents',basic.token,'POST',{reference:'SS22-ACTORBAD1',actorUserId:String(treasurer.user.id),path:'/api/building/alerts',status:503,state:'open'})).status===409);
+ check('Another account cannot close an existing incident by reusing its reference',(await api('/api/activity/incidents',basic.token,'POST',{reference:incidentReference,actorUserId:String(basic.user.id),path:'/api/building/alerts',status:200,state:'recovered'})).status===409);
+ const afterActorConflict=(await api('/api/admin/activity',owner.token)).data;
+ check('Rejected actor changes create no new incident and preserve original error history',!afterActorConflict.incidents.some(item=>item.reference==='SS22-ACTORBAD1')&&afterActorConflict.incidents.find(item=>item.reference===incidentReference).state==='open');
+
  await api('/api/activity/incidents',treasurer.token,'POST',{reference:incidentReference,area:'minutes',path:'/api/minutes/123e4567-e89b-12d3-a456-426614174000',method:'GET',status:200,category:'temporary_connection',state:'recovered'});
  incidentActivity=(await api('/api/admin/activity?userId='+treasurer.user.id,owner.token)).data;
  check('Recovered incidents close instead of creating a duplicate',incidentActivity.incidents.filter(item=>item.reference===incidentReference).length===1&&incidentActivity.incidents.find(item=>item.reference===incidentReference).state==='recovered'&&Boolean(incidentActivity.incidents.find(item=>item.reference===incidentReference).recoveredAt));
