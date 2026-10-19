@@ -38,10 +38,11 @@ export async function organizeReport(input,{schema,generateStructured}={}) {
   const contract={type:'object',additionalProperties:false,required:['suggestions','warnings'],properties:{suggestions:{type:'array',maxItems:fields.length,items:{type:'object',additionalProperties:false,required:['field','value','quote'],properties:{field:{type:'string',enum:fields.map(f=>f.id)},value:str,quote:{type:'string',maxLength:12000}}}},warnings:{type:'array',maxItems:30,items:str}}};
   const result=await generateStructured({purpose:'report',schemaName:'stone_square_officer_report',schema:contract,instructions:REPORT_GENERATOR_RULES,input:JSON.stringify({report:definition.name,fields,source})});
   if(!Array.isArray(result?.suggestions)||!Array.isArray(result?.warnings))throw fail('The report suggestions were incomplete. Your entries have not changed.',502);
-  const output={},evidence=[],warnings=[...result.warnings];
+  const output={},evidence=[],warnings=[...result.warnings],quotedAmounts=[],seen=new Set();
   for(const item of result.suggestions) {
     const field=allowed.get(item.field);
-    if(!field||Object.hasOwn(output,item.field)||typeof item.value!=='string'||item.value.length>6000||!item.value.trim()||typeof item.quote!=='string'||!item.quote.trim()||!source.includes(item.quote))throw fail('A report suggestion could not be verified against the notes. Your entries have not changed.',502);
+    if(!field||seen.has(item.field)||typeof item.value!=='string'||item.value.length>6000||!item.value.trim()||typeof item.quote!=='string'||!item.quote.trim()||!source.includes(item.quote))throw fail('A report suggestion could not be verified against the notes. Your entries have not changed.',502);
+    seen.add(item.field);
     if(field.kind==='budget') {
       const compact=text=>text.split('\n').map(line=>line.trim().replace(/^[-*•]\s+/,'').replace(/[.;]$/,'').replace(/\s+/g,' ').toLowerCase()).filter(Boolean).join('\n');
       if(compact(item.value)!==compact(item.quote))throw fail('A suggested budget changed a source item, amount or payer. Review the original budget notes.',502);
@@ -59,7 +60,14 @@ export async function organizeReport(input,{schema,generateStructured}={}) {
     if(field.kind==='money') {
       const value=item.value.replace(/[$,]/g,'').trim();
       const amounts=[...item.quote.matchAll(/(?<![\w/])\$?\s*(\d[\d,]*(?:\.\d{1,2})?)(?![\w/]|\.\d)/g)].map(m=>m[1].replace(/,/g,''));
-      if(!/^\d+(?:\.\d{1,2})?$/.test(value)||!amounts.some(x=>Number(x)===Number(value)))throw fail('A suggested amount does not match its source. Please review the banking or budget figures.',502);
+      if(!/^\d+(?:\.\d{1,2})?$/.test(value)) {
+        // A price list or source range cannot occupy a single-amount field.
+        // Retain only the verified original wording, never the generated value.
+        if(allowed.get('notes')?.kind!=='long')throw fail(`${field.label} contains more than a single amount. Keep the original wording in the report notes and confirm the applicable amount.`,502);
+        quotedAmounts.push({field:item.field,label:field.label,quote:item.quote});
+        continue;
+      }
+      if(!amounts.some(x=>Number(x)===Number(value)))throw fail('A suggested amount does not match its source. Please review the banking or budget figures.',502);
     }
     if(field.kind==='date'&&minutesDateParts(item.quote)?.iso!==item.value)throw fail('A suggested date does not match its source. Please review the date.',502);
     if(field.kind==='time') {
@@ -68,6 +76,20 @@ export async function organizeReport(input,{schema,generateStructured}={}) {
     }
     if(field.kind==='choices'&&!item.value.split(',').every(v=>field.options.some(([id])=>id===v.trim())))throw fail('A suggested selection is not available for this report.',502);
     output[item.field]=item.value;evidence.push({field:item.field,quote:item.quote});
+  }
+  if(quotedAmounts.length) {
+    const parts=[];
+    for(const text of [existing.notes,output.notes,...quotedAmounts.map(item=>item.quote)].filter(Boolean)) {
+      if(!parts.some(part=>part.includes(text)))parts.push(text);
+    }
+    const retained=parts.join('\n\n');
+    if(retained.length>6000)throw fail('The original price or amount details do not fit in Additional information. Shorten that field while keeping a copy of the source, then organize again.',502);
+    output.notes=retained;
+    if(existing.notes)evidence.push({field:'notes',quote:existing.notes});
+    for(const item of quotedAmounts) {
+      evidence.push({field:'notes',quote:item.quote});
+      warnings.push(`${item.label} does not fit a single amount. Its exact source wording was retained in Additional information; confirm any applicable amount before completing the report.`);
+    }
   }
   for(const f of fields.filter(f=>f.req))if(!(output[f.id]||existing[f.id]||'').trim())warnings.push(`Complete ${f.label} before previewing.`);
   return {fields:output,fieldLabels:Object.fromEntries(Object.keys(output).map(key=>[key,allowed.get(key).label])),warnings:[...new Set(['Review the suggestions against your original notes before applying them.',...warnings])],evidence};
