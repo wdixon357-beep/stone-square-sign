@@ -47,7 +47,7 @@ async function start(mocked) {
     cwd: new URL('..', import.meta.url),
     env: {...process.env, PORT: String(port), NODE_ENV: 'test', DATABASE_URL: '', PGLITE_DIR: '',
       OWNER_EMAIL: 'generation-owner@example.org', APP_BASE_URL: base, SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '',
-      WARDEN_EMAILS: 'generation-warden@example.org',
+      WARDEN_EMAILS: 'generation-warden@example.org', TRACKER_SSO_SHARED_SECRET: 'synthetic-generation-routes-report-only',
       LODGE_ACCESS_CODE: '', DDGM_EMAIL: 'unused@example.org', OPENAI_API_KEY: '',
       MINUTES_TEST_RESPONSE: '', TREASURY_TEST_RESPONSE: ''},
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -77,11 +77,16 @@ const minutesForm = (source = minutesSource) => {const form = new FormData(); fo
 
 await writeFile(loaderFile, `
 import {appendFile, readFile, access} from 'node:fs/promises';
+import {createHmac} from 'node:crypto';
 import {createGenerator, setGenerationForTests} from ${JSON.stringify(new URL('../ai-generation.js', import.meta.url).href)};
 import {generateMinutesDraft, MINUTES_SCHEMA} from ${JSON.stringify(new URL('../minutes.js', import.meta.url).href)};
 const callsFile = ${JSON.stringify(callsFile)}, controlFile = ${JSON.stringify(controlFile)}, releaseFile = ${JSON.stringify(releaseFile)}, inputsFile = ${JSON.stringify(inputsFile)};
-globalThis.fetch = async url => {
+globalThis.fetch = async (url,options) => {
   if(String(url)!=='https://request.stonesquare22pha.org/api/report?schema=1')throw Error('Unexpected schema destination');
+  const [payload,signature]=String(options?.headers?.Authorization||'').replace(/^Bearer /,'').split('.');
+  if(!payload||createHmac('sha256','synthetic-generation-routes-report-only').update(payload).digest('base64url')!==signature)throw Error('Missing or untrusted synthetic report assertion');
+  const principal=JSON.parse(Buffer.from(payload,'base64url'));
+  if(principal.aud!=='stone-square-report-generator'||!principal.permissions.includes('reports.create'))throw Error('Invalid synthetic report principal');
   return Response.json({authenticated:true,types:{officer:{name:'Officer Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}},masterTypes:{officer:{name:'WM Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}}});
 };
 const fetchImpl = async (url, options) => {
