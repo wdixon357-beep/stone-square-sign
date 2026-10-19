@@ -82,7 +82,7 @@ import {generateMinutesDraft, MINUTES_SCHEMA} from ${JSON.stringify(new URL('../
 const callsFile = ${JSON.stringify(callsFile)}, controlFile = ${JSON.stringify(controlFile)}, releaseFile = ${JSON.stringify(releaseFile)}, inputsFile = ${JSON.stringify(inputsFile)};
 globalThis.fetch = async url => {
   if(String(url)!=='https://request.stonesquare22pha.org/api/report?schema=1')throw Error('Unexpected schema destination');
-  return Response.json({types:{officer:{name:'Officer Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}},masterTypes:{officer:{name:'WM Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}}});
+  return Response.json({authenticated:true,types:{officer:{name:'Officer Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}},masterTypes:{officer:{name:'WM Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}}});
 };
 const fetchImpl = async (url, options) => {
   if (String(url) !== 'https://api.openai.com/v1/responses') throw new Error('Unexpected network destination in the provider mock.');

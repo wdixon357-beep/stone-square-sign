@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import CryptoKit
 
 final class ReportFixture: URLProtocol {
     static var pdf = Data()
@@ -315,6 +316,88 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         let savedServer = reportApp.serverAddress
         reportApp.serverAddress = "https://generation-fixture.invalid"
         defer { reportApp.serverAddress = savedServer }
+        let importApp = AppModel(session: generationSession, savedSessionToken: "synthetic-token")
+        importApp.serverAddress = "https://generation-fixture.invalid"
+        importApp.user = User(id: 610, email: "importer@example.invalid", name: "QA Importer", role: "assistant_treasurer", hasSignature: true, permissions: ["reports.create"])
+        let imported = ReportBrowserModel(persistenceURL: scratch.appendingPathComponent("import-draft.json"), session: generationSession)
+        imported.configure(importApp)
+        imported.source = "Keep existing notes."; imported.fields = ["summary":"Keep the report fields."]; imported.changed()
+        imported.pdf = fixtureBytes; imported.reviewed = true
+        let importURL = scratch.appendingPathComponent("existing-report.txt")
+        let importBytes = Data("Imported fixture text with emoji 😀.".utf8)
+        try importBytes.write(to: importURL)
+        let importText = "Imported fixture text with emoji 😀."
+        let importHash = SHA256.hash(data: importBytes).map { String(format: "%02x", $0) }.joined()
+        let importResponse = try JSONSerialization.data(withJSONObject: ["source":importText,"filename":"existing-report.txt","format":"txt","characters":importText.utf16.count,"sha256":importHash,"warnings":["Review the imported formatting."]])
+        GenerationFixture.routeResponses = ["POST /api/reports/import-source":(200,importResponse)]
+        GenerationFixture.requests = []
+        GenerationFixture.beforeReply = { request in
+            precondition(request.url?.path == "/api/reports/import-source" && request.value(forHTTPHeaderField:"Authorization") == "Bearer synthetic-token")
+            precondition(request.value(forHTTPHeaderField:"Content-Type")?.hasPrefix("multipart/form-data; boundary=ReportImport-") == true)
+        }
+        await imported.importReport(from: importURL, using: importApp)
+        precondition(imported.pendingImport?.source == importText && imported.source == "Keep existing notes.")
+        precondition(imported.pdf == fixtureBytes && imported.reviewed && imported.fields["summary"] == "Keep the report fields.")
+        precondition(GenerationFixture.requests.count == 1 && String(data: GenerationFixture.requests[0].body,encoding:.utf8)?.contains("name=\"report\"; filename=\"existing-report.txt\"") == true)
+        imported.importedSource += " Edited before adding."
+        imported.cancelImport()
+        precondition(imported.pendingImport == nil && imported.source == "Keep existing notes." && imported.pdf == fixtureBytes && imported.reviewed)
+        await imported.importReport(from: importURL, using: importApp)
+        imported.applyImportedSource()
+        precondition(imported.source == "Keep existing notes.\n\n" + importText && imported.fields["summary"] == "Keep the report fields.")
+        precondition(imported.pdf == nil && !imported.reviewed && imported.importedFilename == "existing-report.txt" && imported.importWarnings == ["Review the imported formatting."])
+        let reopenedImport = ReportBrowserModel(persistenceURL: imported.persistenceURL)
+        precondition(reopenedImport.source == imported.source && reopenedImport.importedFilename == imported.importedFilename && reopenedImport.importWarnings == imported.importWarnings)
+        let importAttributes = try FileManager.default.attributesOfItem(atPath: imported.persistenceURL!.path)
+        precondition((importAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        await imported.importReport(from: importURL, using: importApp)
+        imported.importedSource = "Reviewed replacement text."
+        imported.applyImportedSource(replace: true)
+        precondition(imported.source == "Reviewed replacement text." && imported.fields["summary"] == "Keep the report fields.")
+        for (format, bytes, mime) in [("docx",Data([0x50,0x4b,0x03,0x04]),"application/vnd.openxmlformats-officedocument.wordprocessingml.document"),("pdf",fixtureBytes,"application/pdf")] {
+            let url = scratch.appendingPathComponent("existing-report.\(format)")
+            try bytes.write(to:url)
+            let digest = SHA256.hash(data:bytes).map { String(format:"%02x",$0) }.joined()
+            GenerationFixture.routeResponses = ["POST /api/reports/import-source":(200,try JSONSerialization.data(withJSONObject:["source":importText,"filename":url.lastPathComponent,"format":format,"characters":importText.utf16.count,"sha256":digest,"warnings":[]]))]
+            await imported.importReport(from:url,using:importApp)
+            precondition(imported.pendingImport?.format == format && GenerationFixture.requests.last!.body.range(of:Data("Content-Type: \(mime)".utf8)) != nil)
+            imported.cancelImport()
+        }
+        GenerationFixture.routeResponses = ["POST /api/reports/import-source":(200,importResponse)]
+        await imported.importReport(from: importURL, using: importApp)
+        imported.importedSource = String(repeating:"x",count:60_001)
+        imported.applyImportedSource()
+        precondition(imported.error?.contains("60,000") == true && imported.source == "Reviewed replacement text." && imported.pendingImport != nil)
+        imported.cancelImport()
+        print("PASS: imported reports stage editable text with warnings, Cancel preserves notes/preview/review, Add appends, and explicit Replace updates only private source notes")
+        imported.pdf = fixtureBytes; imported.reviewed = true
+        GenerationFixture.routeResponses = ["POST /api/reports/import-source":(422,Data(#"{"error":"This PDF has no extractable text. Choose a text-based PDF or a Word document."}"#.utf8))]
+        await imported.importReport(from: importURL, using: importApp)
+        precondition(imported.error?.contains("no extractable text") == true && imported.source == "Reviewed replacement text." && imported.pdf == fixtureBytes && imported.reviewed)
+        GenerationFixture.routeResponses = ["POST /api/reports/import-source":(200,importResponse)]
+        GenerationFixture.beforeReply = { _ in imported.source = "Changed during upload."; imported.changed() }
+        await imported.importReport(from: importURL, using: importApp)
+        precondition(imported.pendingImport == nil && imported.source == "Changed during upload.")
+        GenerationFixture.beforeReply = { _ in importApp.user = User(id:611,email:"other-importer@example.invalid",name:"Other Importer",role:"secretary",hasSignature:true) }
+        await imported.importReport(from: importURL, using: importApp)
+        precondition(imported.pendingImport == nil && imported.source == "Changed during upload.")
+        GenerationFixture.beforeReply = nil
+        importApp.user = User(id:610,email:"importer@example.invalid",name:"QA Importer",role:"assistant_treasurer",hasSignature:true,permissions:["reports.create"])
+        print("PASS: extraction failures retain current work, and stale file responses cannot replace newer notes or cross accounts")
+        let beforeRejectedFiles = GenerationFixture.requests.count
+        let linkedURL = scratch.appendingPathComponent("linked-report.txt")
+        try FileManager.default.createSymbolicLink(at: linkedURL, withDestinationURL: importURL)
+        await imported.importReport(from: linkedURL, using: importApp)
+        let bigURL = scratch.appendingPathComponent("oversized-report.txt")
+        try Data(repeating:65,count:12*1024*1024+1).write(to:bigURL)
+        await imported.importReport(from: bigURL, using: importApp)
+        let unsupportedURL = scratch.appendingPathComponent("unsupported-report.rtf")
+        try Data("fixture".utf8).write(to:unsupportedURL)
+        await imported.importReport(from: unsupportedURL, using: importApp)
+        precondition(GenerationFixture.requests.count == beforeRejectedFiles && imported.source == "Changed during upload.")
+        GenerationFixture.routeResponses = [:]; GenerationFixture.beforeReply = nil
+        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/reports/import-source" })
+        print("PASS: symlinks, oversized files and unsupported types are rejected before any upload; importing never invokes organization, signatures or delivery")
         let bankingAlert = TreasuryAlert(
             id: "waiting-bank-record", title: "Banking information is awaiting report preparation",
             message: "Uploaded by John Brown.", uploadedBy: "John Brown", createdAt: "2026-09-20T14:00:00Z"

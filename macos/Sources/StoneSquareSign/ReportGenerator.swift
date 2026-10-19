@@ -2,6 +2,9 @@ import AppKit
 import Foundation
 import SwiftUI
 import PDFKit
+import UniformTypeIdentifiers
+import Darwin
+import CryptoKit
 
 struct NativeReportField: Identifiable {
     let id: String; let label: String; let kind: String; let required: Bool; let hint: String
@@ -19,6 +22,15 @@ struct ReportOrganization: Decodable {
     let fields: [String: String]
     let warnings: [String]
     let evidence: [Evidence]
+}
+
+struct ReportSourceImport: Decodable {
+    let source: String
+    let filename: String
+    let format: String
+    let characters: Int
+    let sha256: String
+    let warnings: [String]
 }
 
 private struct ReportHandoffResponse: Decodable {
@@ -44,6 +56,12 @@ final class ReportBrowserModel: ObservableObject {
     @Published var source = ""
     @Published var organization: ReportOrganization?
     @Published var organizing = false
+    @Published var importing = false
+    @Published private(set) var pendingImport: ReportSourceImport?
+    @Published var importedSource = ""
+    @Published private(set) var importedFilename = ""
+    @Published private(set) var importWarnings: [String] = []
+    private var importSnapshot: Data?
     private var organizationKey: Data?
     private var revision = 0
     @Published var reviewed = false
@@ -84,6 +102,8 @@ final class ReportBrowserModel: ObservableObject {
         email = raw["email"] as? String ?? ""; phone = raw["phone"] as? String ?? ""
         type = raw["type"] as? String ?? "officer"; fields = raw["fields"] as? [String: String] ?? [:]
         source = raw["source"] as? String ?? ""
+        importedFilename = raw["importedFilename"] as? String ?? ""
+        importWarnings = raw["importWarnings"] as? [String] ?? []
         clientId = raw["clientId"] as? String ?? UUID().uuidString
         deliveryIntent = (raw["deliveryIntent"] as? String).flatMap { UUID(uuidString: $0)?.uuidString }
         loadedDraftUserID = raw["userId"] as? Int
@@ -97,6 +117,7 @@ final class ReportBrowserModel: ObservableObject {
             phone = ""; type = "officer"; fields = [:]; source = ""; reviewed = false; signatureName = ""
             organization = nil; pdf = nil; previewKey = nil; clientId = UUID().uuidString; draftSaved = false
             deliveryIntent = UUID().uuidString
+            cancelImport(); importedFilename = ""; importWarnings = []
             loadedDraftUserID = nil
         }
         if assertionUserID != user.id {
@@ -117,10 +138,12 @@ final class ReportBrowserModel: ObservableObject {
         return try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
     }
     func changed() {
+        cancelImport()
         reviewed = false; signatureName = ""; previewKey = nil; pdf = nil
         organization = nil; organizationKey = nil; revision += 1
         draftSaved = false
         var object = payload(); object["source"] = source; object["reviewed"] = false; object["signatureName"] = ""; object["savedAt"] = Date().timeIntervalSince1970
+        object["importedFilename"] = importedFilename; object["importWarnings"] = importWarnings
         if let configuredUserID { object["userId"] = configuredUserID; loadedDraftUserID = configuredUserID }
         if let url = persistenceURL, let data = try? JSONSerialization.data(withJSONObject: object) {
             do {
@@ -130,6 +153,92 @@ final class ReportBrowserModel: ObservableObject {
                 draftSaved = true
             } catch { self.error = "This draft could not be saved on this Mac. Keep the report open and save a PDF when ready." }
         }
+    }
+    private func currentImportSnapshot() -> Data? {
+        guard let user = appModel?.user, user.id == configuredUserID else { return nil }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let userData = try? encoder.encode(user)
+        guard let userData else { return nil }
+        return try? JSONSerialization.data(withJSONObject: ["account": userData.base64EncodedString(), "revision": revision,
+            "source": source, "content": contentKey()?.base64EncodedString() ?? ""], options: .sortedKeys)
+    }
+    func cancelImport() {
+        pendingImport = nil; importedSource = ""; importSnapshot = nil
+    }
+    func importReport(from url: URL, using model: AppModel) async {
+        guard !busy, appModel === model, let user = model.user, user.can("reports.create"),
+              let snapshot = currentImportSnapshot() else { return }
+        busy = true; importing = true; error = nil
+        defer { busy = false; importing = false }
+        do {
+            let upload = try await Task.detached { try Self.importUpload(url) }.value
+            guard snapshot == currentImportSnapshot(), appModel === model else { return }
+            let result: ReportSourceImport = try await model.request("/api/reports/import-source", method: "POST", body: upload.body, contentType: upload.contentType)
+            guard snapshot == currentImportSnapshot(), appModel === model else { return }
+            guard result.format == url.pathExtension.lowercased(), !result.filename.isEmpty,
+                  !result.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  result.source.utf16.count <= 60_000, result.characters == result.source.utf16.count,
+                  result.sha256 == upload.sha256 else {
+                throw ClientError.server("The imported report text could not be verified. Your current notes have been kept.")
+            }
+            pendingImport = result; importedSource = result.source; importSnapshot = snapshot
+            message = "Report text is ready. Review it, then add it to your notes or choose Replace existing notes."
+        } catch {
+            guard snapshot == currentImportSnapshot(), appModel === model else { return }
+            self.error = "The report could not be imported. \(error.localizedDescription) Your current notes and report fields have been kept."
+        }
+    }
+    func applyImportedSource(replace: Bool = false) {
+        guard let pendingImport, importSnapshot == currentImportSnapshot() else {
+            cancelImport(); error = "The report changed. Upload the file again before adding its text."; return
+        }
+        guard !importedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            error = "The imported text is empty. Keep or correct the text before adding it."; return
+        }
+        let combined = replace || source.isEmpty ? importedSource : source + "\n\n" + importedSource
+        guard combined.utf16.count <= 60_000 else {
+            error = "The combined notes exceed 60,000 characters. Shorten the imported text or choose Replace existing notes."; return
+        }
+        error = nil
+        source = combined; importedFilename = pendingImport.filename; importWarnings = pendingImport.warnings
+        changed()
+        message = "Imported text added to your notes. Report fields stay as entered until you organize and apply suggestions."
+    }
+    nonisolated private static func importUpload(_ url: URL) throws -> (body: Data, contentType: String, sha256: String) {
+        let limit = 12 * 1024 * 1024
+        let formats = ["docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "pdf": "application/pdf", "txt": "text/plain"]
+        guard url.isFileURL, !url.path.contains("\0"), let mime = formats[url.pathExtension.lowercased()] else {
+            throw ClientError.server("Choose a Word document (.docx), text-based PDF, or UTF-8 text file.")
+        }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard descriptor >= 0 else { throw ClientError.server("The selected file could not be opened. Choose the original file rather than a shortcut or link.") }
+        defer { Darwin.close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size > 0, info.st_size <= Int64(limit) else {
+            throw ClientError.server("Choose a regular file containing report text, no larger than 12 MB.")
+        }
+        var bytes = Data(), buffer = [UInt8](repeating: 0, count: 65_536)
+        while true {
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw ClientError.server("The selected file could not be read. Download it to this Mac and try again.")
+            }
+            bytes.append(contentsOf: buffer.prefix(count))
+            if bytes.count > limit { throw ClientError.server("Choose a report file no larger than 12 MB.") }
+        }
+        guard !bytes.isEmpty else { throw ClientError.server("The selected file is empty.") }
+        let sanitizedName = url.lastPathComponent.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) || ["\"", "\\"].contains(String($0)) ? "_" : String($0) }.joined()
+        let suffix = "." + url.pathExtension.lowercased()
+        let filename = sanitizedName.count > 240 ? String(sanitizedName.dropLast(suffix.count).prefix(240 - suffix.count)) + suffix : sanitizedName
+        let boundary = "ReportImport-\(UUID().uuidString)"
+        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"report\"; filename=\"\(filename)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8)
+        body.append(bytes); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        return (body, "multipart/form-data; boundary=\(boundary)", SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
     }
     private var organizerFieldIDs: Set<String> {
         Set(reportFields.flatMap { $0.kind == "choices" ? [$0.id, $0.id + "Other"] : [$0.id] })
@@ -254,6 +363,7 @@ final class ReportBrowserModel: ObservableObject {
     }
     func startOver() {
         source = ""; fields = [:]; reviewed = false; signatureName = ""; pdf = nil; message = ""; error = nil
+        cancelImport(); importedFilename = ""; importWarnings = []
         clientId = UUID().uuidString; deliveryIntent = UUID().uuidString; changed()
     }
 
@@ -302,6 +412,8 @@ struct ReportGeneratorView: View {
     @ObservedObject var browser: ReportBrowserModel
     @State private var confirmSend = false
     @State private var confirmReset = false
+    @State private var showImportPicker = false
+    @State private var confirmReplaceImport = false
     private func fieldBinding(_ id: String) -> Binding<String> {
         Binding(get: { browser.fields[id] ?? "" }, set: { browser.fields[id] = $0; browser.changed() })
     }
@@ -352,6 +464,7 @@ struct ReportGeneratorView: View {
                                     }
                                     Text("Your selected report determines the sections in the document.").font(.caption).foregroundStyle(.secondary)
                                 } header: { Text("Document") }
+                                importControls
                             } else if step == 1 {
                                 organizer
                                 Section {
@@ -415,9 +528,61 @@ struct ReportGeneratorView: View {
         .alert("Start a new report?", isPresented: $confirmReset) {
             Button("Clear report", role: .destructive) { browser.startOver(); step = 0 }; Button("Cancel", role: .cancel) {}
         } message: { Text("The saved report fields will be cleared. Your contact details remain available.") }
+        .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.pdf, .plainText, UTType(filenameExtension: "docx") ?? .data]) { result in
+            switch result {
+            case .success(let url): Task { await browser.importReport(from: url, using: model); if browser.pendingImport != nil { step = 1 } }
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError { browser.error = "The file could not be selected. Your report has been kept." }
+            }
+        }
+        .alert("Replace existing notes?", isPresented: $confirmReplaceImport) {
+            Button("Replace notes", role: .destructive) { browser.applyImportedSource(replace: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Only your source notes will be replaced with the imported text. The report fields will stay as entered.") }
     }
 
-    private var organizer: some View {
+    private var importControls: some View {
+        Section {
+            Button { showImportPicker = true } label: {
+                Label(browser.importing ? "Reading report…" : "Upload existing report", systemImage: "doc.badge.arrow.up")
+                    .fixedSize(horizontal: false, vertical: true)
+            }.disabled(browser.busy)
+            Text("Choose Word (.docx), a text-based PDF, or a text file up to 12 MB. Uploading only reads the text; it does not organize, sign, or send a report.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let pending = browser.pendingImport {
+                Text(pending.filename).font(.headline).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Text("Review the imported text before adding it to your source notes.").font(.callout).foregroundStyle(.secondary)
+                ForEach(Array(pending.warnings.enumerated()), id: \.offset) { _, warning in
+                    Label(warning, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                TextEditor(text: $browser.importedSource)
+                    .font(.body).frame(minHeight: 150).padding(8)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.secondary.opacity(0.2)))
+                    .accessibilityLabel("Imported report text")
+                ViewThatFits(in: .horizontal) {
+                    HStack { importActions }
+                    VStack(alignment: .leading, spacing: 10) { importActions }
+                }
+            } else if !browser.importedFilename.isEmpty {
+                Label("Imported: \(browser.importedFilename)", systemImage: "doc.text")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                ForEach(Array(browser.importWarnings.enumerated()), id: \.offset) { _, warning in
+                    Text(warning).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } header: { Text("Use an existing report") }
+    }
+
+    @ViewBuilder private var importActions: some View {
+        Button("Add to notes") { browser.applyImportedSource() }.buttonStyle(.borderedProminent)
+        Button("Replace existing notes") { confirmReplaceImport = true }
+        Button("Cancel import") { browser.cancelImport(); browser.message = "Import cancelled. Your current notes and report fields have been kept." }
+    }
+
+    @ViewBuilder private var organizer: some View {
+        importControls
         Section {
             Text("Paste notes or source text, then review the suggested report fields before applying them.").font(.callout).foregroundStyle(.secondary)
             TextEditor(text: Binding(get: { browser.source }, set: { browser.source = $0; browser.changed() }))

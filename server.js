@@ -33,6 +33,7 @@ import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
 import { mountOfficerReportRoutes } from './officer-report-routes.js';
 import { initReportDeliverySchema, mountReportDelivery } from './report-delivery.js';
+import { mountReportSource } from './report-source.js';
 import { mountCorrespondenceRoutes } from './correspondence.js';
 import { createDispensationSubmissions, initDispensationSubmissionSchema } from './dispensation-submissions.js';
 import { mountMemberFeatures } from './member-features.js';
@@ -3649,7 +3650,7 @@ app.post('/api/reports/organize', requireAuth, rateLimit({key:'report-organize',
     if(req.body.master === true && req.user.role !== 'owner')return res.status(403).json({error:"Only the Worshipful Master can organize a Worshipful Master's report."});
     const generateStructured=generationFor(req.user.id);
     if(!generateStructured)return res.status(503).json({error:'Report assistance is not configured. You can still complete the report manually.'});
-    const result=await organizeReport(req.body,{schema:await reportSchema(),generateStructured});
+    const result=await organizeReport(req.body,{schema:await reportSchema({assertion:createReportAssertion(req.user).assertion}),generateStructured});
     res.setHeader('Cache-Control','no-store');res.json(result);
   }catch(error){next(error);}
 });
@@ -3663,6 +3664,7 @@ mountBuildingCalendar(app,{requireAuth,sendBuildingEmail:sendEmail});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
 mountOfficerReportRoutes(app, { requireAuth, requireOwner });
+mountReportSource(app, { requireAuth });
 mountReportDelivery(app, {
   secret: TRACKER_SSO_SHARED_SECRET,
   recipient: OWNER_EMAIL,

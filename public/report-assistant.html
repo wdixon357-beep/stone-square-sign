@@ -1,1 +1,68 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Organize your Lodge report</title><link rel="stylesheet" href="/report-assistant.css"><script src="/report-assistant.js" defer></script></head><body><main><h1>Organize your report</h1><p>Paste your notes. Review the suggested entries before adding them to your report.</p><p id="status" role="status">Connecting to your report…</p><section id="signin" hidden><p>Sign in to Stone Square to use report assistance.</p><a href="/" target="_blank" rel="noopener">Open sign-in</a> <button id="check">Check sign-in</button></section><label for="source">Report notes</label><textarea id="source" rows="12" maxlength="60000" placeholder="Include the work completed, people involved, dates, costs, decisions needed and next steps."></textarea><button id="organize" disabled>Organize report</button><p class="hint">Review suggested entries before applying them. Previewing and signing remain separate actions.</p><section id="suggestions" hidden><h2>Review suggested entries</h2><div id="warnings"></div><div id="fields"></div><button id="apply">Apply to report</button></section></main></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Organize your Lodge report</title>
+  <link rel="stylesheet" href="/report-assistant.css">
+  <script src="/report-assistant.js" defer></script>
+</head>
+<body>
+<main id="assistant">
+  <header>
+    <p class="eyebrow">Stone Square Lodge No. 22</p>
+    <h1>Build your report</h1>
+    <p>Upload an existing report or paste your notes. Review the text and suggested entries before adding them to your report.</p>
+  </header>
+  <p id="status" role="status" aria-live="polite">Connecting to your report…</p>
+  <section id="signin" class="notice" hidden>
+    <p>Use the same Dashboard account that opened this report.</p>
+    <div class="actions"><a href="/" target="_blank" rel="noopener">Open sign-in</a><button id="check" type="button" class="secondary">Check sign-in</button></div>
+  </section>
+  <div id="workspace" hidden>
+    <section id="uploadPanel" class="upload-panel" aria-labelledby="uploadHeading">
+      <p class="step">1. Add your information</p>
+      <h2 id="uploadHeading">Start with an existing report</h2>
+      <p id="uploadHelp">Choose a Word document (.docx), a PDF with selectable text, or a text file (.txt), up to 12 MB. Uploading only extracts text. It does not change, sign, or send your report.</p>
+      <input id="reportFile" type="file" accept=".docx,.pdf,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain" hidden>
+      <button id="chooseReport" type="button" aria-describedby="uploadHelp" disabled>Upload existing report</button>
+      <p id="importMessage" class="hint" role="status" aria-live="polite"></p>
+      <p id="importError" class="error" role="alert" hidden></p>
+      <div id="importSummary" hidden><p id="importFilename" class="file-name"></p><ul id="importWarnings"></ul></div>
+    </section>
+    <section id="pendingImport" class="notice" aria-labelledby="pendingHeading" hidden>
+      <h2 id="pendingHeading" tabindex="-1">Keep your current notes</h2>
+      <p id="pendingFilename" class="file-name"></p>
+      <label for="importedPreview">Extracted document text</label>
+      <textarea id="importedPreview" rows="6" readonly></textarea>
+      <fieldset>
+        <legend>How should this text be added?</legend>
+        <label class="choice"><input id="appendImport" type="radio" name="importMode" value="append" checked><span>Append to my current notes</span></label>
+        <label class="choice"><input id="replaceImport" type="radio" name="importMode" value="replace"><span>Replace my current notes</span></label>
+      </fieldset>
+      <div class="actions"><button id="confirmImport" type="button">Add document text</button><button id="cancelImport" type="button" class="secondary">Cancel import</button></div>
+    </section>
+    <section aria-labelledby="notesHeading">
+      <h2 id="notesHeading" class="notes-heading">Review your source text</h2>
+      <label for="source">Report notes and document text</label>
+      <textarea id="source" rows="12" maxlength="60000" aria-describedby="sourceHelp sourceCount" placeholder="Include the work completed, people involved, dates, costs, decisions needed and next steps."></textarea>
+      <p id="sourceHelp" class="hint">You can edit this text before organizing it. Your report fields remain unchanged.</p>
+      <p id="sourceCount" class="hint count">0 of 60,000 characters</p>
+    </section>
+    <section class="organize-panel" aria-labelledby="organizeHeading">
+      <p class="step">2. Organize and review</p>
+      <h2 id="organizeHeading">Suggest entries for your report</h2>
+      <button id="organize" type="button" disabled>Organize report</button>
+      <p class="hint">Review every suggestion against the source text. Applying suggestions, previewing, signing, and sending remain separate actions.</p>
+    </section>
+    <section id="suggestions" hidden>
+      <p class="step">3. Choose what to apply</p>
+      <h2>Review suggested entries</h2>
+      <div id="warnings"></div>
+      <div id="fields"></div>
+      <button id="apply" type="button" disabled>Apply to report</button>
+    </section>
+  </div>
+</main>
+</body>
+</html>
