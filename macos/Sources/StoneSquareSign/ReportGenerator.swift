@@ -55,6 +55,7 @@ final class ReportBrowserModel: ObservableObject {
     @Published var message = "" { didSet { messageIsWarning = false } }
     @Published var draftSaved = false
     var clientId = UUID().uuidString
+    private(set) var deliveryIntent: String? = UUID().uuidString
     private weak var appModel: AppModel?
     private var assertion = ""
     private var assertionExpiresAt = Date.distantPast
@@ -84,6 +85,7 @@ final class ReportBrowserModel: ObservableObject {
         type = raw["type"] as? String ?? "officer"; fields = raw["fields"] as? [String: String] ?? [:]
         source = raw["source"] as? String ?? ""
         clientId = raw["clientId"] as? String ?? UUID().uuidString
+        deliveryIntent = (raw["deliveryIntent"] as? String).flatMap { UUID(uuidString: $0)?.uuidString }
         loadedDraftUserID = raw["userId"] as? Int
         draftSaved = true
     }
@@ -94,6 +96,7 @@ final class ReportBrowserModel: ObservableObject {
         if belongsToAnotherUser || configuredUserID.map({ $0 != user.id }) == true {
             phone = ""; type = "officer"; fields = [:]; source = ""; reviewed = false; signatureName = ""
             organization = nil; pdf = nil; previewKey = nil; clientId = UUID().uuidString; draftSaved = false
+            deliveryIntent = UUID().uuidString
             loadedDraftUserID = nil
         }
         if assertionUserID != user.id {
@@ -105,7 +108,9 @@ final class ReportBrowserModel: ObservableObject {
         email = user.email
     }
     func payload() -> [String: Any] {
-        ["phone": phone, "type": type, "fields": fields, "reviewed": reviewed, "clientId": clientId]
+        var body: [String: Any] = ["phone": phone, "type": type, "fields": fields, "reviewed": reviewed, "clientId": clientId]
+        if let deliveryIntent { body["deliveryIntent"] = deliveryIntent }
+        return body
     }
     func contentKey() -> Data? {
         var object = payload(); object.removeValue(forKey: "reviewed"); object.removeValue(forKey: "signatureName")
@@ -249,7 +254,7 @@ final class ReportBrowserModel: ObservableObject {
     }
     func startOver() {
         source = ""; fields = [:]; reviewed = false; signatureName = ""; pdf = nil; message = ""; error = nil
-        clientId = UUID().uuidString; changed()
+        clientId = UUID().uuidString; deliveryIntent = UUID().uuidString; changed()
     }
 
     private func portalAssertion() async throws -> String {

@@ -8,6 +8,7 @@ final class ReportFixture: URLProtocol {
     static var archives = 0
     static var portalBodies: [[String: Any]] = []
     static var mailed = true
+    static var rejectLegacyIntent = false
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -52,6 +53,13 @@ final class ReportFixture: URLProtocol {
         }
         let sending = request.url!.query?.contains("copy=1") == true
         if sending { Self.deliveries += 1 }
+        if sending && Self.rejectLegacyIntent && Self.portalBodies.last?["deliveryIntent"] == nil {
+            let response = HTTPURLResponse(url: request.url!, statusCode: 409, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(#"{"error":"This earlier report may already have been sent. Start a new report to send another copy."}"#.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
         let data = sending ? try! JSONSerialization.data(withJSONObject: ["id": "RPT-NATIVE-TEST", "filename": "Native_Report.pdf", "pdf": Self.pdf.base64EncodedString(), "mailed": Self.mailed]) : Self.pdf
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": sending ? "application/json" : "application/pdf"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -200,6 +208,8 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         defer { secureReportApp.serverAddress = savedReportServer }
         secureReportApp.user = User(id: 1, email: "qa@example.org", name: "QA Officer", role: "secretary", hasSignature: true, permissions: ["reports.create"])
         let model = ReportBrowserModel(persistenceURL: scratch.appendingPathComponent("draft.json"), session: session)
+        let originalDeliveryIntent = model.deliveryIntent
+        precondition(originalDeliveryIntent.flatMap(UUID.init(uuidString:)) != nil)
         model.configure(secureReportApp)
         model.schema = ["officers": [["name": "QA Officer", "office": "Secretary"]], "types": ["officer": ["name": "Officer Report", "fields": [["id": "summary", "label": "Summary", "req": true]]]]]
         await model.prepare(send: false)
@@ -210,12 +220,14 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         precondition(model.draftSaved && FileManager.default.fileExists(atPath: model.persistenceURL!.path))
         let restored = ReportBrowserModel(persistenceURL: model.persistenceURL, session: session)
         precondition(restored.fields == model.fields && restored.draftSaved && !restored.reviewed && restored.signatureName.isEmpty)
+        precondition(restored.deliveryIntent == originalDeliveryIntent)
         print("PASS: draft survives reopening without carrying a signature or approval")
         let anotherAccount = AppModel(session: session, savedSessionToken: "synthetic-token")
         anotherAccount.user = User(id: 2, email: "other@example.invalid", name: "Other Officer", role: "officer", hasSignature: true, permissions: ["reports.create"])
         let isolatedDraft = ReportBrowserModel(persistenceURL: model.persistenceURL, session: session)
         isolatedDraft.configure(anotherAccount)
         precondition(isolatedDraft.fields.isEmpty && isolatedDraft.source.isEmpty && isolatedDraft.phone.isEmpty && !isolatedDraft.draftSaved)
+        precondition(isolatedDraft.deliveryIntent != nil && isolatedDraft.deliveryIntent != originalDeliveryIntent)
         print("PASS: a saved local report draft is never shown to a different Dashboard account")
         model.reviewed = true; model.signatureName = "QA Officer"
         await model.prepare(send: true)
@@ -239,6 +251,7 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         for body in ReportFixture.portalBodies {
             precondition(body["name"] == nil && body["email"] == nil && body["office"] == nil && body["isOfficer"] == nil && body["signatureName"] == nil)
             precondition(body["type"] as? String == "officer")
+            precondition(body["deliveryIntent"] as? String == originalDeliveryIntent)
         }
         print("PASS: report preview and final use a short-lived signed handoff without editable officer identity")
         print("PASS: reviewed current report reaches only the isolated delivery fixture")
@@ -246,10 +259,33 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         await model.prepare(send: true)
         precondition(ReportFixture.deliveries == 2 && ReportFixture.archives == 2 && model.messageIsWarning && model.message.contains("delivery failed"))
         ReportFixture.mailed = true
+        precondition(ReportFixture.portalBodies.last?["deliveryIntent"] as? String == originalDeliveryIntent)
         print("PASS: a prepared report with failed email delivery displays a distinct warning state")
         model.startOver()
         precondition(model.fields.isEmpty && model.pdf == nil && !model.reviewed && model.signatureName.isEmpty && model.name == "QA Officer")
+        precondition(model.deliveryIntent != nil && model.deliveryIntent != originalDeliveryIntent)
         print("PASS: new report clears content and signature while retaining contact details")
+        print("PASS: a new report's delivery intent survives save, reopen, content changes and final-send retries, and changes only for a new report or account")
+
+        let legacyURL = scratch.appendingPathComponent("legacy-draft.json")
+        try JSONSerialization.data(withJSONObject: ["userId":1,"clientId":"legacy-report-fixture","fields":["summary":"Retained legacy report notes."],"savedAt":Date().timeIntervalSince1970]).write(to: legacyURL)
+        let legacyReport = ReportBrowserModel(persistenceURL: legacyURL, session: session)
+        legacyReport.configure(secureReportApp); legacyReport.schema = model.schema
+        precondition(legacyReport.deliveryIntent == nil && legacyReport.fields["summary"] == "Retained legacy report notes.")
+        legacyReport.fields["summary"] = "Edited retained legacy notes."; legacyReport.changed()
+        precondition(legacyReport.deliveryIntent == nil && legacyReport.payload()["deliveryIntent"] == nil)
+        let legacySaved = try JSONSerialization.jsonObject(with: Data(contentsOf: legacyURL)) as! [String: Any]
+        precondition(legacySaved["deliveryIntent"] == nil)
+        await legacyReport.prepare(send: false); legacyReport.reviewed = true
+        let archiveCountBeforeLegacy = ReportFixture.archives
+        ReportFixture.rejectLegacyIntent = true
+        await legacyReport.prepare(send: true)
+        ReportFixture.rejectLegacyIntent = false
+        precondition(legacyReport.error?.contains("Start a new report") == true && ReportFixture.archives == archiveCountBeforeLegacy)
+        precondition(legacyReport.fields["summary"] == "Edited retained legacy notes." && legacyReport.deliveryIntent == nil)
+        legacyReport.startOver()
+        precondition(legacyReport.deliveryIntent.flatMap(UUID.init(uuidString:)) != nil)
+        print("PASS: restored legacy reports never acquire new-send intent through editing or retry, and uncertain legacy delivery guidance preserves their notes")
 
         let minutesRecord = try JSONDecoder().decode(MinutesRecord.self, from: Data(#"{"id":"synthetic-minutes","status":"draft","createdBy":"QA Officer","updatedAt":"2026-09-12T18:00:00.000Z","draft":{"meetingType":"Stated Communication","present":[],"excused":[],"visitors":[],"officerAttendance":[],"income":[],"expenses":[],"sections":[{"heading":"Opening","body":"Synthetic saved content."}],"warnings":[],"sensitiveReview":[],"actionItems":[]}}"#.utf8))
         let minutesConfig = URLSessionConfiguration.ephemeral

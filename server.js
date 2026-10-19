@@ -32,6 +32,7 @@ import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treas
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
 import { mountOfficerReportRoutes } from './officer-report-routes.js';
+import { initReportDeliverySchema, mountReportDelivery } from './report-delivery.js';
 import { mountCorrespondenceRoutes } from './correspondence.js';
 import { createDispensationSubmissions, initDispensationSubmissionSchema } from './dispensation-submissions.js';
 import { mountMemberFeatures } from './member-features.js';
@@ -3662,6 +3663,25 @@ mountBuildingCalendar(app,{requireAuth,sendBuildingEmail:sendEmail});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
 mountOfficerReportRoutes(app, { requireAuth, requireOwner });
+mountReportDelivery(app, {
+  secret: TRACKER_SSO_SHARED_SECRET,
+  recipient: OWNER_EMAIL,
+  sendEmail: async ({ to, subject, text, messageId, attachment }) => {
+    if (!transporter) return false;
+    const info = await transporter.sendMail({ from: process.env.MAIL_FROM, to, subject, text, messageId,
+      attachments: [{ filename: attachment.filename, content: attachment.content, contentType: 'application/pdf' }] });
+    const accepted = Array.isArray(info.accepted) && info.accepted.some(address =>
+      String(typeof address === 'object' ? address.address : address).toLowerCase() === to.toLowerCase());
+    if (!accepted) {
+      // A completed SMTP response without acceptance of the fixed recipient is
+      // a confirmed refusal, rather than successful delivery.
+      const error = new Error('The mail service did not accept the report recipient.');
+      error.code = 'EENVELOPE';
+      throw error;
+    }
+    return true;
+  },
+});
 mountCorrespondenceRoutes(app, { requireAuth, broadcast });
 mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: requestBaseUrl, generateToken, hashSecret, generationFor, rateLimit });
 
@@ -3716,6 +3736,7 @@ app.use(async (error, req, res, _next) => {
 validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
+await initReportDeliverySchema();
 await initSignaturePolicySchema();
 await initMinutesSignatureRevisionSchema();
 await initDispensationSubmissionSchema();
