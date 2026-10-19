@@ -740,7 +740,8 @@
           <button id="closeSignatureSetup" class="modal-close" type="button" aria-label="Close">×</button>
           <p class="eyebrow">SIGNATURE PROFILE</p><h2 id="signatureSetupTitle">Create your signature</h2>
           <p id="signatureSetupHelp">Create the signature that will be applied when you approve a Lodge document.</p>
-          <div class="signature-tabs"><button id="chooseDraw" class="signature-tab" type="button">Draw signature</button><button id="chooseType" class="signature-tab active" type="button">Cursive signature</button><button id="chooseInitials" class="signature-tab" type="button">Initials</button></div>
+          <div id="approvedSignatureProfile" class="saved-signature hidden"><span>Approved handwritten signature</span><img id="approvedSignaturePreview" alt="Your approved saved signature" /></div>
+          <div id="signatureMethodTabs" class="signature-tabs"><button id="chooseDraw" class="signature-tab" type="button">Draw signature</button><button id="chooseType" class="signature-tab active" type="button">Cursive signature</button><button id="chooseInitials" class="signature-tab" type="button">Initials</button></div>
           <div id="drawSignaturePanel">
             <div class="signature-area"><canvas id="profileSigCanvas" width="760" height="190"></canvas></div>
             <button id="clearProfileSig" class="secondary" type="button">Clear drawing</button>

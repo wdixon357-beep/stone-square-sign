@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
 import { hasPermission, resolvePermissions } from './access-control.js';
 import { createBuildingAlertCache } from './building-alert-cache.js';
+import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode});
 const DATE=/^\d{4}-\d{2}-\d{2}$/;const TIME=/^(?:[01]\d|2[0-3]):[0-5]\d$/;
 export function validDate(value){return typeof value==='string'&&DATE.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;}
@@ -35,6 +36,7 @@ export function buildingSubmission(input,user) {
  return {org:'Stone Square Lodge No. 22',name:user.name,contact:user.email,phone,purpose,spaces,bathroomAccess,bookings:bookings.sort((a,b)=>a.date.localeCompare(b.date)),clientSubmissionKey:crypto.createHash('sha256').update(String(user.id)+':'+submissionId).digest('hex')};
 }
 export async function initializeBuildingCalendar(){
+ await initSignaturePolicySchema();
  await dbRun(`CREATE TABLE IF NOT EXISTS lodge_calendar_events (id TEXT PRIMARY KEY,event_json TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,created_by INTEGER REFERENCES users(id),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT)`);
  await dbRun(`CREATE TABLE IF NOT EXISTS building_workflow_records (request_id TEXT PRIMARY KEY,organization TEXT NOT NULL,event_date TEXT NOT NULL,agreement_status TEXT,attestation_roles_json TEXT NOT NULL,portal_revision TEXT NOT NULL,updated_at TEXT NOT NULL,filed_revision TEXT,filed_at TEXT,filed_by_user_id INTEGER REFERENCES users(id))`);
 }
@@ -142,13 +144,17 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
  app.post('/api/building/requests/:id/decision',requireAuth,permit('building.decide'),async(req,res,next)=>{try{
   if(req.user.role!=='owner'&&req.user.role!=='warden')throw fail(403,'Building decisions are assigned to the Worshipful Master and Xavier White.');
   const {decision,note,revision,authorization}=req.body||{};if(!['approved','denied'].includes(decision)||typeof revision!=='string'||!revision)throw fail(400,'Review the current request before choosing a decision.');
-  let signatureData=null;
+  const decide=signatureData=>mutatePortal('/api/reservation?dashboard=1&decide='+encodeURIComponent(req.params.id),req,{decision,note:String(note||'').slice(0,3000),revision,authorization,signatureData});
+  let payload;
   if(decision==='approved'){
-   const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=?',[req.user.id]);
-   if(!signature?.signature_bytes)throw fail(409,'Save your signature profile before approving this agreement.');
-   signatureData='data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64');
-  }
-  const payload=await mutatePortal('/api/reservation?dashboard=1&decide='+encodeURIComponent(req.params.id),req,{decision,note:String(note||'').slice(0,3000),revision,authorization,signatureData});
+   payload=await withTransaction(async()=>{
+    await dbGet('SELECT id FROM users WHERE id=? FOR UPDATE',[req.user.id]);
+    const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=? FOR SHARE',[req.user.id]);
+    if(!signature?.signature_bytes)throw fail(409,'Save your signature profile before approving this agreement.');
+    await assertApprovedSignature(req.user,Buffer.from(signature.signature_bytes));
+    return decide('data:image/png;base64,'+Buffer.from(signature.signature_bytes).toString('base64'));
+   });
+  }else payload=await decide(null);
   if(payload.request)await syncRequests([payload.request]);
   await audit(req,'building_request_decided',{id:req.params.id,decision});
   const notificationWarnings=[];

@@ -23,6 +23,7 @@ struct User: Codable, Identifiable, Equatable {
     let name: String
     let role: String
     let hasSignature: Bool
+    var signatureProfileLocked: Bool? = nil
     var treasuryAccess: String? = nil
     var permissions: [String]? = nil
     func can(_ capability: String) -> Bool {
@@ -46,6 +47,7 @@ struct User: Codable, Identifiable, Equatable {
         return defaults.contains(capability)
     }
     var canSign: Bool { can("signature.manage") }
+    var isSignatureProfileLocked: Bool { role == "owner" && signatureProfileLocked == true }
     var canUseTreasury: Bool { can("treasury.view") || can("treasury.prepare") || can("treasury.upload") }
     var canReadMinutes: Bool { can("minutes.view") || can("minutes.prepare") }
     var canReadDues: Bool { can("dues.ledger") }

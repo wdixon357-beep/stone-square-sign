@@ -7,6 +7,7 @@ import { generateTreasuryDraft } from './treasury-ai.js';
 import { readTreasurySources } from './treasury-source.js';
 import { buildTreasuryPdf } from './treasury-pdf.js';
 import { easternDate, treasuryReportingWindow, treasuryWindowForDraft, applyTreasuryMeetingCycle } from './treasury-period.js';
+import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
 const error = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 const bytes = v => v ? Buffer.from(v) : null;
 const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*1024*1024, files:5, fields:6, fieldSize:180000 }, fileFilter:(_req,file,done)=>/\.(pdf|png|jpe?g|txt)$/i.test(file.originalname)?done(null,true):done(error(400,'Choose a PDF, PNG, JPG or TXT file.')) });
@@ -76,6 +77,7 @@ export async function treasuryAccess(user) {
   return canPrepare(user)?'prepare':hasPermission(user,'treasury.upload')?'upload':hasPermission(user,'treasury.view')?'view':null;
 }
 export async function initTreasurySchema() {
+  await initSignaturePolicySchema();
   await dbRun(`CREATE TABLE IF NOT EXISTS treasury_reports (
     id TEXT PRIMARY KEY, draft_json TEXT NOT NULL, source_text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', revision INTEGER NOT NULL DEFAULT 1,
     created_by_user_id INTEGER NOT NULL REFERENCES users(id), preparer_name TEXT NOT NULL, preparer_role TEXT NOT NULL,
@@ -304,9 +306,11 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   app.post('/api/treasury/:id/preparer-attest',requirePrepare,route(async(req,res)=>{
     const initial=await record(req);revision(req,initial);
     if(initial.preparer_user_id!==req.user.id||initial.status!=='draft'||req.treasuryAccess!=='prepare')throw error(403,'Only the preparing officer can attest to an unsigned draft.');
-    const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=?',[req.user.id]);if(!signature?.signature_bytes)throw error(409,'Save your signature profile before attesting.');
     let row;const time=new Date().toISOString();
     await withTransaction(async()=>{
+      await dbGet('SELECT id FROM users WHERE id=? FOR UPDATE',[req.user.id]);
+      const signature=await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id=? FOR SHARE',[req.user.id]);if(!signature?.signature_bytes)throw error(409,'Save your signature profile before attesting.');
+      await assertApprovedSignature(req.user,bytes(signature.signature_bytes));
       await dbGet('SELECT id FROM treasury_period_lock WHERE id=1 FOR UPDATE');
       row=await dbGet('SELECT * FROM treasury_reports WHERE id=? AND deleted_at IS NULL FOR UPDATE',[req.params.id]);
       if(!row)throw error(404,'Treasurer report not found.');revision(req,row);

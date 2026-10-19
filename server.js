@@ -35,6 +35,8 @@ import { mountOfficerReportRoutes } from './officer-report-routes.js';
 import { mountCorrespondenceRoutes } from './correspondence.js';
 import { createDispensationSubmissions, initDispensationSubmissionSchema } from './dispensation-submissions.js';
 import { mountMemberFeatures } from './member-features.js';
+import { initSignaturePolicySchema, signatureProfilePolicyForUser, assertApprovedSignature } from './signature-policy.js';
+import { initMinutesSignatureRevisionSchema, createMinutesSignatureRevisions } from './minutes-signature-revisions.js';
 
 dotenv.config();
 
@@ -283,15 +285,28 @@ const createAuthToken = async (userId, req) => {
 const userForResponse = async (user) => {
   const saved = await dbGet('SELECT 1 FROM profile_signatures WHERE user_id = ?', [user.id]);
   const accessUser = await dbGet('SELECT role,permissions_json,roster_id FROM users WHERE id=?',[user.id]);
+  const signaturePolicy = await signatureProfilePolicyForUser(user);
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     role: user.role,
     hasSignature: Boolean(saved),
+    signatureProfileLocked: signaturePolicy.locked,
     permissions: resolvePermissions(accessUser || user),
     treasuryAccess: await treasuryAccess({ ...user, ...accessUser }),
   };
+};
+
+// Call inside the signing transaction. Policy installation and signature saves
+// take this same account lock before inspecting or changing the saved image.
+const lockSavedSignature = async (user) => {
+  await dbGet('SELECT id FROM users WHERE id = ? FOR UPDATE', [user.id]);
+  const profile = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [user.id]);
+  const signature = asBuffer(profile?.signature_bytes);
+  if (!signature?.length) throw httpError(409, 'Save your signature profile before signing.');
+  await assertApprovedSignature(user, signature);
+  return signature;
 };
 
 /* Role capability sets. These are ALLOWLISTS on purpose.
@@ -1551,6 +1566,7 @@ app.get('/api/profile/signature', requireAuth, requireSignatureProfile, async (r
     if (!bytes?.length) {
       return res.status(404).json({ error: 'No saved signature is available.' });
     }
+    await assertApprovedSignature(req.user, bytes);
     res.setHeader('Cache-Control', 'no-store');
     res.type('image/png').send(bytes);
   } catch (error) {
@@ -1579,20 +1595,29 @@ app.put('/api/profile/signature', requireAuth, requireSignatureProfile, rateLimi
     } catch {
       return res.status(400).json({ error: 'Create a visible signature before saving.' });
     }
-    await dbRun(
+    await withTransaction(async () => {
+      await dbGet('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.user.id]);
+      await assertApprovedSignature(req.user, bytes);
+      if ((await signatureProfilePolicyForUser(req.user)).locked) {
+        const current = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
+        await assertApprovedSignature(req.user, asBuffer(current?.signature_bytes));
+        return;
+      }
+      await dbRun(
       `INSERT INTO profile_signatures (user_id, signature_bytes, signature_type, style_name, updated_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET signature_bytes = excluded.signature_bytes,
        signature_type = excluded.signature_type, style_name = excluded.style_name,
        updated_at = excluded.updated_at`,
       [req.user.id, bytes, signatureType, styleName, nowIso()],
-    );
-    await addAudit({
+      );
+      await addAudit({
       userId: req.user.id,
       action: 'profile_signature_saved',
       ip: req.ip,
       userAgent: req.get('user-agent') || '',
       details: { signatureType, styleName },
+      });
     });
     broadcast('profile_changed', { userId: req.user.id });
     res.json({ message: 'Signature saved.', user: await userForResponse(req.user) });
@@ -2203,18 +2228,20 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     if (reviewIssues.length) return res.status(409).json({ error: reviewIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
+    await assertApprovedSignature(req.user, asBuffer(signature.signature_bytes));
     const time = nowIso();
     const attestedDraftJson = JSON.stringify(draft);
     const attestation = await withTransaction(async () => {
+      const signatureBytes = await lockSavedSignature(req.user);
       const result = await dbRun(
       `UPDATE meeting_minutes SET status = 'awaiting_master_attestation', submitted_for_review_at = ?,
        preparer_attested_at = ?, draft_json = ?, submitted_draft_json = ?, preparer_signature_bytes = ?, master_changes_json = '[]',
        updated_by_user_id = ?, updated_at = ? WHERE id = ? AND status = 'draft' AND updated_at = ?`,
-      [time, time, attestedDraftJson, attestedDraftJson, asBuffer(signature.signature_bytes), req.user.id, time, row.id, row.updated_at],
+      [time, time, attestedDraftJson, attestedDraftJson, signatureBytes, req.user.id, time, row.id, row.updated_at],
     );
       if (result.changes) await dbRun(
         `INSERT INTO meeting_minutes_attestations (id, minutes_id, user_id, phase, draft_json, signature_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [crypto.randomUUID(), row.id, req.user.id, 'preparer', attestedDraftJson, asBuffer(signature.signature_bytes), time],
+        [crypto.randomUUID(), row.id, req.user.id, 'preparer', attestedDraftJson, signatureBytes, time],
       );
       return result;
     });
@@ -2254,18 +2281,20 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     if (reviewIssues.length) return res.status(409).json({ error: `The preparing officer must complete the required attendance review before these minutes can be signed. ${reviewIssues.join(' ')}` });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
+    await assertApprovedSignature(req.user, asBuffer(signature.signature_bytes));
     const time = nowIso();
     const attested = await withTransaction(async () => {
+      const signatureBytes = await lockSavedSignature(req.user);
       const result = await dbRun(
       `UPDATE meeting_minutes SET status = 'ready_for_distribution', master_attested_by_user_id = ?,
        master_attested_at = ?, master_signature_bytes = ?, authorized_by_user_id = ?, authorized_at = ?,
        preparer_review_seen_at = NULL, updated_by_user_id = ?, updated_at = ?
        WHERE id = ? AND status = 'awaiting_master_attestation' AND updated_at = ?`,
-      [req.user.id, time, asBuffer(signature.signature_bytes), req.user.id, time, req.user.id, time, row.id, row.updated_at],
+      [req.user.id, time, signatureBytes, req.user.id, time, req.user.id, time, row.id, row.updated_at],
     );
       if (result.changes) await dbRun(
         `INSERT INTO meeting_minutes_attestations (id, minutes_id, user_id, phase, draft_json, signature_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [crypto.randomUUID(), row.id, req.user.id, 'master', row.draft_json, asBuffer(signature.signature_bytes), time],
+        [crypto.randomUUID(), row.id, req.user.id, 'master', row.draft_json, signatureBytes, time],
       );
       return result;
     });
@@ -2403,16 +2432,30 @@ const minutesArtifactContext = async (row, draft, captured = {}) => {
   };
 };
 
+const minutesSignatureRevisions = createMinutesSignatureRevisions({
+  buildOriginalPdf: async ({ row, masterAttestation, preparerAttestation }) => buildMinutesPdf(
+    await minutesArtifactContext(row, normalizeMinutesDraft(JSON.parse(masterAttestation.draft_json)), {
+      masterName: row.master_attested_by_name,
+      masterSignature: masterAttestation.signature_bytes,
+      preparerSignature: preparerAttestation.signature_bytes,
+    }),
+  ),
+});
+
 const publishedMinutesSnapshot = async (row) => {
-  const master=await dbGet(`SELECT a.draft_json, a.signature_bytes, u.name
+  const master=await dbGet(`SELECT a.id, a.draft_json, a.signature_bytes, u.name
     FROM meeting_minutes_attestations a JOIN users u ON u.id=a.user_id
-    WHERE a.minutes_id=? AND a.phase='master' ORDER BY a.created_at DESC LIMIT 1`,[row.id]);
-  const preparer=await dbGet(`SELECT signature_bytes FROM meeting_minutes_attestations
-    WHERE minutes_id=? AND phase='preparer' ORDER BY created_at DESC LIMIT 1`,[row.id]);
+    WHERE a.minutes_id=? AND a.phase='master' ORDER BY a.created_at DESC, a.id DESC LIMIT 1`,[row.id]);
+  const preparer=await dbGet(`SELECT id, signature_bytes FROM meeting_minutes_attestations
+    WHERE minutes_id=? AND phase='preparer' ORDER BY created_at DESC, id DESC LIMIT 1`,[row.id]);
   if(!master||!preparer)return null;
+  const signatureRevision = await minutesSignatureRevisions.resolve({
+    minutesId: row.id, masterAttestationId: master.id, preparerAttestationId: preparer.id,
+    draftJson: master.draft_json,
+  });
   return {draft:normalizeMinutesDraft(JSON.parse(master.draft_json)),captured:{
-    masterName:master.name,masterSignature:master.signature_bytes,preparerSignature:preparer.signature_bytes,
-  }};
+    masterName:master.name,masterSignature:signatureRevision?.masterSignature || master.signature_bytes,preparerSignature:preparer.signature_bytes,
+  },signatureRevision};
 };
 
 app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next)=>{try{
@@ -2421,12 +2464,13 @@ app.get('/api/minutes/:id/pdf',requireAuth,requireMinutesView,async(req,res,next
   if(!row||(!mayOpenWorking&&!finalMinutes(row)))return res.status(404).json({error:'Finished meeting minutes not found.'});
   let draft=workingMinutesDraft(row);
   let captured={};
+  let signatureRevision=null;
   if(finalMinutes(row)){
     const snapshot=await publishedMinutesSnapshot(row);
     if(!snapshot)return res.status(404).json({error:'Signed meeting minutes are not available.'});
-    ({draft,captured}=snapshot);
+    ({draft,captured,signatureRevision}=snapshot);
   }
-  const bytes=await buildMinutesPdf(await minutesArtifactContext(row,draft,captured));
+  const bytes=signatureRevision?.useRetainedPdf ? signatureRevision.pdfBytes : await buildMinutesPdf(await minutesArtifactContext(row,draft,captured));
   if(finalMinutes(row))await addAudit({userId:req.user.id,action:'minutes_signed_pdf_viewed',ip:req.ip,userAgent:req.get('user-agent')||'',details:{minutesId:row.id}});
   const pdfName = minutesFileName(draft, row.status).replace(/\.docx$/i, '.pdf');
   const disposition = req.query.download === '1' ? 'attachment' : 'inline';
@@ -2440,10 +2484,17 @@ app.post('/api/minutes/:id/preview', requireAuth, requireMinutesAccess,
       if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
       if (!canOpenWorkingMinutes(req.user, row)) return res.status(404).json({ error: 'Meeting minutes not found.' });
       const savedDraft = workingMinutesDraft(row);
-      const draft = (row.status === 'draft' || (row.status === 'awaiting_master_attestation' && req.user.role === 'owner')) && req.body?.draft
+      let draft = (row.status === 'draft' || (row.status === 'awaiting_master_attestation' && req.user.role === 'owner')) && req.body?.draft
         ? workingMinutesDraft(row, req.body.draft) : savedDraft;
+      let captured = {};
+      let signatureRevision = null;
+      if (finalMinutes(row)) {
+        const snapshot = await publishedMinutesSnapshot(row);
+        if (!snapshot) return res.status(404).json({ error: 'Signed meeting minutes are not available.' });
+        ({ draft, captured, signatureRevision } = snapshot);
+      }
       if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
-      const bytes = await buildMinutesPdf(await minutesArtifactContext(row, draft));
+      const bytes = signatureRevision?.useRetainedPdf ? signatureRevision.pdfBytes : await buildMinutesPdf(await minutesArtifactContext(row, draft, captured));
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', 'inline; filename="meeting-minutes-preview.pdf"');
@@ -2466,6 +2517,7 @@ app.get('/api/minutes/:id/docx', requireAuth, requireMinutesAccess, async (req, 
       ({ draft, captured } = snapshot);
     }
     const bytes = await buildMinutesDocx(await minutesArtifactContext(row, draft, captured));
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${minutesFileName(draft, row.status)}"`);
     res.send(bytes);
@@ -2788,6 +2840,7 @@ app.post('/api/dispensations/preview', requireAuth, requireOwner, rateLimit({ ke
     if (!ownerSignature?.length) {
       return res.status(409).json({ error: 'Save your Worshipful Master signature before reviewing the PDF.' });
     }
+    await assertApprovedSignature(req.user, ownerSignature);
     const pdfBytes = await createDispensationPdf({
       fields: { requestDate, eventDate, requestDetails, eventTime, locationName, streetAddress, cityState, worshipfulMasterAddress },
       ownerName: req.user.name,
@@ -2826,6 +2879,7 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
   if (!ownerSignature?.length) {
     throw httpError(409, 'Save your Worshipful Master signature before creating a dispensation.');
   }
+  await assertApprovedSignature(ownerUser, ownerSignature);
   const pdfBytes = await createDispensationPdf({
     fields: {
       requestDate, eventDate, requestDetails, eventTime, locationName, streetAddress,
@@ -2838,33 +2892,47 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
   const createdAt = nowIso();
   const documentTitle = title || `Dispensation - ${requestDetails.slice(0, 90)}`;
   const fileName = `${documentTitle.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100) || 'dispensation'}.pdf`;
-  await dbRun(
-    `INSERT INTO documents
-     (id, title, original_name, stored_name, owner_user_id, owner_email, file_bytes,
-      signed_bytes, status, parsed_preview, created_at, updated_at, template_kind)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'partially_signed', ?, ?, ?, 'dispensation_v1')`,
-    [documentId, documentTitle, fileName, `${documentId}.pdf`, ownerUser.id, ownerUser.email,
-      pdfBytes, pdfBytes, requestDetails, createdAt, createdAt],
-  );
-  await dbRun(
-    `INSERT INTO document_signers
-     (document_id, user_id, signer_role, signer_name, signed_at, signature_bytes, consent_text)
-     VALUES (?, ?, 'worshipful_master', ?, ?, ?, ?)`,
-    [documentId, ownerUser.id, ownerUser.name, createdAt, ownerSignature,
-      'Saved Worshipful Master signature applied when the official template was created.'],
-  );
-  await dbRun('UPDATE documents SET signing_mode = ? WHERE id = ?', ['any', documentId]);
   const signerNames = [];
   const notificationWarnings = [];
-  for (const role of BOTH_SECRETARIES) {
-    const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
-    const officerName = officer?.name
-      || (role === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
-    signerNames.push(officerName);
+  const recipients = await withTransaction(async () => {
+    const currentSignature = await lockSavedSignature(ownerUser);
+    if (!currentSignature.equals(ownerSignature)) throw httpError(409, 'Your saved signature changed. Review the dispensation again before creating it.');
     await dbRun(
-      'INSERT INTO document_signers (document_id, user_id, signer_role, signer_name) VALUES (?, ?, ?, ?)',
-      [documentId, officer?.id || null, role, officerName],
+      `INSERT INTO documents
+       (id, title, original_name, stored_name, owner_user_id, owner_email, file_bytes,
+        signed_bytes, status, parsed_preview, created_at, updated_at, template_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'partially_signed', ?, ?, ?, 'dispensation_v1')`,
+      [documentId, documentTitle, fileName, `${documentId}.pdf`, ownerUser.id, ownerUser.email,
+        pdfBytes, pdfBytes, requestDetails, createdAt, createdAt],
     );
+    await dbRun(
+      `INSERT INTO document_signers
+       (document_id, user_id, signer_role, signer_name, signed_at, signature_bytes, consent_text)
+       VALUES (?, ?, 'worshipful_master', ?, ?, ?, ?)`,
+      [documentId, ownerUser.id, ownerUser.name, createdAt, ownerSignature,
+        'Saved Worshipful Master signature applied when the official template was created.'],
+    );
+    await dbRun('UPDATE documents SET signing_mode = ? WHERE id = ?', ['any', documentId]);
+    const assigned = [];
+    for (const role of BOTH_SECRETARIES) {
+      const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
+      const officerName = officer?.name
+        || (role === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
+      signerNames.push(officerName);
+      await dbRun(
+        'INSERT INTO document_signers (document_id, user_id, signer_role, signer_name) VALUES (?, ?, ?, ?)',
+        [documentId, officer?.id || null, role, officerName],
+      );
+      assigned.push({ officer, officerName });
+    }
+    await addAudit({
+      userId: ownerUser.id, documentId, action: auditAction || 'dispensation_created_from_template', ip, userAgent,
+      details: { signerRoles: BOTH_SECRETARIES, signingMode: 'any', signerNames,
+        requestDate, eventDate, template: 'official-grand-lodge' },
+    });
+    return assigned;
+  });
+  for (const { officer, officerName } of recipients) {
     if (officer?.email && !officer.email.endsWith('.local')) {
       try {
         const sent = await sendEmail({
@@ -2879,17 +2947,6 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
       }
     } else notificationWarnings.push(`The dispensation is saved, but ${officerName} does not have a deliverable account email for the signature notice.`);
   }
-  await addAudit({
-    userId: ownerUser.id,
-    documentId,
-    action: auditAction || 'dispensation_created_from_template',
-    ip,
-    userAgent,
-    details: {
-      signerRoles: BOTH_SECRETARIES, signingMode: 'any', signerNames,
-      requestDate, eventDate, template: 'official-grand-lodge',
-    },
-  });
   broadcast('queue_changed', { reason: 'dispensation_created', documentId });
   return { documentId, documentTitle, notificationWarnings };
 };
@@ -3214,12 +3271,8 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
     if (req.body?.consent !== true) {
       return res.status(400).json({ error: 'Confirm the electronic signature consent before signing.' });
     }
-    const savedSignature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
-    const signatureBytes = asBuffer(savedSignature?.signature_bytes);
-    if (!signatureBytes?.length) {
-      return res.status(409).json({ error: 'Create your saved signature before signing a document.' });
-    }
     const outcome = await withTransaction(async () => {
+      const signatureBytes = await lockSavedSignature(req.user);
       const document = await dbGet('SELECT * FROM documents WHERE id = ? FOR UPDATE', [req.params.id]);
       if (!document) throw httpError(404, 'Document not found.');
       if (document.status === 'rescinded') {
@@ -3663,6 +3716,8 @@ app.use(async (error, req, res, _next) => {
 validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
+await initSignaturePolicySchema();
+await initMinutesSignatureRevisionSchema();
 await initDispensationSubmissionSchema();
 await ensureBrotherSelfServiceAccess();
 await grantTreasuryDuesAccessOnce();

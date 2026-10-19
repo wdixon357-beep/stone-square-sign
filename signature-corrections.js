@@ -146,7 +146,7 @@ const objectDigest = object => sha256(Buffer.from(object.toString(), 'latin1'));
  * document, authorize delivery, update an attestation, or write any file/record.
  * Only ordinary pdf-lib RGB PNG stamps are accepted; ambiguity always fails.
  */
-export async function replaceSignatureImage({ pdfBytes, oldSignaturePng, replacementSignaturePng }) {
+export async function replaceSignatureImage({ pdfBytes, oldSignaturePng, replacementSignaturePng, alignInkBottom = false }) {
   const original = Buffer.from(pdfBytes || []);
   if (!original.length || original.length > 30_000_000) fail('INVALID_SIGNATURE_PDF', 'The signed PDF must be non-empty and at most 30 MB.');
   const old = pngPixels(oldSignaturePng, 'The existing signature snapshot');
@@ -199,10 +199,23 @@ export async function replaceSignatureImage({ pdfBytes, oldSignaturePng, replace
   const embedded = await pdf.embedPng(replacement.bytes); await embedded.embed();
   const scale = Math.min(old.width / replacement.width, old.height / replacement.height);
   const width = replacement.width * scale / old.width, height = replacement.height * scale / old.height;
-  const x = (1 - width) / 2, y = (1 - height) / 2;
+  const inkBottom = image => {
+    for (let row = image.height - 1; row >= 0; row--) for (let col = 0; col < image.width; col++) {
+      const p = (row * image.width + col) * 4;
+      if (image.rgba[p + 3] > 20 && Math.min(image.rgba[p], image.rgba[p + 1], image.rgba[p + 2]) < 230) {
+        return (image.height - 1 - row) / image.height;
+      }
+    }
+    fail('INVALID_SIGNATURE_PNG', 'A visible signature is required for signature-line alignment.');
+  };
+  const x = (1 - width) / 2;
+  // Minutes position the original visible ink just above the signature line.
+  // Translate only this image form to retain that ink edge with different padding.
+  const y = alignInkBottom === true ? inkBottom(old) - inkBottom(replacement) * height : (1 - height) / 2;
+  const box = alignInkBottom === true ? [0, Math.min(0, y), 1, Math.max(1, y + height)] : [0, 0, 1, 1];
   const number = value => Number(value.toFixed(10)).toString();
   const form = pdf.context.flateStream(Buffer.from(`q\n${number(width)} 0 0 ${number(height)} ${number(x)} ${number(y)} cm\n/WMReplacement Do\nQ\n`), {
-    Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: [0, 0, 1, 1],
+    Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: box,
     Resources: { XObject: { WMReplacement: embedded.ref } },
   });
   pdf.context.assign(target, form);
@@ -218,5 +231,5 @@ export async function replaceSignatureImage({ pdfBytes, oldSignaturePng, replace
     replacementCount: 1, imageReference: target.toString(), pageNumber: uses[0].pageNumber,
     oldImageSize: { width: old.width, height: old.height },
     replacementImageSize: { width: replacement.width, height: replacement.height },
-    placement: { x, y, width, height, mode: 'contain' } };
+    placement: { x, y, width, height, mode: alignInkBottom === true ? 'align-ink-bottom' : 'contain' } };
 }

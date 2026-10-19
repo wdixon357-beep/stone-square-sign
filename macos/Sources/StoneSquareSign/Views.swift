@@ -199,7 +199,7 @@ struct RootView: View {
             await model.restoreSession()
         }
         .onChange(of: model.user) { _, user in
-            showRequiredSignature = user?.hasSignature == false && user?.canSign == true
+            showRequiredSignature = user?.hasSignature == false && user?.canSign == true && user?.isSignatureProfileLocked != true
             checkPendingSignatureNotice()
         }
         .onChange(of: model.documents.filter { $0.needsSignature && !$0.isTerminal }.count) { _, _ in
@@ -3284,15 +3284,26 @@ struct SignatureProfileView: View {
             .frame(maxWidth: 680, minHeight: 210)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
             .overlay { RoundedRectangle(cornerRadius: 8).stroke(.separator.opacity(0.5)) }
-            Button(model.user?.hasSignature == true ? "Change signature" : "Create signature") {
-                showEditor = true
+            if model.user?.isSignatureProfileLocked == true {
+                Label("Approved signature protected", systemImage: "lock.shield")
+                    .font(.headline)
+                Text("Your approved blue handwritten signature is saved and will be used when you review and sign a document. It cannot be replaced here.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Button(model.user?.hasSignature == true ? "Change signature" : "Create signature") {
+                    showEditor = true
+                }
+                .buttonStyle(.borderedProminent).tint(.accentColor)
             }
-            .buttonStyle(.borderedProminent).tint(.accentColor)
             Spacer()
         }
         .padding(22)
         .background(Color(nsColor: .windowBackgroundColor))
         .task { image = try? await model.signatureImage() }
+        .onChange(of: model.user?.isSignatureProfileLocked) { _, locked in
+            if locked == true { showEditor = false }
+        }
         .sheet(isPresented: $showEditor, onDismiss: {
             Task { image = try? await model.signatureImage() }
         }) { SignatureSetupView(required: false) }
@@ -3591,6 +3602,19 @@ struct SignatureSetupView: View {
     @State private var currentPath: [CGPoint] = []
 
     var body: some View {
+        Group {
+            if model.user?.isSignatureProfileLocked == true {
+                VStack(alignment: .trailing, spacing: 12) {
+                    SignatureProfileView()
+                    Button("Close") { dismiss() }.padding([.horizontal, .bottom], 22)
+                }
+            } else {
+                signatureEditor
+            }
+        }
+    }
+
+    private var signatureEditor: some View {
         VStack(alignment: .leading, spacing: 17) {
             Text("SIGNATURE PROFILE")
                 .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(SignTheme.gold)

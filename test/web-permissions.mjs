@@ -66,3 +66,63 @@ workspace.user=()=>({role:'assistant_treasurer',permissions:['treasury.prepare']
 workspace.user=()=>({role:'officer',permissions:['treasury.view']});workspace.api=async(path)=>{apiCalls.push(path);return{arrayBuffer:async()=>new ArrayBuffer(0)}};await workspace.openArchive({id:'old-1',title:'Treasurer Report, January 1, 2024'});assert.match(workspace.root.innerHTML,/All reports/);assert.doesNotMatch(workspace.root.innerHTML,/target="_blank"/);let returned=false;workspace.list=async()=>{returned=true};workspace.dirty=false;workspace.busy=false;await workspace.run('back',{disabled:false,isConnected:false});assert.equal(returned,true);
 workspace.user=()=>({role:'assistant_treasurer',permissions:['treasury.prepare']});workspace.open=record=>{workspace.record=record};workspace.api=async(path,init)=>{apiCalls.push(path);assert.equal(init.method,'POST');return{report:{id:'blank'}}};await workspace.run('new-draft',{disabled:false,isConnected:false});assert.equal(workspace.record.id,'blank');assert.equal(apiCalls.at(-1),'/api/treasury/drafts');
 console.log('PASS: per-person access, finalized treasury transaction ledger and PDF view, preparation does not imply upload.');
+
+// Exercise the actual profile controller with isolated account states. These
+// fixtures never load signature bytes or make requests to the live service.
+const appSource=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
+const signatureElements=new Map(),signatureCalls=[];
+const signatureElement=id=>{
+  if(!signatureElements.has(id)){
+    const classes=new Set();
+    signatureElements.set(id,{value:'',textContent:'',events:{},classList:{
+      contains:value=>classes.has(value),add:value=>classes.add(value),remove:value=>classes.delete(value),
+      toggle(value,active){if(active)classes.add(value);else classes.delete(value);}
+    },removeAttribute(name){delete this[name];},addEventListener(name,handler){this.events[name]=handler;}});
+  }
+  return signatureElements.get(id);
+};
+const signatureContext={state:{user:null,signatureRequired:false,signatureMode:'drawn'},$:signatureElement,
+  show:element=>element.classList.remove('hidden'),hide:element=>element.classList.add('hidden'),
+  setMessage:(element,message)=>{element.textContent=message;},
+  loadSavedSignature:async element=>{signatureCalls.push('load-saved-profile');element.src='blob:synthetic-approved-signature';},
+  signatureInitialsFromName:()=> 'QA',renderTypedChoices:()=>signatureCalls.push('typed-choices'),renderInitialsChoices:()=>{},
+  configureProfileCanvas:()=>signatureCalls.push('configure-canvas'),clearProfileCanvas:()=>{},
+  apiFetch:async()=>{signatureCalls.push('signature-write');return{user:signatureContext.state.user};},
+  typedSignatureStyles:[{label:'Fixture style'}],profileCanvas:{toDataURL:()=> 'data:image/png;base64,SYNTHETIC'},
+  drawTypedSignature:()=>{},window:{document:{createElement:()=>({toDataURL:()=> 'data:image/png;base64,SYNTHETIC'})}},
+  docMessage:signatureElement('documentMessage')};
+vm.createContext(signatureContext);
+vm.runInContext(appSource.slice(appSource.indexOf('const can = '),appSource.indexOf('const DUES_MANAGEMENT_ROLES'))+
+  appSource.slice(appSource.indexOf('const selectSignatureMode = '),appSource.indexOf("$('profileButton').addEventListener"))+
+  appSource.slice(appSource.indexOf("$('saveProfileSignature').addEventListener"),appSource.indexOf('const loadSavedSignature = '))+
+  '\nglobalThis.openProfile = openSignatureSetup;',signatureContext);
+const hidden=id=>signatureElement(id).classList.contains('hidden');
+signatureContext.state.user={id:1,role:'owner',name:'QA Owner',hasSignature:true,signatureProfileLocked:true};
+signatureElement('signatureSetupModal').classList.add('hidden');
+await signatureContext.openProfile(true);
+assert.equal(signatureContext.state.signatureRequired,false,'a pinned profile never opens forced signature setup');
+assert.equal(hidden('signatureSetupModal'),true,'a delayed required-setup request cannot prompt the pinned owner');
+assert.deepEqual(signatureCalls,[],'a suppressed setup prompt performs no signature loading or drawing');
+await signatureContext.openProfile(false);
+assert.equal(hidden('closeSignatureSetup'),false,'the approved profile can always be closed');
+for(const id of ['signatureMethodTabs','saveProfileSignature','drawSignaturePanel','typeSignaturePanel','initialsSignaturePanel'])assert.equal(hidden(id),true,`pinned profile hides ${id}`);
+assert.equal(hidden('approvedSignatureProfile'),false);
+assert.equal(signatureElement('approvedSignaturePreview').src,'blob:synthetic-approved-signature');
+assert.match(signatureElement('signatureSetupHelp').textContent,/approved blue handwritten signature/);
+assert.deepEqual(signatureCalls,['load-saved-profile'],'viewing a pinned signature only loads the existing saved profile');
+await signatureElement('saveProfileSignature').events.click();
+assert.equal(signatureCalls.includes('signature-write'),false,'a stale or manually invoked save control cannot replace the pinned signature');
+signatureCalls.length=0;
+signatureContext.state.user={id:2,role:'secretary',name:'QA Secretary',hasSignature:true,signatureProfileLocked:true,permissions:['signature.manage']};
+await signatureContext.openProfile(false);
+assert.equal(hidden('signatureMethodTabs'),false,'other officers retain their signature methods');
+assert.equal(hidden('saveProfileSignature'),false);
+assert.equal(hidden('typeSignaturePanel'),false);
+assert.equal(hidden('approvedSignatureProfile'),true,'a prior owner preview is hidden for another account');
+signatureElement('typedSignatureName').value='QA Secretary';
+await signatureElement('saveProfileSignature').events.click();
+assert.equal(signatureCalls.includes('signature-write'),true,'normal officer signature editing still saves');
+signatureContext.state.user={id:3,role:'owner',name:'Legacy QA Owner',hasSignature:true};
+await signatureContext.openProfile(false);
+assert.equal(hidden('saveProfileSignature'),false,'an absent optional lock flag remains backward compatible');
+console.log('PASS: protected owner signature profile stays read-only, forced setup is suppressed, and other officers retain signature editing.');

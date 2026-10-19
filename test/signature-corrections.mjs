@@ -112,4 +112,24 @@ await assert.rejects(fix(result.pdfBytes), expectCode('SIGNATURE_IMAGE_NOT_FOUND
 const opaque = await make({ opaque: true });
 assert.equal((await fix(opaque.bytes, opaque.source)).replacementCount, 1, 'Opaque PNG stamps are also supported.');
 assert.equal((await fix((await make({ nested: true })).bytes)).replacementCount, 1, 'A signature inside a drawn form remains correctable.');
+// Different transparent margins must not move visible handwriting below an
+// existing minutes signature line. Verify the PDF form, not a source pattern.
+const band = (first, last) => {
+  const rgba = new Uint8Array(80 * 20 * 4);
+  for (let row = first; row <= last; row++) for (let col = 5; col < 75; col++) rgba.set([0, 60, 220, 255], (row * 80 + col) * 4);
+  return Buffer.from(UPNG.encode([rgba.buffer], 80, 20, 0));
+};
+const padded = band(3, 10), fuller = band(2, 18);
+const lineDoc = await PDFDocument.create(), linePage = lineDoc.addPage();
+linePage.drawImage(await lineDoc.embedPng(padded), { x: 40, y: 200, width: 160, height: 40 });
+linePage.drawText('Keep the name and line unchanged.', { x: 40, y: 180, size: 10 });
+linePage.drawLine({ start: { x: 35, y: 217 }, end: { x: 220, y: 217 } });
+const lineBefore = Buffer.from(await lineDoc.save());
+const aligned = await replaceSignatureImage({ pdfBytes: lineBefore, oldSignaturePng: padded, replacementSignaturePng: fuller, alignInkBottom: true });
+assert.equal(aligned.placement.mode, 'align-ink-bottom');
+assert.ok(Math.abs(aligned.placement.y + 1 / 20 - 9 / 20) < 1e-9, 'Visible ink retains its original bottom edge.');
+const lineOriginal = await snapshot(lineBefore), lineAfter = await snapshot(aligned.pdfBytes);
+for (const [ref, digest] of lineOriginal.objects) if (ref !== aligned.imageReference) assert.equal(lineAfter.objects.get(ref), digest);
+const alignedForm = lineAfter.doc.context.enumerateIndirectObjects().find(([ref]) => ref.toString() === aligned.imageReference)[1];
+assert.ok(alignedForm.dict.lookup(n('BBox')).asArray()[3].asNumber() >= aligned.placement.y + aligned.placement.height, 'The form does not clip the repositioned handwriting.');
 console.log('Signature correction checks passed: exact RGB/alpha identity, aspect-fit image replacement, unchanged pages/text/other signatures/seal/widgets, and fail-closed ambiguity/digital-signature guards.');

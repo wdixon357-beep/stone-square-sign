@@ -1292,6 +1292,11 @@ final class AppModel: ObservableObject {
     }
 
     func saveSignature(dataURL: String, type: String, style: String) async -> Bool {
+        guard user?.isSignatureProfileLocked != true else {
+            message = "Your approved handwritten signature is protected and cannot be replaced here."
+            isError = true
+            return false
+        }
         var success = false
         await perform {
             let body = try JSONSerialization.data(withJSONObject: [

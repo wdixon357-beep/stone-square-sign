@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { dbGet, dbAll, dbRun, withTransaction } from './db.js';
 import { replaceSignatureImage } from './signature-corrections.js';
+import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const bytes = value => Buffer.from(value || []);
@@ -11,6 +12,7 @@ const DELIVERY_NOTE = 'Prior delivery history applies to the previous PDF bytes.
 
 // Initialization is explicit. Importing this module never connects to or changes a database.
 export async function initOwnerSignatureRevisionSchema() {
+  await initSignaturePolicySchema();
   await dbRun(`CREATE TABLE IF NOT EXISTS owner_signature_revisions (
     id TEXT PRIMARY KEY,
     document_id TEXT NOT NULL REFERENCES documents(id),
@@ -99,6 +101,7 @@ export function createOwnerSignatureRevisions({ replaceSignature = replaceSignat
     const replacement = bytes(replacementSignaturePng);
     if (!replacement.length || replacement.length > 8_000_000) throw failure(400, 'REPLACEMENT_SIGNATURE_REQUIRED', 'Provide the verified replacement signature PNG.');
     const replacementHash = hash(replacement);
+    await assertApprovedSignature({ id: ownerUserId }, replacement);
     const initial = await snapshot(ownerUserId, documentId);
     const prior = await replay(initial, replacementHash, expectedPdfSha256, expectedSignatureSha256);
     if (prior) return prior;
@@ -117,6 +120,7 @@ export function createOwnerSignatureRevisions({ replaceSignature = replaceSignat
 
     return withTransaction(async () => {
       const current = await snapshot(ownerUserId, documentId, true);
+      await assertApprovedSignature({ id: ownerUserId }, replacement);
       const repeated = await replay(current, replacementHash, expectedPdfSha256, expectedSignatureSha256);
       if (repeated) return repeated;
       if (current.pdfSha256 !== initial.pdfSha256 || current.signatureSha256 !== initial.signatureSha256 ||

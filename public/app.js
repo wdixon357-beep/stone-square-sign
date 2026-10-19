@@ -544,6 +544,8 @@ const easternGreeting = () => {
 /* Who is ever asked for a saved signature. An allowlist, so a new role is never trapped
  * behind the forced signature modal that has no dismiss control. */
 const can = (permission, user = state.user) => user?.role === 'owner' || Boolean(user?.permissions?.includes(permission));
+const signatureProfileLocked = (user = state.user) => user?.role === 'owner' && user?.signatureProfileLocked === true;
+const approvedSignatureExplanation = 'Your approved blue handwritten signature is saved and will be used when you review and sign a document. It cannot be replaced here.';
 const DUES_MANAGEMENT_ROLES = new Set(['owner', 'secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer']);
 const canManageDues = (user = state.user) => DUES_MANAGEMENT_ROLES.has(user?.role) && can('dues.manage', user);
 
@@ -561,6 +563,8 @@ const applyWorkspacePermissions = user => {
   $('settingsNav').classList.toggle('hidden', !can('settings.manage', user));
   $('settingsName').textContent = user.name; $('settingsEmail').textContent = user.email;
   $('settingsSignature').classList.toggle('hidden', !can('signature.manage', user));
+  $('settingsSignature').textContent = signatureProfileLocked(user) ? 'View my saved signature' : 'Manage my signature';
+  $('changeSignatureFromSign').classList.toggle('hidden', signatureProfileLocked(user));
   $('candidateMenuDescription').textContent = can('candidates.edit', user) ? 'View and update candidate records' : 'View candidate records';
   $('profileButton').classList.toggle('hidden',!can('signature.manage', user));
   $('whoami').textContent = user.name;
@@ -662,7 +666,7 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   startRealtime();
   /* Only roles that actually sign are asked for a signature. This modal has no close button
    * when forced, so a role that can never sign would be trapped behind it with no way out. */
-  if (!user.hasSignature && can('signature.manage', user)) window.setTimeout(() => openSignatureSetup(true), 150);
+  if (!user.hasSignature && can('signature.manage', user) && !signatureProfileLocked(user)) window.setTimeout(() => openSignatureSetup(true), 150);
 };
 
 // Refresh access without rebuilding forms, clearing drafts, or restarting the workspace.
@@ -675,8 +679,8 @@ const refreshSessionPermissions = async () => {
   try {
     const { user } = await apiFetch('/api/auth/me');
     if (!state.user || !user || state.authEpoch !== authEpoch || user.id !== userId || user.id !== state.user.id) return;
-    const before = JSON.stringify([state.user.role, [...(state.user.permissions || [])].sort()]);
-    const after = JSON.stringify([user.role, [...(user.permissions || [])].sort()]);
+    const before = JSON.stringify([state.user.role, [...(state.user.permissions || [])].sort(), signatureProfileLocked(state.user), state.user.hasSignature]);
+    const after = JSON.stringify([user.role, [...(user.permissions || [])].sort(), signatureProfileLocked(user), user.hasSignature]);
     state.user = user;
     legacyReportBridge.request();
     if (before === after) return;
@@ -689,6 +693,7 @@ const refreshSessionPermissions = async () => {
     if (!can('documents.sign')) hide($('signModal'));
     if (!can('minutes.prepare')) hide($('minutesEditorModal'));
     if (!can('signature.manage')) hide($('signatureSetupModal'));
+    else if (signatureProfileLocked(user) && !$('signatureSetupModal').classList.contains('hidden')) void openSignatureSetup(false);
     $('permissionRefreshNotice').textContent = 'Your access has been updated. Entries on this page have been kept.';
     show($('permissionRefreshNotice'));
   } catch(error) {
@@ -3668,6 +3673,7 @@ const renderInitialsChoices = () => {
 };
 
 const selectSignatureMode = (mode) => {
+  if (signatureProfileLocked()) return;
   state.signatureMode = mode;
   $('chooseDraw').classList.toggle('active', mode === 'drawn');
   $('chooseType').classList.toggle('active', mode === 'typed');
@@ -3679,9 +3685,26 @@ const selectSignatureMode = (mode) => {
   if (mode === 'initials') renderInitialsChoices();
 };
 
-const openSignatureSetup = (required = false) => {
-  state.signatureRequired = required;
-  $('closeSignatureSetup').classList.toggle('hidden', required);
+const openSignatureSetup = async (required = false) => {
+  if (!can('signature.manage')) return;
+  const locked = signatureProfileLocked();
+  if (required && locked) { state.signatureRequired = false; return; }
+  state.signatureRequired = required && !locked;
+  $('closeSignatureSetup').classList.toggle('hidden', state.signatureRequired);
+  $('signatureMethodTabs').classList.toggle('hidden', locked);
+  $('saveProfileSignature').classList.toggle('hidden', locked);
+  $('approvedSignatureProfile').classList.toggle('hidden', !locked);
+  setMessage($('profileSignatureMessage'), '');
+  if (locked) {
+    $('signatureSetupTitle').textContent = 'Your approved signature';
+    $('signatureSetupHelp').textContent = approvedSignatureExplanation;
+    ['drawSignaturePanel', 'typeSignaturePanel', 'initialsSignaturePanel'].forEach(id => hide($(id)));
+    $('approvedSignaturePreview').removeAttribute('src');
+    show($('signatureSetupModal'));
+    try { await loadSavedSignature($('approvedSignaturePreview')); }
+    catch (error) { setMessage($('profileSignatureMessage'), error.message, true); }
+    return;
+  }
   $('signatureSetupTitle').textContent = required ? 'Create your signature to continue' : 'Change your saved signature';
   $('signatureSetupHelp').textContent = required
     ? 'Choose how your signature should appear when you sign a report or an assigned document.'
@@ -3711,6 +3734,7 @@ $('closeSignatureSetup').addEventListener('click', () => {
 });
 
 $('saveProfileSignature').addEventListener('click', async () => {
+  if (signatureProfileLocked()) return setMessage($('profileSignatureMessage'), approvedSignatureExplanation, true);
   let signatureData;
   let styleName = 'drawn';
   if (state.signatureMode === 'drawn') {
@@ -3759,6 +3783,7 @@ const loadSavedSignature = async (imageElement) => {
 };
 
 const openSignerModal = async (documentId, title) => {
+  if (!state.user?.hasSignature && signatureProfileLocked()) return setMessage(docMessage, 'Your approved signature could not be loaded. Reload the dashboard before signing.', true);
   if (!state.user?.hasSignature) return openSignatureSetup(true);
   state.signingDocumentId = documentId;
   $('signTitle').textContent = `Sign ${title || 'document'}`;
@@ -3815,6 +3840,7 @@ const closeSignerModal = () => {
 
 $('closeSign').addEventListener('click', closeSignerModal);
 $('changeSignatureFromSign').addEventListener('click', () => {
+  if (signatureProfileLocked()) return;
   closeSignerModal();
   openSignatureSetup(false);
 });

@@ -4,9 +4,11 @@ final class SessionFixture: URLProtocol {
     static var status = 503
     static var offline = false
     static var payload = "{\"error\":\"fixture response\"}"
+    static var signatureWrites = 0
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if request.url?.path == "/api/profile/signature" && request.httpMethod == "PUT" { Self.signatureWrites += 1 }
         if Self.offline {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
             return
@@ -71,6 +73,21 @@ final class SessionFixture: URLProtocol {
         let legacy = try JSONDecoder().decode(MeResponse.self, from: Data(#"{"user":{"id":9999,"email":"session-qa@example.org","name":"QA Member","role":"member","hasSignature":false}}"#.utf8))
         precondition(legacy.session == nil)
         print("PASS: Mac remains compatible with services that do not yet return session details")
+        let lockedOwner = try JSONDecoder().decode(User.self, from: Data(#"{"id":9999,"email":"session-qa@example.org","name":"QA Owner","role":"owner","hasSignature":true,"signatureProfileLocked":true}"#.utf8))
+        precondition(lockedOwner.isSignatureProfileLocked && legacy.user.signatureProfileLocked == nil && !legacy.user.isSignatureProfileLocked)
+        model.user = lockedOwner
+        let priorSignatureWrites = SessionFixture.signatureWrites
+        let replacedOwnerSignature = await model.saveSignature(dataURL: "data:image/png;base64,SYNTHETIC", type: "typed", style: "fixture")
+        precondition(!replacedOwnerSignature && SessionFixture.signatureWrites == priorSignatureWrites && model.user == lockedOwner)
+        precondition(model.message.contains("protected"))
+        print("PASS: a pinned owner signature is not replaceable from the native model and no replacement request leaves the client")
+        let editableSecretary = try JSONDecoder().decode(User.self, from: Data(#"{"id":9998,"email":"secretary-qa@example.org","name":"QA Secretary","role":"secretary","hasSignature":true,"signatureProfileLocked":true}"#.utf8))
+        precondition(!editableSecretary.isSignatureProfileLocked)
+        model.user = editableSecretary
+        SessionFixture.payload = #"{"message":"Fixture signature saved","user":{"id":9998,"email":"secretary-qa@example.org","name":"QA Secretary","role":"secretary","hasSignature":true}}"#
+        let savedSecretarySignature = await model.saveSignature(dataURL: "data:image/png;base64,SYNTHETIC", type: "typed", style: "fixture")
+        precondition(savedSecretarySignature && SessionFixture.signatureWrites == priorSignatureWrites + 1)
+        print("PASS: other officers retain normal signature editing and legacy user responses still decode")
         session.invalidateAndCancel()
     }
 }
