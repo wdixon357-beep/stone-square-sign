@@ -183,7 +183,7 @@ struct FinalReportBrowserView: View {
         .task(id: kind) { transport.configure(model); await refresh(); if let initialSelection { selectedID = "current:\(initialSelection)" } }
         .onChange(of: model.minutesRecordsRevision) { _, _ in if kind == .minutes { Task { await refresh() } } }
         .onChange(of: model.treasuryRecordsRevision) { _, _ in if kind == .treasury { Task { await refresh() } } }
-        .onChange(of: selectedID) { _, id in pdf = nil; if let id { browserPane = 1; Task { await open(id) } } }
+        .onChange(of: selectedID) { _, id in pdf = nil; browserPane = id == nil ? 0 : 1; if let id { Task { await open(id) } } }
     }
     @ViewBuilder private var reportActions: some View {
         Button("Refresh") { Task { await refresh() } }.disabled(loading)
