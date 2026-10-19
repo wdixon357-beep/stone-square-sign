@@ -17,6 +17,29 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+const observedPools = new WeakSet();
+// pg has discarded an idle client before emitting this pool event. Observe it
+// without inspecting/logging its error or client, or retrying any work.
+export function observePostgresPoolErrors(pool, {
+  warn = message => console.warn(message),
+  now = () => performance.now(),
+} = {}) {
+  if (observedPools.has(pool)) return pool;
+  observedPools.add(pool);
+  let lastLoggedAt = null;
+  pool.on('error', () => {
+    try {
+      const time = now();
+      if (!Number.isFinite(time) || (lastLoggedAt !== null && time - lastLoggedAt < 60_000)) return;
+      lastLoggedAt = time;
+      warn('An idle database connection ended. New requests can open another pooled connection.');
+    } catch {
+      // A diagnostics failure must not turn a handled idle event into a crash.
+    }
+  });
+  return pool;
+}
+
 const usePglite = !process.env.DATABASE_URL;
 
 let query;          // (sql, params) -> { rows, rowCount }
@@ -106,22 +129,40 @@ export const connect = async () => {
     max: Number(process.env.PG_POOL_MAX || 5),
     idleTimeoutMillis: 30_000,
   });
+  observePostgresPoolErrors(pool);
   query = (sql, params) => pool.query(sql, params);
   beginTransaction = async (callback) => {
     const client = await pool.connect();
+    let connectionError = null;
+    let discardError = null;
+    const onConnectionError = error => { connectionError ||= error || new Error('The transaction connection ended.'); };
+    client.on('error', onConnectionError);
+    const checkedQuery = async (sql, params) => {
+      if (connectionError) throw connectionError;
+      try {
+        const result = await client.query(sql, params);
+        if (connectionError) throw connectionError;
+        return result;
+      } catch (error) { throw connectionError || error; }
+    };
     try {
-      await client.query('BEGIN');
+      await checkedQuery('BEGIN');
       const result = await transactionQuery.run(
-        (sql, params) => client.query(sql, params),
+        checkedQuery,
         callback,
       );
-      await client.query('COMMIT');
+      await checkedQuery('COMMIT');
+      if (connectionError) throw connectionError;
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      // A rollback on a lost connection can fail too. Keep the original failure
+      // and discard an unusable client; neither case authorizes retrying work.
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { discardError = rollbackError; }
       throw error;
     } finally {
-      client.release();
+      client.removeListener('error', onConnectionError);
+      client.release(connectionError || discardError || undefined);
     }
   };
   closeDriver = () => pool.end();
