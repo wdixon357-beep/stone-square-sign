@@ -792,7 +792,11 @@ const legacyReportBridge = (() => {
       || typeof text !== 'string' || text.length > 20000)
       || entries.reduce((length, [key, text]) => length + key.length + text.length, 0) > 120000
       || !entries.some(([, text]) => text.trim())) return null;
-    return { type: value.type, fields: Object.fromEntries(entries), phone: value.phone || '' };
+    return { type: value.type, fields: Object.fromEntries(entries), phone: value.phone || '',
+      ...(/^[a-z0-9-]{8,64}$/i.test(String(value.clientId || '')) ? { clientId: value.clientId } : {}),
+      ...(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value.deliveryIntent || ''))
+        ? { deliveryIntent: value.deliveryIntent } : {}),
+    };
   };
   const deliver = connection => {
     if (!candidate || !matches(account())) { if (candidate) clear(); return; }

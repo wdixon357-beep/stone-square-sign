@@ -73,8 +73,22 @@ late.message({ data: { kind: 'stone-square-legacy-report-draft', requestId: late
   draft: { type: 'formal', fields: { title: '<script>window.secret=true</script>' }, phone: '', reviewed: true,
     name: 'Impersonator', office: 'Worshipful Master', signatureName: 'Forged', clientId: 'old-submission' } } });
 assert.equal(late.posts.length, 2);
-assert.deepEqual(Object.keys(late.posts[1].payload.draft).sort(), ['fields', 'phone', 'type']);
+assert.deepEqual(Object.keys(late.posts[1].payload.draft).sort(), ['clientId', 'fields', 'phone', 'type']);
+assert.equal(late.posts[1].payload.draft.clientId, 'old-submission');
 assert.equal(late.posts[1].payload.draft.fields.title, '<script>window.secret=true</script>', 'content is relayed as data, never executed or inserted into the dashboard DOM');
+
+const durable = harness(); durable.login(); durable.request(); durable.connect(); durable.ready();
+const deliveryIntent = randomUUID();
+durable.message({ data: { kind: 'stone-square-legacy-report-draft', requestId: durable.requests[0].payload.requestId,
+  draft: { type: 'formal', fields: { title: 'Retained final draft' }, clientId: 'retained-client-id', deliveryIntent, externalId: 'Never-trust-client-archive' } } });
+assert.equal(durable.posts[1].payload.draft.clientId, 'retained-client-id');
+assert.equal(durable.posts[1].payload.draft.deliveryIntent, deliveryIntent);
+assert.equal(durable.posts[1].payload.draft.externalId, undefined);
+const malformedIntent = harness(); malformedIntent.login(); malformedIntent.request(); malformedIntent.connect(); malformedIntent.ready();
+malformedIntent.message({ data: { kind: 'stone-square-legacy-report-draft', requestId: malformedIntent.requests[0].payload.requestId,
+  draft: { type: 'formal', fields: { title: 'Preserved notes' }, clientId: '<invalid>', deliveryIntent: 'not-a-uuid' } } });
+assert.equal(malformedIntent.posts[1].payload.draft.deliveryIntent, undefined);
+assert.equal(malformedIntent.posts[1].payload.draft.clientId, undefined);
 
 for (const badDraft of [
   { type: 'unknown', fields: { title: 'Bad type' } },
