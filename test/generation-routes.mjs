@@ -11,6 +11,7 @@ const work = await mkdtemp(join(tmpdir(), 'stone-square-generation-routes-'));
 const callsFile = join(work, 'provider-calls.txt');
 const controlFile = join(work, 'provider-control.json');
 const releaseFile = join(work, 'provider-release');
+const inputsFile = join(work, 'provider-inputs.jsonl');
 const loaderFile = join(work, 'provider-loader.mjs');
 const minutesSource = 'Meeting date: September 17, 2026\nPresent: Brother Example Officer\nThe Lodge opened on the Third Degree at 7:30 PM. A quorum was present.\nThe meeting schedule was discussed, with no vote recorded.\nThe Lodge closed at 9:00 PM.';
 let server;
@@ -78,7 +79,7 @@ await writeFile(loaderFile, `
 import {appendFile, readFile, access} from 'node:fs/promises';
 import {createGenerator, setGenerationForTests} from ${JSON.stringify(new URL('../ai-generation.js', import.meta.url).href)};
 import {generateMinutesDraft, MINUTES_SCHEMA} from ${JSON.stringify(new URL('../minutes.js', import.meta.url).href)};
-const callsFile = ${JSON.stringify(callsFile)}, controlFile = ${JSON.stringify(controlFile)}, releaseFile = ${JSON.stringify(releaseFile)};
+const callsFile = ${JSON.stringify(callsFile)}, controlFile = ${JSON.stringify(controlFile)}, releaseFile = ${JSON.stringify(releaseFile)}, inputsFile = ${JSON.stringify(inputsFile)};
 globalThis.fetch = async url => {
   if(String(url)!=='https://request.stonesquare22pha.org/api/report?schema=1')throw Error('Unexpected schema destination');
   return Response.json({types:{officer:{name:'Officer Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}},masterTypes:{officer:{name:'WM Report',fields:[{id:'title',label:'Title',kind:'text',req:true}]}}});
@@ -86,7 +87,8 @@ globalThis.fetch = async url => {
 const fetchImpl = async (url, options) => {
   if (String(url) !== 'https://api.openai.com/v1/responses') throw new Error('Unexpected network destination in the provider mock.');
   await appendFile(callsFile, 'called\\n');
-  const mode = JSON.parse(await readFile(controlFile, 'utf8')).mode;
+  const configuration = JSON.parse(await readFile(controlFile, 'utf8'));
+  const mode = configuration.mode;
   if (mode === 'error') return new Response(JSON.stringify({error:{message:'Synthetic request rejection'}}), {status:400, headers:{'Content-Type':'application/json'}});
   if (mode === 'unknown') return new Response(JSON.stringify({error:{message:'Synthetic service failure'}}), {status:503, headers:{'Content-Type':'application/json'}});
   if (mode === 'wait') {
@@ -96,6 +98,7 @@ const fetchImpl = async (url, options) => {
   const rawInput = typeof body.input === 'string' ? body.input : body.input.at(-1)?.content;
   const inputText = typeof rawInput === 'string' ? rawInput : rawInput?.find(item=>item.type==='input_text')?.text;
   const input = JSON.parse(inputText);
+  await appendFile(inputsFile, JSON.stringify({schemaName:body.text.format.name,input})+'\\n');
   let result;
   if (body.text.format.name === 'stone_square_officer_report') {
     const title=input.source.includes('Source note mentions OpenAI')?'Source note mentions OpenAI':'Synthetic report notes';
@@ -103,19 +106,21 @@ const fetchImpl = async (url, options) => {
   } else if (body.text.format.name === 'stone_square_meeting_minutes') {
     const local = await generateMinutesDraft(input.source, {sourceType:input.sourceType});
     const draft = Object.fromEntries(Object.keys(MINUTES_SCHEMA.properties).map(key=>[key,local[key]]));
+    if (!body.text.format.schema.properties.draft.properties.sections.items.required.includes('sourceQuotes')) throw Error('Minutes provider schema omitted section-local evidence');
+    draft.sections = configuration.sections || draft.sections.map(section=>({...section,sourceQuotes:section.body.trim()?[input.source]:[]}));
     const evidence=[];
     const add=field=>evidence.push({field,quote:input.source});
     for(const field of ['meetingDate','degree','openingTime','closingTime','prayerRequested','closingPrayerGiven','presiding','quorum','nextMeeting']) if(draft[field]!==null && draft[field]!=='')add(field);
     if(draft.meetingType!=='Stated Communication')add('meetingType');
     for(const field of ['present','excused','visitors','sensitiveReview'])draft[field].forEach((_,index)=>add(field+'['+index+']'));
-    draft.sections.forEach((section,index)=>{if(section.body.trim())add('sections['+index+'].body');});
-    draft.officerAttendance.forEach((entry,index)=>{if(entry.status!=='not_recorded')add('officerAttendance['+index+'].status');});
-    result={draft,evidence};
+    draft.officerAttendance.forEach((entry,index)=>{
+      if(entry.status!=='not_recorded')add('officerAttendance['+index+'].status');
+      for(const field of ['stationCoverage','actingName','actingWholeMeeting'])if(entry[field]!==null&&entry[field]!=='')add('officerAttendance['+index+'].'+field);
+    });
+    result={draft,evidence:[...evidence,...(configuration.extraEvidence||[])]};
     if (mode === 'procedural_omission' || mode === 'unsupported_second') {
       const body = '- The minutes of the previous meeting were reviewed. The source states that the minutes were approved as submitted, but it does not identify a mover, seconder, vote method or tally.';
-      draft.sections = [{heading:'Reading of the Minutes',body:body + (mode === 'unsupported_second' ? ' Brother Example seconded the motion.' : '')}];
-      result.evidence = evidence.filter(item=>!item.field.startsWith('sections['));
-      result.evidence.push({field:'sections[0].body',quote:input.source});
+      draft.sections = [{heading:'Reading of the Minutes',body:body + (mode === 'unsupported_second' ? ' Brother Example seconded the motion.' : ''),sourceQuotes:[input.source]}];
     }
   } else {
     const empty=()=>({value:null,evidence:''});
@@ -323,6 +328,118 @@ try {
   const unsupportedRetry = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(unsupportedSource));
   check('Retrying a rejected cached interpretation does not make a silent paid retry',
     unsupportedRetry.status===502 && await providerCalls()===beforeUnsupportedRetry);
+
+  // Keep this multipart regression isolated from the earlier rate bucket. Its
+  // intentionally empty agenda sections must never shift a later body's quote.
+  await stop();
+  await start(true);
+  owner = await registerOwner();
+  const sectionAssistant = await officer(owner, 'assistant_secretary');
+  const sourceLines = [
+    'Meeting date: September 17, 2026',
+    'Present: Brother Example Officer',
+    'The Lodge opened on the Third Degree at 7:30 PM.',
+    'Minutes of the previous meeting were approved as submitted.',
+    'The Scholarship Committee will contact the school about the application deadline.',
+    "The Treasurer's report was read aloud.",
+    'The room reservation motion was tabled.',
+    'Community Supper: Fish and two sides were proposed. No vote was taken.',
+    'Prayers were requested for the families.',
+    'The Lodge closed at 9:00 PM.',
+  ];
+  const sectionSource = sourceLines.join('\n');
+  const sourcedSection = (heading, line) => ({heading,body:'- '+sourceLines[line-1],sourceQuotes:[sourceLines[line-1]]});
+  const sectionFixture = [
+    sourcedSection('Opening',3),
+    {heading:'Balloting',body:'',sourceQuotes:[]},
+    sourcedSection('Reading of the Minutes',4),
+    {heading:'Elections',body:'',sourceQuotes:[]},
+    sourcedSection('Committee Reports',5),
+    sourcedSection("Treasurer's Report",6),
+    {heading:'Petitions',body:'',sourceQuotes:[]},
+    sourcedSection('Old Business',7),
+    sourcedSection('New Business and Motions',8),
+    sourcedSection('Sickness and Distress',9),
+    sourcedSection('Prayer and Closing',10),
+  ];
+  await control({mode:'section_fixture',sections:sectionFixture});
+  const beforeSectionFixture = await providerCalls();
+  const sectionResult = await api('/api/minutes/generate',sectionAssistant.token,'POST',minutesForm(sectionSource));
+  assert.equal(sectionResult.status,201,JSON.stringify(sectionResult.data));
+  const sectionMinutes = sectionResult.data.minutes;
+  const originalSectionInput=JSON.parse((await readFile(inputsFile,'utf8')).trim().split('\n').at(-1)).input.source;
+  // Multipart text fields use CRLF on the wire. Retain that exact accepted
+  // source when comparing the later reorganization request.
+  assert.equal(originalSectionInput.replace(/\r\n/g,'\n'),sectionSource);
+  check('Assistant Secretary multipart generation accepts interleaved empty agenda sections with section-local quotes',
+    sectionMinutes.status==='draft' && await providerCalls()===beforeSectionFixture+1
+      && sectionMinutes.draft.sections.some(section=>section.heading==='Old Business' && section.body.includes('reservation motion was tabled'))
+      && sectionMinutes.draft.sections.some(section=>section.heading==='New Business and Motions' && section.body.includes('Fish and two sides')));
+  check('Every populated section retains its own source-line comment after empty sections are removed',
+    [['Opening',3],['Reading of the Minutes',4],['Committee Reports',5],["Treasurer's Report",6],['Old Business',7],['New Business and Motions',8],['Sickness and Distress',9],['Prayer and Closing',10]]
+      .every(([heading,line])=>sectionMinutes.draft.warnings.includes(`Source reference: ${heading}, line ${line}.`)));
+  check('Internal section quotes do not change the saved public draft shape',
+    sectionMinutes.draft.sections.every(section=>Object.keys(section).sort().join(',')==='body,heading')
+      && !JSON.stringify(sectionMinutes).includes('sourceQuotes'));
+  let reopenedSectionMinutes = (await api('/api/minutes',sectionAssistant.token)).data.minutes.find(item=>item.id===sectionMinutes.id);
+  check('The sourced Assistant Secretary draft reopens unchanged with no automatic review or signatures',
+    JSON.stringify(reopenedSectionMinutes.draft)===JSON.stringify(sectionMinutes.draft)
+      && reopenedSectionMinutes.preparerAttestedAt==null && reopenedSectionMinutes.masterAttestedAt==null
+      && reopenedSectionMinutes.submittedForReviewAt==null && reopenedSectionMinutes.submittedDraft==null
+      && ['officerRoll','otherPresent','otherExcused'].every(field=>reopenedSectionMinutes.draft.attendanceReview[field]===false));
+  const beforeSectionCache = await providerCalls();
+  const sectionCached = await api(`/api/minutes/${sectionMinutes.id}/reorganize`,sectionAssistant.token,'POST',{expectedUpdatedAt:sectionMinutes.updatedAt});
+  check('Reorganizing the same verified section-local result uses cache without another provider call',
+    sectionCached.status===200 && await providerCalls()===beforeSectionCache
+      && JSON.stringify(sectionCached.data.draft)===JSON.stringify(sectionMinutes.draft));
+  const sectionAttestation = await api(`/api/minutes/${sectionMinutes.id}/preparer-attest`,sectionAssistant.token,'POST',{expectedUpdatedAt:sectionMinutes.updatedAt});
+  check('Accepted section quotes never confirm attendance or bypass the preparer attestation checks',
+    sectionAttestation.status===409 && await providerCalls()===beforeSectionCache);
+
+  const invalidSectionCases = [
+    // The adapter's strict wire-schema check catches a missing required field
+    // before the minutes-specific quote verifier receives the response.
+    {name:'missing embedded quotes',mutate:sections=>{delete sections[4].sourceQuotes;},category:'GENERATION_INVALID_RESPONSE'},
+    {name:'empty quotes on populated text',mutate:sections=>{sections[4].sourceQuotes=[];}},
+    {name:'a quotation absent from the source',mutate:sections=>{sections[4].sourceQuotes=['The Scholarship Committee approved an unsupported budget.'];}},
+    {name:'evidence attached to an empty section',mutate:sections=>{sections[1].sourceQuotes=[sourceLines[4]];}},
+    {name:'obsolete parallel section indexes',extraEvidence:[{field:'sections[4].body',quote:sourceLines[4]}]},
+    {name:'an unsupported affirmative second',mutate:sections=>{sections[8].body+=' Brother Example seconded the motion.';},category:'MINUTES_UNSUPPORTED_SECOND'},
+  ];
+  const sectionRecordsBefore = (await api('/api/minutes',sectionAssistant.token)).data.minutes.length;
+  for (const [index,testCase] of invalidSectionCases.entries()) {
+    const sections=structuredClone(sectionFixture);testCase.mutate?.(sections);
+    await control({mode:'section_fixture',sections,extraEvidence:testCase.extraEvidence});
+    const callsBefore=await providerCalls();
+    const badSource=sectionSource+`\nSynthetic source case ${index+1}.`;
+    const rejection=await api('/api/minutes/generate',sectionAssistant.token,'POST',minutesForm(badSource));
+    const incident=(await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===rejection.data.incidentReference);
+    assert.equal(rejection.status,502,JSON.stringify(rejection.data));
+    assert.equal(incident?.category,testCase.category||'MINUTES_SECTION_EVIDENCE_INVALID',testCase.name);
+    check(`HTTP verification rejects ${testCase.name} before saving and records its safe category`,
+      rejection.status===502 && /^SS22-[A-Z0-9]+$/.test(rejection.data.incidentReference||'')
+        && incident?.category===(testCase.category||'MINUTES_SECTION_EVIDENCE_INVALID')
+        && incident.userId===sectionAssistant.user.id && await providerCalls()===callsBefore+1
+        && (await api('/api/minutes',sectionAssistant.token)).data.minutes.length===sectionRecordsBefore);
+  }
+  const invalidReorganization=structuredClone(sectionFixture);invalidReorganization[4].sourceQuotes=[];
+  await control({mode:'section_fixture',sections:invalidReorganization});
+  const beforeRejectedReorganization=await providerCalls();
+  const rejectedReorganization=await api(`/api/minutes/${sectionMinutes.id}/reorganize`,sectionAssistant.token,'POST',{
+    expectedUpdatedAt:sectionMinutes.updatedAt,sourceType:sectionMinutes.draft.sourceType==='transcript'?'compiled_notes':'transcript',
+  });
+  const inputs=(await readFile(inputsFile,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  reopenedSectionMinutes=(await api('/api/minutes',sectionAssistant.token)).data.minutes.find(item=>item.id===sectionMinutes.id);
+  assert.equal(rejectedReorganization.status,502,JSON.stringify(rejectedReorganization.data));
+  assert.equal(await providerCalls(),beforeRejectedReorganization+1,'reorganization explicitly requests one new interpretation');
+  assert.equal(inputs.at(-1).input.source,originalSectionInput,'reorganization receives the original stored source');
+  assert.deepEqual(reopenedSectionMinutes,sectionMinutes,'rejection does not rewrite any saved draft or workflow field');
+  check('Rejected section reorganization retains the original source and the previously saved unsigned draft',
+    rejectedReorganization.status===502 && await providerCalls()===beforeRejectedReorganization+1
+      && inputs.at(-1).input.source===originalSectionInput
+      && reopenedSectionMinutes.updatedAt===sectionMinutes.updatedAt
+      && JSON.stringify(reopenedSectionMinutes.draft)===JSON.stringify(sectionMinutes.draft)
+      && reopenedSectionMinutes.preparerAttestedAt==null && reopenedSectionMinutes.masterAttestedAt==null);
   console.log(`${passed} generation route checks passed with an isolated mocked provider.`);
 } finally {
   await stop();

@@ -25,6 +25,7 @@ const categorySource = server.slice(server.indexOf('const serverIncidentCategory
 assert.ok(categorySource.includes('const serverIncidentArea ='), 'Exercise the actual safe server incident classifiers');
 const classifiers = vm.runInNewContext(`${categorySource}\n({category:serverIncidentCategory,area:serverIncidentArea})`);
 assert.equal(classifiers.category({statusCode:502,code:'MINUTES_UNSUPPORTED_SECOND'},'/api/minutes/generate'),'MINUTES_UNSUPPORTED_SECOND');
+assert.equal(classifiers.category({statusCode:502,code:'MINUTES_SECTION_EVIDENCE_INVALID'},'/api/minutes/generate'),'MINUTES_SECTION_EVIDENCE_INVALID');
 assert.equal(classifiers.category({statusCode:502,code:'GENERATION_REQUEST_REJECTED'},'/api/reports/organize'),'GENERATION_REQUEST_REJECTED');
 for (const code of ['private@example.org source text','PRIVATE_PERSON_NAME','MINUTES_PRIVATE_PERSON_NAME',null]) {
   assert.equal(classifiers.category({statusCode:502,code},'/api/minutes/generate'),'minutes_verification','An arbitrary code cannot leak a name or source into the incident log');

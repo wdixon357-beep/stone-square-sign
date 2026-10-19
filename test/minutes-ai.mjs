@@ -26,11 +26,11 @@ const response = () => ({
     present: ['Brother Example Officer'], excused: [], visitors: [], officerAttendance: [],
     income: [], expenses: [], actionItems: [], sensitiveReview: [],
     sections: [
-      {heading: 'Opening', body: '- The Lodge opened on the **Third Degree** at <u>7:30 PM</u>.'},
-      {heading: 'SICKNESS & DISTRESS', body: '- Prayers were requested for the families.'},
-      {heading: 'New Business and Motions', body: '- **Community Supper:** Fish and two sides were proposed. *No vote was taken.* Volunteers will confirm the menu.'},
-      {heading: "Treasurer's Report", body: "- The Treasurer's report was read aloud."},
-      {heading: 'Prayer and Closing', body: '- The Lodge closed at <u>9:00 PM</u>.'},
+      {heading: 'Opening', body: '- The Lodge opened on the **Third Degree** at <u>7:30 PM</u>.', sourceQuotes:["The Lodge opened on the Third Degree at 7:30 PM."]},
+      {heading: 'SICKNESS & DISTRESS', body: '- Prayers were requested for the families.', sourceQuotes:["Prayers were requested for the families."]},
+      {heading: 'New Business and Motions', body: '- **Community Supper:** Fish and two sides were proposed. *No vote was taken.* Volunteers will confirm the menu.', sourceQuotes:["Community Supper: Fish and two sides were proposed.\nNo vote was taken. Volunteers will confirm the menu."]},
+      {heading: "Treasurer's Report", body: "- The Treasurer's report was read aloud.", sourceQuotes:["The Treasurer's report was read aloud."]},
+      {heading: 'Prayer and Closing', body: '- The Lodge closed at <u>9:00 PM</u>.', sourceQuotes:["The Lodge closed at 9:00 PM."]},
     ],
     warnings: ['Confirm the unassigned scheduling note before attestation.'],
   },
@@ -44,11 +44,6 @@ const response = () => ({
     {field: 'presiding', quote: 'Presiding: WM Dixon-Saunders'},
     {field: 'quorum', quote: 'Quorum: Yes'},
     {field: 'present[0]', quote: 'Present: Brother Example Officer'},
-    {field: 'sections[0].body', quote: 'The Lodge opened on the Third Degree at 7:30 PM.'},
-    {field: 'sections[1].body', quote: 'Prayers were requested for the families.'},
-    {field: 'sections[2].body', quote: 'Community Supper: Fish and two sides were proposed.\nNo vote was taken. Volunteers will confirm the menu.'},
-    {field: 'sections[3].body', quote: "The Treasurer's report was read aloud."},
-    {field: 'sections[4].body', quote: 'The Lodge closed at 9:00 PM.'},
   ],
 });
 
@@ -64,6 +59,8 @@ try {
   };
   assertStrict(MINUTES_SCHEMA);
   assertStrict(MINUTES_GENERATION_SCHEMA);
+  assert.deepEqual(Object.keys(MINUTES_SCHEMA.properties.sections.items.properties).sort(), ['body','heading'], 'Saved/public sections keep their established contract');
+  assert.deepEqual(Object.keys(MINUTES_GENERATION_SCHEMA.properties.draft.properties.sections.items.properties).sort(), ['body','heading','sourceQuotes'], 'Only the generation wire shape adds section-local evidence');
   let calls = 0;
   const draft = await generateMinutesDraft(source, {generateStructured: async request => {
     calls++;
@@ -74,7 +71,8 @@ try {
     assert.match(request.instructions, /untrusted meeting notes/);
     assert.match(request.instructions, /WM Dixon-Saunders/);
     assert.match(request.instructions, /Sickness and Distress/);
-    assert.match(request.instructions, /Every nonempty section body/);
+    assert.match(request.instructions, /sourceQuotes/);
+    assert.match(request.instructions, /For an empty body use sourceQuotes:\[\]/);
     assert.match(request.instructions, /Praise Reports heading or bullet/);
     assert.match(request.instructions, /Omit standalone empty markers/);
     assert.match(request.instructions, /Preserve actual named visitors accurately/);
@@ -131,13 +129,14 @@ try {
     /source reference that could not be verified/, 'a supplied invalid reference is still rejected');
   for (const missingField of ['meetingDate', 'closingPrayerGiven', 'sections[2].body', 'present[0]']) {
     const anotherMissingReference = structuredClone(cachedPresidingResult);
-    anotherMissingReference.evidence = anotherMissingReference.evidence.filter(item => item.field !== missingField);
+    if (missingField === 'sections[2].body') anotherMissingReference.draft.sections[2].sourceQuotes = [];
+    else anotherMissingReference.evidence = anotherMissingReference.evidence.filter(item => item.field !== missingField);
     await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => anotherMissingReference}),
-      /all extracted content/, `the presiding repair does not bypass missing ${missingField} evidence`);
+      /all extracted content|section source references/, `the presiding repair does not bypass missing ${missingField} evidence`);
   }
 
   const wrappedCitation = response();
-  wrappedCitation.evidence.find(item => item.field === 'sections[2].body').quote =
+  wrappedCitation.draft.sections[2].sourceQuotes[0] =
     'Community Supper: Fish and two sides were proposed. No vote was taken. Volunteers will confirm the menu.';
   const wrappedDraft = await generateMinutesDraft(source, {generateStructured: async () => wrappedCitation});
   assert.ok(wrappedDraft.warnings.some(warning => /Source reference: New Business and Motions, lines 7 to 8/.test(warning)),
@@ -180,13 +179,11 @@ try {
   const visitorResponse = response();
   visitorResponse.draft.visitors = ['Bro. Alex Example, Example Lodge No. 99'];
   visitorResponse.draft.sections.push(
-    {heading:'Roll Call and Quorum',body:'Visitors: Bro. Alex Example, Example Lodge No. 99'},
-    {heading:'Praise Reports',body:'- None reported.'},
+    {heading:'Roll Call and Quorum',body:'Visitors: Bro. Alex Example, Example Lodge No. 99',sourceQuotes:['Visitors: Bro. Alex Example, Example Lodge No. 99']},
+    {heading:'Praise Reports',body:'- None reported.',sourceQuotes:['None reported.']},
   );
   visitorResponse.evidence.push(
     {field:'visitors[0]',quote:'Visitors: Bro. Alex Example, Example Lodge No. 99'},
-    {field:'sections[5].body',quote:'Visitors: Bro. Alex Example, Example Lodge No. 99'},
-    {field:'sections[6].body',quote:'None reported.'},
   );
   const visitorDraft = await generateMinutesDraft(visitorSource, {generateStructured: async () => visitorResponse});
   assert.deepEqual(visitorDraft.visitors, ['Bro. Alex Example, Example Lodge No. 99']);
@@ -194,6 +191,58 @@ try {
   assert.equal(visitorDraft.quorum, 'Yes');
   assert.ok(!visitorDraft.sections.some(section => /^(?:Praise Reports|Roll Call and Quorum)$/i.test(section.heading)));
   assert.doesNotMatch(JSON.stringify(visitorDraft.sections), /None reported/);
+
+  // Quotes travel with their section, so canonical empty rows and reordering
+  // cannot shift a parallel numeric citation onto a different heading.
+  const localEvidenceSource = `${source}\nPlanning for the next outreach event was discussed.\nBrothers discussed maintaining the building grounds.`;
+  const canonicalHeadings = ['Sickness and Distress','Reading of the Minutes',"Treasurer's Report",'Degree Work','Communications','Demits','Petitions','Balloting','Unfinished Business','New Business and Motions','Committee Reports','Elections','Good of the Order','Upcoming Events and Reminders','Prayer and Closing','Other Meeting Business'];
+  const template = response();
+  const canonicalSections = canonicalHeadings.map(heading => ({heading,body:'',sourceQuotes:[]}));
+  canonicalSections[0] = {...structuredClone(template.draft.sections[1]),heading:canonicalHeadings[0]};
+  canonicalSections[2] = structuredClone(template.draft.sections[3]);
+  canonicalSections[9] = structuredClone(template.draft.sections[2]);
+  canonicalSections[13] = {heading:canonicalHeadings[13],body:'- Planning for the next outreach event was discussed.',sourceQuotes:['Planning for the next outreach event was discussed.']};
+  canonicalSections[14] = structuredClone(template.draft.sections[4]);
+  canonicalSections[15] = {heading:canonicalHeadings[15],body:'- Brothers discussed maintaining the building grounds.',sourceQuotes:['Brothers discussed maintaining the building grounds.']};
+  for (const sections of [canonicalSections,[...canonicalSections].reverse()]) {
+    const reordered = response(); reordered.draft.sections = structuredClone(sections);
+    const originalWire = JSON.stringify(reordered); let invocations = 0;
+    const output = await generateMinutesDraft(localEvidenceSource,{generateStructured:async()=>{invocations++;return reordered;}});
+    assert.equal(invocations,1,'A valid structural change never triggers a second generation call');
+    assert.equal(JSON.stringify(reordered),originalWire,'Verification never mutates the provider/cache result');
+    assert.ok(output.sections.some(section=>section.heading===canonicalHeadings[13] && /next outreach/.test(section.body)));
+    assert.ok(output.sections.some(section=>section.heading===canonicalHeadings[15] && /building grounds/.test(section.body)));
+    assert.ok(output.sections.every(section=>Object.keys(section).every(key=>['heading','body'].includes(key))), 'Normalized sections expose only heading/body');
+    assert.ok(!JSON.stringify(output).includes('sourceQuotes'),'Raw provider source quotes never enter saved/API drafts');
+  }
+  const sectionFailure = async mutate => {
+    const value=response();mutate(value);let invocations=0;
+    await assert.rejects(generateMinutesDraft(source,{generateStructured:async()=>{invocations++;return value;}}),
+      error=>error.statusCode===502 && error.code==='MINUTES_SECTION_EVIDENCE_INVALID');
+    assert.equal(invocations,1,'Invalid evidence does not trigger an automatic paid retry');
+  };
+  await sectionFailure(value=>{delete value.draft.sections[2].sourceQuotes;});
+  await sectionFailure(value=>{value.draft.sections[2].sourceQuotes=[];});
+  await sectionFailure(value=>{value.draft.sections[2].sourceQuotes=['  '];});
+  await sectionFailure(value=>{value.draft.sections[2].sourceQuotes=[42];});
+  await sectionFailure(value=>{value.draft.sections[2].sourceQuotes=['A quotation that was never in these meeting notes.'];});
+  await sectionFailure(value=>{value.draft.sections.push({heading:'Balloting',body:'',sourceQuotes:['No vote was taken.']});});
+  await sectionFailure(value=>{value.evidence.push({field:'sections[2].body',quote:value.draft.sections[2].sourceQuotes[0]});});
+  await sectionFailure(value=>{
+    value.evidence.push({field:'sections[7].body',quote:value.draft.sections[2].sourceQuotes[0]});
+    value.draft.sections.splice(2,0,{heading:'Balloting',body:'',sourceQuotes:[]});
+  });
+  await sectionFailure(value=>{for(const section of value.draft.sections)delete section.sourceQuotes;});
+  const mismatchedSection=response();
+  mismatchedSection.draft.sections[2].body='- The roof repair motion was approved.';
+  mismatchedSection.draft.sections[2].sourceQuotes=['No vote was taken.'];
+  await assert.rejects(generateMinutesDraft(source,{generateStructured:async()=>mismatchedSection}),
+    error=>error.statusCode===502 && error.code==='MINUTES_UNSUPPORTED_APPROVAL','An exact quote attached to the wrong claim still cannot establish approval');
+  const privateMarker='PRIVATE_SOURCE_ONLY: medical detail not included in the section body.';
+  const privateEvidence=response();
+  privateEvidence.draft.sections.push({heading:'Other Meeting Business',body:'- A private matter was reserved for officer review.',sourceQuotes:[privateMarker]});
+  const privateOutput=await generateMinutesDraft(`${source}\n${privateMarker}`,{generateStructured:async()=>privateEvidence});
+  assert.ok(!JSON.stringify(privateOutput).includes(privateMarker),'Embedded source quotes are stripped before public-draft presentation');
 
   const rejectResponse = async (change, pattern) => {
     const result = response(); change(result);
@@ -212,9 +261,9 @@ try {
   // usable while checking each nearby recorded action independently.
   const proceduralDraft = async (body, quote, expectedCode) => {
     const result = response();
-    const originalQuote = result.evidence.find(item => item.field === 'sections[2].body').quote;
+    const originalQuote = result.draft.sections[2].sourceQuotes[0];
     result.draft.sections[2].body = body;
-    result.evidence.find(item => item.field === 'sections[2].body').quote = quote;
+    result.draft.sections[2].sourceQuotes[0] = quote;
     const inputSource = source.replace(originalQuote, quote);
     if (expectedCode) {
       await assert.rejects(generateMinutesDraft(inputSource, {generateStructured:async()=>result}),
@@ -280,14 +329,14 @@ try {
   await proceduralDraft('- The motion was approved.', 'The motion was discussed; no vote was taken.', 'MINUTES_UNSUPPORTED_APPROVAL');
   const citedSecond = response();
   const secondLine = 'Community Supper: Fish and two sides were proposed. The motion was seconded.';
-  citedSecond.evidence.find(item => item.field === 'sections[2].body').quote = `${secondLine}\nNo vote was taken. Volunteers will confirm the menu.`;
+  citedSecond.draft.sections[2].sourceQuotes[0] = `${secondLine}\nNo vote was taken. Volunteers will confirm the menu.`;
   const missingSecond = await generateMinutesDraft(source.replace('Community Supper: Fish and two sides were proposed.', secondLine), {
     generateStructured: async () => citedSecond,
   });
   assert.ok(missingSecond.warnings.some(warning => /a second appears in the cited source but is absent/.test(warning)));
   const citedOutcome = response();
   citedOutcome.draft.sections[2].body = 'Community Supper: Fish and two sides were proposed. Volunteers will confirm the menu.';
-  citedOutcome.evidence.find(item => item.field === 'sections[2].body').quote = 'Community Supper: Fish and two sides were proposed.\nThe motion carried. Volunteers will confirm the menu.';
+  citedOutcome.draft.sections[2].sourceQuotes[0] = 'Community Supper: Fish and two sides were proposed.\nThe motion carried. Volunteers will confirm the menu.';
   const missingOutcome = await generateMinutesDraft(source.replace('No vote was taken. Volunteers will confirm the menu.',
     'The motion carried. Volunteers will confirm the menu.'), {generateStructured: async () => citedOutcome});
   assert.ok(missingOutcome.warnings.some(warning => /motion outcome that is absent/.test(warning)));
@@ -298,7 +347,7 @@ try {
   for (const figure of ['$100.00', '100 dollars', 'Balance: 100.00', 'Balance: <u>100.00</u>.']) {
     const financial = response();
     financial.draft.sections[3].body = `The Treasurer's report was read aloud. ${figure}`;
-    financial.evidence.find(item => item.field === 'sections[3].body').quote = `The Treasurer's report was read aloud. ${figure}`;
+    financial.draft.sections[3].sourceQuotes[0] = `The Treasurer's report was read aloud. ${figure}`;
     await assert.rejects(generateMinutesDraft(`${source}\nThe Treasurer's report was read aloud. ${figure}`, {
       generateStructured: async () => financial,
     }), /treasury figures/);
@@ -307,7 +356,7 @@ try {
   // a no-vote outcome for a different motion. Officers still review semantics.
   const mixed = response();
   mixed.draft.sections[2].body += ' The room reservation motion was approved.';
-  mixed.evidence.find(item => item.field === 'sections[2].body').quote += '\nThe room reservation motion was approved.';
+  mixed.draft.sections[2].sourceQuotes[0] += '\nThe room reservation motion was approved.';
   await generateMinutesDraft(source.replace('No vote was taken. Volunteers will confirm the menu.',
     'No vote was taken. Volunteers will confirm the menu.\nThe room reservation motion was approved.'), {generateStructured: async () => mixed});
 
@@ -327,12 +376,12 @@ try {
   }
   await rejectResponse(result => {result.evidence.push({field: 'warnings[0]', quote: 'This sentence is absent from the source.'});}, /could not be verified/);
   await rejectResponse(result => {
-    result.evidence = result.evidence.filter(entry => entry.field !== 'sections[2].body');
+    result.draft.sections[2].sourceQuotes = [];
     result.evidence.push({field: 'warnings[0]', quote: 'An additional scheduling note needs placement.'});
-  }, /all extracted content/);
+  }, /all extracted content|section source references/);
   await rejectResponse(result => {delete result.draft.closingPrayerGiven;}, /incomplete/);
   await rejectResponse(result => {result.evidence[0].quote = 'Meeting date: September 18, 2026';}, /could not be verified/);
-  await rejectResponse(result => {result.evidence = result.evidence.filter(entry => entry.field !== 'sections[2].body');}, /all extracted content/);
+  await rejectResponse(result => {result.draft.sections[2].sourceQuotes = [];}, /section source references/);
   await rejectResponse(result => {result.draft.closingTime = '10:00 PM';}, /disagreed with the source/);
   const unsupportedClosingPrayer = response();
   unsupportedClosingPrayer.evidence.find(entry => entry.field === 'closingPrayerGiven').quote = 'The Lodge closed at 9:00 PM.';

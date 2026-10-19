@@ -81,7 +81,15 @@ export const MINUTES_SCHEMA = {
 export const MINUTES_GENERATION_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['draft', 'evidence'],
   properties: {
-    draft: MINUTES_SCHEMA,
+    // Evidence stays beside the section it supports. The saved/public draft
+    // contract remains heading/body only; this is the provider wire contract.
+    draft: {...MINUTES_SCHEMA, properties: {...MINUTES_SCHEMA.properties,
+      sections: {type:'array', items:{type:'object', additionalProperties:false,
+        required:['heading','body','sourceQuotes'], properties:{
+          ...MINUTES_SCHEMA.properties.sections.items.properties,
+          sourceQuotes:{type:'array',items:{type:'string'}},
+        }}},
+    }},
     evidence: {
       type: 'array', items: {
         type: 'object', additionalProperties: false, required: ['field', 'quote'],
@@ -160,9 +168,26 @@ const negatedProcedure = (verbs, extra = '') => new RegExp(String.raw`\b(?:(?:no
 
 
 function checkedGeneratedDraft(response, source, localDraft) {
+  const sectionEvidenceError = () => generationError('The meeting section source references are incomplete or invalid. Your source has not been changed.', 'MINUTES_SECTION_EVIDENCE_INVALID');
+  // Do not adopt a cached legacy parallel-index response or guess which later
+  // heading its orphaned quote belonged to. A deliberate new request uses the
+  // changed schema/cache key and must supply section-local evidence.
+  if (Array.isArray(response?.draft?.sections) && response.draft.sections.some(section =>
+    section && typeof section === 'object' && (!Array.isArray(section.sourceQuotes)
+      || section.sourceQuotes.some(quote => typeof quote !== 'string')))) throw sectionEvidenceError();
   validateGeneratedShape(response, MINUTES_GENERATION_SCHEMA);
-  const {evidence} = response;
+  if (response.evidence.some(item => /^sections(?:\[|\.|$)/.test(item.field))) throw sectionEvidenceError();
+  const evidence = structuredClone(response.evidence);
   const generated = structuredClone(response.draft);
+  generated.sections = generated.sections.map((section, index) => {
+    const {heading, body, sourceQuotes} = section;
+    if (body.trim() ? !sourceQuotes.length : sourceQuotes.length) throw sectionEvidenceError();
+    for (const quote of sourceQuotes) {
+      if (!quote.trim()) throw sectionEvidenceError();
+      evidence.push({field:`sections[${index}].body`,quote});
+    }
+    return {heading,body};
+  });
   // Retain this nullable wire field for older provider schemas only. It is no
   // longer a recorded fact or a preparer confirmation in new minutes.
   generated.prayerRequested = null;
@@ -212,7 +237,8 @@ function checkedGeneratedDraft(response, source, localDraft) {
     const quote = item.quote.trim() && exactSourceQuote(source, item.quote);
     if (!allowedField || !quote) {
       console.warn('Minutes source reference rejected:', !allowedField ? 'invalid_field' : 'quote_not_found');
-      throw generationError('Minutes generation returned a source reference that could not be verified. Please try again.');
+      throw generationError('Minutes generation returned a source reference that could not be verified. Please try again.',
+        /^sections\[/.test(item.field) ? 'MINUTES_SECTION_EVIDENCE_INVALID' : 'MINUTES_SOURCE_VERIFICATION_FAILED');
     }
     const entries = references.get(item.field) || [];
     const start = source.indexOf(quote);
