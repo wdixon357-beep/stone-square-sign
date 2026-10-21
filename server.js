@@ -1,4 +1,6 @@
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
+import { initBuildingStoreSchema } from './building-store.js';
+import { mountBuildingStore } from './building-store-routes.js';
 import { hasPermission, resolvePermissions, permissionsForStorage, mountAccessRoutes, ensureBrotherSelfServiceAccess, grantTreasuryDuesAccessOnce } from './access-control.js';
 import {organizeReport, reportSchema} from './report-ai.js';
 import { initActivitySchema, mountActivityRoutes, startActivitySession, endActivitySession, endUserActivity, recordAppIncident, clientName } from './activity.js';
@@ -1116,6 +1118,7 @@ app.use((req, res, next) => {
   }
   next();
 });
+mountBuildingStore(app);
 app.use(express.json({ limit: '4mb' }));
 app.use('/api', (_req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -3738,6 +3741,7 @@ app.use(async (error, req, res, _next) => {
 validateProductionConfiguration();
 const connection = await connect();
 await runMigrations();
+await initBuildingStoreSchema();
 await initReportDeliverySchema();
 await initSignaturePolicySchema();
 await initMinutesSignatureRevisionSchema();
