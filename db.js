@@ -43,9 +43,15 @@ export function observePostgresPoolErrors(pool, {
 const usePglite = !process.env.DATABASE_URL;
 
 let query;          // (sql, params) -> { rows, rowCount }
+let connectionIdentity;
 let closeDriver;
 let beginTransaction;
 const transactionQuery = new AsyncLocalStorage();
+
+// An opaque in-process identity for caches. It changes on every connect() and
+// exposes neither a connection string nor access to the underlying driver.
+export const getDatabaseConnectionIdentity = () => connectionIdentity;
+export const isDatabaseTransactionActive = () => Boolean(transactionQuery.getStore());
 
 export const isUniqueViolation = (error) =>
   error?.code === '23505' || /UNIQUE constraint failed/i.test(String(error?.message || ''));
@@ -111,6 +117,7 @@ export const connect = async () => {
     const dir = process.env.PGLITE_DIR || null;      // null keeps it in memory, for tests
     const db = await PGlite.create(dir ? { dataDir: dir } : {});
     query = (sql, params) => db.query(sql, params);
+    connectionIdentity = Object.freeze({});
     beginTransaction = (callback) => db.transaction((tx) =>
       transactionQuery.run((sql, params) => tx.query(sql, params), callback));
     closeDriver = () => db.close();
@@ -131,6 +138,7 @@ export const connect = async () => {
   });
   observePostgresPoolErrors(pool);
   query = (sql, params) => pool.query(sql, params);
+  connectionIdentity = Object.freeze({});
   beginTransaction = async (callback) => {
     const client = await pool.connect();
     let connectionError = null;

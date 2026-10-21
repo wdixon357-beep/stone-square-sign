@@ -30,6 +30,13 @@ const dto = row => ({
   returnNote: row.return_note,
   updatedAt: row.updated_at,
 });
+// The queue needs its existing editable fields, never the captured signature
+// image. Load those immutable bytes only for the document's signing/PDF paths.
+const queueColumns = `id,matter,recipient_lodge,recipient_name,subject,body,status,
+  prepared_by_name,prepared_by_office,prepared_by_user_id,
+  assigned_to_user_id,assigned_to_name,assigned_to_office,signing_mode,
+  shared_signer_1_id,shared_signer_2_id,signed_by_user_id,signed_by_name,signed_at,
+  return_note,updated_at`;
 const denied = (res) => res.status(403).json({ error: 'Official correspondence is available only to the Worshipful Master and secretaries.' });
 const unfilledDemitTemplate = fields => fields.matter === 'demit' &&
   /\[(?:Brother full name|Receiving Lodge|record date|verified standing and charges statement)\]/i.test(`${fields.subject} ${fields.body}`);
@@ -190,7 +197,7 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
   app.get('/api/correspondence', requireAuth, async (req, res, next) => {
     try {
       if (!eligible(req.user)) return denied(res);
-      const rows = await dbAll('SELECT * FROM correspondence_drafts ORDER BY updated_at DESC LIMIT 100');
+      const rows = await dbAll(`SELECT ${queueColumns} FROM correspondence_drafts ORDER BY updated_at DESC LIMIT 100`);
       res.setHeader('Cache-Control', 'private, no-store');
       res.json({ drafts: rows.map(dto) });
     } catch (error) { next(error); }

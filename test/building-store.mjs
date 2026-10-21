@@ -80,9 +80,9 @@ try {
   // observed. Calls still run against this test's real isolated PGlite driver;
   // no production hook, fake SQL result, or retained source record is involved.
   const storeSource = await fs.readFile(new URL('../building-store.js', import.meta.url), 'utf8');
-  const databaseImport = "import { dbAll, dbGet, dbRun, withTransaction } from './db.js';";
+  const databaseImport = "import { dbAll, dbGet, dbRun, withTransaction, getDatabaseConnectionIdentity, isDatabaseTransactionActive } from './db.js';";
   assert.equal(storeSource.split(databaseImport).length, 2, 'Instrument the exact database import once.');
-  const observedSource = storeSource.replace(databaseImport, `import { dbAll, dbGet as actualDbGet, dbRun, withTransaction } from ${JSON.stringify(new URL('../db.js', import.meta.url).href)};
+  const observedSource = storeSource.replace(databaseImport, `import { dbAll, dbGet as actualDbGet, dbRun, withTransaction, getDatabaseConnectionIdentity, isDatabaseTransactionActive } from ${JSON.stringify(new URL('../db.js', import.meta.url).href)};
 export const archiveReadObservations = [];
 const dbGet = async (sql, params) => {
   const row = await actualDbGet(sql, params);

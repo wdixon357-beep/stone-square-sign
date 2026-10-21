@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
+import { dbAll, dbGet, dbRun, withTransaction, getDatabaseConnectionIdentity, isDatabaseTransactionActive } from './db.js';
 
 export const BUILDING_STORE_MAX_VALUE_BYTES = 5 * 1024 * 1024;
 // CAS carries both old and new raw JSON text, escaped in the RPC envelope.
@@ -55,6 +55,32 @@ export async function initBuildingStoreSchema() {
 const unavailable = () => buildingStoreError(503, 'Building storage has not passed migration verification.');
 const integerSeconds = value => Number.isSafeInteger(value) && value >= 1 && value <= 31_536_000;
 const ownKeys = (body, allowed) => Object.keys(body).every(key => allowed.includes(key));
+
+// Keep only the immutable raw archive, never permissions, tokens or filtered
+// results. A cache hit still requires the current database row's actual digest
+// inside the same singleton transaction. Only committed top-level reads publish
+// an entry; work in an enclosing transaction bypasses the cache entirely.
+let archiveCache = null;
+const archiveMetadata = () => dbGet(`SELECT key,value_sha256,revision::text AS revision,expires_at,
+  octet_length(convert_to(value_text,'UTF8')) AS value_bytes,
+  encode(sha256(convert_to(value_text,'UTF8')),'hex') AS actual_sha256
+  FROM building_store_entries WHERE key='resv:all'`);
+const validArchiveMetadata = row => !!row && row.expires_at === null
+  && /^[a-f0-9]{64}$/.test(row.value_sha256 || '') && row.actual_sha256 === row.value_sha256
+  && /^[1-9][0-9]*$/.test(String(row.revision ?? ''))
+  && Number.isSafeInteger(Number(row.value_bytes)) && Number(row.value_bytes) >= 0
+  && Number(row.value_bytes) <= BUILDING_STORE_MAX_VALUE_BYTES;
+const matchesArchive = (entry, metadata, scope) => !!entry && entry.scope === scope
+  && entry.revision === String(metadata.revision) && entry.sha256 === metadata.actual_sha256
+  && entry.bytes === Number(metadata.value_bytes);
+const readArchive = async metadata => {
+  const row = await dbGet("SELECT key,value_text,value_sha256,revision::text AS revision,expires_at FROM building_store_entries WHERE key='resv:all'");
+  if (!row || row.expires_at !== null || typeof row.value_text !== 'string'
+      || String(row.revision) !== String(metadata.revision) || row.value_sha256 !== metadata.value_sha256
+      || Buffer.byteLength(row.value_text) !== Number(metadata.value_bytes)
+      || buildingStoreHash(row.value_text) !== metadata.actual_sha256) throw unavailable();
+  return row;
+};
 
 export function validateBuildingStoreOperation(body) {
   if (body && typeof body === 'object' && !Array.isArray(body) && body.operation === 'health'
@@ -117,23 +143,36 @@ export async function executeBuildingStoreOperation(body, { requestId, payloadSh
       || !/^[a-f0-9]{64}$/.test(payloadSha256 || '') || !Number.isSafeInteger(now)) {
     throw buildingStoreError(400, 'Invalid building storage request identity.');
   }
-  if (body.operation === 'health') {
-    const state = await dbGet('SELECT * FROM building_store_state WHERE id=1');
-    const archive = await dbGet("SELECT value_text,value_sha256,expires_at FROM building_store_entries WHERE key='resv:all'");
-    const ready = state?.state === 'ready' && !!archive && archive.expires_at === null
-      && buildingStoreHash(archive.value_text) === archive.value_sha256;
-    return { ready, state: ready ? 'ready' : 'uninitialized', snapshotId: state?.snapshot_id ?? null,
-      manifestSha256: state?.manifest_sha256 ?? null, importedKeyCount: state?.imported_key_count ?? null,
-      importedRecordCount: state?.imported_record_count ?? null };
-  }
-  return withTransaction(async () => {
+  const scope = getDatabaseConnectionIdentity();
+  const cacheAllowed = !!scope && !isDatabaseTransactionActive();
+  let pendingCache = null;
+  const result = await withTransaction(async () => {
     const state = await dbGet('SELECT * FROM building_store_state WHERE id=1 FOR UPDATE');
+    const metadata = await archiveMetadata();
+    if (body.operation === 'health') {
+      const ready = state?.state === 'ready' && validArchiveMetadata(metadata);
+      return { ready, state: ready ? 'ready' : 'uninitialized', snapshotId: state?.snapshot_id ?? null,
+        manifestSha256: state?.manifest_sha256 ?? null, importedKeyCount: state?.imported_key_count ?? null,
+        importedRecordCount: state?.imported_record_count ?? null };
+    }
     if (state?.state !== 'ready') throw unavailable();
-    const archive = await dbGet("SELECT key,value_text,value_sha256,expires_at FROM building_store_entries WHERE key='resv:all'");
-    if (!archive || archive.expires_at !== null || buildingStoreHash(archive.value_text) !== archive.value_sha256) throw unavailable();
+    if (!validArchiveMetadata(metadata)) throw unavailable();
     // Reads need current values and leave no retry rows. In particular, polling
     // must never duplicate the signed archive into a receipt for each GET.
     const mutation = body.operation !== 'get';
+    // Mutations retain their full current-row verification and receipt ordering.
+    // Other-key reads and health only need scalar archive integrity evidence.
+    let archive = null;
+    if (mutation || body.key === 'resv:all') {
+      if (!mutation && cacheAllowed && matchesArchive(archiveCache, metadata, scope)) {
+        archive = { ...metadata, value_text: archiveCache.valueText };
+      } else {
+        archive = await readArchive(metadata);
+        if (!mutation && cacheAllowed) pendingCache = Object.freeze({ scope,
+          revision: String(metadata.revision), sha256: metadata.actual_sha256,
+          bytes: Number(metadata.value_bytes), valueText: archive.value_text });
+      }
+    }
     if (mutation) await dbRun('DELETE FROM building_store_receipts WHERE expires_at<=?', [now]);
     const prior = mutation ? await dbGet('SELECT * FROM building_store_receipts WHERE request_id=?', [requestId]) : null;
     if (prior) {
@@ -181,6 +220,13 @@ export async function executeBuildingStoreOperation(body, { requestId, payloadSh
       [requestId, payloadSha256, JSON.stringify(result), now + 86_400_000]);
     return result;
   });
+  // withTransaction only guarantees a commit when it was not already nested.
+  // A failed operation or failed COMMIT never publishes transaction-local text.
+  if (cacheAllowed) {
+    if (!['get', 'health'].includes(body.operation)) archiveCache = null;
+    else if (pendingCache) archiveCache = pendingCache;
+  }
+  return result;
 }
 
 export async function buildingStoreInventory() {
