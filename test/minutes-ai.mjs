@@ -111,6 +111,59 @@ try {
   assert.ok(!draft.warnings.some(warning => warning.includes('Prayers were requested for the families.')), 'references expose line numbers rather than repeating source details');
   assert.equal(draft.presiding, 'WM Dixon-Saunders', 'a presiding officer with a verified source reference is preserved');
 
+  // Input sourceType is request metadata, not meeting evidence. An optional
+  // default-type citation must neither block a sourced draft nor earn coverage.
+  const metadataCitation = response();
+  metadataCitation.evidence.unshift({field:'meetingType',quote:'compiled_notes'});
+  const metadataSnapshot = structuredClone(metadataCitation);
+  let metadataRequests = 0;
+  const metadataOptions = {sourceType:'compiled_notes',generateStructured:async()=>{metadataRequests++;return metadataCitation;}};
+  const metadataDraft = await generateMinutesDraft(source, metadataOptions);
+  assert.equal(metadataDraft.meetingType,'Stated Communication');
+  assert.deepEqual(metadataDraft.sections,draft.sections);
+  assert.deepEqual(metadataCitation,metadataSnapshot,'Optional default-type handling never rewrites the cached provider response');
+  assert.deepEqual(await generateMinutesDraft(source,metadataOptions),metadataDraft,'The same cached provider output remains usable');
+  assert.equal(metadataRequests,2,'Each explicit caller invocation is handled once without an automatic retry');
+  assert.ok(!metadataDraft.warnings.some(warning=>/^Source reference: meetingType,/.test(warning)));
+  const coverageBefore = draft.warnings.find(warning=>warning.startsWith('Source coverage review:'));
+  assert.equal(metadataDraft.warnings.find(warning=>warning.startsWith('Source coverage review:')),coverageBefore);
+  const irrelevantDefaultCitation=response();
+  irrelevantDefaultCitation.evidence.unshift({field:'meetingType',quote:'An additional scheduling note needs placement.'});
+  const irrelevantDefaultDraft=await generateMinutesDraft(source,{generateStructured:async()=>irrelevantDefaultCitation});
+  assert.equal(irrelevantDefaultDraft.warnings.find(warning=>warning.startsWith('Source coverage review:')),coverageBefore,
+    'A coincidentally literal default-type quote still cannot hide an uncovered source line');
+  const specialSource=source+'\nMeeting type: Special Communication';
+  const specialResponse=response();specialResponse.draft.meetingType='Special Communication';
+  specialResponse.evidence.unshift({field:'meetingType',quote:'Meeting type: Special Communication'});
+  assert.equal((await generateMinutesDraft(specialSource,{generateStructured:async()=>specialResponse})).meetingType,'Special Communication');
+  for (const [specificSource,generated] of [
+    [source,{...response(),draft:{...response().draft,meetingType:'Special Communication'},evidence:[...response().evidence,{field:'meetingType',quote:'compiled_notes'}]}],
+    [specialSource,metadataCitation],
+  ]) await assert.rejects(generateMinutesDraft(specificSource,{sourceType:'compiled_notes',generateStructured:async()=>generated}),
+    /source reference that could not be verified/,'Known nondefault meeting types retain strict quote validation');
+  const uncitedSpecial=response();uncitedSpecial.draft.meetingType='Special Communication';
+  await assert.rejects(generateMinutesDraft(specialSource,{generateStructured:async()=>uncitedSpecial}),/all extracted content/);
+  const factualMetadata=response();factualMetadata.evidence.find(entry=>entry.field==='meetingDate').quote='compiled_notes';
+  await assert.rejects(generateMinutesDraft(source,{sourceType:'compiled_notes',generateStructured:async()=>factualMetadata}),
+    error=>error.code==='MINUTES_SOURCE_VERIFICATION_FAILED','Request metadata cannot support an actual meeting date');
+  const sectionMetadata=response();sectionMetadata.draft.sections[2].sourceQuotes=['compiled_notes'];
+  await assert.rejects(generateMinutesDraft(source,{sourceType:'compiled_notes',generateStructured:async()=>sectionMetadata}),
+    error=>error.code==='MINUTES_SECTION_EVIDENCE_INVALID','Request metadata cannot support section facts');
+
+  const rejectedReferenceLogs=[];
+  const originalReferenceWarning=console.warn;
+  console.warn=(...values)=>rejectedReferenceLogs.push(values);
+  try {
+    const unsafeField=response();
+    unsafeField.evidence.push({field:'untrusted model field with private source text',quote:'untrusted private quotation'});
+    await assert.rejects(generateMinutesDraft(source,{generateStructured:async()=>unsafeField}),/could not be verified/);
+    await assert.rejects(generateMinutesDraft(source,{generateStructured:async()=>factualMetadata}),/could not be verified/);
+  } finally { console.warn=originalReferenceWarning; }
+  assert.deepEqual(rejectedReferenceLogs,[
+    ['Minutes source reference rejected:','invalid_field','unsupported'],
+    ['Minutes source reference rejected:','quote_not_found','meetingDate'],
+  ],'Diagnostics identify only a validated field and never log rejected source text, quotes or model-supplied field names');
+
   // Reproduce the failed cached-result shape with synthetic notes only. The
   // actual failed pasted source was not retained and is not reconstructed here.
   const uncitedPresiding = response();
@@ -486,6 +539,26 @@ try{
  const rejected=await dbAll('SELECT state,charged_units FROM ai_generation_requests WHERE user_id=?',['72']);
  assert.equal(rejected.length,1);assert.equal(rejected[0].state,'failed');assert.ok(Number(rejected[0].charged_units)>0,'Rejected stub usage remains in the allowance audit');
  assert.deepEqual(legacyResult,originalLegacy);assert.equal(fixture.source,originalSource);
+ // Seed a completed valid-shape cache entry directly through the actual
+ // adapter, then apply source verification without another provider request.
+ const defaultMetadata=structuredClone(fixture.response);defaultMetadata.evidence.unshift({field:'meetingType',quote:'compiled_notes'});
+ const defaultMetadataSnapshot=structuredClone(defaultMetadata);let metadataProviderCalls=0;
+ const metadataGenerator=createGenerator({apiKey:'SYNTHETIC-OPTIONAL-METADATA',fetchImpl:async()=>{
+  metadataProviderCalls++;
+  return new Response(JSON.stringify({id:'resp_metadata_fixture',model:'gpt-5.6-luna',status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(defaultMetadata)}]}],usage:{input_tokens:1000,output_tokens:100}}),{status:200,headers:{'Content-Type':'application/json'}});
+ }});
+ let metadataRequest;
+ const baselineMetadataDraft=await generateMinutesDraft(fixture.source,{sourceType:'compiled_notes',generateStructured:async request=>{metadataRequest=request;return fixture.response;}});
+ const forMetadata=metadataGenerator.forUser(73);await forMetadata(metadataRequest);
+ const metadataRowsBefore=await dbAll('SELECT * FROM ai_generation_requests WHERE user_id=?',['73']);
+ assert.equal(metadataRowsBefore.length,1);assert.equal(metadataRowsBefore[0].state,'completed');
+ const metadataCachedDraft=await generateMinutesDraft(fixture.source,{sourceType:'compiled_notes',generateStructured:forMetadata});
+ assert.deepEqual(metadataCachedDraft,baselineMetadataDraft);
+ assert.deepEqual(await generateMinutesDraft(fixture.source,{sourceType:'compiled_notes',generateStructured:forMetadata}),metadataCachedDraft);
+ assert.equal(metadataProviderCalls,1,'Optional default-type verification reuses the exact completed cache without a new provider request');
+ assert.deepEqual(await dbAll('SELECT * FROM ai_generation_requests WHERE user_id=?',['73']),metadataRowsBefore,'Cached response, schema hash and allowance history are not rewritten');
+ assert.deepEqual(defaultMetadata,defaultMetadataSnapshot);
+ console.log('PASS: cached optional default meetingType metadata is usable without a new provider call or source-coverage credit; cached result, request hash and charge history remain unchanged.');
  const edited={...organized,sections:[{heading:'New Business and Motions',body:'- Officer correction retained verbatim.'}]};
  assert.equal(normalizeMinutesDraft(structuredClone(edited)).sections.find(section=>section.heading==='New Business and Motions').body,edited.sections[0].body,'The new wire schema does not rewrite existing officer edits');
  console.log('PASS: legacy 14-action cached rejection reproduced; generation-only schema changes cache identity, preserves old audit/source/edits, succeeds once with all sourced sections, caches valid output and rejects forbidden provider extras without automatic retry.');

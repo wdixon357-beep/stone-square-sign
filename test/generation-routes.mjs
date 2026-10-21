@@ -127,6 +127,10 @@ const fetchImpl = async (url, options) => {
     });
     result={draft,evidence:[...evidence,...(configuration.extraEvidence||[])]};
     if (mode === 'forbidden_actions') draft.actionItems = Array.from({length:14},(_,index)=>'Synthetic unsupported action '+(index+1));
+    if (mode === 'default_metadata_citation' || mode === 'default_metadata_invalid_section') {
+      result.evidence.unshift({field:'meetingType',quote:'compiled_notes'});
+      if (mode === 'default_metadata_invalid_section') draft.sections.find(section=>section.body.trim()).sourceQuotes=['compiled_notes'];
+    }
     if (mode === 'procedural_omission' || mode === 'unsupported_second') {
       const body = '- The minutes of the previous meeting were reviewed. The source states that the minutes were approved as submitted, but it does not identify a mover, seconder, vote method or tally.';
       draft.sections = [{heading:'Reading of the Minutes',body:body + (mode === 'unsupported_second' ? ' Brother Example seconded the motion.' : ''),sourceQuotes:[input.source]}];
@@ -352,6 +356,30 @@ try {
     forbiddenIncident?.category==='GENERATION_INVALID_RESPONSE' && forbiddenIncident.userId===assistant.user.id);
   assert.deepEqual((await api('/api/minutes',assistant.token)).data.minutes,beforeForbiddenRecords);
   check('Rejected action-table response preserves existing source, draft, signatures and workflow',true);
+
+  await control({mode:'default_metadata_citation'});
+  const metadataSource = omissionSource+'\nThe meeting schedule was discussed.';
+  const beforeMetadataCalls = await providerCalls();
+  const metadataResult = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(metadataSource));
+  assert.equal(metadataResult.status,201,JSON.stringify(metadataResult.data));
+  const metadataMinutes = metadataResult.data.minutes;
+  check('Assistant Secretary can save otherwise sourced minutes with optional default meeting-type metadata citation',
+    metadataMinutes.status==='draft' && metadataMinutes.draft.meetingType==='Stated Communication' && await providerCalls()===beforeMetadataCalls+1);
+  const metadataReopened = (await api('/api/minutes',assistant.token)).data.minutes.find(item=>item.id===metadataMinutes.id);
+  assert.deepEqual(metadataReopened,metadataMinutes);
+  check('The saved draft reopens with its source and unsigned workflow preserved',
+    metadataReopened.preparerAttestedAt==null && metadataReopened.masterAttestedAt==null);
+  const cachedMetadata = await api(`/api/minutes/${metadataMinutes.id}/reorganize`,assistant.token,'POST',{expectedUpdatedAt:metadataMinutes.updatedAt});
+  check('The same optional metadata citation remains usable from existing provider cache without another call',
+    cachedMetadata.status===200 && await providerCalls()===beforeMetadataCalls+1);
+  const beforeInvalidMetadata = (await api('/api/minutes',assistant.token)).data.minutes;
+  await control({mode:'default_metadata_invalid_section'});
+  const invalidMetadata = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(metadataSource+'\nA distinct source-verification case.'));
+  const invalidMetadataIncident = (await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===invalidMetadata.data.incidentReference);
+  check('Ignoring an optional default reference never accepts metadata as a real section quote',
+    invalidMetadata.status===502 && invalidMetadataIncident?.category==='MINUTES_SECTION_EVIDENCE_INVALID');
+  assert.deepEqual((await api('/api/minutes',assistant.token)).data.minutes,beforeInvalidMetadata);
+  check('A genuine source-reference failure leaves all saved minutes untouched',true);
 
   // Keep this multipart regression isolated from the earlier rate bucket. Its
   // intentionally empty agenda sections must never shift a later body's quote.

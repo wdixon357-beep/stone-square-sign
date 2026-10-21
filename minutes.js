@@ -230,6 +230,10 @@ function checkedGeneratedDraft(response, source, localDraft) {
     // An obsolete field supports no displayed fact and must not count toward
     // source coverage or block a draft. All recorded facts still need evidence.
     if (item.field === 'prayerRequested') continue;
+    // The unchanged default is allowed without a source fact. Provider input
+    // metadata is not a citation and must never count as source coverage.
+    if (item.field === 'meetingType' && generated.meetingType === 'Stated Communication'
+      && localDraft.meetingType === 'Stated Communication') continue;
     const unrecordedOfficer = /^officerAttendance\[(0|[1-9]\d*)\]\.status$/.exec(item.field);
     if (unrecordedOfficer && generated.officerAttendance[Number(unrecordedOfficer[1])]?.status === 'not_recorded') {
       // The model sometimes cites an officer whose attendance it explicitly left
@@ -242,7 +246,7 @@ function checkedGeneratedDraft(response, source, localDraft) {
     const allowedField = requiredFields.has(item.field) || item.field === 'meetingType' || existingWarning;
     const quote = item.quote.trim() && exactSourceQuote(source, item.quote);
     if (!allowedField || !quote) {
-      console.warn('Minutes source reference rejected:', !allowedField ? 'invalid_field' : 'quote_not_found');
+      console.warn('Minutes source reference rejected:', !allowedField ? 'invalid_field' : 'quote_not_found', allowedField ? item.field : 'unsupported');
       throw generationError('Minutes generation returned a source reference that could not be verified. Please try again.',
         /^sections\[/.test(item.field) ? 'MINUTES_SECTION_EVIDENCE_INVALID' : 'MINUTES_SOURCE_VERIFICATION_FAILED');
     }
