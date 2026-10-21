@@ -84,6 +84,12 @@ export const MINUTES_GENERATION_SCHEMA = {
     // Evidence stays beside the section it supports. The saved/public draft
     // contract remains heading/body only; this is the provider wire contract.
     draft: {...MINUTES_SCHEMA, properties: {...MINUTES_SCHEMA.properties,
+      // These tables are forbidden in new minutes. Constrain the provider
+      // contract without altering saved drafts or discarding returned facts.
+      // The changed schema also separates this request from legacy cached output.
+      income: {...MINUTES_SCHEMA.properties.income, maxItems: 0},
+      expenses: {...MINUTES_SCHEMA.properties.expenses, maxItems: 0},
+      actionItems: {...MINUTES_SCHEMA.properties.actionItems, maxItems: 0},
       sections: {type:'array', items:{type:'object', additionalProperties:false,
         required:['heading','body','sourceQuotes'], properties:{
           ...MINUTES_SCHEMA.properties.sections.items.properties,

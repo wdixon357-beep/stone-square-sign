@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { MINUTES_REPORT_RULES } from '../report-rules.js';
 import { generateMinutesDraft, normalizeMinutesDraft, MINUTES_SCHEMA, MINUTES_GENERATION_SCHEMA } from '../minutes.js';
 import { attendanceReviewIssues, UNCITED_PRESIDING_WARNING } from '../minutes-format.js';
@@ -59,6 +60,14 @@ try {
   };
   assertStrict(MINUTES_SCHEMA);
   assertStrict(MINUTES_GENERATION_SCHEMA);
+  for (const field of ['income', 'expenses', 'actionItems']) {
+    assert.equal(MINUTES_GENERATION_SCHEMA.properties.draft.properties[field].maxItems, 0,
+      `The provider can only return an empty ${field} table`);
+    assert.ok(!Object.hasOwn(MINUTES_SCHEMA.properties[field], 'maxItems'),
+      `Saved/public ${field} data keeps its established contract`);
+    assert.notEqual(MINUTES_GENERATION_SCHEMA.properties.draft.properties[field], MINUTES_SCHEMA.properties[field],
+      `The generation constraint must not mutate saved/public ${field} schema`);
+  }
   assert.deepEqual(Object.keys(MINUTES_SCHEMA.properties.sections.items.properties).sort(), ['body','heading'], 'Saved/public sections keep their established contract');
   assert.deepEqual(Object.keys(MINUTES_GENERATION_SCHEMA.properties.draft.properties.sections.items.properties).sort(), ['body','heading','sourceQuotes'], 'Only the generation wire shape adds section-local evidence');
   let calls = 0;
@@ -414,6 +423,81 @@ try {
     ];
   }, /invalid officer attendance name/);
   await rejectResponse(result => {result.draft.income = [{date:null, reference:null, party:null, description:'Unsupported receipt', amount:'100'}];}, /unsupported transaction/);
+  for (const [field, items] of [
+    ['income', [{date:null,reference:null,party:null,description:'Community Supper',amount:null}]],
+    ['expenses', [{date:null,reference:null,party:null,description:'Community Supper',amount:null}]],
+    ['actionItems', Array(14).fill('Volunteers will confirm the menu.')],
+  ]) {
+    const forbidden = response();
+    forbidden.draft[field] = items;
+    const unchanged = structuredClone(forbidden);
+    let attempts = 0;
+    await assert.rejects(generateMinutesDraft(source, {generateStructured:async()=>{attempts++;return forbidden;}}),
+      /unsupported transaction or action tables/, `Nonempty ${field} is rejected, never silently removed`);
+    assert.equal(attempts, 1, `Rejecting ${field} cannot automatically request another generation`);
+    assert.deepEqual(forbidden, unchanged, `Rejecting ${field} cannot rewrite the provider result`);
+  }
+
+  // Reproduce the observed legacy contract/cache failure through the actual
+  // allowance/cache adapter, with only synthetic input and a stubbed provider.
+  // A separate process forces PGlite in memory before any adapter is imported.
+  const cacheFixture = String.raw`
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {connect,close,dbAll} from './db.js';
+import {createGenerator} from './ai-generation.js';
+import {generateMinutesDraft,MINUTES_GENERATION_SCHEMA,normalizeMinutesDraft} from './minutes.js';
+assert.equal(process.env.DATABASE_URL,'');assert.equal(process.env.PGLITE_DIR,'');
+assert.equal((await connect()).driver,'pglite');
+const fixture=JSON.parse(readFileSync(0,'utf8'));
+const legacySchema=structuredClone(MINUTES_GENERATION_SCHEMA);
+for(const field of ['income','expenses','actionItems'])delete legacySchema.properties.draft.properties[field].maxItems;
+let providerCalls=0;const requestedSchemas=[];
+const legacyResult=structuredClone(fixture.response);legacyResult.draft.actionItems=Array(14).fill('Volunteers will confirm the menu.');
+const originalLegacy=structuredClone(legacyResult),originalSource=fixture.source;
+const generator=createGenerator({apiKey:'SYNTHETIC-CACHE-FIXTURE',fetchImpl:async(url,options)=>{
+ assert.equal(url,'https://api.openai.com/v1/responses');providerCalls++;
+ const body=JSON.parse(options.body);assert.equal(body.text.format.strict,true);requestedSchemas.push(body.text.format.schema);
+ const result=providerCalls===1||providerCalls===3?legacyResult:fixture.response;
+ return new Response(JSON.stringify({id:'resp_fixture_'+providerCalls,model:'gpt-5.6-luna',status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}],usage:{input_tokens:1000,output_tokens:100}}),{status:200,headers:{'Content-Type':'application/json'}});
+}});
+const organize=generator.forUser(71);
+const legacy=async request=>organize({...request,schema:legacySchema});
+try{
+ await assert.rejects(generateMinutesDraft(fixture.source,{generateStructured:legacy}),/unsupported transaction or action tables/);
+ assert.equal(providerCalls,1);
+ await assert.rejects(generateMinutesDraft(fixture.source,{generateStructured:legacy}),/unsupported transaction or action tables/);
+ assert.equal(providerCalls,1,'An identical legacy rejected interpretation reuses its existing audited cache');
+ const legacyRows=await dbAll('SELECT * FROM ai_generation_requests WHERE user_id=?',['71']);
+ assert.equal(legacyRows.length,1);assert.equal(legacyRows[0].state,'completed');assert.equal(JSON.parse(legacyRows[0].result_json).draft.actionItems.length,14);
+ const oldHash=legacyRows[0].request_hash,oldBytes=legacyRows[0].result_json;
+ const organized=await generateMinutesDraft(fixture.source,{generateStructured:organize});
+ assert.equal(providerCalls,2,'The new schema permits exactly one fresh call after a deliberate new generation request');
+ assert.deepEqual(organized.sections,fixture.expectedDraft.sections,'Every source-verified section and follow-up remains in the successful draft');
+ assert.deepEqual([organized.income,organized.expenses,organized.actionItems],[[],[],[]]);
+ assert.deepEqual(await generateMinutesDraft(fixture.source,{generateStructured:organize}),organized);
+ assert.equal(providerCalls,2,'An identical valid new contract is cached without another call');
+ const rows=await dbAll('SELECT * FROM ai_generation_requests WHERE user_id=?',['71']);
+ assert.equal(rows.length,2);assert.equal(new Set(rows.map(row=>row.request_hash)).size,2);
+ assert.equal(rows.find(row=>row.request_hash===oldHash).result_json,oldBytes,'The earlier audited result and charge history are retained unchanged');
+ for(const field of ['income','expenses','actionItems'])assert.equal(requestedSchemas[1].properties.draft.properties[field].maxItems,0);
+ await assert.rejects(generateMinutesDraft(fixture.source,{generateStructured:generator.forUser(72)}),error=>error.code==='GENERATION_INVALID_RESPONSE');
+ assert.equal(providerCalls,3,'An output violating maxItems is rejected without an automatic provider retry');
+ const rejected=await dbAll('SELECT state,charged_units FROM ai_generation_requests WHERE user_id=?',['72']);
+ assert.equal(rejected.length,1);assert.equal(rejected[0].state,'failed');assert.ok(Number(rejected[0].charged_units)>0,'Rejected stub usage remains in the allowance audit');
+ assert.deepEqual(legacyResult,originalLegacy);assert.equal(fixture.source,originalSource);
+ const edited={...organized,sections:[{heading:'New Business and Motions',body:'- Officer correction retained verbatim.'}]};
+ assert.equal(normalizeMinutesDraft(structuredClone(edited)).sections.find(section=>section.heading==='New Business and Motions').body,edited.sections[0].body,'The new wire schema does not rewrite existing officer edits');
+ console.log('PASS: legacy 14-action cached rejection reproduced; generation-only schema changes cache identity, preserves old audit/source/edits, succeeds once with all sourced sections, caches valid output and rejects forbidden provider extras without automatic retry.');
+}finally{await close();}
+`;
+  const cacheRun = spawnSync(process.execPath, ['--input-type=module','-e',cacheFixture], {
+    cwd:new URL('../',import.meta.url),
+    env:{...process.env,NODE_ENV:'test',DATABASE_URL:'',PGLITE_DIR:'',OPENAI_API_KEY:'',SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:''},
+    input:JSON.stringify({source,response:response(),expectedDraft:draft}),encoding:'utf8',timeout:120000,
+  });
+  assert.equal(cacheRun.status,0,cacheRun.stderr||cacheRun.error?.message);
+  process.stdout.write(cacheRun.stdout);
   const providerFailure = Object.assign(new Error('Monthly limit reached.'), {statusCode: 429});
   await assert.rejects(generateMinutesDraft(source, {generateStructured: async () => {throw providerFailure;}}), error => error === providerFailure);
   const local = await generateMinutesDraft(source);

@@ -112,6 +112,9 @@ const fetchImpl = async (url, options) => {
     const local = await generateMinutesDraft(input.source, {sourceType:input.sourceType});
     const draft = Object.fromEntries(Object.keys(MINUTES_SCHEMA.properties).map(key=>[key,local[key]]));
     if (!body.text.format.schema.properties.draft.properties.sections.items.required.includes('sourceQuotes')) throw Error('Minutes provider schema omitted section-local evidence');
+    for (const field of ['income','expenses','actionItems']) {
+      if (body.text.format.schema.properties.draft.properties[field].maxItems !== 0) throw Error('Minutes provider schema permits an unsupported '+field+' table');
+    }
     draft.sections = configuration.sections || draft.sections.map(section=>({...section,sourceQuotes:section.body.trim()?[input.source]:[]}));
     const evidence=[];
     const add=field=>evidence.push({field,quote:input.source});
@@ -123,6 +126,7 @@ const fetchImpl = async (url, options) => {
       for(const field of ['stationCoverage','actingName','actingWholeMeeting'])if(entry[field]!==null&&entry[field]!=='')add('officerAttendance['+index+'].'+field);
     });
     result={draft,evidence:[...evidence,...(configuration.extraEvidence||[])]};
+    if (mode === 'forbidden_actions') draft.actionItems = Array.from({length:14},(_,index)=>'Synthetic unsupported action '+(index+1));
     if (mode === 'procedural_omission' || mode === 'unsupported_second') {
       const body = '- The minutes of the previous meeting were reviewed. The source states that the minutes were approved as submitted, but it does not identify a mover, seconder, vote method or tally.';
       draft.sections = [{heading:'Reading of the Minutes',body:body + (mode === 'unsupported_second' ? ' Brother Example seconded the motion.' : ''),sourceQuotes:[input.source]}];
@@ -333,6 +337,21 @@ try {
   const unsupportedRetry = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(unsupportedSource));
   check('Retrying a rejected cached interpretation does not make a silent paid retry',
     unsupportedRetry.status===502 && await providerCalls()===beforeUnsupportedRetry);
+
+  // Reproduce the rejected fourteen-action provider shape without a real call.
+  // A provider that violates the constrained wire format must still fail closed
+  // before insertion, preserving every field of the earlier saved draft.
+  const beforeForbiddenRecords = (await api('/api/minutes',assistant.token)).data.minutes;
+  const beforeForbiddenCalls = await providerCalls();
+  await control({mode:'forbidden_actions'});
+  const forbidden = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(omissionSource+'\nA distinct synthetic source for the forbidden-action regression.'));
+  check('Provider contract rejects fourteen extra actions without automatic retry',
+    forbidden.status===502 && await providerCalls()===beforeForbiddenCalls+1);
+  const forbiddenIncident = (await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===forbidden.data.incidentReference);
+  check('Forbidden actions are rejected by the shared provider validator before creating minutes',
+    forbiddenIncident?.category==='GENERATION_INVALID_RESPONSE' && forbiddenIncident.userId===assistant.user.id);
+  assert.deepEqual((await api('/api/minutes',assistant.token)).data.minutes,beforeForbiddenRecords);
+  check('Rejected action-table response preserves existing source, draft, signatures and workflow',true);
 
   // Keep this multipart regression isolated from the earlier rate bucket. Its
   // intentionally empty agenda sections must never shift a later body's quote.
