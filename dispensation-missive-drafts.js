@@ -50,7 +50,8 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
     return words.length <= maximumWords ? cleaned : `${words.slice(0, maximumWords).join(' ')}…`;
   };
   const overview = (document, reportFilename) => {
-    const title = plain(document.title || 'Dispensation request', 180);
+    const title = plain(document.title || 'Dispensation request', 180)
+      .replace(/^dispensation\s+request:\s*/i, '') || 'Dispensation request';
     let request = document.parsed_preview || '';
     // Current generators store requestDetails directly. Older structured previews
     // are supported only when the same explicit field can be read safely.
@@ -148,7 +149,9 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
       uncertain: 'Missive has not confirmed the draft. Check Missive before creating another one to avoid a duplicate.',
       failed: 'The Missive draft could not be prepared. Both original documents remain saved.',
     };
-    const preview = saved || overview(document);
+    // Until a complete packet has been saved, no overview should claim that
+    // missing or unsigned attachments already exist in an email draft.
+    const preview = saved || {};
     return { state, message: sourceChanged ? 'The signed dispensation or corresponding report changed after this draft attempt. Check the earlier draft in Missive before proceeding.' : row?.failure_message || messageByState[state], subject: preview.subject, body: preview.body,
       draftId: row?.draft_id || null, conversationId: row?.conversation_id || null, url: state === 'drafted' ? row.draft_url : null,
       createdAt: row?.verified_at || null, queuedAt: row?.created_at || null, updatedAt: row?.updated_at || null,

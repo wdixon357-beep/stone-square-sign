@@ -40,6 +40,7 @@ try {
   assert.equal(await dbGet('SELECT * FROM dispensation_missive_drafts WHERE document_id = ?',['historical']),undefined);
   await make('untouched'); await service.enqueue('untouched',{onlyExisting:true});
   assert.equal((await service.status('untouched',owner)).state,'not_requested');assert.equal((await service.status('historical',owner)).state,'not_requested');
+  assert.equal((await service.status('untouched',owner)).body,undefined,'An unrequested historical record cannot advertise nonexistent email attachments.');
   await service.processPending({limit:10}); assert.equal(creations.length,0,'Report attachments and worker scans never backfill old completed records.');
   await assert.rejects(service.status('untouched',{id:owner.id,role:'secretary'}),/Only the document owner/);
   await assert.rejects(service.status('untouched',{id:owner.id+1,role:'owner'}),/Only the document owner/);
@@ -49,11 +50,14 @@ try {
   await make('no-secretary',{role:'owner'}); assert.equal((await service.enqueue('no-secretary')).state,'awaiting_signature');
   await make('superseded',{superseded:true}); assert.equal((await service.enqueue('superseded')).state,'awaiting_signature');
   await make('late-report',{reportPresent:false}); assert.equal((await service.enqueue('late-report')).state,'awaiting_report');
+  assert.equal((await service.status('late-report',owner)).body,undefined,'A missing report has no complete draft overview yet.');
+  await dbRun('UPDATE documents SET title=? WHERE id=?',['Dispensation Request: Sample community meal','late-report']);
   await addReport('late-report'); await service.enqueue('late-report',{onlyExisting:true});
   await Promise.all([service.processPending({limit:10}),service.processPending({limit:10}),service.enqueue('late-report')]);
   assert.equal(creations.length,1,'Concurrent workers and final-signature hooks create one draft.');
   const saved=await service.status('late-report',owner); assert.equal(saved.state,'drafted'); assert.equal(saved.automaticSendingEnabled,false);assert.equal(saved.reportLocked,true);assert.match(saved.body,/Request: Sample community meal on November 1, 2026/);assert.match(saved.body,/proposal-report\.pdf/);
   assert.deepEqual(Buffer.from(creations[0].attachments[0].base64,'base64'),signed);
+  assert.equal(saved.subject,'Dispensation request: Sample community meal','The existing record title does not duplicate the email subject prefix.');
   assert.deepEqual(Buffer.from(creations[0].attachments[1].base64,'base64'),report);
   assert.ok(saved.createdAt);assert.ok(saved.queuedAt);
   const persisted=await dbGet('SELECT * FROM dispensation_missive_drafts WHERE document_id = ?',['late-report']);
