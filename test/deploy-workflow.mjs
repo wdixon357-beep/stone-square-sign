@@ -14,18 +14,19 @@ for (const [name, source] of [['GitHub workflow', workflow], ['local deployment 
   }
 }
 assert.match(workflow, /check-production\.mjs .*--track-main/);
-assert.match(monitor, /30 4-9 \* \* \*/, 'production must still be monitored while William\'s Mac is asleep');
+assert.match(monitor, /37 4-9 \* \* \*/, 'production must still be monitored while William\'s Mac is asleep');
 assert.match(monitor, /RENDER_DEPLOY_HOOK/);
 assert.match(monitor, /\/api\/ready/);
 assert.match(monitor, /MONITOR_SCHEDULE: \$\{\{ github\.event\.schedule \}\}/);
 assert.match(monitor, /MONITOR_EVENT: \$\{\{ github\.event_name \}\}/);
+assert.match(monitor, /coverage:\n    needs: monitor\n    if: always\(\) &&/, 'Coverage must still run after failed readiness checks.');
 assert.match(monitor, /did not recover within eight minutes/);
 assert.doesNotMatch(localDeploy, /BASE_URL="\$\{APP_BASE_URL:/, 'local deployment must not watch a development localhost');
 assert.match(localDeploy, /PRODUCTION_BASE_URL:-https:\/\/stone-square-sign\.onrender\.com/);
 // Rehearse the actual shell body with isolated transports. Runner delay must
 // never skip an hourly event or wake the database for a process-only event.
 const schedules = [...monitor.matchAll(/- cron: "([^"]+)"/g)].map(match => match[1]);
-assert.equal(schedules.filter(schedule => schedule === '0 * * * *').length, 1);
+assert.equal(schedules.filter(schedule => schedule === '7 * * * *').length, 1);
 function expand(field, max) {
   if (field === '*') return Array.from({ length: max + 1 }, (_, value) => value);
   return field.split(',').flatMap(part => {
@@ -47,9 +48,9 @@ for (const schedule of schedules) {
 }
 for (let hour = 0; hour < 24; hour += 1) {
   const minutes = [...events.keys()].filter(key => Number(key.split(':')[0]) === hour).map(key => Number(key.split(':')[1])).sort((a, b) => a - b);
-  assert.deepEqual(minutes, hour >= 4 && hour <= 9 ? [0, 30] : [0, 10, 20, 30, 40, 50], 'process cadence at UTC hour ' + hour);
+  assert.deepEqual(minutes, hour >= 4 && hour <= 9 ? [7, 37] : [7, 17, 27, 37, 47, 57], 'process cadence at UTC hour ' + hour);
 }
-const runBody = monitor.match(/        run: \|\n([\s\S]*)$/)?.[1].replace(/^ {10}/gm, '');
+const runBody = monitor.split('\n  coverage:')[0].match(/        run: \|\n([\s\S]*)$/)?.[1].replace(/^ {10}/gm, '');
 assert.ok(runBody);
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'stone-square-monitor-'));
 try {
@@ -73,7 +74,7 @@ try {
   fs.writeFileSync(path.join(fixture, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   fs.writeFileSync(path.join(fixture, 'date'), '#!/bin/sh\nprintf "%s\\n" "$MOCK_START_MINUTE"\n', { mode: 0o755 });
   const script = runBody.replaceAll('/tmp/health', path.join(fixture, 'health')).replaceAll('/tmp/ready', path.join(fixture, 'ready'));
-  function rehearse({ schedule = '0 * * * *', event = 'schedule', minute = '24', ready = '200', healthFailures = 0, hookStatus = '202' } = {}) {
+  function rehearse({ schedule = '7 * * * *', event = 'schedule', minute = '24', ready = '200', healthFailures = 0, hookStatus = '202' } = {}) {
     const log = path.join(fixture, 'requests');
     for (const file of [log, path.join(fixture, 'count')]) fs.rmSync(file, { force: true });
     const result = spawnSync('bash', ['-e', '-c', script], {
@@ -88,7 +89,7 @@ try {
   const hourly = rehearse();
   assert.equal(hourly.status, 0, hourly.stderr);
   assert.deepEqual(hourly.requests, [healthUrl, readyUrl], 'delayed hourly event still checks readiness');
-  for (const schedule of schedules.filter(value => value !== '0 * * * *')) {
+  for (const schedule of schedules.filter(value => value !== '7 * * * *')) {
     const frequent = rehearse({ schedule, minute: '00' });
     assert.equal(frequent.status, 0, frequent.stderr);
     assert.deepEqual(frequent.requests, [healthUrl], 'process event starting on the hour does not wake the database');

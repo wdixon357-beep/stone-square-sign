@@ -71,7 +71,7 @@ export async function validateSupportingReport(bytes) {
 }
 
 export function createDispensationSubmissions({ sendEmail, addAudit, recipient, lodgeName, mailFrom, automaticDeliveryEnabled = false,
-  missiveDraftStatus, onReportSaved }) {
+  missiveDraftStatus, onReportSaved, onReportCommitted }) {
   // Sending is disconnected by default. Production never opts in; the opt-in is
   // retained solely for isolated transport regression tests of historical code.
   automaticDeliveryEnabled = automaticDeliveryEnabled === true;
@@ -232,7 +232,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     return packet(id);
   }
 
-  async function attachReport(id, user, file, sourceLabel, context) {
+  async function saveReport(id, user, file, sourceLabel, context) {
     const bytes = buffer(file?.buffer);
     await validateSupportingReport(bytes);
     const digest = hash(bytes);
@@ -259,6 +259,10 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       // callback never creates a queue row for a historical signed document.
       if (onReportSaved) await onReportSaved(id, context);
     });
+  }
+
+  async function attachReport(id, user, file, sourceLabel, context) {
+    await saveReport(id, user, file, sourceLabel, context);
     return automaticDeliveryEnabled ? deliver(id, context) : packet(id, user);
   }
 
@@ -331,8 +335,12 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     app.put('/api/documents/:id/supporting-report', ...owner,
       rateLimit({ key: 'dispensation-report-upload', maximum: 20, windowMs: 60 * 60 * 1000 }), upload.single('report'), route(async (req, res) => {
       await documentFor(req.params.id, req.user);
-      const result = await attachReport(req.params.id, req.user, req.file, req.body?.sourceLabel, context(req));
+      // saveReport resolves immediately after its transaction commits. Wake the
+      // worker before DTO reads, which may fail independently of that commit.
+      await saveReport(req.params.id, req.user, req.file, req.body?.sourceLabel, context(req));
+      if (onReportCommitted) onReportCommitted(req.params.id);
       broadcast('queue_changed', { reason: 'dispensation_report_associated', documentId: req.params.id });
+      const result = automaticDeliveryEnabled ? await deliver(req.params.id, context(req)) : await packet(req.params.id, req.user);
       res.json({ packet: result, message: result.message });
     }));
     app.get('/api/documents/:id/supporting-report', ...owner, route(async (req, res) => {

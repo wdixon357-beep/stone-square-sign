@@ -1,9 +1,11 @@
 import SwiftUI
 import Foundation
+import AppKit
 
 // Revisions may be an opaque portal token or a numeric sequence. Preserve their wire type.
 enum BuildingRevision: Codable, Equatable {
     case text(String), number(Int)
+    var wireText: String { switch self { case .text(let value): return value; case .number(let value): return String(value) } }
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer()
         if let number = try? value.decode(Int.self) { self = .number(number) }
@@ -46,6 +48,21 @@ private struct BuildingDecisionBody: Encodable { let decision: String; let note:
 private struct BuildingAttestationBody: Encodable { let revision: BuildingRevision }
 private struct BuildingFileCompletedBody: Encodable { let revision: BuildingRevision }
 private struct BuildingDecisionResponse: Decodable { let request: BuildingRequest }
+struct BuildingRecordedSignature: Decodable, Identifiable {
+    let label: String; let name: String; let title: String; let at: String; let image: String; let sha256: String
+    var id: String { label }
+    var ink: NSImage? {
+        guard image.hasPrefix("data:image/png;base64,"), let data = Data(base64Encoded: String(image.dropFirst("data:image/png;base64,".count))) else { return nil }
+        return NSImage(data: data)
+    }
+}
+struct BuildingAgreementRecord: Decodable, Identifiable {
+    let requestId: String; let revision: String; let organization: String; let eventDate: String
+    let version: String; let status: String; let originalText: String; let originalTextSha256: String
+    let authorization: [String: String]?; let signatures: [BuildingRecordedSignature]; let explanation: String
+    var id: String { requestId }
+}
+private struct BuildingAgreementResponse: Decodable { let agreement: BuildingAgreementRecord }
 
 @MainActor final class BuildingRequestsWorkspace: ObservableObject {
     @Published var requests: [BuildingRequest] = []
@@ -134,6 +151,8 @@ struct BuildingRequestsView: View {
     @State private var authorizationConditions = ""
     @State private var attestationPending = false
     @State private var filingPending = false
+    @State private var recordedAgreement: BuildingAgreementRecord?
+    @State private var loadingAgreement = false
     @State private var requestPane = 0
     private var selected: BuildingRequest? { workspace.requests.first { $0.id == selectedID } }
     private var visible: [BuildingRequest] { workspace.requests.filter { filter == "all" || $0.status == filter } }
@@ -176,7 +195,15 @@ struct BuildingRequestsView: View {
                         }
                         if let agreement = request.agreementText, !agreement.isEmpty {
                             Section("Building Use Agreement") {
-                                DisclosureGroup("View full agreement") { Text(agreement).textSelection(.enabled).font(.system(.body, design: .serif)).padding(.vertical, 8) }
+                                Button(request.agreementStatus == "fully_executed" ? "View signed agreement record" : "View recorded agreement and signatures") {
+                                    Task { await openAgreement(request) }
+                                }.disabled(loadingAgreement)
+                                if loadingAgreement { ProgressView("Opening saved agreement") }
+                                DisclosureGroup("Original accepted terms") {
+                                    Text("These are the original accepted terms. Final authorization and captured signatures are shown in the agreement record above.")
+                                        .font(.callout).foregroundStyle(.secondary)
+                                    Text(agreement).textSelection(.enabled).font(.system(.body, design: .serif)).padding(.vertical, 8)
+                                }
                             }
                         }
                         if let existing = request.note, !existing.isEmpty { Section("Recorded note") { Text(existing).textSelection(.enabled) } }
@@ -237,7 +264,13 @@ struct BuildingRequestsView: View {
         }
         .onChange(of: model.requestedBuildingRequestID) { _, _ in openRequestedBuildingRecord() }
         .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
-        .onChange(of: selectedID) { _, id in note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; authorizationConditions = ""; if id != nil { requestPane = 1 } }
+        .sheet(item: $recordedAgreement) { agreement in
+            if model.user?.can("building.view") == true { BuildingAgreementRecordView(agreement: agreement) }
+        }
+        .onChange(of: model.user?.id) { _, _ in recordedAgreement = nil }
+        .onChange(of: model.user?.role) { _, _ in recordedAgreement = nil }
+        .onChange(of: model.user?.can("building.view") ?? false) { _, mayView in if !mayView { recordedAgreement = nil } }
+        .onChange(of: selectedID) { _, id in recordedAgreement = nil; note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; authorizationConditions = ""; if id != nil { requestPane = 1 } }
         .updateDraftGuard(active: !note.isEmpty || workspace.busy || newRequest.hasUnsubmittedChanges || newRequest.busy, reason: "Finish your building request draft before updating.")
         .alert(decision == "approved" ? "Approve this building request?" : "Decline this building request?", isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } })) {
             Button("Confirm decision") {
@@ -264,6 +297,70 @@ struct BuildingRequestsView: View {
         filter = "all"
         selectedID = id
         model.requestedBuildingRequestID = nil
+    }
+    private func openAgreement(_ request: BuildingRequest) async {
+        guard !loadingAgreement else { return }
+        let userID = model.user?.id
+        loadingAgreement = true; defer { loadingAgreement = false }
+        do {
+            let result: BuildingAgreementResponse = try await model.request("/api/building/requests/\(routeID(request.id))/agreement?revision=\(routeID(request.revision.wireText))")
+            guard model.user?.id == userID, model.user?.can("building.view") == true,
+                  selectedID == request.id, selected?.revision == request.revision,
+                  result.agreement.requestId == request.id, result.agreement.revision == request.revision.wireText else { return }
+            recordedAgreement = result.agreement
+        } catch { workspace.message = error.localizedDescription }
+    }
+}
+
+private struct BuildingAgreementRecordView: View {
+    let agreement: BuildingAgreementRecord
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(agreement.status == "fully_executed" ? "Signed Building Use Agreement Record" : "Building Use Agreement Record").font(.title2).bold().fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }.padding(20)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(agreement.organization).font(.headline)
+                    Text("Reference: \(agreement.requestId) · \(LodgeCalendarDates.displayDate(agreement.eventDate))").foregroundStyle(.secondary)
+                    Text(agreement.explanation).font(.callout).padding(14).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                    Text("Original accepted terms").font(.title3).bold()
+                    Text(agreement.originalText).font(.system(.body, design: .serif)).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    if let authorization = agreement.authorization {
+                        Divider()
+                        Text("Recorded Lodge authorization").font(.title3).bold()
+                        ForEach([("date", "Authorization date"), ("record", "Minutes or resolution reference"), ("fee", "Approved fee"), ("insurance", "Insurance"), ("deposit", "Security deposit"), ("conditions", "Conditions")], id: \.0) { key, label in
+                            if let value = authorization[key], !value.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) { Text(label).bold(); Text(value).textSelection(.enabled) }
+                            }
+                        }
+                    }
+                    Divider()
+                    Text("Captured signatures").font(.title3).bold()
+                    ForEach(agreement.signatures) { signature in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(signature.label).font(.headline)
+                            if let ink = signature.ink { Image(nsImage: ink).resizable().scaledToFit().frame(maxWidth: 340, maxHeight: 100).accessibilityLabel("Saved handwritten signature of \(signature.name)") }
+                            Text(signature.name).bold()
+                            if !signature.title.isEmpty { Text(signature.title) }
+                            Text(Self.timestamp(signature.at)).font(.callout).foregroundStyle(.secondary)
+                        }.padding(.vertical, 8)
+                    }
+                    if agreement.status != "fully_executed" { Text("This agreement is still awaiting completion. Only signatures already saved are shown.").font(.callout).foregroundStyle(.secondary) }
+                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.frame(minWidth: 480, idealWidth: 720, minHeight: 480, idealHeight: 680)
+    }
+    private static func timestamp(_ value: String) -> String {
+        let parser = ISO8601DateFormatter(); parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fallback = ISO8601DateFormatter()
+        guard let date = parser.date(from: value) ?? fallback.date(from: value) else { return value }
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US"); formatter.timeZone = TimeZone(identifier: "America/New_York"); formatter.dateStyle = .long; formatter.timeStyle = .short
+        return formatter.string(from: date) + " Eastern Time"
     }
 }
 
@@ -311,6 +408,7 @@ enum LodgeCalendarDates {
     }
     static func displayTime(_ value: String?) -> String {
         guard let value, !value.isEmpty else { return "" }
+        if value == "24:00" { return "12:00 AM (next day)" }
         let input = DateFormatter(); input.locale = Locale(identifier: "en_US_POSIX"); input.timeZone = calendar.timeZone; input.dateFormat = "HH:mm"; input.isLenient = false
         guard let date = input.date(from: value) else { return value }
         let output = DateFormatter(); output.locale = Locale(identifier: "en_US"); output.timeZone = calendar.timeZone; output.dateFormat = "h:mm a"

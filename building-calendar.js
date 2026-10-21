@@ -3,6 +3,7 @@ import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
 import { hasPermission, resolvePermissions } from './access-control.js';
 import { createBuildingAlertCache } from './building-alert-cache.js';
 import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
+import { mountBuildingAgreementRoutes } from './building-agreements.js';
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode});
 const DATE=/^\d{4}-\d{2}-\d{2}$/;const TIME=/^(?:[01]\d|2[0-3]):[0-5]\d$/;
 export function validDate(value){return typeof value==='string'&&DATE.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;}
@@ -105,6 +106,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   }
   return addFiling(visible);
  };
+ mountBuildingAgreementRoutes(app,{requireAuth,visibleRequest:async(req,id)=>{const {payload}=await loadRequests(req);return payload.requests.find(request=>request.id===id);}});
  app.get('/api/building/availability',requireAuth,permit('building.request'),async(req,res,next)=>{try{res.setHeader('Cache-Control','no-store');res.json(await availability(String(req.query.from||''),String(req.query.to||'')));}catch(e){next(e)}});
  app.post('/api/building/requests',requireAuth,permit('building.request'),async(req,res,next)=>{try{
   const body=buildingSubmission(req.body,req.user);

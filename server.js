@@ -36,6 +36,8 @@ import { mountArchiveRoutes } from './archive-routes.js';
 import { mountOfficerReportRoutes } from './officer-report-routes.js';
 import { initReportDeliverySchema, mountReportDelivery } from './report-delivery.js';
 import { mountReportSource } from './report-source.js';
+import { mountReportSignature } from './report-signature.js';
+import { databaseQuotaResponse } from './service-availability.js';
 import { mountCorrespondenceRoutes } from './correspondence.js';
 import { createDispensationSubmissions, initDispensationSubmissionSchema } from './dispensation-submissions.js';
 import { createDispensationMissiveDrafts, initDispensationMissiveDraftSchema } from './dispensation-missive-drafts.js';
@@ -588,11 +590,16 @@ const dispensationMissiveDrafts = createDispensationMissiveDrafts({
   from: process.env.MISSIVE_DRAFT_FROM || OWNER_EMAIL,
   recipient: { to: DDGM_EMAIL, name: DDGM_NAME }, lodgeName: LODGE_NAME, addAudit,
 });
+const missiveDraftWorker = dispensationMissiveDrafts.worker({
+  onChanged: () => broadcast('queue_changed', { reason: 'dispensation_missive_draft_changed' }),
+  onError: () => console.warn('The Missive draft queue could not be checked. Saved records are unchanged.'),
+});
 const dispensationSubmissions = createDispensationSubmissions({
   sendEmail, addAudit, recipient: { to: DDGM_EMAIL, name: DDGM_NAME }, lodgeName: LODGE_NAME, mailFrom: process.env.MAIL_FROM,
   automaticDeliveryEnabled: false,
   missiveDraftStatus: (id, user) => dispensationMissiveDrafts.status(id, user),
   onReportSaved: (id, context) => dispensationMissiveDrafts.enqueue(id, { ...context, onlyExisting: true }),
+  onReportCommitted: () => { void missiveDraftWorker.wake(); },
 });
 
 const requestBaseUrl = (req) =>
@@ -1542,6 +1549,8 @@ app.post('/api/tracker/permissions', async (req, res, next) => {
     return res.json({ active: Boolean(user) && permissions.includes('candidates.view'), permissions });
   } catch (error) { next(error); }
 });
+
+mountReportSignature(app, { secret: TRACKER_SSO_SHARED_SECRET, rateLimit });
 
 app.post('/api/reports/handoff', requireAuth, rateLimit({ key: 'report-handoff', maximum: 120, windowMs: 60 * 60 * 1000 }), (req, res, next) => {
   try {
@@ -3379,6 +3388,7 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       return { documentId: document.id, status, remaining: remaining.total };
     });
     const { documentId, status, remaining } = outcome;
+    if (status === 'completed') void missiveDraftWorker.wake();
     let submission = null;
     if (status === 'completed') {
       const completedDocument = await dbGet('SELECT * FROM documents WHERE id = ?', [documentId]);
@@ -3421,9 +3431,10 @@ dispensationSubmissions.mount(app, { requireAuth, requireOwner, upload, broadcas
 app.post('/api/documents/:id/missive-draft/retry', requireAuth, requireOwner,
   rateLimit({ key: 'dispensation-missive-retry', maximum: 10, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
     try {
-      await dispensationMissiveDrafts.retry(req.params.id, req.user, {
+      await dispensationMissiveDrafts.requestRetry(req.params.id, req.user, {
         actorUserId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || '',
       });
+      void missiveDraftWorker.wake();
       broadcast('queue_changed', { reason: 'dispensation_missive_draft_retry', documentId: req.params.id });
       res.json({ packet: await dispensationSubmissions.packet(req.params.id, req.user) });
     } catch (error) { next(error); }
@@ -3735,6 +3746,16 @@ const serverIncidentArea = requestPath => ({
 }[String(requestPath || '').split('/')[2]] || 'Dashboard');
 
 app.use(async (error, req, res, _next) => {
+  const quota = databaseQuotaResponse(error);
+  if (quota) {
+    const reference = `SS22-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    // The database has explicitly refused access, so retain the failure in
+    // runtime logs rather than claim that a database incident write succeeded.
+    console.error(JSON.stringify({ category: 'database_quota_exceeded', reference, path: req.path, method: req.method }));
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Retry-After', '300');
+    return res.status(quota.status).json({ ...quota.body, incidentReference: reference });
+  }
   console.error(error);
   if (error instanceof multer.MulterError) {
     return res.status(400).json({
@@ -3780,21 +3801,9 @@ await initGenerationSchema();
 await initActivitySchema();
 
 if (dispensationSubmissions.automaticDeliveryEnabled) dispensationSubmissions.startWorker(broadcast);
-// Only explicit queue entries created by new completed signatures are scanned.
-// Historical signed dispensations are never backfilled into someone's mailbox.
-let missiveDraftWorkerRunning = false;
-const processMissiveDrafts = async () => {
-  if (missiveDraftWorkerRunning) return;
-  missiveDraftWorkerRunning = true;
-  try {
-    const changed = await dispensationMissiveDrafts.processPending({ limit: 3 });
-    if (changed?.changed) broadcast('queue_changed', { reason: 'dispensation_missive_draft_changed' });
-  } catch { console.warn('The Missive draft queue could not be checked. Saved records are unchanged.'); }
-  finally { missiveDraftWorkerRunning = false; }
-};
-void processMissiveDrafts();
-const missiveDraftWorker = setInterval(processMissiveDrafts, 30_000);
-missiveDraftWorker.unref();
+// Bootstrap the durable queue once, then wake after committed workflow events.
+// An empty queue does not keep the free database awake with recurring queries.
+void missiveDraftWorker.start();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Stone Square Sign is running at http://localhost:${PORT}`);

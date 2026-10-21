@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { databaseQuotaResponse } from '../service-availability.js';
+const outage = databaseQuotaResponse({ code: '53000', message: 'Your account or project has exceeded the quota. Upgrade your plan to increase limits.', connection: 'private-value' });
+assert.equal(outage.status, 503);
+assert.equal(outage.body.code, 'DATABASE_QUOTA_EXCEEDED');
+assert.equal(outage.body.incidentRecorded, false);
+assert.equal(outage.body.retryable, false, 'A save must not be replayed after a quota outage.');
+assert.doesNotMatch(JSON.stringify(outage), /private-value|Upgrade your plan/);
+assert.equal(databaseQuotaResponse({ code: '53000', message: 'Other resource error' }), null);
+assert.equal(databaseQuotaResponse({ code: '28P01', message: 'password rejected' }), null);
+assert.equal(databaseQuotaResponse(new Error('quota')), null);
+console.log('PASS: confirmed provider quota maps to private503, truthful incident retention and no automatic save replay.');

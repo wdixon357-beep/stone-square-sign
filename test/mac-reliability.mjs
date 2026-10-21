@@ -31,6 +31,9 @@ final class ReliabilityFixture: URLProtocol {
     static var buildingCalls = 0
     static var saveCalls = 0
     static var networkHealthy = false
+    static var incidentStatus = 200
+    static var heartbeatStatus = 200
+    static var heartbeatCalls = 0
     static var reports: [[String: Any]] = []
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -58,7 +61,8 @@ final class ReliabilityFixture: URLProtocol {
             precondition(["Bearer SYNTHETIC-QA-TOKEN", "Bearer SYNTHETIC-OTHER-TOKEN"].contains(authorization))
             var report = try! JSONSerialization.jsonObject(with: body()) as! [String: Any]
             report["fixtureAuthorization"] = authorization
-            Self.reports.append(report)
+            status = Self.incidentStatus
+            if status == 200 { Self.reports.append(report) }
         } else if endpoint == "/api/building/alerts" {
             Self.buildingCalls += 1; status = Self.buildingStatus
             object = status == 200 ? ["alerts":[]] : ["error":"Synthetic upstream outage", "incidentReference":Self.buildingReference]
@@ -67,6 +71,9 @@ final class ReliabilityFixture: URLProtocol {
             object = status == 200 ? ["ok":true] : ["error":"Synthetic save failure", "incidentReference":"SS22-TEST-FOREGROUND"]
         } else if endpoint == "/api/treasury/alerts" && !Self.networkHealthy {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return
+        } else if endpoint == "/api/activity/heartbeat" {
+            Self.heartbeatCalls += 1; status = Self.heartbeatStatus
+            object = status == 200 ? ["ok":true] : ["error":"Synthetic activity storage outage"]
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields:["Content-Type":"application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -161,6 +168,28 @@ extension ReliableTransport {
         _ = try await perform("/api/treasury/alerts")
         precondition(reported(queuedReference, "recovered") && center.notice?.recovered == true)
         precondition(ReliabilityFixture.reports.allSatisfy { ($0["path"] as? String)?.contains("?") == false }, "Audit paths remain redacted")
+        center.dismiss()
+        // A storage outage may prevent the error log itself being accepted.
+        // Passive activity must not claim a user document action failed, and
+        // local queueing must never be described as a confirmed server record.
+        ReliabilityFixture.incidentStatus = 503; ReliabilityFixture.heartbeatStatus = 500
+        _ = try await perform("/api/activity/heartbeat", method: "POST", presentation: .foreground)
+        precondition(ReliabilityFixture.heartbeatCalls == 1, "Activity POST is never replayed")
+        precondition(center.notice?.background == true && center.notice?.title == "Activity tracking could not refresh.")
+        precondition(center.notice?.message.contains("saved on this Mac") == true && center.notice?.message.contains("incident was recorded") == false)
+        let activityQueued = try JSONSerialization.jsonObject(with: UserDefaults.standard.data(forKey: pendingKey)!) as! [[String: Any]]
+        let activityReference = activityQueued.last!["reference"] as! String
+        precondition(activityQueued.last!["path"] as? String == "/api/activity/heartbeat" && activityQueued.last!["state"] as? String == "open" && activityQueued.last!["status"] as? Int == 500)
+        precondition(!reported(activityReference, "open"), "An incident refusal is not confirmed delivery")
+        ReliabilityFixture.incidentStatus = 200
+        _ = try await perform("/api/minutes")
+        precondition(reported(activityReference, "open") && center.notice?.message.contains("incident was recorded") == true)
+        precondition(center.notice?.recovered == false, "Delivering queued telemetry does not prove the activity endpoint recovered")
+        ReliabilityFixture.heartbeatStatus = 200
+        _ = try await perform("/api/activity/heartbeat", method: "POST", presentation: .foreground)
+        precondition(center.notice?.background == true && center.notice?.recovered == true && reported(activityReference, "recovered"))
+        precondition(ReliabilityCenter.presentation(for: "/api/activity/interaction?private=not-reported", requested: .foreground) == .background)
+        center.dismiss()
         // Account A's queued audit and visible error cannot be recovered or
         // attributed by a later successful read under Account B.
         let accountA = "SYNTHETIC-QA-TOKEN", accountB = "SYNTHETIC-OTHER-TOKEN"
@@ -220,7 +249,7 @@ extension ReliableTransport {
                     && (index < 20 ? item["context"] == nil : item["context"] as? String == contextA)
             }, "Every legacy and former-account audit must remain retained")
         }
-        print("PASS: compiled native reminder lifecycle, path deduplication, foreground priority, complete audits, account isolation and retention beyond 20 queued incidents")
+        print("PASS: compiled native reminder lifecycle, passive activity, truthful queued/delivered status, path recovery, foreground priority, complete audits, account isolation and retention beyond 20 queued incidents")
     }
 }
 `);

@@ -1,0 +1,873 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lodge Report Generator, Stone Square Lodge No. 22</title>
+<meta name="referrer" content="no-referrer">
+<script>
+(() => {
+  try {
+    const incoming = new URL(location.href);
+    const candidate = incoming.searchParams.get("assertion");
+    if (candidate && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(candidate) && candidate.length <= 8192) window.__REPORT_ASSERTION = candidate;
+    if (incoming.searchParams.has("assertion")) {
+      incoming.searchParams.delete("assertion");
+      history.replaceState(null, "", incoming.pathname + (incoming.searchParams.size ? "?" + incoming.searchParams : "") + incoming.hash);
+    }
+  } catch(e) {}
+})();
+</script>
+<meta name="description" content="Prepare Lodge reports and proposals on Stone Square letterhead, ready to print or save.">
+<link rel="canonical" href="https://request.stonesquare22pha.org/report">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Stone Square Lodge No. 22">
+<meta property="og:title" content="Lodge Report Generator">
+<meta property="og:description" content="Reports and proposals for the Craft. Prepare your report on the Lodge letterhead, ready to print or save.">
+<meta property="og:url" content="https://request.stonesquare22pha.org/report">
+<meta property="og:image" content="https://request.stonesquare22pha.org/icons/lodge-report-generator-share-v1.png">
+<meta property="og:image:secure_url" content="https://request.stonesquare22pha.org/icons/lodge-report-generator-share-v1.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Stone Square Lodge No. 22 seal with Lodge Report Generator in navy and gold. Reports and proposals for the Craft.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Lodge Report Generator">
+<meta name="twitter:description" content="Reports and proposals for the Craft, prepared on Stone Square Lodge letterhead.">
+<meta name="twitter:image" content="https://request.stonesquare22pha.org/icons/lodge-report-generator-share-v1.png">
+<meta name="twitter:image:alt" content="Stone Square Lodge No. 22 seal with Lodge Report Generator in navy and gold.">
+<meta name="theme-color" content="#0f1b3d">
+<link rel="icon" href="icons/lh-seal.png">
+<link rel="manifest" href="/report.webmanifest">
+<link rel="apple-touch-icon" href="/icons/rep-touch-180.png">
+<style>
+  :root{ --navy:#16264d; --gold:#a9812c; --ink:#1c2333; --mut:#5a6274; --line:#dfe3ec; --field:#767f94; --bg:#eef1f7; }
+  *{box-sizing:border-box}
+  body{ margin:0; min-height:100vh; background:radial-gradient(1200px 800px at 50% -10%, #1c2f63, #0f1b3d); color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%; }
+  .wrap{ max-width:640px; margin:0 auto; padding:24px 16px 48px; }
+  .card{ background:#fff; border:1px solid var(--line); border-radius:18px; padding:24px 20px; box-shadow:0 12px 34px -18px rgba(20,30,60,.4); }
+  .head{ text-align:center; margin-bottom:8px; }
+  .head img{ width:72px; height:72px; }
+  h1{ font-family:Georgia,"Times New Roman",serif; color:var(--navy); font-size:22px; margin:10px 0 4px; }
+  .head p{ color:var(--mut); font-size:14px; margin:0; }
+  h2{ font-family:Georgia,"Times New Roman",serif; color:var(--navy); font-size:17px; margin:26px 0 2px; padding-top:18px; border-top:1px solid var(--line); }
+  h2 small{ display:block; font:400 13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--mut); }
+  label{ display:block; font-weight:600; font-size:14px; margin:16px 0 6px; }
+  .hint{ font-weight:400; color:var(--mut); font-size:12.5px; }
+  input, textarea, select{ width:100%; font:inherit; font-size:16px; color:var(--ink); background:#fff; border:1.5px solid var(--field); border-radius:11px; padding:12px 13px; }
+  input:focus, textarea:focus, select:focus{ border-color:var(--gold); box-shadow:0 0 0 3px rgba(169,129,44,.16); }
+  input:focus-visible, textarea:focus-visible, select:focus-visible{ outline:3px solid var(--navy); outline-offset:2px; }
+  .tp:has(input:focus-visible){ box-shadow:0 0 0 3px var(--navy); }
+  select{ appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%235a6274' d='M1 1l5 5 5-5'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 14px center; padding-right:34px; }
+  input[aria-invalid="true"], textarea[aria-invalid="true"], select[aria-invalid="true"]{ border-color:#a5372c; }
+  .req{ color:#c0392b; font-weight:700; }
+  textarea{ resize:vertical; min-height:84px; }
+  .types{ display:grid; gap:8px; margin-top:8px; }
+  .tp{ display:flex; gap:11px; align-items:flex-start; margin:0; font-weight:600; cursor:pointer; border:1.5px solid var(--field); border-radius:11px; padding:12px 13px; }
+  .tp input{ width:20px; height:20px; margin:2px 0 0; accent-color:var(--navy); flex:none; }
+  .tp em{ display:block; font-style:normal; font-size:12.5px; color:var(--mut); font-weight:400; }
+  .tp:has(input:checked){ border-color:var(--navy); background:#f7f9fd; }
+  fieldset.choices{ border:0; padding:0; margin:16px 0 0; display:grid; gap:8px; }
+  fieldset.choices legend{ font-weight:600; font-size:14px; margin-bottom:6px; padding:0; }
+  fieldset.choices .tp{ font-weight:500; }
+  fieldset.choices label.sub{ margin:6px 0 4px; font-weight:500; font-size:13.5px; color:var(--mut); }
+  .two{ display:flex; flex-wrap:wrap; gap:12px; } .two > div{ flex:1 1 180px; min-width:0; }
+  .guidance{ margin:22px 0 0; padding:14px 16px; border-left:3px solid var(--gold); border-radius:0 8px 8px 0; background:#faf7ef; font-size:14px; line-height:1.6; }
+  .acts{ display:grid; gap:10px; margin-top:24px; }
+  button.send, button.ghost{ width:100%; padding:15px; font-size:16px; font-weight:700; cursor:pointer; border-radius:12px; }
+  button.send{ color:#fff; background:var(--navy); border:0; }
+  button.ghost{ color:var(--navy); background:#fff; border:1.5px solid var(--navy); }
+  button:disabled{ opacity:.5; cursor:default; }
+  .err{ color:#a5372c; font-size:14px; text-align:center; margin-top:12px; font-weight:600; }
+  .ok{ color:#1c7a48; font-size:14px; text-align:center; margin-top:12px; font-weight:600; }
+  .note{ text-align:center; color:#aebfda; font-size:12.5px; margin-top:16px; }
+  .remember{ display:flex; gap:10px; align-items:center; font-weight:500; font-size:14px; margin-top:10px; }
+  .remember input{ width:18px; height:18px; accent-color:var(--navy); }
+  .done{ text-align:center; padding:8px 4px; }
+  .done .big{ font-size:44px; }
+  .ref{ display:inline-block; margin:12px 0; font-size:22px; font-weight:800; letter-spacing:1px; color:var(--navy); background:#f3eddc; border:1px solid #e6d9b0; border-radius:10px; padding:8px 16px; }
+  a.btn{ display:inline-block; text-decoration:none; font-size:15px; font-weight:700; color:#fff; background:var(--navy); border-radius:11px; padding:12px 18px; margin:6px 4px; }
+  a.btn.alt{ color:var(--navy); background:#fff; border:1.5px solid var(--navy); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="head">
+      <img src="icons/lh-seal.png" alt="Stone Square Lodge No. 22">
+      <h1>Lodge Report Generator</h1>
+      <p>Stone Square Lodge No. 22, F&amp;AM, PHA<br>Prepare your report on the Lodge letterhead. Preview it if you like, then review and send. <span id="intro-copy">Previews do not send email.</span></p>
+    </div>
+    <div id="body"><p style="text-align:center;color:var(--mut)">Loading&hellip;</p></div>
+  </div>
+  <p class="note" id="copy-note">Previews do not send email. Only Send final report emails the completed copy.</p>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const REPORT_DASHBOARD_ORIGIN = "https://stone-square-sign.onrender.com";
+let REPORT_ASSERTION = window.__REPORT_ASSERTION || null;
+window.__REPORT_ASSERTION = null;
+const apiHeaders = () => ({ "Content-Type": "application/json", ...(REPORT_ASSERTION ? { Authorization: "Bearer " + REPORT_ASSERTION } : {}) });
+const officerSessionMessage = "Your secure officer session is unavailable or expired. Open Report Generator from the Stone Square Dashboard again.";
+let SCHEMA = null;
+const newClientId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+let CLIENT_ID = newClientId();
+const validDeliveryIntent = value => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+const newDeliveryIntent = () => crypto.randomUUID();
+let DELIVERY_INTENT = "";
+let draft = {};
+let ACTIVE_DRAFT_KEY = null;
+const DASHBOARD_REPORT_URL = REPORT_DASHBOARD_ORIGIN + "/?section=reports&legacyReport=1";
+let legacyDashboardWindow = null;
+let pendingReportRecovery = null;
+// The former shared slot cannot be assigned safely to any account, so it is
+// retired instead of exposing one officer's text to the next browser user.
+try { localStorage.removeItem("report_draft"); } catch(e) {}
+function draftStorageKey(schema) {
+  if (!schema?.authenticated) return "report_draft_public";
+  return "report_draft_officer:" + encodeURIComponent(String(schema.identity?.email || "").trim().toLowerCase());
+}
+function readDraft(key) {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(key) || "{}") || {};
+    if (!saved || typeof saved !== "object" || Array.isArray(saved) || !saved.savedAt || Date.now() - saved.savedAt > 7 * 86400000) saved = {};
+  } catch(e) { saved = {}; }
+  return { ...saved, reviewed: false, signatureName: "" };
+}
+function activateDraftForSchema(schema) {
+  const key = draftStorageKey(schema);
+  if (key === ACTIVE_DRAFT_KEY) return;
+  ACTIVE_DRAFT_KEY = key;
+  draft = readDraft(key);
+  CLIENT_ID = /^[a-z0-9-]{8,64}$/i.test(String(draft.clientId || "")) ? draft.clientId : newClientId();
+  // Restored drafts may already have reached the former delivery service.
+  // Only a genuinely fresh report receives a new delivery intent.
+  DELIVERY_INTENT = validDeliveryIntent(draft.deliveryIntent) ? draft.deliveryIntent : draft.savedAt ? "" : newDeliveryIntent();
+}
+let COPY_BUSY = false;
+// Old bookmarks enter through the Dashboard. Keep the old window available
+// only when it holds a draft, so Safari can recover its first-party storage.
+function legacyDraftForEmail(email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized) return null;
+  const account = readDraft("report_draft_officer:" + encodeURIComponent(normalized));
+  const publicDraft = readDraft("report_draft_public");
+  const candidates = [account];
+  if (String(publicDraft.email || "").trim().toLowerCase() === normalized) candidates.push(publicDraft);
+  return candidates.filter(value => value.fields && Object.values(value.fields).some(text => String(text || "").trim()))
+    .sort((a, b) => b.savedAt - a.savedAt)[0] || null;
+}
+function boundedRecoveryDraft(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.type !== "string"
+    || !["officer", "committee", "event", "formal"].includes(value.type)
+    || !value.fields || typeof value.fields !== "object" || Array.isArray(value.fields)) return null;
+  const entries = Object.entries(value.fields);
+  if (entries.length > 80) return null;
+  const fields = Object.create(null);
+  for (const [key, text] of entries) {
+    if (!/^[a-zA-Z]{1,25}$/.test(key) || ["constructor", "prototype", "__proto__"].includes(key)
+      || typeof text !== "string" || text.length > 6000) return null;
+    fields[key] = text;
+  }
+  return { type: value.type, fields, phone: typeof value.phone === "string" ? value.phone.slice(0, 40) : "",
+    clientId: /^[a-z0-9-]{8,64}$/i.test(String(value.clientId || "")) ? value.clientId : "",
+    deliveryIntent: validDeliveryIntent(value.deliveryIntent) ? value.deliveryIntent : "" };
+}
+function hasLegacyReportDraft() {
+  try {
+    return Object.keys(localStorage).some(key => /^report_draft_(?:public$|officer:)/.test(key)
+      && Object.values(readDraft(key).fields || {}).some(value => String(value || "").trim()));
+  } catch(e) { return false; }
+}
+function openLegacyDashboardEntry() {
+  if (REPORT_ASSERTION || window.parent !== window || window.opener) return false;
+  window.__REPORT_DASHBOARD_ENTRY = true;
+  if (!hasLegacyReportDraft()) {
+    location.replace(DASHBOARD_REPORT_URL);
+    return true;
+  }
+  const intro = $("#intro-copy")?.parentElement;
+  if (intro) intro.textContent = "Stone Square Lodge No. 22, F&AM, PHA. Continue your saved report securely in the Dashboard.";
+  $("#body").innerHTML = `<h2>Continue your report in the Dashboard</h2>
+    <p>Your report now starts in the Stone Square Dashboard. Sign in with your Dashboard account to use your name and office.</p>
+    <p>Sign in with the email address used for your saved report. Keep this tab open until you have restored your entries.</p>
+    <div class="acts"><button class="send" id="legacy-open-dashboard" type="button">Open Dashboard and recover report</button></div>
+    <p id="legacy-bridge-status" class="hint" role="status" aria-live="polite"></p>`;
+  $("#copy-note").textContent = "Opening the Dashboard does not submit or email a report.";
+  $("#legacy-open-dashboard").onclick = () => {
+    legacyDashboardWindow = window.open(DASHBOARD_REPORT_URL, "_blank");
+    $("#legacy-bridge-status").textContent = legacyDashboardWindow
+      ? "Sign in in the Dashboard tab, then choose Restore saved report. Keep this tab open until recovery is complete."
+      : "Allow this page to open the Dashboard tab, then select the button again. Your saved entries are still on this device.";
+  };
+  return true;
+}
+window.addEventListener("message", event => {
+  if (event.origin !== REPORT_DASHBOARD_ORIGIN) return;
+  const message = event.data;
+  if (message?.kind === "stone-square-legacy-report-request") {
+    if (!legacyDashboardWindow || event.source !== legacyDashboardWindow || !/^[a-z0-9-]{8,80}$/i.test(String(message.requestId || ""))) return;
+    const candidate = boundedRecoveryDraft(legacyDraftForEmail(message.email));
+    event.source.postMessage({ kind: "stone-square-legacy-report-draft", requestId: message.requestId, draft: candidate }, REPORT_DASHBOARD_ORIGIN);
+  } else if (message?.kind === "stone-square-report-recovery") {
+    if (event.source !== window.parent && event.source !== window.opener) return;
+    const candidate = boundedRecoveryDraft(message.draft);
+    if (!candidate || typeof message.email !== "string") return;
+    pendingReportRecovery = { email: message.email.trim().toLowerCase(), draft: candidate };
+    offerReportRecovery();
+  }
+});
+function offerReportRecovery() {
+  const container = $("#report-recovery");
+  if (!container || !SCHEMA?.authenticated || !pendingReportRecovery
+    || pendingReportRecovery.email !== String(SCHEMA.identity?.email || "").trim().toLowerCase()) return;
+  const recovery = pendingReportRecovery.draft;
+  const reportType = typesFor(draft)[recovery.type];
+  if (!reportType) return;
+  container.hidden = false;
+  container.innerHTML = `<p><strong>Your saved report is available.</strong><br>Restore it from the older report page. This replaces the entries currently shown below. Review the restored report before sending it.</p>
+    <div class="acts"><button class="ghost" id="restore-legacy-report" type="button">Restore saved report</button><button class="ghost" id="keep-current-report" type="button">Keep current entries</button></div>`;
+  $("#keep-current-report").onclick = () => { pendingReportRecovery = null; container.hidden = true; container.replaceChildren(); };
+  $("#restore-legacy-report").onclick = () => {
+    if (COPY_BUSY || PREVIEW_BUSY) {
+      $("#review-status").textContent = "Wait for the current report request to finish before restoring saved entries.";
+      return;
+    }
+    const allowed = new Set(reportType.fields.flatMap(field => field.kind === "choices" ? [field.id, field.id + "Other"] : [field.id]));
+    const fields = Object.fromEntries(Object.entries(recovery.fields).filter(([key]) => allowed.has(key)));
+    draft = { ...draft, type: recovery.type, fields, phone: recovery.phone, reviewed: false, signatureName: "" };
+    CLIENT_ID = recovery.clientId || newClientId();
+    DELIVERY_INTENT = recovery.deliveryIntent || "";
+    pendingReportRecovery = null;
+    form();
+    saveDraft();
+    $("#review-status").textContent = "Saved entries restored. Review the report before confirming and sending it.";
+  };
+}
+let PREVIEW_BUSY = false;
+let PREVIEWED_KEY = null;
+const previewKey = d => JSON.stringify({ isOfficer: d.isOfficer, office: d.office, name: d.name, email: d.email, phone: d.phone, type: d.type, fields: d.fields });
+const isMaster = d => d?.isOfficer === true && d.office === "Worshipful Master";
+const typesFor = d => isMaster(d) ? SCHEMA.masterTypes : SCHEMA.types;
+const copyRecipient = d => isMaster(d) ? "your Lodge inbox" : "the Worshipful Master";
+let reportAssertionRefresh = null;
+
+function dashboardWindows() {
+  const targets = [];
+  if (window.opener) targets.push(window.opener);
+  if (window.parent && window.parent !== window && !targets.includes(window.parent)) targets.push(window.parent);
+  return targets;
+}
+function signalReportReady() {
+  const targets = dashboardWindows();
+  targets.forEach(target => {
+    try { target.postMessage({ kind: "stone-square-report-ready" }, REPORT_DASHBOARD_ORIGIN); } catch(e) {}
+  });
+  return targets.length > 0;
+}
+function signalReportSubmitted(d, result) {
+  const report = {
+    externalId: result.id || CLIENT_ID,
+    clientId: d.clientId || CLIENT_ID,
+    type: d.type,
+    title: String(d.fields?.title || typesFor(d)?.[d.type]?.name || "Lodge Report"),
+    filename: result.filename,
+    pdf: result.pdf,
+    emailed: result.mailed === true,
+    preparedByOffice: d.office
+  };
+  dashboardWindows().forEach(target => {
+    try { target.postMessage({ kind: "stone-square-report-submitted", report }, REPORT_DASHBOARD_ORIGIN); } catch(e) {}
+  });
+}
+function requestFreshReportAssertion() {
+  if (reportAssertionRefresh) return reportAssertionRefresh.promise;
+  REPORT_ASSERTION = null;
+  let resolveRefresh, rejectRefresh;
+  const promise = new Promise((resolve, reject) => { resolveRefresh = resolve; rejectRefresh = reject; });
+  const timer = setTimeout(() => {
+    if (!reportAssertionRefresh || reportAssertionRefresh.promise !== promise) return;
+    reportAssertionRefresh = null;
+    rejectRefresh(new Error(officerSessionMessage));
+  }, 15000);
+  reportAssertionRefresh = { promise, resolve: resolveRefresh, reject: rejectRefresh, timer };
+  if (!signalReportReady()) {
+    clearTimeout(timer);
+    reportAssertionRefresh = null;
+    rejectRefresh(new Error(officerSessionMessage));
+  }
+  return promise;
+}
+async function reportFetch(url, options) {
+  const wasAuthenticated = !!REPORT_ASSERTION || SCHEMA?.authenticated === true;
+  const first = await fetch(url, options());
+  if (first.status !== 401 || !wasAuthenticated) return first;
+  await requestFreshReportAssertion();
+  return fetch(url, options());
+}
+
+function receiveReportAssertion(event) {
+  if (event.origin !== REPORT_DASHBOARD_ORIGIN || (event.source !== window.opener && event.source !== window.parent)) return;
+  const message = event.data;
+  if (!message || message.kind !== "stone-square-report-assertion" || typeof message.assertion !== "string") return;
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(message.assertion) || message.assertion.length > 8192) return;
+  REPORT_ASSERTION = message.assertion;
+  if (reportAssertionRefresh) {
+    const refresh = reportAssertionRefresh;
+    reportAssertionRefresh = null;
+    clearTimeout(refresh.timer);
+    refresh.resolve(message.assertion);
+    return;
+  }
+  loadSchema();
+}
+window.addEventListener("message", receiveReportAssertion);
+if (!REPORT_ASSERTION) signalReportReady();
+
+const REPORT_ASSISTANT_ORIGIN = "https://stone-square-sign.onrender.com";
+let reportAssistantSession = null;
+const reportAssistantKey = d => JSON.stringify({ type: d.type, master: isMaster(d), fields: d.fields, accountEmail: String(d.email || "").trim().toLowerCase() });
+function assistantStatus(message, error = false){
+  const el = $("#assistant-status");
+  if (el) { el.textContent = message; el.className = error ? "err" : "hint"; }
+}
+function openReportAssistant(mode = "notes"){
+  const uploading = mode === "upload";
+  if (COPY_BUSY || PREVIEW_BUSY) {
+    assistantStatus("Wait for the current report action to finish, then open the notes assistant.", true);
+    return;
+  }
+  const snapshot = collect();
+  if (!typesFor(snapshot)[snapshot.type]) return;
+  // Open synchronously from the button click so browsers can allow the new window.
+  let popup = null;
+  try { popup = window.open(REPORT_ASSISTANT_ORIGIN + "/report-assistant.html" + (uploading ? "?mode=upload" : ""), "_blank", "popup,width=760,height=900"); } catch(e) {}
+  if (!popup) {
+    assistantStatus("The report assistant could not open. Allow popups for this site, then select Upload existing report or Organize from notes again. Your report is still here.", true);
+    return;
+  }
+  reportAssistantSession = { popup, snapshot, key: reportAssistantKey(snapshot) };
+  assistantStatus(uploading
+    ? "Choose your existing report in the assistant window, review the imported text, then organize and apply the suggested entries."
+    : "Use the assistant window to organize your notes, review the suggestions, and choose whether to apply them here.");
+}
+window.addEventListener("message", event => {
+  const session = reportAssistantSession;
+  if (!session || event.origin !== REPORT_ASSISTANT_ORIGIN || event.source !== session.popup) return;
+  const message = event.data;
+  if (!message || typeof message !== "object") return;
+  if (message.kind === "report-assistant-ready") {
+    session.popup.postMessage({ kind: "report-assistant-context", context: {
+      type: session.snapshot.type, master: isMaster(session.snapshot), fields: session.snapshot.fields,
+      accountEmail: String(session.snapshot.email || "").trim().toLowerCase()
+    } }, REPORT_ASSISTANT_ORIGIN);
+    return;
+  }
+  if (message.kind !== "report-assistant-apply") return;
+  if (!$("#type") || COPY_BUSY || PREVIEW_BUSY) {
+    assistantStatus("The report is busy or no longer open. Return to the report and open the notes assistant again.", true);
+    return;
+  }
+  const current = collect();
+  if (reportAssistantKey(current) !== session.key) {
+    reportAssistantSession = null;
+    assistantStatus("Your report changed while the assistant was open. No suggestions were applied. Open Organize from notes again to use your latest entries.", true);
+    return;
+  }
+  const incoming = message.fields;
+  if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+    assistantStatus("The assistant returned invalid report fields. Your entries have not changed.", true);
+    return;
+  }
+  const allowed = new Set();
+  typesFor(current)[current.type].fields.forEach(field => {
+    allowed.add(field.id);
+    if (field.kind === "choices") allowed.add(field.id + "Other");
+  });
+  const updates = {};
+  for (const [key, value] of Object.entries(incoming)) {
+    if (!allowed.has(key)) continue;
+    if (typeof value !== "string" || value.length > 6000) {
+      assistantStatus("The assistant returned an invalid or oversized field. Your entries have not changed.", true);
+      return;
+    }
+    updates[key] = value;
+  }
+  if (!Object.keys(updates).length) {
+    assistantStatus("There were no matching report fields to apply. Your entries have not changed.", true);
+    return;
+  }
+  draft = { ...current, fields: { ...current.fields, ...updates }, reviewed: false, signatureName: "" };
+  PREVIEWED_KEY = null;
+  renderFields();
+  $("#reviewed").checked = false;
+  if ($("#signatureName")) $("#signatureName").value = "";
+  $("#previewlink").textContent = "";
+  $("#review-status").textContent = "Suggestions applied. Review the updated report before signing.";
+  saveDraft();
+  reportAssistantSession = null;
+  assistantStatus("Suggestions applied. Check the report fields before signing and sending.");
+});
+
+function updateAudienceCopy(){
+  const recipient = copyRecipient(collect());
+  $("#intro-copy").textContent = "Previews do not send email.";
+  const signed = SCHEMA.authenticated ? "signed " : "";
+  $("#copy-note").textContent = `Only Send final report emails your ${signed}copy to ${recipient}.`;
+  $("#copy-hint").textContent = `Send final report emails the ${signed}copy to ${recipient} and gives you links to print or save it. Opening, printing or saving those links does not send another email.`;
+}
+
+function saveDraft(){
+  const d = collect();
+  draft = d;
+  if (PREVIEWED_KEY && PREVIEWED_KEY !== previewKey(d)) { PREVIEWED_KEY = null; $("#previewlink").textContent = ""; }
+  if (!COPY_BUSY) $("#finallink").textContent = "";
+  const saved = SCHEMA.authenticated ? { ...d, isOfficer: false, office: "", name: "", email: "" } : d;
+  try { localStorage.setItem(ACTIVE_DRAFT_KEY, JSON.stringify({ ...saved, reviewed: false, signatureName: "", savedAt: Date.now() })); } catch(e) {}
+}
+
+function fieldHtml(f){
+  const id = "f-" + f.id, v = esc((draft.fields||{})[f.id] || "");
+  const req = f.req ? ' <span class="req" aria-hidden="true">*</span>' : "";
+  const hint = f.hint ? ` <span class="hint">(${esc(f.hint)})</span>` : "";
+  const reqA = f.req ? " required" : "";
+  let input;
+  if (f.kind === "pick") {
+    const cur = String((draft.fields||{})[f.id] || ""), other = cur && !f.options.includes(cur) ? cur : "";
+    return `<label for="${id}-sel">${esc(f.label)}${req}</label>
+      <select id="${id}-sel" data-pick="${f.id}"${reqA}>
+        <option value="" disabled ${cur?"":"selected"}>Pick one</option>
+        ${f.options.map(o => `<option value="${esc(o)}" ${cur===o?"selected":""}>${esc(o)}</option>`).join("")}
+        <option value="__other" ${other?"selected":""}>Other (type it in)</option>
+      </select>
+      <input id="${id}" data-id="${f.id}" type="hidden" value="${esc(cur)}">
+      <input id="${id}-other" aria-label="${esc(f.label)}, typed in" placeholder="Type the committee name" value="${esc(other)}" style="display:${other?"block":"none"};margin-top:8px">`;
+  }
+  if (f.kind === "choices") {
+    const allowed = new Set(f.options.map(([key]) => key));
+    const on = new Set(String((draft.fields||{})[f.id] || "").split(",").filter(key => allowed.has(key)));
+    const other = esc((draft.fields||{})[f.id + "Other"] || "");
+    return `<fieldset class="choices" data-group="${f.id}"><legend>${esc(f.label)}${req}</legend>
+      ${f.options.map(([k, lab]) => `<label class="tp"><input type="checkbox" value="${k}" ${on.has(k)?"checked":""}><span>${esc(lab)}</span></label>`).join("")}
+      <input type="hidden" id="${id}" data-id="${f.id}" value="${esc([...on].join(","))}">
+      <label for="${id}-other" class="sub">Something else</label>
+      <input id="${id}-other" data-id="${f.id}Other" value="${other}" placeholder="In your own words, if the list does not cover it">
+    </fieldset>`;
+  }
+  if (f.kind === "budget") input = `<textarea id="${id}" data-id="${f.id}"${reqA} placeholder="Venue deposit, 500, Stone Square&#10;Decorations, 150, Jephthah&#10;Food, 400, Stone Square">${v}</textarea>`;
+  else if (f.kind === "long" || f.kind === "list") input = `<textarea id="${id}" data-id="${f.id}"${reqA}>${v}</textarea>`;
+  else if (f.kind === "date") input = `<input id="${id}" data-id="${f.id}" type="date"${reqA} value="${v}">`;
+  else if (f.kind === "time") input = `<input id="${id}" data-id="${f.id}" type="time"${reqA} value="${v}">`;
+  else if (f.kind === "money") input = `<input id="${id}" data-id="${f.id}" inputmode="decimal"${reqA} placeholder="$0.00" value="${v}">`;
+  else input = `<input id="${id}" data-id="${f.id}"${reqA} value="${v}">`;
+  return `<label for="${id}">${esc(f.label)}${req}${hint}</label>${input}`;
+}
+
+// An Officer Report arrives with its title filled in from the office and the month. Easy to overwrite.
+function prefillOfficer(){
+  const d = collect(); if (d.type !== "officer" || d.isOfficer !== true || !d.office) return;
+  const now = new Date(); const m = now.getDate() <= 15 ? new Date(now.getFullYear(), now.getMonth() - 1, 1) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const month = m.toLocaleDateString("en-US", { month: "long" }), pad = n => String(n).padStart(2, "0");
+  const first = `${m.getFullYear()}-${pad(m.getMonth() + 1)}-01`;
+  const lastDay = now.getDate() <= 15 ? new Date(m.getFullYear(), m.getMonth() + 1, 0) : now;
+  const last = `${lastDay.getFullYear()}-${pad(lastDay.getMonth() + 1)}-${pad(lastDay.getDate())}`;
+  const t = $("#f-title");
+  if (t && !t.value.trim()) t.value = `${d.office}'s Report for ${month}`;
+}
+function renderFields(){
+  const t = typesFor(collect())[$("#type").value];
+  if (!t) { $("#fields").innerHTML = ""; return; }
+  $("#fields").innerHTML = `<h2>${esc(t.name)}<small>${esc(t.intro)}</small></h2>` + t.fields.map(fieldHtml).join("");
+  prefillOfficer();
+  document.querySelectorAll("select[data-pick]").forEach(sel => {
+    const id = sel.getAttribute("data-pick"), hid = $("#f-" + id), oth = $("#f-" + id + "-other");
+    const sync = () => { const v = sel.value; oth.style.display = v === "__other" ? "block" : "none"; hid.value = v === "__other" ? oth.value.trim() : v; saveDraft(); };
+    sel.addEventListener("change", sync); oth.addEventListener("input", sync);
+  });
+  document.querySelectorAll(".choices").forEach(g => {
+    const hid = g.querySelector('input[type="hidden"]');
+    g.querySelectorAll('input[type="checkbox"]').forEach(c => c.addEventListener("change", () => {
+      hid.value = Array.from(g.querySelectorAll('input[type="checkbox"]:checked')).map(x => x.value).join(",");
+      saveDraft();
+    }));
+  });
+}
+
+function form(){
+  PREVIEWED_KEY = null;
+  const identity = SCHEMA.identity;
+  if (SCHEMA.authenticated) {
+    draft = { ...draft, isOfficer: true, office: identity.office, name: identity.name, email: identity.email };
+  } else {
+    const staleOfficerDraft = draft.isOfficer === true || String(draft.office || "").trim();
+    draft = { ...draft, isOfficer: false, office: "", signatureName: "",
+      ...(staleOfficerDraft ? { name: "", email: "" } : {}) };
+  }
+  const types = Object.entries(typesFor(draft)).filter(([key]) => key !== "officer" || draft.isOfficer === true);
+  if (!types.some(([key]) => key === draft.type)) draft.type = draft.isOfficer === true ? "officer" : "formal";
+  $("#body").innerHTML = `
+    <div id="report-recovery" class="guidance" hidden role="region" aria-label="Saved report recovery"></div>
+    <div id="report-details">
+    ${SCHEMA.authenticated ? `<p class="guidance"><strong>${esc(identity.name)}</strong><br>${esc(identity.office)}<br><span class="hint">${esc(identity.email)}</span></p>
+    <input id="name" type="hidden" value="${esc(identity.name)}">
+    <input id="email" type="hidden" value="${esc(identity.email)}">
+    <input id="office" type="hidden" value="${esc(identity.office)}">` : `<p class="guidance">This public form prepares a report without an officer title or signature. Officers should open Report Generator from the Stone Square Dashboard.</p>
+    <label for="name">Your name as it should print <span class="req" aria-hidden="true">*</span></label>
+    <input id="name" required autocomplete="name" value="${esc(draft.name||"")}">
+    <label for="email">Your email <span class="req" aria-hidden="true">*</span> <span class="hint">(contact address for this report)</span></label>
+    <input id="email" type="email" inputmode="email" autocomplete="email" required maxlength="160" value="${esc(draft.email||"")}">`}
+    <label for="phone">Your phone number <span class="hint">(optional)</span></label>
+    <input id="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="40" aria-describedby="phone-hint" value="${esc(draft.phone||"")}">
+    <p class="hint" id="phone-hint">If you give it, it prints under your name so the Worshipful Master can reach you.</p>
+
+    <h2>What kind of report</h2>
+    <div class="types" role="radiogroup" aria-label="Report type">
+      ${types.map(([k,t])=>`<label class="tp"><input type="radio" name="type" value="${k}" ${(draft.type||"officer")===k?"checked":""}><span>${esc(t.name)}<em>${esc(t.intro)}</em></span></label>`).join("")}
+    </div>
+    <input type="hidden" id="type" value="${esc(draft.type||"officer")}">
+    <p class="guidance" id="detail-guidance"><strong>Brothers, please be as detailed as possible.</strong> Include relevant names, dates, amounts, decisions and next steps. Use Additional information for anything the questions do not cover.</p>
+    <div class="acts">
+      <button class="ghost" id="upload-existing-report" type="button" aria-describedby="assistant-hint">Upload existing report</button>
+      <button class="ghost" id="organize-notes" type="button" aria-describedby="assistant-hint">Organize from notes</button>
+      <p class="hint" id="assistant-hint" style="margin:0">Import a Word document, text-based PDF or text file, or paste notes. Review the suggested report entries before applying them.</p>
+      <p class="hint" id="assistant-status" role="status" aria-live="polite" style="margin:0"></p>
+    </div>
+    <div id="fields"></div>
+    <h2>1. Preview your report, if you like</h2>
+    <p class="hint">See it on the letterhead before you send, or skip straight to ${SCHEMA.authenticated ? "signing" : "reviewing"}. Previewing does not send an email.</p>
+    <div class="acts">
+      <button class="ghost" id="preview" type="button">Preview report</button>
+      <div id="previewlink" role="status" style="text-align:center"></div>
+    </div>
+    <section id="review-section" aria-labelledby="review-heading">
+      <h2 id="review-heading">2. Review${SCHEMA.authenticated ? ", sign" : ""} and send</h2>
+      <label class="tp" style="margin-top:12px"><input id="reviewed" type="checkbox" required ${draft.reviewed === true ? "checked" : ""}><span>${esc(SCHEMA.reviewStatement)}</span></label>
+      ${SCHEMA.authenticated ? `<p class="guidance"><strong>Signed as ${esc(identity.name)}</strong><br>${identity.role === "owner" ? "Your approved blue signature from the Dashboard is used for this report." : "Your secure officer account supplies the signature."} If you change the report after previewing, the preview is simply out of date; what you send is always what is on this page.</p>` : `<p class="hint">Public reports do not carry an officer title or typed signature.</p>`}
+      <p class="hint" id="review-status" role="status"></p>
+    <div class="acts">
+      <button class="send" id="send-final" type="button">Send final report</button>
+      <div id="finallink" role="status" style="text-align:center"></div>
+    </div>
+    <p class="hint" id="copy-hint" style="text-align:center;margin-top:10px"></p>
+    </section>
+    </div>
+    <div id="msg" class="err" role="alert" aria-atomic="true"></div>
+    <p class="hint" style="text-align:center;margin-top:14px">The page remembers what you type on this phone until it is sent. <button type="button" id="startover" style="font:inherit;color:var(--navy);background:none;border:0;padding:0;text-decoration:underline;cursor:pointer">Start over</button></p>`;
+  renderFields();
+  updateAudienceCopy();
+  offerReportRecovery();
+  document.querySelectorAll('input[name="type"]').forEach(r => r.onchange = () => { draft = collect(); $("#type").value = r.value; renderFields(); saveDraft(); });
+  $("#body").oninput = e => {
+    if (!["reviewed", "signatureName"].includes(e.target.id)) {
+      if ($("#reviewed").checked) $("#review-status").textContent = "Your report changed. Please review it again before continuing.";
+      $("#reviewed").checked = false;
+      if (e.target.id === "name") { if ($("#signatureName")) $("#signatureName").value = ""; $("#phone").value = ""; }
+    } else if (e.target.id === "reviewed" && e.target.checked) $("#review-status").textContent = "";
+    saveDraft();
+  };
+  $("#startover").onclick = () => { if (!confirm("Clear everything on this page and start a fresh report?")) return; try { localStorage.removeItem(ACTIVE_DRAFT_KEY); } catch(e) {} location.reload(); };
+  $("#preview").onclick = preparePreview;
+  $("#organize-notes").onclick = () => openReportAssistant("notes");
+  $("#upload-existing-report").onclick = () => openReportAssistant("upload");
+  $("#send-final").onclick = prepareCopy;
+}
+
+function collect(){
+  const fields = {};
+  document.querySelectorAll("#fields [data-id]").forEach(el => fields[el.getAttribute("data-id")] = el.value);
+  const name = $("#name").value.trim();
+  return { isOfficer: SCHEMA.authenticated, office: SCHEMA.authenticated ? SCHEMA.identity.office : "", name, email: $("#email").value.trim(), phone: $("#phone").value.trim(), type: $("#type").value, fields, reviewed: $("#reviewed").checked, signatureName: $("#signatureName")?.value.trim() || "", clientId: CLIENT_ID, deliveryIntent: DELIVERY_INTENT };
+}
+
+function problem(field, message){
+  let el = field === "isOfficer" ? $("#isOfficer-yes") : field === "type" ? document.querySelector('input[name="type"]') : field === "office" ? $("#name") : ["name", "email", "phone", "reviewed", "signatureName"].includes(field) ? $("#"+field) : $("#f-"+field);
+  if (el && el.type === "hidden") el = document.querySelector('.choices[data-group="' + field + '"] input[type="checkbox"]') || el;
+  $("#msg").textContent = ""; setTimeout(() => { $("#msg").textContent = message; }, 40);
+  if (el) { el.setAttribute("aria-invalid","true"); el.setAttribute("aria-describedby","msg"); el.focus(); el.oninput = () => { el.removeAttribute("aria-invalid"); el.removeAttribute("aria-describedby"); }; }
+}
+
+function localCheck(d, requireSignature = true){
+  const t = typesFor(d)[d.type];
+  if (d.isOfficer && !d.office) return problem("name", "Choose your name from the officer list.");
+  if (!d.isOfficer && d.type === "officer") return problem("type", "Choose a report available to all Brothers.");
+  if (!d.name) return problem("name", "Give your name as it should print.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)) return problem("email", "Enter a working email address.");
+  if (d.phone && (d.phone.length > 40 || !/^\+?[\d(). -]+(?: *(?:x|ext\.?|#) *\d{1,6})?$/i.test(d.phone) || d.phone.replace(/\D/g, "").length < 7 || d.phone.replace(/\D/g, "").length > 21)) return problem("phone", "Enter your phone number for the report letterhead.");
+  for (const f of t.fields) {
+    if (f.kind === "choices") { if (f.req && !String(d.fields[f.id]||"").trim() && !String(d.fields[f.id+"Other"]||"").trim()) return problem(f.id, f.label + ": tick at least one, or say what else."); continue; }
+    if (f.req && !String(d.fields[f.id]||"").trim()) return problem(f.id, f.label + " is required.");
+  }
+  if (requireSignature && !d.reviewed) return problem("reviewed", "Review your report and check the confirmation box before continuing.");
+  if (d.signatureName.length > 80) return problem("signatureName", "Use no more than 80 characters for your signature name.");
+  return true;
+}
+
+async function preparePreview(){
+  if (PREVIEW_BUSY || COPY_BUSY) return;
+  $("#msg").textContent = "";
+  const d = collect();
+  if (localCheck(d, false) !== true) return;
+  saveDraft();
+  PREVIEW_BUSY = true;
+  const btn = $("#preview");
+  btn.disabled = true; btn.textContent = "Preparing preview...";
+  let w = null;
+  try { w = window.open("", "_blank"); if (w) w.document.write("<!doctype html><html><head><title>Report preview</title></head><body><p>Preparing your preview. No email will be sent.</p></body></html>"); } catch {}
+  try {
+    const r = await reportFetch("/api/report?preview=1", () => ({ method: "POST", headers: apiHeaders(), body: JSON.stringify(d) }));
+    if (r.status === 400) { const j = await r.json(); const p = (j.problems || [])[0]; if (w) w.close(); problem(p?.field || "title", p?.message || "Something is missing."); return; }
+    if (r.status === 401 || r.status === 403) throw new Error(officerSessionMessage);
+    if (r.status === 429) throw new Error("Too many previews were prepared from this connection. Please try again later.");
+    if (r.status === 409) { const failure = await r.json().catch(() => ({})); if (failure.code === "REPORT_OWNER_SIGNATURE_UNAVAILABLE") throw new Error(failure.error); }
+    if (!r.ok) throw new Error("The preview could not be prepared. Please try again. No email was sent.");
+    const url = URL.createObjectURL(await r.blob());
+    if (previewKey(collect()) !== previewKey(d)) {
+      if (w) w.close();
+      $("#previewlink").textContent = "Your report changed while the preview was being prepared. Preview the updated report before sending it.";
+      return;
+    }
+    PREVIEWED_KEY = previewKey(d);
+    $("#previewlink").innerHTML = `<p class="ok">Preview ready. No email has been sent.</p><a class="btn alt" href="${url}" target="_blank" rel="noopener">Open preview</a><p class="hint">Come back here to sign and send, or to make changes first.</p>`;
+
+    if (w) w.location = url;
+  } catch(e) {
+    if (w) w.close();
+    $("#msg").textContent = e.message === "Failed to fetch" ? "Could not load the preview. Your entries are saved. No email was sent." : e.message;
+  } finally {
+    PREVIEW_BUSY = false; btn.disabled = false; btn.textContent = "Preview report";
+  }
+}
+
+async function prepareCopy(){
+  if (COPY_BUSY || PREVIEW_BUSY) return;
+  $("#msg").textContent = "";
+  const d = collect();
+  if (localCheck(d) !== true) return;
+  saveDraft();
+  COPY_BUSY = true;
+  const btn = $("#send-final"), label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Sending final report...";
+  // Open within the click so the PDF can open in Safari on a phone.
+  let w = null;
+  try { w = window.open("", "_blank"); if (w) w.document.write(`<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Preparing your report</title></head><body><p style='font:16px -apple-system,sans-serif;padding:24px'>Preparing your report and emailing a copy to ${copyRecipient(d)}...</p></body></html>`); } catch {}
+  try {
+    const r = await reportFetch("/api/report?copy=1", () => ({ method:"POST", headers:apiHeaders(), body: JSON.stringify(d) }));
+    if (r.status === 400) { const j = await r.json(); const p = (j.problems||[])[0]; if (w) w.close(); problem(p ? p.field : "office", p ? p.message : "Something is missing."); return; }
+    if (r.status === 401 || r.status === 403) throw new Error(officerSessionMessage);
+    if (r.status === 429) throw new Error("Too many reports were prepared from this connection. Please try again later.");
+    if (r.status === 409) {
+      const conflict = await r.json().catch(() => ({}));
+      if (conflict.code === "REPORT_OWNER_SIGNATURE_UNAVAILABLE") throw new Error(conflict.error);
+      throw new Error(conflict.code === "REPORT_DELIVERY_LEGACY_UNVERIFIED"
+        ? "This saved report predates the delivery update. Your entries are safe. Check Received Reports with the Worshipful Master before starting a new report, so an earlier submission is not sent twice."
+        : conflict.code !== "REPORT_DELIVERY_CONFLICT"
+        ? "The saved report could not be verified. Your entries are safe. Ask the Worshipful Master to review the retained record before sending another copy."
+        : "This report already has a final delivery reference. Your edits are saved. Check the earlier delivery, then save your notes and choose Start over to send a separate revised report.");
+    }
+    if (!r.ok) throw new Error("The report could not be prepared. Your entries are saved. Please try again.");
+    const j = await r.json();
+    signalReportSubmitted(d, j);
+    const pdf = new Blob([Uint8Array.from(atob(j.pdf), c => c.charCodeAt(0))], { type:"application/pdf" });
+    const url = URL.createObjectURL(pdf);
+    const reportLabel = SCHEMA.authenticated ? "signed report" : "report";
+    // The links and the emailed attachment come from this same PDF build.
+    $("#finallink").innerHTML = `<p class="${j.mailed ? "ok" : "err"}">${j.mailed ? `Your final report has been emailed to ${copyRecipient(d)}.` : j.delivery === "pending" ? `Your ${reportLabel} is ready. Email delivery is still being checked. Use Send final report again to check the same delivery.` : `Your ${reportLabel} is ready, but the email could not be sent. Use Send final report again to retry.`}</p><a class="btn alt" href="${url}" target="_blank" rel="noopener">Open and print</a><a class="btn alt" href="${url}" download="${esc(j.filename)}">Save the PDF</a>`;
+    if (w) w.location = url;
+    if (JSON.stringify(collect()) !== JSON.stringify(d)) $("#msg").textContent = "You changed the form while the final report was being sent. These links contain the version you sent. Preview your changes before sending a revised report.";
+  } catch(e) {
+    if (w) w.close();
+    $("#msg").textContent = e.message === "Failed to fetch" ? "Could not reach the server. Your entries are saved. Try again to check the same delivery." : e.message;
+  } finally {
+    COPY_BUSY = false; btn.disabled = false; btn.textContent = label;
+  }
+}
+
+let schemaRequestSerial = 0;
+async function loadSchema() {
+  const requestSerial = ++schemaRequestSerial;
+  $("#body").innerHTML = '<p style="text-align:center;color:var(--mut)">Loading&hellip;</p>';
+  try {
+    const r = await reportFetch("/api/report?schema=1", () => ({ headers: REPORT_ASSERTION ? { Authorization: "Bearer " + REPORT_ASSERTION } : {} }));
+    if (requestSerial !== schemaRequestSerial) return;
+    if (r.status === 401 || r.status === 403) throw new Error(officerSessionMessage);
+    if (!r.ok) throw new Error("The report page could not load. Check your connection and try again.");
+    SCHEMA = await r.json();
+    activateDraftForSchema(SCHEMA);
+    form();
+  } catch(e) {
+    if (requestSerial !== schemaRequestSerial) return;
+    $("#body").innerHTML = `<p class="err" role="alert">${esc(e.message || "The report page could not load. Check your connection and try again.")}</p>`;
+  }
+}
+if (!openLegacyDashboardEntry()) loadSchema();
+</script>
+<!-- Install coach: greets visitors and walks them through Add to Home Screen -->
+<style>
+  #a2hs{position:fixed;inset:0;z-index:9999;display:none}
+  #a2hs.show{display:block}
+  #a2hs .bd{position:absolute;inset:0;background:rgba(9,15,34,.55)}
+  #a2hs .sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:22px 22px 0 0;
+    padding:20px 20px calc(20px + env(safe-area-inset-bottom));max-width:600px;margin:0 auto;
+    box-shadow:0 -18px 50px -20px rgba(9,15,34,.6);transform:translateY(100%);
+    transition:transform .34s cubic-bezier(.22,1,.36,1)}
+  #a2hs.show .sheet{transform:translateY(0)}
+  #a2hs .grip{width:38px;height:4px;border-radius:99px;background:#dfe3ec;margin:2px auto 14px}
+  #a2hs .ah{display:flex;align-items:center;gap:12px}
+  #a2hs .ah img{width:46px;height:46px;border-radius:11px;flex:0 0 auto}
+  #a2hs .ah h2{margin:0;font-family:Georgia,"Times New Roman",serif;color:#16264d;font-size:19px;line-height:1.15}
+  #a2hs .ah p{margin:3px 0 0;color:#5a6274;font-size:13px;line-height:1.35}
+  #a2hs .det{margin:7px 0 0;color:#8a93a6;font-size:12px;font-weight:700;letter-spacing:.01em}
+  #a2hs .det::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#3aae5a;margin-right:6px;vertical-align:middle}
+  #a2hs .note{margin:14px 0 0;background:#fff8ec;border:1px solid #f0e2c4;color:#6b5626;padding:10px 12px;border-radius:11px;font-size:13px;line-height:1.4}
+  #a2hs .note b{color:#16264d}
+  #a2hs ol{list-style:none;counter-reset:s;margin:16px 0 2px;padding:0}
+  #a2hs li{counter-increment:s;display:flex;align-items:center;gap:11px;padding:11px 12px;border:1px solid #eef1f7;
+    border-radius:13px;margin-bottom:9px;background:#f8f9fc;color:#1c2333;font-size:14.5px;line-height:1.4}
+  #a2hs li::before{content:counter(s);flex:0 0 auto;width:25px;height:25px;border-radius:50%;background:#16264d;
+    color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  #a2hs li svg{flex:0 0 auto;width:22px;height:22px;color:#a9812c}
+  #a2hs li b{color:#16264d;font-weight:700}
+  #a2hs .btns{display:flex;flex-direction:column;gap:9px;margin-top:14px}
+  #a2hs .install{width:100%;padding:14px;border:0;border-radius:12px;background:#16264d;color:#fff;
+    font-size:15.5px;font-weight:700;cursor:pointer}
+  #a2hs .skip{width:100%;padding:12px;border:0;border-radius:12px;background:transparent;color:#5a6274;
+    font-size:14.5px;font-weight:600;cursor:pointer}
+</style>
+<div id="a2hs" role="dialog" aria-modal="true" aria-label="Add this app to your Home Screen">
+  <div class="bd" data-skip></div>
+  <div class="sheet">
+    <div class="grip"></div>
+    <div class="ah">
+      <img src="/icons/rep-touch-180.png" alt="">
+      <div>
+        <h2>Add &ldquo;Lodge Reports&rdquo; to your Home Screen</h2>
+        <p>One tap to write a report on the Lodge letterhead, without typing the web address each time.</p>
+        <p class="det" id="a2hsDet"></p>
+      </div>
+    </div>
+    <p class="note" id="a2hsNote" style="display:none"></p>
+    <ol id="a2hsSteps"></ol>
+    <div class="btns">
+      <button class="install" id="a2hsInstall" hidden>Add to Home Screen</button>
+      <button class="skip" data-skip>Skip, go to the report</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  if (window.__REPORT_DASHBOARD_ENTRY || window.parent !== window) return;
+  var el = document.getElementById('a2hs');
+  var stepsEl = document.getElementById('a2hsSteps');
+  var installBtn = document.getElementById('a2hsInstall');
+  var ua = navigator.userAgent || '';
+  var mac = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+  var isIOS = /iphone|ipad|ipod/i.test(ua) || mac;
+  var isAndroid = /android/i.test(ua);
+  var os = isIOS ? 'ios' : isAndroid ? 'android' : 'desktop';
+  // Order matters: Edge/Chrome/etc. UAs all contain "Safari", so test Safari last.
+  var browser =
+      /edg(ios|a)?\//i.test(ua) ? 'edge' :
+      /(crios|chromium|chrome|headlesschrome)\//i.test(ua) && !/edg|opr|opios|samsungbrowser/i.test(ua) ? 'chrome' :
+      /(fxios|firefox)\//i.test(ua) ? 'firefox' :
+      /samsungbrowser\//i.test(ua) ? 'samsung' :
+      /(opr|opios|opera)\//i.test(ua) ? 'opera' :
+      /safari\//i.test(ua) ? 'safari' : 'other';
+  var browserName = ({chrome:'Chrome',edge:'Edge',firefox:'Firefox',samsung:'Samsung Internet',opera:'Opera',safari:'Safari',other:'your browser'})[browser];
+  var isIPad = /ipad/i.test(ua) || (mac && !/iphone/i.test(ua));
+  var deviceName = os==='ios' ? (isIPad ? 'iPad' : 'iPhone')
+                 : os==='android' ? 'Android'
+                 : /mac/i.test(ua) ? 'Mac'
+                 : /windows/i.test(ua) ? 'Windows' : 'this computer';
+  var standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  var dismissed = false;
+  try { dismissed = sessionStorage.getItem('a2hs-skip-report') === '1'; } catch(e){}
+
+  var shareSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="M8 8l4-4 4 4"/><path d="M6 12H5a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2h-1"/></svg>';
+  var plusSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 8v8M8 12h8"/></svg>';
+  var dotsSVG = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>';
+
+  function step(icon, html){ var li=document.createElement('li'); li.innerHTML=(icon||'')+'<span>'+html+'</span>'; stepsEl.appendChild(li); }
+
+  var deferred = null;
+  window.addEventListener('beforeinstallprompt', function(e){ e.preventDefault(); deferred = e; installBtn.hidden = false; });
+
+  // Returns an optional highlighted note (e.g. "use Safari instead"), or null.
+  function buildSteps(){
+    stepsEl.innerHTML='';
+    var note = null;
+    if (os === 'ios'){
+      if (browser === 'safari'){
+        step(shareSVG, 'Tap the <b>Share</b> icon at the bottom of Safari. On some iPhones, tap the <b>&#8942;&#8942;&#8942;</b> menu first.');
+        step(plusSVG, 'Scroll down and tap <b>Add to Home Screen</b>.');
+        step(null, 'Tap <b>Add</b>, then open <b>Lodge Reports</b> from your Home Screen.');
+      } else if (browser === 'chrome'){
+        step(shareSVG, 'Tap the <b>Share</b> icon in Chrome&rsquo;s address bar (or the <b>&#8942;</b> menu &rarr; <b>Share</b>).');
+        step(plusSVG, 'Tap <b>Add to Home Screen</b>, then <b>Add</b>.');
+      } else if (browser === 'edge'){
+        step(dotsSVG, 'Tap the <b>&#8942;</b> menu at the bottom of Edge.');
+        step(plusSVG, 'Tap <b>Share</b> &rarr; <b>Add to Home Screen</b>, then <b>Add</b>.');
+      } else if (browser === 'firefox'){
+        note = 'Firefox on iPhone cannot add apps to the Home Screen. Open this page in <b>Safari</b> first, then follow the steps.';
+        step(shareSVG, 'In <b>Safari</b>, tap the <b>Share</b> icon at the bottom.');
+        step(plusSVG, 'Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.');
+      } else {
+        step(shareSVG, 'Tap your browser&rsquo;s <b>Share</b> or <b>&#8942;</b> menu.');
+        step(plusSVG, 'Tap <b>Add to Home Screen</b>. For the best result, use <b>Safari</b>.');
+      }
+    } else if (os === 'android'){
+      if (browser === 'samsung'){
+        step(dotsSVG, 'Tap the <b>&#8801;</b> menu at the bottom of Samsung Internet.');
+        step(plusSVG, 'Tap <b>Add page to</b> &rarr; <b>Home screen</b>, then <b>Add</b>.');
+      } else if (browser === 'firefox'){
+        step(dotsSVG, 'Tap the <b>&#8942;</b> menu.');
+        step(plusSVG, 'Tap <b>Install</b> (or <b>Add to Home screen</b>).');
+      } else if (browser === 'edge'){
+        step(dotsSVG, 'Tap the <b>&#8942;</b> menu at the bottom of Edge.');
+        step(plusSVG, 'Tap <b>Add to phone</b>, then <b>Install</b>.');
+      } else {
+        step(dotsSVG, 'Tap the <b>&#8942;</b> menu at the top-right.');
+        step(plusSVG, 'Tap <b>Install app</b> (or <b>Add to Home screen</b>), then <b>Install</b>.');
+      }
+    } else {
+      if (browser === 'safari'){
+        step(plusSVG, 'In the top menu bar, choose <b>File</b> &rarr; <b>Add to Dock</b>.');
+      } else if (browser === 'firefox'){
+        note = 'Firefox on the desktop cannot install apps. Use <b>Chrome</b>, <b>Edge</b>, or <b>Safari</b>, or just bookmark this page.';
+      } else {
+        step(plusSVG, 'Click the <b>install</b> icon (&#8862;) at the right of the address bar, then <b>Install</b>.');
+      }
+    }
+    return note;
+  }
+
+  function open(){
+    var note = buildSteps();
+    var det = document.getElementById('a2hsDet');
+    if (det) det.textContent = 'Detected: ' + browserName + ' on ' + deviceName;
+    var noteEl = document.getElementById('a2hsNote');
+    if (noteEl){ if (note){ noteEl.innerHTML = note; noteEl.style.display = 'block'; } else { noteEl.style.display = 'none'; } }
+    el.classList.add('show');
+  }
+  function skip(){ el.classList.remove('show'); try { sessionStorage.setItem('a2hs-skip-report','1'); } catch(e){} }
+
+  el.addEventListener('click', function(e){ if (e.target.closest('[data-skip]')) skip(); });
+  installBtn.addEventListener('click', async function(){
+    if (deferred){ deferred.prompt(); try { await deferred.userChoice; } catch(e){} deferred = null; }
+    skip();
+  });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && el.classList.contains('show')) skip(); });
+
+  if (!standalone && !dismissed){ setTimeout(open, 600); }  // let the form paint first
+})();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/report-sw.js', { scope: '/report', updateViaCache: 'none' }).then(function (reg) { reg.update(); }).catch(function () {});
+}
+</script>
+</body>
+</html>

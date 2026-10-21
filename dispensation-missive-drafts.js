@@ -17,6 +17,71 @@ const fileName = (value, fallback) => {
 };
 const claimLeaseMs = 5 * 60_000;
 
+// A durable queue does not need a database heartbeat. Call wake only after the
+// transaction that saved a signature, corresponding report or retry commits.
+// Startup checks retained queue entries once; unfinished claims get one lease
+// expiry wake. Waiting, failed and unknown-outcome states do not poll storage.
+export function createMissiveDraftWorker({ processPending, onChanged = () => {}, onError = () => {},
+  schedule = setTimeout, cancel = clearTimeout, clock = Date.now,
+  retryDelaysMs = [60_000, 300_000, 900_000] } = {}) {
+  if (typeof processPending !== 'function') throw new TypeError('A Missive queue processor is required.');
+  let started = false, stopped = false, requested = false, bootstrap = false, running = null, timer = null, retryIndex = 0;
+  const clearTimer = () => { if (timer !== null) cancel(timer); timer = null; };
+  const arm = (delay, recovery = false) => {
+    clearTimer();
+    timer = schedule(() => { timer = null; requested = true; bootstrap ||= recovery; void run(); }, Math.max(1, delay));
+    timer?.unref?.();
+  };
+  async function drain(includeWaiting) {
+    let cursor = '', nextWakeAt = null;
+    while (!stopped) {
+      const result = await processPending({ limit: 3, afterId: cursor, includeWaiting });
+      if (result?.changed) await onChanged(result);
+      if (result?.nextWakeAt && (nextWakeAt === null || result.nextWakeAt < nextWakeAt)) nextWakeAt = result.nextWakeAt;
+      if (!result?.hasMore) break;
+      if (!result.cursor || result.cursor === cursor) throw new Error('Missive queue recovery did not advance.');
+      cursor = result.cursor;
+    }
+    return nextWakeAt;
+  }
+  function run() {
+    if (stopped) return Promise.resolve();
+    if (running) return running;
+    running = (async () => {
+      let nextWakeAt = null;
+      while (requested && !stopped) {
+        requested = false;
+        const includeWaiting = bootstrap; bootstrap = false;
+        try {
+          const next = await drain(includeWaiting);
+          if (next !== null && (nextWakeAt === null || next < nextWakeAt)) nextWakeAt = next;
+          retryIndex = 0;
+        } catch (cause) {
+          try { await onError(cause); } catch { /* Monitoring must not crash the application. */ }
+          // A hard resource quota cannot be repaired by repeatedly querying it.
+          // Transient startup failures get finite backoff, never an idle loop.
+          const hardLimit = cause?.code === '53000' || cause?.cause?.code === '53000';
+          if (!stopped && !hardLimit && retryIndex < retryDelaysMs.length) arm(retryDelaysMs[retryIndex++], includeWaiting);
+          return;
+        }
+      }
+      if (!stopped && nextWakeAt !== null) arm(nextWakeAt - clock());
+    })().finally(() => { running = null; if (requested && !stopped) void run(); });
+    return running;
+  }
+  function wake() {
+    if (stopped) return Promise.resolve();
+    clearTimer(); retryIndex = 0; requested = true;
+    return run();
+  }
+  function start() {
+    if (started || stopped) return running || Promise.resolve();
+    started = true; bootstrap = true; return wake();
+  }
+  function stop() { stopped = true; requested = false; clearTimer(); }
+  return { start, wake, stop, idle: () => running || Promise.resolve() };
+}
+
 export async function initDispensationMissiveDraftSchema() {
   await dbRun(`CREATE TABLE IF NOT EXISTS dispensation_missive_drafts (
     document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
@@ -231,19 +296,25 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
           signedSha256: row.signed_sha256, reportSha256: row.report_sha256, automaticSending: false });
     });
   }
-  async function processPending({ limit = 3 } = {}) {
+  async function processPending({ limit = 3, afterId = '', includeWaiting = false } = {}) {
     const bounded = Math.min(10, Math.max(1, Number(limit) || 3));
-    const rows = await dbAll(`SELECT document_id FROM dispensation_missive_drafts WHERE state IN ('awaiting_signature','awaiting_report','not_configured','pending','creating') ORDER BY updated_at, document_id LIMIT ?`, [bounded]);
-    let changed = 0;
+    const states = includeWaiting ? "'awaiting_signature','awaiting_report','not_configured','pending','creating'" : "'pending','creating'";
+    const rows = await dbAll(`SELECT document_id FROM dispensation_missive_drafts WHERE document_id > ? AND state IN (${states}) ORDER BY document_id LIMIT ?`, [String(afterId), bounded]);
+    let changed = 0, nextWakeAt = null;
     for (const row of rows) {
       const before = await dbGet('SELECT state, draft_id, verified_at, failure_code FROM dispensation_missive_drafts WHERE document_id = ?', [row.document_id]);
       await processOne(row.document_id);
-      const after = await dbGet('SELECT state, draft_id, verified_at, failure_code FROM dispensation_missive_drafts WHERE document_id = ?', [row.document_id]);
-      if (JSON.stringify(before) !== JSON.stringify(after)) changed++;
+      const after = await dbGet('SELECT state, draft_id, verified_at, failure_code, claim_started_at FROM dispensation_missive_drafts WHERE document_id = ?', [row.document_id]);
+      const { claim_started_at: claimStartedAt, ...afterState } = after || {};
+      if (JSON.stringify(before) !== JSON.stringify(afterState)) changed++;
+      if (after?.state === 'creating') {
+        const expiry = Date.parse(claimStartedAt) + claimLeaseMs + 1;
+        if (Number.isFinite(expiry) && expiry > Date.now() && (nextWakeAt === null || expiry < nextWakeAt)) nextWakeAt = expiry;
+      }
     }
-    return { checked: rows.length, changed };
+    return { checked: rows.length, changed, cursor: rows.at(-1)?.document_id || String(afterId), hasMore: rows.length === bounded, nextWakeAt };
   }
-  async function retry(id, user, context = {}) {
+  async function requestRetry(id, user, context = {}) {
     if (!user) throw error(403, 'Only the document owner can view or manage its Missive draft.');
     await withTransaction(async () => {
       const document = await documentFor(id, user, { lock: true });
@@ -257,7 +328,13 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
       } else throw error(409, 'This draft cannot be created again safely. Check its current state in Missive first.');
       await audit(id, 'dispensation_missive_draft_retry_requested', context, { verifyingExisting: Boolean(row.draft_id), automaticSending: false });
     });
+    // No DTO query belongs between this confirmed commit and the route's wake.
+    return { documentId: id };
+  }
+  async function retry(id, user, context = {}) {
+    await requestRetry(id, user, context);
     return readStatus(id);
   }
-  return { enqueue, status, retry, processPending };
+  const worker = options => createMissiveDraftWorker({ ...options, processPending });
+  return { enqueue, status, retry, requestRetry, processPending, worker };
 }

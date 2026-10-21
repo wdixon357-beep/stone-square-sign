@@ -80,12 +80,19 @@ final class ReliabilityCenter: ObservableObject {
         case "/api/building/alerts": return "Building Request reminders"
         case "/api/minutes/review-alerts", "/api/minutes/completion-alerts": return "Meeting Minutes reminders"
         case "/api/treasury/alerts": return "Treasurer Report reminders"
+        case "/api/activity/heartbeat", "/api/activity/interaction": return "Activity tracking"
         default:
             if path.hasPrefix("/api/building") { return "Building Requests" }
             if path.hasPrefix("/api/minutes") { return "Meeting Minutes" }
             if path.hasPrefix("/api/treasury") { return "Treasurer Reports" }
             return "Dashboard"
         }
+    }
+    static func presentation(for path: String, requested: ReliabilityPresentation) -> ReliabilityPresentation {
+        let endpoint = path.split(separator: "?").first.map(String.init) ?? path
+        // Timer heartbeats and passive interaction telemetry are not failed
+        // document actions, even if a caller leaves the default presentation.
+        return ["/api/activity/heartbeat", "/api/activity/interaction"].contains(endpoint) ? .background : requested
     }
     private func key(path: String?, method: String, reference: String?) -> String? {
         if let path { return "\(method.uppercased()) \(path.split(separator: "?").first.map(String.init) ?? path)" }
@@ -135,6 +142,19 @@ final class ReliabilityCenter: ObservableObject {
         if !background || notice == nil || notice?.recovered == true || notice?.requestKey == requestKey {
             notice = failureNotice
         }
+    }
+
+    func reportRecorded(reference: String, path: String, method: String, context: String, epoch: Int?) {
+        guard isCurrent(context: context, epoch: epoch), let requestKey = key(path: path, method: method, reference: reference),
+              var previous = failures[requestKey], previous.reference == reference else { return }
+        let original = previous.notice
+        let queued = "The incident is saved on this Mac and will be reported when the connection returns."
+        guard original.message.contains(queued) else { return }
+        let updated = ReliabilityNotice(title: original.title,
+            message: original.message.replacingOccurrences(of: queued, with: "The incident was recorded. The hosted monitor checks the service again within 30 minutes."),
+            recovered: false, path: original.path, background: original.background, requestKey: original.requestKey)
+        previous.notice = updated; failures[requestKey] = previous
+        if notice?.id == original.id { notice = updated }
     }
 
     @discardableResult
@@ -190,6 +210,7 @@ enum ReliableTransport {
     }
 
     static func perform(session: URLSession, request: URLRequest, path: String, token: String?, presentation: ReliabilityPresentation = .foreground) async throws -> (Data, HTTPURLResponse) {
+        let presentation = ReliabilityCenter.presentation(for: path, requested: presentation)
         let method = request.httpMethod ?? "GET"
         let mayRetry = method == "GET" || method == "HEAD"
         let productionService = request.url?.host == URL(string: defaultServerAddress)?.host
@@ -201,7 +222,7 @@ enum ReliableTransport {
                 let (data, response) = try await session.data(for: request)
                 guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
                 if (200..<300).contains(http.statusCode) {
-                    if productionService { await flushQueuedReports(session: session, request: request, token: token) }
+                    if productionService { await flushQueuedReports(session: session, request: request, token: token, epoch: epoch) }
                     let recoveredReferences = ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch)
                         ? ReliabilityCenter.shared.recovered(reference: reference, path: path, method: method, presentation: presentation) : []
                     if productionService {
@@ -222,10 +243,16 @@ enum ReliableTransport {
                     continue
                 }
                 if retryable, let reference {
-                    if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
-                        ReliabilityCenter.shared.failed(reference: reference, path: path, method: method, presentation: presentation)
+                    if productionService {
+                        queue(PendingIncident(reference: reference, path: path, method: method, status: http.statusCode, state: "open", category: "service_response", context: context))
                     }
-                    if productionService { await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "open", category: "service_response") }
+                    if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
+                        ReliabilityCenter.shared.failed(reference: reference, queued: productionService, path: path, method: method, presentation: presentation)
+                    }
+                    if productionService {
+                        let recorded = await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "open", category: "service_response")
+                        if recorded { ReliabilityCenter.shared.reportRecorded(reference: reference, path: path, method: method, context: context, epoch: epoch) }
+                    }
                 }
                 return (data, http)
             } catch let client as ClientError {
@@ -253,9 +280,16 @@ enum ReliableTransport {
         "SS22-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).uppercased()
     }
 
-    private static func report(session: URLSession, request: URLRequest, token: String?, reference: String, path: String, status: Int, state: String, category: String) async {
+    @discardableResult
+    private static func report(session: URLSession, request: URLRequest, token: String?, reference: String, path: String, status: Int, state: String, category: String) async -> Bool {
         let incident = PendingIncident(reference: reference, path: path, method: request.httpMethod ?? "GET", status: status, state: state, category: category, context: contextFingerprint(url: request.url, token: token))
-        if !(await send(session: session, request: request, token: token, incident: incident)) { queue(incident) }
+        let recorded = await send(session: session, request: request, token: token, incident: incident)
+        if !recorded { queue(incident) }
+        else if let context = incident.context {
+            let remaining = queued().filter { $0.reference != reference || $0.state != state || $0.context != context }
+            if let data = try? JSONEncoder().encode(remaining) { UserDefaults.standard.set(data, forKey: pendingKey) }
+        }
+        return recorded
     }
 
     private static func send(session: URLSession, request: URLRequest, token: String?, incident: PendingIncident) async -> Bool {
@@ -284,7 +318,7 @@ enum ReliableTransport {
         return (try? JSONDecoder().decode([PendingIncident].self, from: data)) ?? []
     }
 
-    private static func flushQueuedReports(session: URLSession, request: URLRequest, token: String?) async {
+    private static func flushQueuedReports(session: URLSession, request: URLRequest, token: String?, epoch: Int?) async {
         let context = contextFingerprint(url: request.url, token: token)
         var delivered: Set<String> = []
         for incident in queued() {
@@ -293,6 +327,9 @@ enum ReliableTransport {
             guard let incidentContext = incident.context, incidentContext == context else { continue }
             if await send(session: session, request: request, token: token, incident: incident) {
                 delivered.insert("\(incident.reference)|\(incident.state)|\(incidentContext)")
+                if incident.state == "open" {
+                    ReliabilityCenter.shared.reportRecorded(reference: incident.reference, path: incident.path, method: incident.method, context: incidentContext, epoch: epoch)
+                }
             }
         }
         let remaining = queued().filter { !delivered.contains("\($0.reference)|\($0.state)|\($0.context ?? "unknown")") }

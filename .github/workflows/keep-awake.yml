@@ -2,7 +2,7 @@
 #
 # During normal Lodge hours the ten minute checks also keep Render responsive. Overnight,
 # a thirty minute check lets the free service sleep between checks while still providing
-# continuous monitoring and leaves headroom in Render's monthly free allowance.
+# regular hosted monitoring and leaves headroom in Render's monthly free allowance.
 #
 # A failed process check triggers one restart of the current production release. A healthy
 # process with an unavailable database is reported without redeploying, because restarting
@@ -13,11 +13,11 @@ name: Monitor and recover production
 on:
   schedule:
     # 6am to midnight Eastern Daylight Time: process-only checks between hourly runs.
-    - cron: "10,20,30,40,50 10-23,0-3 * * *"
+    - cron: "17,27,37,47,57 10-23,0-3 * * *"
     # Midnight to 6am Eastern Daylight Time: one process-only check between hourly runs.
-    - cron: "30 4-9 * * *"
+    - cron: "37 4-9 * * *"
     # The scheduled event, rather than its delayed runner start time, selects readiness.
-    - cron: "0 * * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -80,7 +80,7 @@ jobs:
 
           # An hourly event still checks readiness if GitHub starts it late. Manual
           # runs also check it; frequent process-only events do not wake the database.
-          if [ "$MONITOR_SCHEDULE" != "0 * * * *" ] && [ "$MONITOR_EVENT" != "workflow_dispatch" ]; then
+          if [ "$MONITOR_SCHEDULE" != "7 * * * *" ] && [ "$MONITOR_EVENT" != "workflow_dispatch" ]; then
             echo "Web process check complete. The hourly database readiness check is not due on this run."
             exit 0
           fi
@@ -90,3 +90,21 @@ jobs:
             exit 1
           fi
           echo "Dashboard and database are ready: $(cat /tmp/ready)"
+
+  coverage:
+    needs: monitor
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '7 * * * *')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Detect overdue or disabled regular checks without touching Lodge records
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-monitor-freshness.mjs

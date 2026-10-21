@@ -68,11 +68,12 @@ try {
   await assert.rejects(service.retry('late-report',owner),/cannot be created again safely/);
   await make('not-configured'); client.configured=false;assert.equal((await service.enqueue('not-configured')).state,'not_configured');
   await service.processPending({limit:10});assert.equal(creations.length,1);
-  client.configured=true;await service.processPending({limit:10});assert.equal((await service.status('not-configured',owner)).state,'drafted');
+  client.configured=true;await service.processPending({limit:10,includeWaiting:true});assert.equal((await service.status('not-configured',owner)).state,'drafted','Configuration changes are recovered by the one-time startup scan, not constant polling.');
   await make('known-refusal');mode='rejected';await service.enqueue('known-refusal');await service.processPending({limit:10});
   assert.equal((await service.status('known-refusal',owner)).state,'failed');assert.equal((await service.status('known-refusal',owner)).canRetry,true);
   mode='valid';await service.processPending({limit:10});assert.equal((await service.status('known-refusal',owner)).state,'failed','A refusal waits for explicit owner retry.');
-  assert.equal((await service.retry('known-refusal',owner,{actorUserId:owner.id})).state,'pending');await service.processPending({limit:10});assert.equal((await service.status('known-refusal',owner)).state,'drafted');
+  assert.deepEqual(await service.requestRetry('known-refusal',owner,{actorUserId:owner.id}),{documentId:'known-refusal'},'The route can wake immediately after the retry commit without any DTO query.');
+  assert.equal((await service.status('known-refusal',owner)).state,'pending');await service.processPending({limit:10});assert.equal((await service.status('known-refusal',owner)).state,'drafted');
   await make('lost-response');mode='unknown';await service.enqueue('lost-response');await service.processPending({limit:10});
   const unknown=await service.status('lost-response',owner);assert.equal(unknown.state,'uncertain');assert.equal(unknown.canRetry,false);
   const before=creations.length;mode='valid';await service.processPending({limit:10});await service.enqueue('lost-response');
