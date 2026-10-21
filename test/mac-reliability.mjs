@@ -35,6 +35,29 @@ final class ReliabilityFixture: URLProtocol {
     static var heartbeatStatus = 200
     static var heartbeatCalls = 0
     static var reports: [[String: Any]] = []
+    static var holdIncidents = false
+    static var incidentCalls = 0
+    static var activeIncidents = 0
+    static var maximumActiveIncidents = 0
+    static var held: [(ReliabilityFixture, [String: Any])] = []
+    static let fixtureLock = NSLock()
+    static func heldCount() -> Int { fixtureLock.lock(); defer { fixtureLock.unlock() }; return held.count }
+    static func releaseHeld(status: Int = 200) {
+        fixtureLock.lock()
+        let next = held.isEmpty ? nil : held.removeFirst()
+        fixtureLock.unlock()
+        if let (fixture, report) = next { fixture.finishIncident(report, status: status) }
+    }
+    private func finishIncident(_ report: [String: Any], status: Int) {
+        Self.fixtureLock.lock()
+        if status == 200 { Self.reports.append(report) }
+        Self.activeIncidents -= 1
+        Self.fixtureLock.unlock()
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields:["Content-Type":"application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("{}".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     private func body() -> Data {
@@ -61,8 +84,14 @@ final class ReliabilityFixture: URLProtocol {
             precondition(["Bearer SYNTHETIC-QA-TOKEN", "Bearer SYNTHETIC-OTHER-TOKEN"].contains(authorization))
             var report = try! JSONSerialization.jsonObject(with: body()) as! [String: Any]
             report["fixtureAuthorization"] = authorization
-            status = Self.incidentStatus
-            if status == 200 { Self.reports.append(report) }
+            Self.fixtureLock.lock()
+            Self.incidentCalls += 1; Self.activeIncidents += 1
+            Self.maximumActiveIncidents = max(Self.maximumActiveIncidents, Self.activeIncidents)
+            let hold = Self.holdIncidents
+            if hold { Self.held.append((self, report)) }
+            Self.fixtureLock.unlock()
+            if !hold { finishIncident(report, status: Self.incidentStatus) }
+            return
         } else if endpoint == "/api/building/alerts" {
             Self.buildingCalls += 1; status = Self.buildingStatus
             object = status == 200 ? ["alerts":[]] : ["error":"Synthetic upstream outage", "incidentReference":Self.buildingReference]
@@ -84,6 +113,7 @@ final class ReliabilityFixture: URLProtocol {
 }
 
 extension ReliableTransport {
+    static func waitForFixtureDelivery() async { await deliveryTask?.value }
     static func enqueueRetentionFixture(reference: String, context: String?) {
         queue(PendingIncident(reference: reference, path: "/api/building/alerts", method: "GET", status: 0, state: "open", category: "network_error", context: context))
     }
@@ -104,7 +134,14 @@ extension ReliableTransport {
         func perform(_ path: String, method: String = "GET", presentation: ReliabilityPresentation = .background, token: String = "SYNTHETIC-QA-TOKEN") async throws -> HTTPURLResponse {
             var request = URLRequest(url: URL(string: "https://stone-square-sign.onrender.com" + path)!)
             request.httpMethod = method
-            return try await ReliableTransport.perform(session: session, request: request, path: path, token: token, presentation: presentation).1
+            do {
+                let response = try await ReliableTransport.perform(session: session, request: request, path: path, token: token, presentation: presentation).1
+                await ReliableTransport.waitForFixtureDelivery()
+                return response
+            } catch {
+                await ReliableTransport.waitForFixtureDelivery()
+                throw error
+            }
         }
         func reported(_ reference: String, _ state: String) -> Bool {
             ReliabilityFixture.reports.contains { $0["reference"] as? String == reference && $0["state"] as? String == state }
@@ -154,6 +191,7 @@ extension ReliableTransport {
         precondition(center.notice?.recovered == true)
         precondition(reported("SS22-TEST-FOREGROUND", "open") && reported("SS22-TEST-FOREGROUND", "recovered"))
         center.dismiss()
+        ReliabilityFixture.incidentStatus = 503
         do {
             _ = try await perform("/api/treasury/alerts")
             preconditionFailure("Synthetic offline request must throw")
@@ -161,6 +199,7 @@ extension ReliableTransport {
         let queued = try JSONSerialization.jsonObject(with: UserDefaults.standard.data(forKey: pendingKey)!) as! [[String: Any]]
         let queuedReference = queued.last!["reference"] as! String
         precondition(center.notice?.title == "Treasurer Report reminders could not refresh.")
+        ReliabilityFixture.incidentStatus = 200
         _ = try await perform("/api/minutes")
         precondition(reported(queuedReference, "open"), "Queued incidents are flushed without a live request")
         precondition(center.notice?.recovered == false, "Flushing a report is not recovery of the failed path")
@@ -199,11 +238,13 @@ extension ReliableTransport {
         precondition(contextA != contextB && contextA.count == 64)
         center.resetSession(context: contextA)
         ReliabilityFixture.networkHealthy = false
+        ReliabilityFixture.incidentStatus = 503
         do { _ = try await perform("/api/treasury/alerts"); preconditionFailure("Expected offline fixture") } catch { }
         var accountPending = try JSONSerialization.jsonObject(with: UserDefaults.standard.data(forKey: pendingKey)!) as! [[String: Any]]
         let formerReference = accountPending.last!["reference"] as! String
         precondition(accountPending.last!["context"] as? String == contextA)
         precondition(!String(data: UserDefaults.standard.data(forKey: pendingKey)!, encoding: .utf8)!.contains(accountA), "Pending audit stores a fingerprint, never a credential")
+        ReliabilityFixture.incidentStatus = 200
         center.resetSession(context: contextB)
         precondition(center.notice == nil, "Authentication changes clear old private notice state")
         ReliabilityFixture.networkHealthy = true
@@ -223,7 +264,7 @@ extension ReliableTransport {
         _ = try await perform("/api/building/alerts", token: accountA)
         precondition(center.notice?.id == accountBNotice && center.notice?.recovered == false, "Stale prior-session reads cannot change the active account's notice")
         let originalAudit = ReliabilityFixture.reports.first { $0["reference"] as? String == formerReference }
-        precondition(originalAudit?["fixtureAuthorization"] as? String == "Bearer " + accountA, "A retained audit may flush only under its original context")
+        precondition(originalAudit == nil, "A stale prior-session read must not send retained telemetry for an inactive account")
         precondition(!reported(formerReference, "recovered"), "A context reset cannot manufacture recovery")
         _ = try await perform("/api/building/alerts", token: accountB)
         precondition(center.notice?.recovered == true && reported("SS22-ACCOUNT-B", "recovered"))
@@ -249,7 +290,70 @@ extension ReliableTransport {
                     && (index < 20 ? item["context"] == nil : item["context"] as? String == contextA)
             }, "Every legacy and former-account audit must remain retained")
         }
-        print("PASS: compiled native reminder lifecycle, passive activity, truthful queued/delivered status, path recovery, foreground priority, complete audits, account isolation and retention beyond 20 queued incidents")
+        // A successful sign-in/data response must return while telemetry is
+        // deliberately held. These fixtures never contact a real service.
+        await ReliableTransport.waitForFixtureDelivery()
+        UserDefaults.standard.removeObject(forKey: pendingKey)
+        center.resetSession(context: contextA)
+        ReliabilityFixture.holdIncidents = true
+        ReliabilityFixture.maximumActiveIncidents = 0
+        for index in 1...3 { ReliableTransport.enqueueRetentionFixture(reference: "SS22-DELAY-A-" + String(index), context: contextA) }
+        ReliableTransport.enqueueRetentionFixture(reference: "SS22-DELAY-B", context: contextB)
+        ReliableTransport.enqueueRetentionFixture(reference: "SS22-DELAY-UNKNOWN", context: nil)
+        func pendingReferences() -> Set<String> {
+            let raw = UserDefaults.standard.data(forKey: pendingKey) ?? Data("[]".utf8)
+            let items = try! JSONSerialization.jsonObject(with: raw) as! [[String: Any]]
+            return Set(items.compactMap { $0["reference"] as? String })
+        }
+        var waitStep = 0
+        func waitUntil(_ condition: () -> Bool) async {
+            waitStep += 1
+            for _ in 0..<200 {
+                if condition() { return }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            preconditionFailure("Synthetic delivery condition timed out at step \(waitStep)")
+        }
+        func directSuccess(_ path: String, token: String) async throws {
+            var req = URLRequest(url: URL(string: "https://stone-square-sign.onrender.com" + path)!)
+            req.httpMethod = "GET"
+            _ = try await ReliableTransport.perform(session: session, request: req, path: path, token: token, presentation: .foreground)
+        }
+        var signInReturned = false
+        let signIn = Task { try await directSuccess("/api/auth/me", token: accountA); signInReturned = true }
+        await waitUntil { ReliabilityFixture.heldCount() == 1 }
+        try? await Task.sleep(for: .milliseconds(30))
+        precondition(signInReturned, "Held telemetry must not block a successful sign-in response")
+        try await signIn.value
+        try await directSuccess("/api/minutes", token: accountA)
+        try await directSuccess("/api/correspondence", token: accountA)
+        precondition(ReliabilityFixture.maximumActiveIncidents == 1 && ReliabilityFixture.heldCount() == 1, "Concurrent successful requests share one audit delivery flight")
+        ReliabilityFixture.releaseHeld()
+        await waitUntil { ReliabilityFixture.heldCount() == 1 && !pendingReferences().contains("SS22-DELAY-A-1") }
+        precondition(pendingReferences().count == 4, "Each acknowledgment is persisted before the next send")
+        ReliabilityFixture.releaseHeld(status: 503)
+        await ReliableTransport.waitForFixtureDelivery()
+        precondition(pendingReferences().count == 4 && pendingReferences().contains("SS22-DELAY-A-2"), "A later failed report cannot replay acknowledged entries or delete an unacknowledged entry")
+        try await directSuccess("/api/auth/me", token: accountA)
+        await waitUntil { ReliabilityFixture.heldCount() == 1 }
+        center.resetSession(context: contextB)
+        try await directSuccess("/api/auth/me", token: accountB)
+        ReliabilityFixture.releaseHeld()
+        await waitUntil { ReliabilityFixture.heldCount() == 1 && !pendingReferences().contains("SS22-DELAY-A-2") }
+        precondition(pendingReferences().contains("SS22-DELAY-A-3") && !reported("SS22-DELAY-A-3", "open"), "A context switch stops further old-account delivery")
+        ReliabilityFixture.releaseHeld()
+        await ReliableTransport.waitForFixtureDelivery()
+        precondition(reported("SS22-DELAY-B", "open") && pendingReferences() == Set(["SS22-DELAY-A-3", "SS22-DELAY-UNKNOWN"]), "The active account is delivered; old and unknown entries remain intact")
+        let bReport = ReliabilityFixture.reports.first { $0["reference"] as? String == "SS22-DELAY-B" }
+        precondition(bReport?["fixtureAuthorization"] as? String == "Bearer " + accountB)
+        precondition(ReliabilityFixture.maximumActiveIncidents == 1, "Context changes never create competing delivery flights")
+        ReliabilityFixture.holdIncidents = false
+        center.resetSession(context: contextA)
+        for index in 0..<31 { ReliableTransport.enqueueRetentionFixture(reference: "SS22-BATCH-" + String(index), context: contextA) }
+        _ = try await perform("/api/auth/me")
+        precondition((0..<31).allSatisfy { reported("SS22-BATCH-" + String($0), "open") }, "Bounded batches continue safely until all acknowledged audit entries are delivered")
+        precondition(pendingReferences() == Set(["SS22-DELAY-UNKNOWN"]), "Unattributable audit is never dropped while draining multiple batches")
+        print("PASS: nonblocking successful sign-in/data reads, single-flight bounded audit batches, per-ack persistence, failure retention, context-switch isolation, original native reminder lifecycle, mutation non-retry and complete audit retention")
     }
 }
 `);

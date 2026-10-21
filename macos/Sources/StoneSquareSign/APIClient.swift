@@ -191,7 +191,7 @@ final class ReliabilityCenter: ObservableObject {
 
 @MainActor
 enum ReliableTransport {
-    private struct PendingIncident: Codable {
+    private struct PendingIncident: Codable, Equatable {
         let reference: String
         let path: String
         let method: String
@@ -201,6 +201,17 @@ enum ReliableTransport {
         var context: String? = nil
     }
     private static let pendingKey = "ss22-pending-incidents-v1"
+    private struct DeliveryContext {
+        let session: URLSession
+        let request: URLRequest
+        let token: String
+        let fingerprint: String
+        let epoch: Int?
+    }
+    private static var deliveryTask: Task<Void, Never>?
+    private static var scheduledDelivery: DeliveryContext?
+    private static var activeDelivery: DeliveryContext?
+    private static let deliveryBatchSize = 25
 
     static func contextFingerprint(url: URL?, token: String?) -> String? {
         guard let url, let host = url.host?.lowercased() else { return nil }
@@ -222,14 +233,14 @@ enum ReliableTransport {
                 let (data, response) = try await session.data(for: request)
                 guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
                 if (200..<300).contains(http.statusCode) {
-                    if productionService { await flushQueuedReports(session: session, request: request, token: token, epoch: epoch) }
                     let recoveredReferences = ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch)
                         ? ReliabilityCenter.shared.recovered(reference: reference, path: path, method: method, presentation: presentation) : []
                     if productionService {
                         for recoveredReference in recoveredReferences {
-                            await report(session: session, request: request, token: token, reference: recoveredReference, path: path, status: http.statusCode, state: "recovered", category: "temporary_connection")
+                            queue(PendingIncident(reference: recoveredReference, path: path, method: method, status: http.statusCode, state: "recovered", category: "temporary_connection", context: context))
                         }
                     }
+                    if productionService { scheduleQueuedReports(session: session, request: request, token: token, epoch: epoch) }
                     return (data, http)
                 }
                 let payload = try? JSONDecoder().decode(APIError.self, from: data)
@@ -250,8 +261,7 @@ enum ReliableTransport {
                         ReliabilityCenter.shared.failed(reference: reference, queued: productionService, path: path, method: method, presentation: presentation)
                     }
                     if productionService {
-                        let recorded = await report(session: session, request: request, token: token, reference: reference, path: path, status: http.statusCode, state: "open", category: "service_response")
-                        if recorded { ReliabilityCenter.shared.reportRecorded(reference: reference, path: path, method: method, context: context, epoch: epoch) }
+                        scheduleQueuedReports(session: session, request: request, token: token, epoch: epoch)
                     }
                 }
                 return (data, http)
@@ -269,7 +279,10 @@ enum ReliableTransport {
                 if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
                     ReliabilityCenter.shared.failed(reference: reference!, queued: productionService, path: path, method: method, presentation: presentation)
                 }
-                if productionService { queue(PendingIncident(reference: reference!, path: path, method: method, status: 0, state: "open", category: "network_error", context: context)) }
+                if productionService {
+                    queue(PendingIncident(reference: reference!, path: path, method: method, status: 0, state: "open", category: "network_error", context: context))
+                    scheduleQueuedReports(session: session, request: request, token: token, epoch: epoch)
+                }
                 throw ClientError.server("The dashboard could not connect. Incident \(reference!).")
             }
         }
@@ -278,18 +291,6 @@ enum ReliableTransport {
 
     private static func newReference() -> String {
         "SS22-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).uppercased()
-    }
-
-    @discardableResult
-    private static func report(session: URLSession, request: URLRequest, token: String?, reference: String, path: String, status: Int, state: String, category: String) async -> Bool {
-        let incident = PendingIncident(reference: reference, path: path, method: request.httpMethod ?? "GET", status: status, state: state, category: category, context: contextFingerprint(url: request.url, token: token))
-        let recorded = await send(session: session, request: request, token: token, incident: incident)
-        if !recorded { queue(incident) }
-        else if let context = incident.context {
-            let remaining = queued().filter { $0.reference != reference || $0.state != state || $0.context != context }
-            if let data = try? JSONEncoder().encode(remaining) { UserDefaults.standard.set(data, forKey: pendingKey) }
-        }
-        return recorded
     }
 
     private static func send(session: URLSession, request: URLRequest, token: String?, incident: PendingIncident) async -> Bool {
@@ -318,23 +319,54 @@ enum ReliableTransport {
         return (try? JSONDecoder().decode([PendingIncident].self, from: data)) ?? []
     }
 
-    private static func flushQueuedReports(session: URLSession, request: URLRequest, token: String?, epoch: Int?) async {
-        let context = contextFingerprint(url: request.url, token: token)
-        var delivered: Set<String> = []
-        for incident in queued() {
-            // Older entries have no trustworthy account context. Retain them,
-            // but never attribute them to the next person who signs in.
-            guard let incidentContext = incident.context, incidentContext == context else { continue }
-            if await send(session: session, request: request, token: token, incident: incident) {
-                delivered.insert("\(incident.reference)|\(incident.state)|\(incidentContext)")
-                if incident.state == "open" {
-                    ReliabilityCenter.shared.reportRecorded(reference: incident.reference, path: incident.path, method: incident.method, context: incidentContext, epoch: epoch)
+    // Auditing must never delay an already completed user request or sign-in.
+    // One worker owns delivery across requests, and only a genuine request can
+    // restart a failed pass. There is no timer polling an unavailable service.
+    private static func scheduleQueuedReports(session: URLSession, request: URLRequest, token: String?, epoch: Int?) {
+        guard let token, let context = contextFingerprint(url: request.url, token: token),
+              ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) else { return }
+        // Requests arriving during the same flight need no additional pass:
+        // new entries are picked up by its next batch, while a failed pass
+        // waits for a later genuine request instead of immediately retrying.
+        if let active = activeDelivery, active.fingerprint == context, active.epoch == epoch { return }
+        scheduledDelivery = DeliveryContext(session: session, request: request, token: token, fingerprint: context, epoch: epoch)
+        guard deliveryTask == nil else { return }
+        deliveryTask = Task {
+            defer { activeDelivery = nil; deliveryTask = nil }
+            while let delivery = scheduledDelivery {
+                scheduledDelivery = nil
+                guard ReliabilityCenter.shared.isCurrent(context: delivery.fingerprint, epoch: delivery.epoch) else { continue }
+                activeDelivery = delivery
+                let hasMore = await flushQueuedReportBatch(delivery)
+                activeDelivery = nil
+                if hasMore, scheduledDelivery == nil,
+                   ReliabilityCenter.shared.isCurrent(context: delivery.fingerprint, epoch: delivery.epoch) {
+                    scheduledDelivery = delivery
                 }
+                await Task.yield()
             }
         }
-        let remaining = queued().filter { !delivered.contains("\($0.reference)|\($0.state)|\($0.context ?? "unknown")") }
-        if let data = try? JSONEncoder().encode(remaining) { UserDefaults.standard.set(data, forKey: pendingKey) }
     }
+
+    private static func flushQueuedReportBatch(_ delivery: DeliveryContext) async -> Bool {
+        // Unknown legacy and other-account entries remain quarantined, intact.
+        let batch = Array(queued().filter { $0.context == delivery.fingerprint }.prefix(deliveryBatchSize))
+        for incident in batch {
+            guard !Task.isCancelled,
+                  ReliabilityCenter.shared.isCurrent(context: delivery.fingerprint, epoch: delivery.epoch) else { return false }
+            guard await send(session: delivery.session, request: delivery.request, token: delivery.token, incident: incident) else { return false }
+            // Persist each acknowledgment before the next network operation.
+            // Exact equality protects a newer replacement queued during await.
+            let remaining = queued().filter { $0 != incident }
+            if let data = try? JSONEncoder().encode(remaining) { UserDefaults.standard.set(data, forKey: pendingKey) }
+            if incident.state == "open" {
+                ReliabilityCenter.shared.reportRecorded(reference: incident.reference, path: incident.path, method: incident.method,
+                                                       context: delivery.fingerprint, epoch: delivery.epoch)
+            }
+        }
+        return !batch.isEmpty && queued().contains { $0.context == delivery.fingerprint }
+    }
+
 }
 
 private struct TrackerHandoffResponse: Decodable {
