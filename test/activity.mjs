@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {measuredSeconds} from '../activity.js';
 const now=Date.now(),previous={last_heartbeat_at:new Date(now-30000).toISOString(),was_active:true};
 assert.equal(measuredSeconds(previous,true,now),30);
@@ -9,6 +9,74 @@ assert.equal(measuredSeconds({...previous,last_heartbeat_at:new Date(now-180000)
 assert.equal(measuredSeconds({...previous,last_heartbeat_at:null},true,now),0);
 assert.equal(measuredSeconds({...previous,last_heartbeat_at:new Date(now+1000).toISOString()},true,now),0);
 console.log('PASS Active time excludes idle, first observations, clock reversal and disconnected gaps');
+// This separate process forces the shared adapter into an in-memory PGlite
+// database. It can seed a contradictory historical row without a production
+// migration, a test-only server endpoint, or modifying a saved Lodge record.
+const incidentStateFixture=String.raw`
+import assert from 'node:assert/strict';
+import express from 'express';
+import {once} from 'node:events';
+import {connect,close,dbRun,dbGet} from './db.js';
+import {initActivitySchema,recordAppIncident,mountActivityRoutes} from './activity.js';
+assert.equal(process.env.DATABASE_URL,'');
+assert.equal(process.env.PGLITE_DIR,'');
+assert.equal((await connect()).driver,'pglite');
+let passed=0;
+const check=(name,ok)=>{assert.ok(ok,name);passed++;console.log('PASS '+name)};
+const pause=()=>new Promise(resolve=>setTimeout(resolve,5));
+await dbRun('CREATE TABLE users (id INTEGER PRIMARY KEY,name TEXT,role TEXT,email TEXT,roster_id INTEGER,access_revoked_at TEXT)');
+await dbRun("INSERT INTO users (id,name,role,email) VALUES (1,'QA owner','owner','state-owner@example.org'),(2,'QA secretary','secretary','state-secretary@example.org')");
+await dbRun('CREATE TABLE audit_events (id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,user_id INTEGER,action TEXT,created_at TEXT,document_id TEXT,details_json TEXT)');
+await initActivitySchema();
+const payload={userId:1,client:'Original client',area:'minutes',path:'/api/minutes/17?private=discard',method:'GET',status:503,category:'service_response',state:'open'};
+const raw=reference=>dbGet('SELECT * FROM app_incidents WHERE reference=?',[reference]);
+const metadata=row=>Object.fromEntries(Object.entries(row).filter(([key])=>!['state','last_seen_at','recovered_at'].includes(key)));
+const record=(reference,fields={})=>recordAppIncident({...payload,reference,...fields});
+const app=express();app.use(express.json());
+const auth=(req,res,next)=>{req.user={id:req.get('authorization')==='Bearer fixture-other'?2:1};next()};
+mountActivityRoutes(app,{requireAuth:auth,requireOwner:(_req,_res,next)=>next(),rateLimit:()=> (_req,_res,next)=>next()});
+app.use((error,_req,res,_next)=>res.status(error.statusCode||500).json({error:error.message}));
+const server=app.listen(0,'127.0.0.1');await once(server,'listening');
+const base='http://127.0.0.1:'+server.address().port;
+try{
+ const ordered='SS22-ORDERED1';await record(ordered);const original=await raw(ordered);
+ await record(ordered,{state:'recovered',status:200,category:'temporary_connection'});const firstRecovery=await raw(ordered);
+ await pause();await record(ordered,{state:'open',client:'Late replay',area:'treasury',path:'/api/treasury/88',method:'POST',status:500,category:'different_late_payload'});
+ const afterLateOpen=await raw(ordered);
+ check('Late open delivery cannot reopen a recovered reference',afterLateOpen.state==='recovered'&&afterLateOpen.recovered_at===firstRecovery.recovered_at);
+ check('Late delivery preserves original metadata and records its receipt',JSON.stringify(metadata(afterLateOpen))===JSON.stringify(metadata(original))&&Date.parse(afterLateOpen.last_seen_at)>Date.parse(firstRecovery.last_seen_at));
+ await pause();await record(ordered,{state:'recovered'});const repeatedRecovery=await raw(ordered);
+ check('Repeated recovery preserves the first recovery timestamp',repeatedRecovery.recovered_at===firstRecovery.recovered_at&&Date.parse(repeatedRecovery.last_seen_at)>Date.parse(afterLateOpen.last_seen_at));
+ const reversed='SS22-REVERSE1';await record(reversed,{state:'recovered',status:200,category:'temporary_connection'});const recoveryFirst=await raw(reversed);
+ await pause();await record(reversed);const reverseResult=await raw(reversed);
+ check('Recovery delivered before its open event stays terminal',reverseResult.state==='recovered'&&reverseResult.recovered_at===recoveryFirst.recovered_at&&JSON.stringify(metadata(reverseResult))===JSON.stringify(metadata(recoveryFirst)));
+ const mixed='SS22-MIXED001';await record(mixed);const mixedOriginal=await raw(mixed);
+ await Promise.all(Array.from({length:12},(_,index)=>record(mixed,{state:index%3===0?'recovered':'open',client:'Concurrent replay',status:index%3===0?200:503})));
+ const mixedResult=await raw(mixed);await record(mixed,{state:'open'});const mixedFinal=await raw(mixed);
+ check('Interleaved concurrent open and recovery reports remain recovered',mixedFinal.state==='recovered'&&Boolean(mixedFinal.recovered_at)&&mixedFinal.recovered_at===mixedResult.recovered_at&&JSON.stringify(metadata(mixedFinal))===JSON.stringify(metadata(mixedOriginal)));
+ const freshMixed='SS22-FRESHMIX';await Promise.all(Array.from({length:12},(_,index)=>record(freshMixed,{state:index%2?'recovered':'open'})));
+ check('Concurrent first observations create one terminal recovered identity',(await dbGet('SELECT COUNT(*)::integer AS count FROM app_incidents WHERE reference=?',[freshMixed])).count===1&&(await raw(freshMixed)).state==='recovered');
+ const newFailure='SS22-NEWOPEN1';await record(newFailure);const genuinelyOpen=await raw(newFailure);
+ check('A new genuine failure reference remains open',genuinelyOpen.state==='open'&&genuinelyOpen.recovered_at===null);
+ const beforeConflict=await raw(ordered);
+ const conflict=await fetch(base+'/api/activity/incidents',{method:'POST',headers:{Authorization:'Bearer fixture-other','Content-Type':'application/json'},body:JSON.stringify({reference:ordered,state:'open',path:'/api/building/alerts',status:503})});
+ check('Another account cannot reopen or change a recovered incident',conflict.status===409&&JSON.stringify(await raw(ordered))===JSON.stringify(beforeConflict));
+ const legacy='SS22-LEGACY01';const first=new Date(Date.now()-60000).toISOString(),recovered=new Date(Date.now()-30000).toISOString(),last=new Date(Date.now()+60000).toISOString();
+ await dbRun('INSERT INTO app_incidents (reference,user_id,client,area,request_path,request_method,status_code,category,state,first_seen_at,last_seen_at,recovered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[legacy,1,'Mac app','Meeting Minutes','/api/minutes','GET',200,'temporary_connection','open',first,last,recovered]);
+ const legacyBefore=await raw(legacy);const response=await fetch(base+'/api/admin/activity');const activity=await response.json();
+ const legacyDTO=activity.incidents.find(row=>row.reference===legacy),newDTO=activity.incidents.find(row=>row.reference===newFailure);
+ check('Read-only admin history presents legacy recovery evidence truthfully',response.status===200&&legacyDTO.state==='recovered'&&legacyDTO.recoveredAt===recovered&&legacyDTO.firstSeenAt===first&&legacyDTO.lastSeenAt===last&&newDTO.state==='open');
+ check('Fresh open incidents take priority over later legacy recovery receipts',activity.incidents.findIndex(row=>row.reference===newFailure)<activity.incidents.findIndex(row=>row.reference===legacy));
+ check('Reading normalized legacy history never rewrites its original row',JSON.stringify(await raw(legacy))===JSON.stringify(legacyBefore)&&legacyBefore.state==='open');
+ await record(legacy,{state:'open'});const healedOnGenuineReceipt=await raw(legacy);
+ check('A genuine late receipt honors existing legacy recovery evidence',healedOnGenuineReceipt.state==='recovered'&&healedOnGenuineReceipt.recovered_at===recovered&&JSON.stringify(metadata(healedOnGenuineReceipt))===JSON.stringify(metadata(legacyBefore)));
+ console.log(passed+' isolated incident ordering and read-only legacy presentation checks passed.');
+}finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await close();}
+`;
+const incidentStateRun=spawnSync(process.execPath,['--input-type=module','-e',incidentStateFixture],{cwd:new URL('../',import.meta.url),env:{...process.env,NODE_ENV:'test',DATABASE_URL:'',PGLITE_DIR:'',OPENAI_API_KEY:'',SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:''},encoding:'utf8',timeout:120000});
+assert.equal(incidentStateRun.status,0,incidentStateRun.stderr||incidentStateRun.error?.message);
+process.stdout.write(incidentStateRun.stdout);
+
 const base='http://127.0.0.1:3548';
 const server=spawn(process.execPath,['server.js'],{env:{...process.env,PORT:'3548',NODE_ENV:'test',SESSION_DAYS:'7',SESSION_REFRESH_DAYS:'3',DATABASE_URL:'',PGLITE_DIR:'',OWNER_EMAIL:'activity-owner@example.org',APP_BASE_URL:base,SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:'',LODGE_ACCESS_CODE:'',DDGM_EMAIL:'unused@example.org'},stdio:'ignore'});
 let passed=0;const check=(name,ok)=>{assert.ok(ok,name);passed++;console.log('PASS '+name)};

@@ -40,11 +40,13 @@ export async function recordAppIncident({reference,userId,client,area,path,metho
  const ref=/^SS22-[A-Z0-9]{6,16}$/.test(String(reference||''))?String(reference):incidentReference();
  const now=iso(),nextState=state==='recovered'?'recovered':'open';
  // Replayed client reports may arrive together. Preserve the original incident
- // identity and metadata while atomically updating only its observed state.
+ // identity and metadata. Recovery is terminal for one reference: a delayed
+ // open report cannot reopen it. A later genuine failure uses a new reference.
  const recorded=await dbRun(`INSERT INTO app_incidents (reference,user_id,client,area,request_path,request_method,status_code,category,state,first_seen_at,last_seen_at,recovered_at)
    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-   ON CONFLICT(reference) DO UPDATE SET state=EXCLUDED.state,last_seen_at=EXCLUDED.last_seen_at,
-    recovered_at=CASE WHEN EXCLUDED.state='recovered' THEN EXCLUDED.recovered_at ELSE app_incidents.recovered_at END
+   ON CONFLICT(reference) DO UPDATE SET
+    state=CASE WHEN app_incidents.state='recovered' OR app_incidents.recovered_at IS NOT NULL OR EXCLUDED.state='recovered' THEN 'recovered' ELSE 'open' END,
+    last_seen_at=EXCLUDED.last_seen_at,recovered_at=COALESCE(app_incidents.recovered_at,EXCLUDED.recovered_at)
     WHERE app_incidents.user_id IS NOT DISTINCT FROM EXCLUDED.user_id`,[ref,userId||null,String(client||'Unknown client').slice(0,60),safeIncidentArea(area),safeIncidentPath(path),String(method||'GET').toUpperCase().slice(0,10),Number.isInteger(Number(status))?Number(status):null,String(category||'request_failed').replace(/[^a-z0-9_-]/ig,'').slice(0,60)||'request_failed',nextState,now,now,nextState==='recovered'?now:null]);
  if(!recorded.changes)throw Object.assign(new Error('This incident belongs to a different sign-in. Keep it queued for the original account.'),{statusCode:409});
  return ref;
@@ -97,7 +99,7 @@ export function mountActivityRoutes(app,{requireAuth,requireOwner,rateLimit}){
   const clauses=' AND (?::integer IS NULL OR a.user_id=?)';
   const events=await dbAll(`SELECT a.id,a.user_id,a.action,a.created_at,a.document_id,a.details_json,u.name AS actor_name FROM audit_events a LEFT JOIN users u ON u.id=a.user_id WHERE a.created_at>=?${clauses} AND (?::integer IS NULL OR a.id<?) ORDER BY a.id DESC LIMIT 101`,[cutoff,userId,userId,eventBefore,eventBefore]);
   const sessions=await dbAll(`SELECT a.id,a.user_id,a.started_at,a.first_seen_at,a.last_seen_at,a.last_heartbeat_at,a.was_active,a.active_seconds,a.client,a.last_area,a.ended_at,a.end_reason,u.name AS actor_name FROM activity_sessions a JOIN users u ON u.id=a.user_id WHERE a.last_seen_at>=?${clauses} AND (?::integer IS NULL OR a.id<?) ORDER BY a.id DESC LIMIT 101`,[cutoff,userId,userId,sessionBefore,sessionBefore]);
-  const incidents=await dbAll(`SELECT i.id,i.reference,i.user_id,i.client,i.area,i.request_path,i.request_method,i.status_code,i.category,i.state,i.first_seen_at,i.last_seen_at,i.recovered_at,u.name AS actor_name FROM app_incidents i LEFT JOIN users u ON u.id=i.user_id WHERE i.last_seen_at>=? AND (?::integer IS NULL OR i.user_id=?) ORDER BY CASE WHEN i.state='open' THEN 0 ELSE 1 END,i.last_seen_at DESC LIMIT 200`,[cutoff,userId,userId]);
+  const incidents=await dbAll(`SELECT i.id,i.reference,i.user_id,i.client,i.area,i.request_path,i.request_method,i.status_code,i.category,CASE WHEN i.state='recovered' OR i.recovered_at IS NOT NULL THEN 'recovered' ELSE 'open' END AS state,i.first_seen_at,i.last_seen_at,i.recovered_at,u.name AS actor_name FROM app_incidents i LEFT JOIN users u ON u.id=i.user_id WHERE i.last_seen_at>=? AND (?::integer IS NULL OR i.user_id=?) ORDER BY CASE WHEN i.state='open' AND i.recovered_at IS NULL THEN 0 ELSE 1 END,i.last_seen_at DESC LIMIT 200`,[cutoff,userId,userId]);
   const detailFor=a=>{try{return JSON.parse(a.details_json||'{}')}catch{return {}}};
   const refs=[...new Set(events.flatMap(a=>{const d=detailFor(a);return [a.document_id,d.reportId,d.minutesId,d.archiveId].filter(v=>typeof v==='string'&&v.length<200)}))];
   const titles=new Map();
