@@ -70,7 +70,8 @@ export async function validateSupportingReport(bytes) {
   }
 }
 
-export function createDispensationSubmissions({ sendEmail, addAudit, recipient, lodgeName, mailFrom, automaticDeliveryEnabled = false }) {
+export function createDispensationSubmissions({ sendEmail, addAudit, recipient, lodgeName, mailFrom, automaticDeliveryEnabled = false,
+  missiveDraftStatus, onReportSaved }) {
   // Sending is disconnected by default. Production never opts in; the opt-in is
   // retained solely for isolated transport regression tests of historical code.
   automaticDeliveryEnabled = automaticDeliveryEnabled === true;
@@ -92,6 +93,9 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
 
   async function packet(id, user) {
     const document = await documentFor(id, user);
+    // The secretary's completion response deliberately contains no owner email
+    // overview, supporting report, or Missive receipt.
+    const missiveDraft = user && missiveDraftStatus ? await missiveDraftStatus(id, user) : null;
     const correction = await dbGet(`SELECT corrected_at, before_pdf_sha256, after_pdf_sha256
       FROM owner_signature_revisions WHERE document_id = ? ORDER BY corrected_at DESC, id DESC LIMIT 1`, [id]);
     const row = await dbGet(`SELECT report_filename, report_sha256, source_label, report_added_at,
@@ -117,7 +121,8 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       uncertain: row?.delivery_error || 'Delivery could not be confirmed. Check before sending again to avoid a duplicate.',
     };
     return {
-      state, automaticDeliveryEnabled, reportLocked: Boolean(draft || document.submitted_at), recipient: draft ? { to: draft.to, name: draft.name } : configuredRecipient(),
+      state, automaticDeliveryEnabled, reportLocked: Boolean(draft || document.submitted_at || missiveDraft?.reportLocked), recipient: draft ? { to: draft.to, name: draft.name } : configuredRecipient(),
+      ...(missiveDraft ? { missiveDraft } : {}),
       report: row?.report_sha256 ? { filename: row.report_filename, sha256: row.report_sha256, sourceLabel: row.source_label || '', addedAt: row.report_added_at } : null,
       draft: automaticDeliveryEnabled && draft ? { ...draft, preparedAt: row.prepared_at } : null,
       delivery: { sentAt: row?.sent_at || document.submitted_at || null, to: draft?.to || document.submitted_to || null,
@@ -125,7 +130,9 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
         confirmationOutcome: row?.delivery_confirmation_outcome || null, attemptedAt: row?.attempted_at || null },
       correction: correction ? { correctedAt: correction.corrected_at, previousPdfSha256: correction.before_pdf_sha256,
         correctedPdfSha256: correction.after_pdf_sha256, previousDeliveryAppliesToPreviousPdf: true } : null,
-      message: `${correction ? 'The Worshipful Master signature was corrected. Earlier email history refers to the previous PDF. ' : ''}${automaticDeliveryEnabled ? messages[state]
+      message: `${correction ? 'The Worshipful Master signature was corrected. Earlier email history refers to the previous PDF. ' : ''}${missiveDraft
+        ? `${state === 'sent' ? 'A previous email submission is recorded. This does not confirm receipt. ' : ['sending', 'uncertain'].includes(state) ? 'A previous delivery attempt remains unconfirmed. ' : ''}Automatic emailing to the District Deputy is turned off. ${missiveDraft.message}`
+        : automaticDeliveryEnabled ? messages[state]
         : `${state === 'sent' ? 'A previous email submission is recorded. This does not confirm receipt. ' : ['sending', 'uncertain'].includes(state) ? 'A previous delivery attempt remains unconfirmed. ' : ''}${DISPENSATION_DELIVERY_DISABLED_MESSAGE}`}`,
     };
   }
@@ -234,6 +241,8 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       await documentFor(id, user);
       const previous = await dbGet('SELECT * FROM dispensation_submissions WHERE document_id = ? FOR UPDATE', [id]);
       if (previous?.report_sha256 === digest) return;
+      const missiveDraft = missiveDraftStatus ? await missiveDraftStatus(id, user) : null;
+      if (missiveDraft?.reportLocked) throw error(409, 'A Missive draft already uses this report. Keep its saved attachments together and review the draft in Missive.');
       if (previous?.message_raw || document.submitted_at) throw error(409, 'This submission packet is already prepared or sent. Its attached report cannot be replaced.');
       const savedAt = now();
       const filename = pdfName(file.originalname, 'corresponding-report');
@@ -246,8 +255,11 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       [id, bytes, filename, digest, plain(sourceLabel, 120), savedAt, user.id, savedAt]);
       await recordAudit(id, 'dispensation_supporting_report_associated', context,
         { filename, sha256: digest, sourceLabel: plain(sourceLabel, 120), replaced: Boolean(previous?.report_sha256) });
+      // Commit the report and its existing draft-queue wakeup together. This
+      // callback never creates a queue row for a historical signed document.
+      if (onReportSaved) await onReportSaved(id, context);
     });
-    return deliver(id, context);
+    return automaticDeliveryEnabled ? deliver(id, context) : packet(id, user);
   }
 
   async function resolveDelivery(id, user, outcome, note, context = {}, expectedAttemptedAt) {

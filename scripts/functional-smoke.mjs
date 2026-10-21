@@ -22,6 +22,7 @@ const excluded = new Set([
   'mac-reliability.mjs',
   'mac-report.mjs',
   'mac-submission.mjs',
+  'mac-missive-draft.mjs',
 ]);
 const selected = commands.filter(command => !excluded.has(path.basename(command)));
 if (selected.length < 35 || !selected.includes('node test/e2e.mjs') ||
@@ -40,6 +41,7 @@ for (const command of selected) {
       ...process.env,
       NODE_ENV: 'test', DATABASE_URL: '', PGLITE_DIR: '', OPENAI_API_KEY: '',
       SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', ZEFFY_API_KEY: '',
+      MISSIVE_API_TOKEN: '', MISSIVE_DRAFT_FROM: '',
       RENDER_DEPLOY_HOOK: '',
     },
   });

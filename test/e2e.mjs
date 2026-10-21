@@ -129,6 +129,8 @@ const server = spawn(process.execPath, ['server.js'], {
     NODE_ENV: 'test',
     DATABASE_URL: '',            // empty forces PGlite
     PGLITE_DIR: '',              // empty keeps it in memory
+    MISSIVE_API_TOKEN: '',       // never create drafts in a real mailbox
+    MISSIVE_DRAFT_FROM: '',
     OWNER_EMAIL: 'wm@stonesquare22pha.org',
     LODGE_ACCESS_CODE: 'square22-lodge-code',
     DDGM_EMAIL: 'districtdeputy@example.org',

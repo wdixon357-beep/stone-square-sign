@@ -38,6 +38,7 @@ import { initReportDeliverySchema, mountReportDelivery } from './report-delivery
 import { mountReportSource } from './report-source.js';
 import { mountCorrespondenceRoutes } from './correspondence.js';
 import { createDispensationSubmissions, initDispensationSubmissionSchema } from './dispensation-submissions.js';
+import { createDispensationMissiveDrafts, initDispensationMissiveDraftSchema } from './dispensation-missive-drafts.js';
 import { mountMemberFeatures } from './member-features.js';
 import { initSignaturePolicySchema, signatureProfilePolicyForUser, assertApprovedSignature } from './signature-policy.js';
 import { initMinutesSignatureRevisionSchema, createMinutesSignatureRevisions } from './minutes-signature-revisions.js';
@@ -583,9 +584,15 @@ const addAudit = async ({
   }
 };
 
+const dispensationMissiveDrafts = createDispensationMissiveDrafts({
+  from: process.env.MISSIVE_DRAFT_FROM || OWNER_EMAIL,
+  recipient: { to: DDGM_EMAIL, name: DDGM_NAME }, lodgeName: LODGE_NAME, addAudit,
+});
 const dispensationSubmissions = createDispensationSubmissions({
   sendEmail, addAudit, recipient: { to: DDGM_EMAIL, name: DDGM_NAME }, lodgeName: LODGE_NAME, mailFrom: process.env.MAIL_FROM,
   automaticDeliveryEnabled: false,
+  missiveDraftStatus: (id, user) => dispensationMissiveDrafts.status(id, user),
+  onReportSaved: (id, context) => dispensationMissiveDrafts.enqueue(id, { ...context, onlyExisting: true }),
 });
 
 const requestBaseUrl = (req) =>
@@ -3361,6 +3368,13 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       });
       if (status === 'completed') {
         await addAudit({ userId: req.user.id, documentId: document.id, action: 'document_completed' });
+        if (document.template_kind === 'dispensation_v1' && !document.submitted_at) {
+          // This durable outbox write shares the signature transaction. No
+          // external API runs here, and email availability cannot undo a signature.
+          await dispensationMissiveDrafts.enqueue(document.id, {
+            actorUserId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || '',
+          });
+        }
       }
       return { documentId: document.id, status, remaining: remaining.total };
     });
@@ -3404,6 +3418,16 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
 });
 
 dispensationSubmissions.mount(app, { requireAuth, requireOwner, upload, broadcast, rateLimit });
+app.post('/api/documents/:id/missive-draft/retry', requireAuth, requireOwner,
+  rateLimit({ key: 'dispensation-missive-retry', maximum: 10, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
+    try {
+      await dispensationMissiveDrafts.retry(req.params.id, req.user, {
+        actorUserId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || '',
+      });
+      broadcast('queue_changed', { reason: 'dispensation_missive_draft_retry', documentId: req.params.id });
+      res.json({ packet: await dispensationSubmissions.packet(req.params.id, req.user) });
+    } catch (error) { next(error); }
+  });
 
 const APPROVAL_STATUSES = new Set(['approved', 'disapproved', 'withdrawn', 'pending']);
 /* Text message is here because it is what this District actually does. Both of Cooke's
@@ -3746,6 +3770,7 @@ await initReportDeliverySchema();
 await initSignaturePolicySchema();
 await initMinutesSignatureRevisionSchema();
 await initDispensationSubmissionSchema();
+await initDispensationMissiveDraftSchema();
 await ensureBrotherSelfServiceAccess();
 await grantTreasuryDuesAccessOnce();
 await initializeBuildingCalendar();
@@ -3755,6 +3780,21 @@ await initGenerationSchema();
 await initActivitySchema();
 
 if (dispensationSubmissions.automaticDeliveryEnabled) dispensationSubmissions.startWorker(broadcast);
+// Only explicit queue entries created by new completed signatures are scanned.
+// Historical signed dispensations are never backfilled into someone's mailbox.
+let missiveDraftWorkerRunning = false;
+const processMissiveDrafts = async () => {
+  if (missiveDraftWorkerRunning) return;
+  missiveDraftWorkerRunning = true;
+  try {
+    const changed = await dispensationMissiveDrafts.processPending({ limit: 3 });
+    if (changed?.changed) broadcast('queue_changed', { reason: 'dispensation_missive_draft_changed' });
+  } catch { console.warn('The Missive draft queue could not be checked. Saved records are unchanged.'); }
+  finally { missiveDraftWorkerRunning = false; }
+};
+void processMissiveDrafts();
+const missiveDraftWorker = setInterval(processMissiveDrafts, 30_000);
+missiveDraftWorker.unref();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Stone Square Sign is running at http://localhost:${PORT}`);

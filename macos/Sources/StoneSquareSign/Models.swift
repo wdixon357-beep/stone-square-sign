@@ -418,6 +418,45 @@ struct DispensationSubmissionDelivery: Codable {
     let attemptedAt: String?
 }
 
+struct DispensationMissiveDraft: Codable {
+    let state: String
+    var message: String? = nil
+    var subject: String? = nil
+    var body: String? = nil
+    var draftId: String? = nil
+    var conversationId: String? = nil
+    var url: String? = nil
+    var createdAt: String? = nil
+    var updatedAt: String? = nil
+    var canRetry: Bool? = nil
+
+    var statusTitle: String {
+        switch state {
+        case "not_requested": return "No Missive draft was requested"
+        case "not_configured": return "Missive connection needs attention"
+        case "awaiting_signature": return "Waiting for the secretary signature"
+        case "awaiting_report": return "Attach the corresponding report to prepare the draft"
+        case "pending": return "Missive draft is queued"
+        case "creating": return "Preparing the Missive draft"
+        case "drafted": return "Missive draft saved for your review"
+        case "uncertain": return "Draft creation needs verification"
+        case "failed": return "Missive draft could not be created"
+        default: return "Missive draft status is unavailable"
+        }
+    }
+
+    var safeURL: URL? {
+        guard state == "drafted", let url, let link = URL(string: url),
+              link.scheme?.lowercased() == "https", link.host?.lowercased() == "mail.missiveapp.com",
+              link.user == nil, link.password == nil, link.port == nil || link.port == 443 else { return nil }
+        return link
+    }
+
+    var canCreateAgain: Bool { state == "failed" && canRetry == true && draftId?.isEmpty != false }
+    var canVerifyExisting: Bool { state == "uncertain" && canRetry == true && draftId.flatMap(UUID.init(uuidString:)) != nil }
+    var canRetrySafely: Bool { canCreateAgain || canVerifyExisting }
+}
+
 struct DispensationSubmissionPacket: Codable {
     let state: String
     let report: SupportingDispensationReport?
@@ -427,6 +466,7 @@ struct DispensationSubmissionPacket: Codable {
     var delivery: DispensationSubmissionDelivery? = nil
     var automaticDeliveryEnabled: Bool? = nil
     var reportLocked: Bool? = nil
+    var missiveDraft: DispensationMissiveDraft? = nil
 
     var recipientEmail: String? { recipient?.to ?? draft?.to }
     var recipientName: String { recipient?.name ?? draft?.name ?? "District Deputy" }

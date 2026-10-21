@@ -2727,7 +2727,7 @@ struct DispensationSubmissionPacketView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if let packet {
+                    if model.user?.role == "owner", let packet {
                         packetContent(packet)
                     } else if busy {
                         ProgressView("Loading saved documents…")
@@ -2765,7 +2765,9 @@ struct DispensationSubmissionPacketView: View {
             Label("Automatic email sending is off", systemImage: "envelope")
                 .font(.headline).foregroundStyle(SignTheme.navy)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Review the signed dispensation and corresponding report, save the PDFs, and send them through your email app. Signing a dispensation does not send it to the District Deputy.")
+            Text(packet.missiveDraft == nil || packet.missiveDraft?.state == "not_requested"
+                 ? "Review the signed dispensation and corresponding report, save the PDFs, and send them through your email app. Signing a dispensation does not send it to the District Deputy."
+                 : "After the secretary signs and the corresponding report is saved, the dashboard prepares an unsent Missive draft for you to review and send. Signing a dispensation does not send it to the District Deputy.")
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
             if ["sent", "sending", "uncertain"].contains(packet.state) {
                 Text(packet.statusTitle).font(.callout.weight(.semibold))
@@ -2782,6 +2784,10 @@ struct DispensationSubmissionPacketView: View {
                 Text("The District Deputy's email is not configured.")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+        }
+        if let draft = packet.missiveDraft {
+            Divider()
+            missiveDraftContent(draft)
         }
         Divider()
         VStack(alignment: .leading, spacing: 12) {
@@ -2814,6 +2820,10 @@ struct DispensationSubmissionPacketView: View {
                     .font(.headline)
                 Text("Choose the matching PDF to keep with this dispensation. Saving a report does not send an email.")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
+                if packet.missiveDraft != nil && packet.missiveDraft?.state != "not_requested" {
+                    Text("Once both documents are ready, an unsent Missive draft can be prepared for your review.")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack(spacing: 12) {
                     Button("Desktop reports") { chooseReport(in: desktopReports) }
                     Button("Dropbox reports") { chooseReport(in: dropboxReports) }
@@ -2829,6 +2839,57 @@ struct DispensationSubmissionPacketView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(busy || !matchingReportConfirmed)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder private func missiveDraftContent(_ draft: DispensationMissiveDraft) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Missive email draft").font(.headline)
+            Label(draft.statusTitle, systemImage: draft.state == "drafted" ? "envelope.badge" : "envelope")
+                .font(.callout.weight(.semibold)).foregroundStyle(SignTheme.navy)
+                .fixedSize(horizontal: false, vertical: true)
+            if let message = draft.message, !message.isEmpty {
+                Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            if draft.state == "not_requested" {
+                Text("This earlier completed dispensation has no automatic draft request. No Missive draft has been created for it.")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("This draft is for your review. You choose when to send it in Missive.")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            if draft.state == "uncertain" {
+                Text("Check Missive before creating another draft. Its creation has not been confirmed.")
+                    .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            if let subject = draft.subject, !subject.isEmpty {
+                Text("Subject: \(subject)").font(.callout.weight(.semibold))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            if let body = draft.body, !body.isEmpty {
+                Text(body).font(.callout).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if draft.state == "drafted", let createdAt = draft.createdAt, !createdAt.isEmpty {
+                Text("Draft saved: \(LodgeDateTime.display(createdAt))")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let url = draft.safeURL {
+                Link(destination: url) {
+                    Text("Open Missive draft").fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.borderedProminent)
+            } else if draft.state == "drafted" {
+                Text("The draft is saved. Open Missive to review it; its direct link is unavailable.")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            if draft.canRetrySafely {
+                Button { Task { await retryMissiveDraft() } } label: {
+                    Text(draft.canVerifyExisting ? "Verify existing Missive draft" : "Try creating the draft again")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .disabled(busy)
             }
         }
     }
@@ -2892,6 +2953,26 @@ struct DispensationSubmissionPacketView: View {
         errorMessage = ""
         do { packet = try await model.submissionPacket(documentId: document.id) }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    @MainActor private func retryMissiveDraft() async {
+        guard !busy, model.user?.role == "owner", packet?.missiveDraft?.canRetrySafely == true else { return }
+        busy = true
+        defer { busy = false }
+        errorMessage = ""
+        do {
+            let response: DispensationSubmissionPacketResponse = try await model.request(
+                "/api/documents/\(document.id)/missive-draft/retry", method: "POST", body: Data("{}".utf8))
+            packet = response.packet
+        } catch {
+            // Read after a lost response before allowing another creation attempt.
+            if let latest = try? await model.submissionPacket(documentId: document.id) {
+                packet = latest
+            } else {
+                packet?.missiveDraft?.canRetry = false
+            }
+            errorMessage = "\(error.localizedDescription) Refresh saved documents before trying again. A draft may already have been saved."
+        }
     }
 
     @MainActor private func saveDispensation() async {
