@@ -99,10 +99,15 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     const correction = await dbGet(`SELECT corrected_at, before_pdf_sha256, after_pdf_sha256
       FROM owner_signature_revisions WHERE document_id = ? ORDER BY corrected_at DESC, id DESC LIMIT 1`, [id]);
     const row = await dbGet(`SELECT report_filename, report_sha256, source_label, report_added_at,
-      message_json, prepared_at, delivery_state, delivery_error, message_id, sent_at, attempted_at
+      message_json IS NOT NULL AS has_message,
+      message_json::jsonb ->> 'to' AS message_to, message_json::jsonb ->> 'name' AS message_name,
+      message_json::jsonb ->> 'filename' AS message_filename, message_json::jsonb ->> 'reportFilename' AS message_report_filename,
+      message_json::jsonb ->> 'subject' AS message_subject, message_json::jsonb ->> 'body' AS message_body,
+      prepared_at, delivery_state, delivery_error, message_id, sent_at, attempted_at
       , delivery_confirmed_at, delivery_confirmation_outcome
       FROM dispensation_submissions WHERE document_id = ?`, [id]);
-    const draft = row?.message_json ? JSON.parse(row.message_json) : null;
+    const draft = row?.has_message ? { to: row.message_to, name: row.message_name, filename: row.message_filename,
+      reportFilename: row.message_report_filename, subject: row.message_subject, body: row.message_body } : null;
     const historicalSent = document.submitted_at && !row?.sent_at;
     const stale = row?.delivery_state === 'sending' && Date.parse(row.attempted_at) < Date.now() - 300_000;
     const recordedState = historicalSent ? 'sent' : document.status !== 'completed' ? 'awaiting_signature'

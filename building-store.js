@@ -140,7 +140,10 @@ export async function executeBuildingStoreOperation(body, { requestId, payloadSh
       if (prior.payload_sha256 !== payloadSha256) throw buildingStoreError(409, 'Building storage request identity was already used.');
       return JSON.parse(prior.result_json);
     }
-    let row = await dbGet('SELECT * FROM building_store_entries WHERE key=?', [body.key]);
+    // The locked transaction already read and verified this exact archive row.
+    // Reuse it instead of transferring the signed archive from PostgreSQL twice.
+    let row = body.key === 'resv:all' ? archive
+      : await dbGet('SELECT * FROM building_store_entries WHERE key=?', [body.key]);
     if (row && row.expires_at !== null && Number(row.expires_at) <= now) {
       await dbRun('DELETE FROM building_store_entries WHERE key=?', [body.key]);
       row = undefined;

@@ -103,8 +103,10 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
   };
   const safeContext = context => ({ actorUserId: Number.isInteger(context?.actorUserId) ? context.actorUserId : null,
     ip: plain(context?.ip, 100), userAgent: plain(context?.userAgent, 300) });
-  async function documentFor(id, user, { lock = false } = {}) {
-    const document = await dbGet(`SELECT * FROM documents WHERE id = ?${lock ? ' FOR UPDATE' : ''}`, [id]);
+  async function documentFor(id, user, { lock = false, includeBytes = false } = {}) {
+    const document = await dbGet(`SELECT id, owner_user_id, template_kind, status, submitted_at,
+      title, original_name, parsed_preview, (signed_bytes IS NOT NULL AND octet_length(signed_bytes) > 0) AS signed_present
+      ${includeBytes ? ', signed_bytes' : ''} FROM documents WHERE id = ?${lock ? ' FOR UPDATE' : ''}`, [id]);
     if (!document) throw error(404, 'Document not found.');
     if (user && (user.role !== 'owner' || user.id !== document.owner_user_id)) throw error(403, 'Only the document owner can view or manage its Missive draft.');
     if (document.template_kind !== 'dispensation_v1') throw error(409, 'Missive dispensation drafts are available only for dispensations.');
@@ -129,14 +131,15 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
     return { subject: `Dispensation request: ${title}`,
       body: `${detail ? `Request: ${detail}\n\n` : ''}Attached are the fully signed dispensation for ${excerpt(title, 12)} and its ${reportLabel} from ${plain(lodgeName, 100)}.` };
   };
-  async function readiness(document) {
+  async function readiness(document, { includeBytes = false } = {}) {
     if (document.status === 'rescinded') return { state: 'failed', code: 'rescinded', message: 'This dispensation was rescinded. No draft will be created.' };
     const signedSecretary = await dbGet(`SELECT 1 FROM document_signers WHERE document_id = ? AND signer_role IN ('secretary', 'assistant_secretary')
       AND signed_at IS NOT NULL AND superseded_at IS NULL LIMIT 1`, [document.id]);
     const unsigned = await dbGet('SELECT 1 FROM document_signers WHERE document_id = ? AND signed_at IS NULL AND superseded_at IS NULL LIMIT 1', [document.id]);
-    if (document.status !== 'completed' || !document.signed_bytes?.length || !signedSecretary || unsigned) return { state: 'awaiting_signature' };
-    const report = await dbGet('SELECT report_bytes, report_filename, report_sha256 FROM dispensation_submissions WHERE document_id = ?', [document.id]);
-    if (!report?.report_bytes?.length || !report.report_sha256) return { state: 'awaiting_report' };
+    if (document.status !== 'completed' || !(includeBytes ? document.signed_bytes?.length : document.signed_present) || !signedSecretary || unsigned) return { state: 'awaiting_signature' };
+    const report = await dbGet(`SELECT report_filename, report_sha256, octet_length(report_bytes) AS report_size
+      ${includeBytes ? ', report_bytes' : ''} FROM dispensation_submissions WHERE document_id = ?`, [document.id]);
+    if (!(includeBytes ? report?.report_bytes?.length : Number(report?.report_size) > 0) || !report.report_sha256) return { state: 'awaiting_report' };
     return { state: 'ready', report };
   }
   async function snapshot(document, report) {
@@ -157,7 +160,7 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
     // Once a network attempt starts, the immutable payload and its receipt are
     // never rebuilt from a later edit, attachment replacement, or signature fix.
     if (row.attempted_at || ['creating', 'drafted', 'uncertain'].includes(row.state)) return row;
-    const ready = await readiness(document);
+    const ready = await readiness(document, { includeBytes: true });
     let state = ready.state; let packet = null; let failureCode = ready.code || null; let failureMessage = ready.message || null;
     if (state === 'ready') {
       if (!configured()) state = 'not_configured';
@@ -176,7 +179,7 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
   }
   async function enqueue(id, context = {}) {
     await withTransaction(async () => {
-      const document = await documentFor(id, null, { lock: true });
+      const document = await documentFor(id, null, { lock: true, includeBytes: true });
       let row = await dbGet('SELECT * FROM dispensation_missive_drafts WHERE document_id = ? FOR UPDATE', [id]);
       if (!row && context.onlyExisting) return;
       if (!row) {
@@ -193,15 +196,27 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
     });
     return readStatus(id);
   }
-  async function readStatus(id) {
-    const document = await documentFor(id); const row = await dbGet('SELECT * FROM dispensation_missive_drafts WHERE document_id = ?', [id]);
+  async function readStatus(id, authorizedDocument) {
+    const document = authorizedDocument || await documentFor(id);
+    // Snapshot PDFs remain in PostgreSQL. Status reads project only display
+    // fields and hashes, so a 20-second client refresh cannot transfer both PDFs.
+    const row = await dbGet(`SELECT state, draft_id, conversation_id, draft_url, attempted_at, verified_at, created_at, updated_at,
+      failure_code, failure_message, payload_sha256,
+      snapshot_json IS NOT NULL AS has_snapshot,
+      snapshot_json::jsonb ->> 'subject' AS snapshot_subject, snapshot_json::jsonb ->> 'body' AS snapshot_body,
+      snapshot_json::jsonb #>> '{attachments,0,sha256}' AS expected_signed_sha256,
+      snapshot_json::jsonb #>> '{attachments,1,sha256}' AS expected_report_sha256,
+      encode(sha256(convert_to(snapshot_json, 'UTF8')), 'hex') AS snapshot_sha256
+      FROM dispensation_missive_drafts WHERE document_id = ?`, [id]);
     let state = row?.state;
     if (!row) {
-      const ready = await readiness(document);
-      state = document.status === 'completed' ? 'not_requested' : ready.state;
+      // Completed historical records without an explicit queue entry must not
+      // read report bytes, create a packet, or be inferred into the new workflow.
+      state = document.status === 'completed' ? 'not_requested' : (await readiness(document)).state;
     }
-    const saved = decode(row?.snapshot_json);
-    const sourceChanged = Boolean(row?.attempted_at && saved && !(await sourceMatches(id, saved)));
+    const snapshotVerified = Boolean(row?.has_snapshot && row.snapshot_sha256 === row.payload_sha256
+      && /^[a-f0-9]{64}$/.test(row.expected_signed_sha256 || '') && /^[a-f0-9]{64}$/.test(row.expected_report_sha256 || ''));
+    const sourceChanged = Boolean(row?.attempted_at && (!snapshotVerified || !(await metadataSourceMatches(id, row))));
     if (sourceChanged) state = 'uncertain';
     const messageByState = {
       not_requested: 'No Missive draft has been requested for this existing dispensation. Nothing will be created automatically.',
@@ -216,8 +231,7 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
     };
     // Until a complete packet has been saved, no overview should claim that
     // missing or unsigned attachments already exist in an email draft.
-    const preview = saved || {};
-    return { state, message: sourceChanged ? 'The signed dispensation or corresponding report changed after this draft attempt. Check the earlier draft in Missive before proceeding.' : row?.failure_message || messageByState[state], subject: preview.subject, body: preview.body,
+    return { state, message: sourceChanged ? 'The signed dispensation or corresponding report changed after this draft attempt. Check the earlier draft in Missive before proceeding.' : row?.failure_message || messageByState[state], subject: snapshotVerified ? row.snapshot_subject : undefined, body: snapshotVerified ? row.snapshot_body : undefined,
       draftId: row?.draft_id || null, conversationId: row?.conversation_id || null, url: state === 'drafted' ? row.draft_url : null,
       createdAt: row?.verified_at || null, queuedAt: row?.created_at || null, updatedAt: row?.updated_at || null,
       canRetry: Boolean(row && !sourceChanged && configured() && ((row.state === 'failed' && !row.draft_id && row.failure_code !== 'rescinded') || (row.state === 'uncertain' && row.draft_id))),
@@ -225,16 +239,31 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
   }
   async function status(id, user) {
     if (!user) throw error(403, 'Only the document owner can view or manage its Missive draft.');
-    await documentFor(id, user); return readStatus(id);
+    const document = await documentFor(id, user); return readStatus(id, document);
+  }
+  async function metadataSourceMatches(id, row) {
+    // PostgreSQL's built-in SHA256 returns only 32 bytes. Compare the ACTUAL
+    // current PDF bytes inside storage, not merely their recorded hash columns.
+    const result = await dbGet(`SELECT COALESCE(d.status = 'completed'
+      AND d.signed_bytes IS NOT NULL AND octet_length(d.signed_bytes) > 0
+      AND EXISTS (SELECT 1 FROM document_signers ds WHERE ds.document_id = d.id
+        AND ds.signer_role IN ('secretary','assistant_secretary') AND ds.signed_at IS NOT NULL AND ds.superseded_at IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM document_signers ds WHERE ds.document_id = d.id AND ds.signed_at IS NULL AND ds.superseded_at IS NULL)
+      AND encode(sha256(d.signed_bytes),'hex') = ?
+      AND s.report_bytes IS NOT NULL AND octet_length(s.report_bytes) > 0
+      AND encode(sha256(s.report_bytes),'hex') = ? AND s.report_sha256 = ?, FALSE) AS matches
+      FROM documents d LEFT JOIN dispensation_submissions s ON s.document_id = d.id WHERE d.id = ?`,
+    [row.expected_signed_sha256, row.expected_report_sha256, row.expected_report_sha256, id]);
+    return result?.matches === true;
   }
   async function sourceMatches(id, packet) {
-    const document = await documentFor(id); const ready = await readiness(document);
+    const document = await documentFor(id, null, { includeBytes: true }); const ready = await readiness(document, { includeBytes: true });
     return ready.state === 'ready' && hash(Buffer.from(document.signed_bytes)) === packet.attachments[0].sha256
       && hash(Buffer.from(ready.report.report_bytes)) === packet.attachments[1].sha256 && ready.report.report_sha256 === packet.attachments[1].sha256;
   }
   async function processOne(id) {
     const claim = await withTransaction(async () => {
-      const document = await documentFor(id, null, { lock: true });
+      const document = await documentFor(id, null, { lock: true, includeBytes: true });
       let row = await dbGet('SELECT * FROM dispensation_missive_drafts WHERE document_id = ? FOR UPDATE', [id]);
       if (!row) return null;
       if (row.state === 'creating') {
@@ -317,7 +346,7 @@ export function createDispensationMissiveDrafts({ client = createMissiveDraftCli
   async function requestRetry(id, user, context = {}) {
     if (!user) throw error(403, 'Only the document owner can view or manage its Missive draft.');
     await withTransaction(async () => {
-      const document = await documentFor(id, user, { lock: true });
+      const document = await documentFor(id, user, { lock: true, includeBytes: true });
       const row = await dbGet('SELECT * FROM dispensation_missive_drafts WHERE document_id = ? FOR UPDATE', [id]);
       if (!row || !configured()) throw error(409, 'Connect the Lodge’s Missive account before retrying a queued draft.');
       if (row.state === 'uncertain' && row.draft_id) {

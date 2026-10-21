@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import express from 'express';
 process.env.DATABASE_URL = ''; process.env.PGLITE_DIR = ''; process.env.NODE_ENV = 'test';
 const { connect, close, dbRun, dbGet, dbAll } = await import('../db.js');
@@ -75,6 +76,42 @@ try {
   await activateBuildingTarget(stage.manifest.snapshotId, stage.manifestSha256, { now });
   check('Only verified activation makes the bridge ready', (await request({ operation: 'health' })).data.result.ready === true);
   check('Original request and signatures survive exact text roundtrip', (await request({ operation: 'get', key: 'resv:all' })).data.result === archive);
+  // Execute a fresh copy of the current module with only its dbGet binding
+  // observed. Calls still run against this test's real isolated PGlite driver;
+  // no production hook, fake SQL result, or retained source record is involved.
+  const storeSource = await fs.readFile(new URL('../building-store.js', import.meta.url), 'utf8');
+  const databaseImport = "import { dbAll, dbGet, dbRun, withTransaction } from './db.js';";
+  assert.equal(storeSource.split(databaseImport).length, 2, 'Instrument the exact database import once.');
+  const observedSource = storeSource.replace(databaseImport, `import { dbAll, dbGet as actualDbGet, dbRun, withTransaction } from ${JSON.stringify(new URL('../db.js', import.meta.url).href)};
+export const archiveReadObservations = [];
+const dbGet = async (sql, params) => {
+  const row = await actualDbGet(sql, params);
+  if (typeof row?.value_text === 'string' && (row.key === 'resv:all' || sql.includes("key='resv:all'") || params?.[0] === 'resv:all'))
+    archiveReadObservations.push({ bytes: Buffer.byteLength(row.value_text), sql });
+  return row;
+};`);
+  const observedPath = path.join(directory, 'observed-building-store.mjs');
+  await fs.writeFile(observedPath, observedSource);
+  const observed = await import(pathToFileURL(observedPath).href);
+  const originalGet = { operation: 'get', key: 'resv:all' };
+  check('Observed archive GET retains every original byte', await observed.executeBuildingStoreOperation(originalGet, identity(originalGet)) === archive);
+  check('Archive GET transfers the raw archive from PostgreSQL once, not twice', observed.archiveReadObservations.length === 1
+    && observed.archiveReadObservations[0].bytes === Buffer.byteLength(archive));
+  observed.archiveReadObservations.length = 0;
+  const identicalCas = { operation: 'cas', key: 'resv:all', expected: archive, value: archive };
+  const casIdentity = identity(identicalCas);
+  check('Observed exact CAS preserves the original archive', await observed.executeBuildingStoreOperation(identicalCas, casIdentity) === 1);
+  check('Archive CAS transfers the prior raw archive once', observed.archiveReadObservations.length === 1
+    && observed.archiveReadObservations[0].bytes === Buffer.byteLength(archive));
+  observed.archiveReadObservations.length = 0;
+  check('CAS retry keeps the original successful receipt', await observed.executeBuildingStoreOperation(identicalCas, casIdentity) === 1);
+  check('CAS retry still verifies exactly one authoritative archive read', observed.archiveReadObservations.length === 1);
+  const retainedRow = await dbGet("SELECT * FROM building_store_entries WHERE key='resv:all'");
+  await dbRun("UPDATE building_store_entries SET value_sha256=? WHERE key='resv:all'", ['0'.repeat(64)]);
+  await assert.rejects(observed.executeBuildingStoreOperation(originalGet, identity(originalGet)), error => error.statusCode === 503); checks++;
+  await assert.rejects(observed.executeBuildingStoreOperation(identicalCas, identity(identicalCas)), error => error.statusCode === 503); checks++;
+  await dbRun("UPDATE building_store_entries SET value_sha256=? WHERE key='resv:all'", [retainedRow.value_sha256]);
+  check('Corruption rejection leaves archive text, signatures and revision unchanged', JSON.stringify(await dbGet("SELECT * FROM building_store_entries WHERE key='resv:all'")) === JSON.stringify(retainedRow));
   const receiptsBeforePolling = (await dbGet('SELECT COUNT(*) AS count FROM building_store_receipts')).count;
   await Promise.all(Array.from({ length: 30 }, () => operation({ operation: 'get', key: 'resv:all' })));
   check('Archive polling never duplicates raw archives into receipts', (await dbGet('SELECT COUNT(*) AS count FROM building_store_receipts')).count === receiptsBeforePolling);
