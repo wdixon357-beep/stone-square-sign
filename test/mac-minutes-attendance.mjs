@@ -14,6 +14,15 @@ assert.match(native, /Text\("No, the regular officer arrived"\)/, 'A partial ass
 assert.match(native, /Button\("Clear conflicting coverage"\)/, 'Saved contradictory coverage has a visible native recovery action');
 assert.match(native, /row\.hasStationCoverageValues \{/, 'Saved contradictory coverage stays visible');
 assert.ok(!/\.frame\(width: 120\)/.test(native.slice(native.indexOf('private func officerText('), native.indexOf('private var metadata:'))), 'Attendance controls must not use a fixed narrow width');
+assert.match(native, /MinutesAttendanceWorkflow\.requiresPreparerConfirmation\(status: workspace\.selected\?\.status/, 'Preparation confirmations depend on the actual record and viewer');
+assert.match(native, /GroupBox\("Recorded attendance"\)/, 'Review starts with recorded attendance');
+assert.match(native, /if preparingAttendance && model\.user\?\.can\("minutes\.prepare"\) == true \{\s*Button\(actionLabel\("preparer-attest"\)\)/, 'Only the actual preparer receives the preparation attestation action');
+assert.match(native, /DisclosureGroup\("Change attendance", isExpanded: \$changingAttendance\)/, 'Review corrections remain optional');
+assert.match(native, /private func resetOfficerConfirmation\(\) \{\s*guard preparingAttendance else \{ return \}/, 'Review corrections cannot require a second confirmation');
+const attendanceFields = native.slice(native.indexOf('private var attendanceFields:'), native.indexOf('private var attendanceSummary:'));
+assert.equal((attendanceFields.match(/if preparingAttendance \{/g) || []).length, 3, 'Each confirmation toggle is preparer-only');
+assert.match(native, /Text\(MinutesAttendanceWorkflow\.statusLabel\("not_recorded", preparing: preparingAttendance\)\)/, 'Unknown status does not ask the WM to confirm an officer again');
+
 
 const base = { name: 'Xavier M. White', title: 'Senior Warden', status: 'excused' };
 const cases = [
@@ -93,10 +102,42 @@ row.status = "present"; row.stationCoverage = "filled"; row.actingName = "PM Mob
 precondition(row.hasStationCoverageValues && !row.reviewComplete(requiringCoverage: true), "Conflicting saved coverage remains detectable")
 row.setCoverage(nil)
 precondition(!row.hasStationCoverageValues && row.reviewComplete(requiringCoverage: true), "Clear conflicting coverage restores a present officer's valid state")
+let preparer = MinutesAttendanceWorkflow.requiresPreparerConfirmation
+precondition(preparer("draft", 2, 1, 2), "Assigned Secretary confirms attendance while preparing")
+precondition(!preparer("draft", 2, 1, 1), "WM observing a Secretary draft is not asked to confirm")
+precondition(!preparer("draft", 2, 1, 3), "Another officer does not confirm the assigned preparer's roll")
+precondition(preparer("draft", nil, 2, 2), "Legacy draft uses its creator as the preparer")
+precondition(preparer("draft", 1, 1, 1), "Owner preparing his own draft still completes preparation")
+precondition(!preparer("awaiting_master_attestation", 2, 2, 1), "WM submitted review has no preparation confirmation")
+precondition(!preparer("ready_for_distribution", 2, 2, 1), "Finalized minutes never receive fresh preparation controls")
+precondition(!preparer("draft", nil, nil, 1), "Missing identity cannot create confirmation authority")
+precondition(MinutesAttendanceWorkflow.statusLabel("not_recorded", preparing: false) == "Not recorded", "Review unknowns remain unknown without an action prompt")
+precondition(MinutesAttendanceWorkflow.statusLabel("not_recorded", preparing: true) == "Needs confirmation", "Preparer unknowns keep their required prompt")
+let sourceReminder = "Confirm attendance for Xavier M. White: the source mentions the officer but does not establish an attendance status."
+let originalWarnings = [sourceReminder, "Confirm the meeting date from the source."]
+let presentOfficer = MinutesAttendance(name: "Xavier M. White", title: "Senior Warden", status: "present")
+precondition(MinutesAttendanceWorkflow.visibleReminders(originalWarnings, officers: [presentOfficer], preparing: false) == [originalWarnings[1]], "Only an obsolete resolved attendance reminder is hidden in review")
+let unknownOfficer = MinutesAttendance(name: "Xavier M. White", title: "Senior Warden", status: "not_recorded")
+precondition(MinutesAttendanceWorkflow.visibleReminders(originalWarnings, officers: [unknownOfficer], preparing: false) == ["The preparing officer still needs to record attendance for Xavier M. White.", originalWarnings[1]], "Unfinished attendance stays with the preparer while unrelated reminders remain")
+precondition(MinutesAttendanceWorkflow.visibleReminders(originalWarnings, officers: [presentOfficer], preparing: true) == originalWarnings, "Preparation reminders are retained")
+precondition(originalWarnings[0] == sourceReminder, "Presentation does not rewrite saved warnings")
+var covered = MinutesAttendance(name: "Xavier M. White", title: "Senior Warden", status: "arrived_late", stationCoverage: "filled", actingName: "PM Mobley", actingWholeMeeting: false)
+precondition(MinutesAttendanceWorkflow.coverageSummary(covered) == "Covered by PM Mobley until the regular officer arrived.", "Review shows partial coverage plainly")
+covered.status = "absent"
+precondition(MinutesAttendanceWorkflow.coverageSummary(covered) == "Partial coverage is recorded, but the regular officer's arrival is not recorded.", "Malformed legacy partial coverage never invents a later arrival")
+covered.status = "arrived_late"
+covered.actingWholeMeeting = true
+precondition(MinutesAttendanceWorkflow.coverageSummary(covered) == "Covered by PM Mobley for the whole meeting.", "Review preserves a whole-meeting assignment")
+covered.actingWholeMeeting = nil
+precondition(MinutesAttendanceWorkflow.coverageSummary(covered) == "Covered by PM Mobley; duration not recorded.", "Unknown duration stays unknown")
+covered.setCoverage("vacant")
+precondition(MinutesAttendanceWorkflow.coverageSummary(covered) == "Station remained vacant until the regular officer arrived.", "Review preserves a temporary vacancy")
+covered.setStatus("present")
+precondition(MinutesAttendanceWorkflow.coverageSummary(covered) == nil, "Ordinary presence does not invent coverage")
 let legacyJSON = #"{"meetingType":"Stated Communication","present":[],"excused":[],"visitors":[],"officerAttendance":[{"name":"Xavier M. White","title":"Senior Warden","status":"excused"}],"income":[],"expenses":[],"sections":[],"warnings":[],"sensitiveReview":[],"actionItems":[]}"#
 let legacy = try JSONDecoder().decode(MinutesDraft.self, from: Data(legacyJSON.utf8))
 precondition(legacy.officerAttendanceVersion == nil && legacy.officerAttendance[0].stationCoverage == nil && legacy.officerAttendance[0].actingName == nil && legacy.officerAttendance[0].actingWholeMeeting == nil, "Legacy records decode without new fields")
-print("PASS: 31 native attendance fixtures, Codable round trips, explicit arrival, stale-data clearing and legacy decoding")
+print("PASS: 31 native attendance fixtures, preparer-only workflow, recorded summaries, warning projection, Codable preservation and legacy decoding")
 `);
   const build = spawnSync('swiftc', [source, '-o', binary], { encoding: 'utf8' });
   assert.equal(build.status, 0, build.stderr);

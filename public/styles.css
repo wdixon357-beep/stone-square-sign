@@ -243,6 +243,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-confirmation { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; color: var(--navy); font-size: 12px; font-weight: 650; line-height: 1.45; }
 .minutes-confirmation input { width: 17px; height: 17px; min-width: 17px; margin: 1px 0 0; }
 .minutes-visitors-field { margin-top: 4px; }
+.minutes-attendance-fields, .minutes-attendance-summary, .minutes-attendance-summary-officers { display: grid; gap: 10px; min-width: 0; }
+.minutes-attendance-fields > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.minutes-attendance-summary-officer { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: white; min-width: 0; }
+.minutes-attendance-summary-officer strong { color: var(--navy); font-size: 14px; overflow-wrap: anywhere; }
+.minutes-attendance-status { color: var(--navy); font-size: 13px; font-weight: 700; }
+.minutes-attendance-summary-officer p { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.minutes-attendance-summary-lists { display: grid; gap: 12px; }
+.minutes-attendance-summary-lists h4 { margin-top: 0; }
+.minutes-attendance-summary-lists p { margin: 4px 0 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+#toggleMinutesAttendanceEdit { justify-self: start; }
 .minutes-officer-attendance { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 8px; }
 .minutes-officer-row { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: white; }
 .minutes-officer-identity { display: grid; grid-template-columns: minmax(0, 1fr) minmax(125px, .8fr); gap: 8px; min-width: 0; }

@@ -1861,6 +1861,75 @@ const sectionEditor = (section, index) => {
   return card;
 };
 
+// Attendance confirmation belongs to the officer preparing the working draft.
+// The Master's review shows recorded attendance without creating a second roll call.
+const minutesAttendanceNeedsPreparerConfirmation = (item = currentMinutes()) => item?.status === 'draft'
+  && (item.preparerUserId || item.createdByUserId) === state.user?.id;
+const minutesAttendanceIsReview = (item = currentMinutes()) => Boolean(item) && !minutesAttendanceNeedsPreparerConfirmation(item);
+const minutesCanEditAttendance = (item = currentMinutes()) => Boolean(item) && (item.status === 'draft'
+  || item.status === 'awaiting_master_attestation' && state.user?.role === 'owner');
+
+const minutesAttendanceDisplayWarnings = (draft, item = currentMinutes()) => (draft.warnings || []).flatMap(text => {
+  if (!minutesAttendanceIsReview(item)) return [text];
+  const attendanceWarning = /^Confirm attendance for (.+): the source mentions the officer but does not establish an attendance status\.$/.exec(text);
+  if (!attendanceWarning) return [text];
+  if ((draft.officerAttendance || []).some(officer => officer.status !== 'not_recorded'
+    && minutesAttendance.sameAttendancePerson(officer.name, attendanceWarning[1]))) return [];
+  return [`The preparing officer still needs to record attendance for ${attendanceWarning[1]}.`];
+});
+
+const renderMinutesAttendanceSummary = (draft) => {
+  const summary = $('minutesAttendanceSummary');
+  summary.replaceChildren();
+  const officers = document.createElement('div'); officers.className = 'minutes-attendance-summary-officers';
+  (draft.officerAttendance || []).forEach(officer => {
+    const row = document.createElement('div'); row.className = 'minutes-attendance-summary-officer';
+    const identity = document.createElement('strong'); identity.textContent = [officer.title, officer.name].filter(Boolean).join(': ');
+    const status = document.createElement('span'); status.className = 'minutes-attendance-status';
+    status.textContent = minutesAttendance.attendanceLabel(officer);
+    row.append(identity, status);
+    let coverage = minutesAttendance.stationCoverageText(officer).replace('Duration not yet confirmed.', 'Duration not recorded.');
+    if (officer.stationCoverage === 'filled' && officer.actingWholeMeeting === false && officer.status !== 'arrived_late') {
+      coverage = `${officer.actingName ? officer.actingName + ' served pro tem. ' : 'Covering Brother not recorded. '}Partial coverage is recorded, but the regular officer's arrival is not recorded.`;
+    }
+    if (coverage) { const text = document.createElement('p'); text.textContent = coverage; row.append(text); }
+    officers.append(row);
+  });
+  if (!officers.children.length) { const empty = document.createElement('p'); empty.textContent = 'No officer attendance recorded.'; officers.append(empty); }
+  summary.append(officers);
+  const lists = document.createElement('div'); lists.className = 'minutes-attendance-summary-lists';
+  for (const [key, label] of [['present', 'Other Brothers present'], ['excused', 'Other Brothers excused'], ['visitors', 'Visitors']]) {
+    const group = document.createElement('div'); const heading = document.createElement('h4'); heading.textContent = label;
+    const names = document.createElement('p'); names.textContent = draft[key]?.length ? draft[key].join(', ') : 'No names recorded.';
+    group.append(heading, names); lists.append(group);
+  }
+  summary.append(lists);
+};
+
+const updateMinutesAttendancePresentation = (item, draft = item.draft) => {
+  const review = minutesAttendanceIsReview(item);
+  const editable = minutesCanEditAttendance(item);
+  const editing = review && editable && state.minutesAttendanceEditing === true;
+  $('minutesAttendanceReview').classList.toggle('minutes-required-review', !review);
+  $('minutesAttendanceEyebrow').textContent = review ? 'RECORDED ATTENDANCE' : 'REQUIRED BEFORE SUBMISSION';
+  $('minutesAttendanceTitle').textContent = review ? 'Attendance' : 'Attendance review';
+  $('minutesAttendanceBadge').textContent = review ? item.status === 'draft' ? 'Secretary preparing' : 'Recorded in minutes' : 'Secretary confirmation';
+  $('minutesAttendanceReviewNote').textContent = !editable ? 'Attendance from the saved minutes is shown below.' : item.status === 'draft'
+    ? "The Secretary's Office is completing attendance. You can read what is recorded or make a correction."
+    : 'Attendance is recorded below. You can edit it if a correction is needed.';
+  $('minutesAttendanceReviewNote').classList.toggle('hidden', !review);
+  for (const id of ['minutesAttendancePreparerInstructions', 'minutesOfficerAttendanceInstructions', 'minutesOfficerRollConfirmation', 'minutesOtherPresentConfirmation', 'minutesOtherExcusedConfirmation']) {
+    $(id).classList.toggle('hidden', review);
+  }
+  $('minutesAttendanceFields').classList.toggle('hidden', review && !editing);
+  $('minutesAttendanceSummary').classList.toggle('hidden', !review || editing);
+  const toggle = $('toggleMinutesAttendanceEdit');
+  toggle.classList.toggle('hidden', !review || !editable);
+  toggle.textContent = editing ? 'Done editing attendance' : 'Edit attendance';
+  toggle.setAttribute('aria-expanded', String(editing));
+  renderMinutesAttendanceSummary(draft);
+};
+
 const officerAttendanceEditor = (entry) => {
   const normalized = { ...entry, ...minutesAttendance.normalizeOfficerCoverage(entry) };
   const row = document.createElement('div');
@@ -1894,7 +1963,7 @@ const officerAttendanceEditor = (entry) => {
   const name = input('name', 'Officer name', normalized.name);
   const title = input('title', 'Office or pro tem role', normalized.title);
   const status = picker('status', [
-    ['not_recorded', 'Needs confirmation'], ['present', 'Present'],
+    ['not_recorded', minutesAttendanceIsReview() ? 'Not recorded' : 'Needs confirmation'], ['present', 'Present'],
     ['arrived_late', 'Arrived later'], ['excused', 'Excused'], ['absent', 'Absent'],
   ], normalized.status || 'not_recorded');
   const nameField = field('Regular officer', name);
@@ -2071,6 +2140,7 @@ const updateMinutesEditorControls = (item) => {
     $(id).classList.toggle('hidden', !editable);
   });
   $('addMinutesSection').disabled = !editable;
+  updateMinutesAttendancePresentation(item);
 };
 
 const openMinutesEditor = (id) => {
@@ -2081,6 +2151,7 @@ const openMinutesEditor = (id) => {
   state.editingMinutesId = id;
   state.editingMinutesUpdatedAt = item.updatedAt;
   state.minutesOfficerAttendanceEdited = false;
+  state.minutesAttendanceEditing = false;
   const draft = item.draft;
   $('minutesMeetingDate').value = minutesDates.formatMinutesDate(draft.meetingDate);
   $('minutesMeetingDateCalendar').value = minutesDates.minutesDateParts(draft.meetingDate)?.iso || '';
@@ -2117,7 +2188,7 @@ const openMinutesEditor = (id) => {
   $('minutesApprovalNote').value = item.approvalNote || '';
   $('minutesSections').replaceChildren(...draft.sections.map(sectionEditor));
   const reviewItems = [
-    ...(draft.warnings || []).map((text) => `Check: ${text}`),
+    ...minutesAttendanceDisplayWarnings(draft, item).map((text) => `Check: ${text}`),
     ...(draft.sensitiveReview || []).map((text) => `Private review: ${text}`),
   ];
   const warnings = $('minutesReviewWarnings');
@@ -2726,6 +2797,12 @@ $('minutesEditView').addEventListener('click', () => setMinutesView(false));
 $('minutesPreviewView').addEventListener('click', () => setMinutesView(true));
 $('minutesPreviewFrame').addEventListener('previewerror', event => { $('minutesPreviewState').textContent = `Preview could not render: ${event.detail}. You can download the PDF above.`; });
 $('refreshMinutesPreview').addEventListener('click', refreshMinutesPreview);
+$('toggleMinutesAttendanceEdit').addEventListener('click', () => {
+  const item = currentMinutes();
+  if (!minutesAttendanceIsReview(item) || !minutesCanEditAttendance(item)) return;
+  state.minutesAttendanceEditing = !state.minutesAttendanceEditing;
+  updateMinutesAttendancePresentation(item, collectMinutesDraft());
+});
 $('addMinutesOfficer').addEventListener('click', () => {
   $('minutesOfficerAttendance').append(officerAttendanceEditor({ status: 'not_recorded' }));
   $('minutesOfficerRollConfirmed').checked = false;

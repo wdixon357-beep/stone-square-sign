@@ -599,26 +599,31 @@
               <div><label for="minutesNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesNextMeeting" type="text" placeholder="Thursday, October 1, 2026" /><input id="minutesNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
             </div>
             <section id="minutesAttendanceReview" class="minutes-detail-section minutes-required-review">
-              <div class="minutes-required-heading"><div><p class="eyebrow">REQUIRED BEFORE SUBMISSION</p><h3>Attendance review</h3></div><span>Secretary confirmation</span></div>
-              <p>Review every officer and both other-Brother lists. These minutes cannot be sent to the Worshipful Master until this section is complete.</p>
+              <div class="minutes-required-heading"><div><p id="minutesAttendanceEyebrow" class="eyebrow">REQUIRED BEFORE SUBMISSION</p><h3 id="minutesAttendanceTitle">Attendance review</h3></div><span id="minutesAttendanceBadge">Secretary confirmation</span></div>
+              <p id="minutesAttendancePreparerInstructions">Review every officer and both other-Brother lists. These minutes cannot be sent to the Worshipful Master until this section is complete.</p>
+              <p id="minutesAttendanceReviewNote" class="hidden">Attendance is recorded below. You can edit it if a correction is needed.</p>
+              <div id="minutesAttendanceSummary" class="minutes-attendance-summary hidden"></div>
+              <button id="toggleMinutesAttendanceEdit" class="secondary small hidden" type="button" aria-expanded="false" aria-controls="minutesAttendanceFields">Edit attendance</button>
+              <div id="minutesAttendanceFields" class="minutes-attendance-fields">
               <h4>Officers present, excused and absent</h4>
-              <p>Choose Present, Arrived later, Excused or Absent for every Lodge officer. For anyone who was not in his station, record who filled it or confirm it was left vacant. If the regular officer arrived, record whether the covering Brother served until that arrival.</p>
+              <p id="minutesOfficerAttendanceInstructions">Choose Present, Arrived later, Excused or Absent for every Lodge officer. For anyone who was not in his station, record who filled it or confirm it was left vacant. If the regular officer arrived, record whether the covering Brother served until that arrival.</p>
               <div id="minutesOfficerAttendance" class="minutes-officer-attendance"></div>
               <button id="addMinutesOfficer" class="secondary small minutes-add-row" type="button">Add officer or pro tem</button>
-              <label class="minutes-confirmation"><input id="minutesOfficerRollConfirmed" type="checkbox" /> I reviewed the complete officer roll, station coverage and any late arrivals.</label>
+              <label id="minutesOfficerRollConfirmation" class="minutes-confirmation"><input id="minutesOfficerRollConfirmed" type="checkbox" /> I reviewed the complete officer roll, station coverage and any late arrivals.</label>
               <div class="minutes-attendance-grid minutes-other-attendance">
                 <div>
                   <label for="minutesPresent">Other Brothers present</label>
                   <textarea id="minutesPresent" rows="4" placeholder="Enter one Brother per line. Leave blank only when none were present."></textarea>
-                  <label class="minutes-confirmation"><input id="minutesOtherPresentConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were present.</label>
+                  <label id="minutesOtherPresentConfirmation" class="minutes-confirmation"><input id="minutesOtherPresentConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were present.</label>
                 </div>
                 <div>
                   <label for="minutesExcused">Other Brothers excused</label>
                   <textarea id="minutesExcused" rows="4" placeholder="Enter one Brother per line. Leave blank only when none were excused."></textarea>
-                  <label class="minutes-confirmation"><input id="minutesOtherExcusedConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were excused.</label>
+                  <label id="minutesOtherExcusedConfirmation" class="minutes-confirmation"><input id="minutesOtherExcusedConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were excused.</label>
                 </div>
               </div>
               <div class="minutes-visitors-field"><label for="minutesVisitors">Visitors, if any</label><textarea id="minutesVisitors" rows="3" placeholder="Enter one visitor per line only when visitors attended."></textarea></div>
+              </div>
             </section>
             <div id="minutesSections" class="minutes-sections"></div>
             <button id="addMinutesSection" class="secondary small minutes-add-row hidden" type="button" disabled>Add section</button>

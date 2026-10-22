@@ -651,6 +651,15 @@ try {
   const savedCoverage = savedMinutes.payload.minutes.draft.officerAttendance.find(officer => officer.title === 'Senior Warden');
   check('saving retains the regular officer, covering Brother and partial duration', savedCoverage.name === 'Xavier M. White'
     && savedCoverage.status === 'arrived_late' && savedCoverage.actingName === 'PM Mobley' && savedCoverage.actingWholeMeeting === false);
+  const ownerEditingUnsubmitted = structuredClone(savedMinutes.payload.minutes.draft);
+  ownerEditingUnsubmitted.present.push('Brother Owner Correction');
+  const ownerDraftAttendanceEdit = await api('PUT', `/api/minutes/${minutesId}`, {token:wmToken,body:{draft:ownerEditingUnsubmitted}});
+  check('owner corrections to another preparer draft never confirm attendance on that preparer behalf',
+    ownerDraftAttendanceEdit.status===200 && ownerDraftAttendanceEdit.payload.minutes.draft.attendanceReview.otherPresent===false
+      && ownerDraftAttendanceEdit.payload.minutes.draft.attendanceReview.officerRoll===true);
+  const needsPreparerAttendance = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
+  check('the preparing Secretary must confirm attendance changed by the owner before submission',needsPreparerAttendance.status===409 && /Other Brothers Present/.test(needsPreparerAttendance.payload.error));
+  await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken,body:{draft:revisedDraft}});
   const alertStreamAbort = new AbortController();
   const ownerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${wmToken}` }, signal: alertStreamAbort.signal });
   const viewerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${viewerToken}` }, signal: alertStreamAbort.signal });
@@ -700,6 +709,23 @@ try {
   check('the original submitted draft remains available', masterEdit.payload.minutes.submittedDraft.sections[0].body === revisedDraft.sections[0].body);
   const correctedPreview = await api('POST', `/api/minutes/${minutesId}/preview`, { token: wmToken, body: { draft: editedByMaster } });
   check('the Master can preview corrections before the second attestation', correctedPreview.status === 200);
+  const invalidMasterAttendance=structuredClone(masterEdit.payload.minutes.draft);
+  invalidMasterAttendance.officerAttendance.find(row=>row.title==='Junior Warden').status='not_recorded';
+  await api('PUT', `/api/minutes/${minutesId}`, {token:wmToken,body:{draft:invalidMasterAttendance}});
+  const invalidMasterAttendanceSign=await api('POST', `/api/minutes/${minutesId}/master-attest`, {token:wmToken});
+  check('Master signing still rejects actual unknown attendance facts',invalidMasterAttendanceSign.status===409 && /Still incomplete/.test(invalidMasterAttendanceSign.payload.error));
+  const correctedMasterAttendance=structuredClone(masterEdit.payload.minutes.draft);
+  Object.assign(correctedMasterAttendance.officerAttendance.find(row=>row.title==='Junior Warden'),{status:'excused',stationCoverage:'vacant',actingName:null,actingWholeMeeting:null});
+  correctedMasterAttendance.present.push('Brother Master Review Addition');
+  correctedMasterAttendance.excused.push('Brother Master Review Excused');
+  correctedMasterAttendance.attendanceReview={officerRoll:true,otherPresent:true,otherExcused:true};
+  const masterAttendanceSave=await api('PUT', `/api/minutes/${minutesId}`, {token:wmToken,body:{draft:correctedMasterAttendance}});
+  check('valid Master attendance corrections save without falsely inheriting Secretary confirmations',masterAttendanceSave.status===200
+    && Object.values(masterAttendanceSave.payload.minutes.draft.attendanceReview).every(flag=>flag===false));
+  check('Master corrections retain the exact submitted attendance snapshot and show recorded changes',
+    JSON.stringify(masterAttendanceSave.payload.minutes.submittedDraft)===JSON.stringify(masterEdit.payload.minutes.submittedDraft)
+      && masterAttendanceSave.payload.minutes.masterChanges.some(change=>change.field==='Officer attendance')
+      && masterAttendanceSave.payload.minutes.preparerAttestedAt===submittedMinutes.payload.minutes.preparerAttestedAt);
   const assistantAuthorization = await api('POST', `/api/minutes/${minutesId}/master-attest`, { token: asstToken });
   check('only the Worshipful Master can complete the second attestation', assistantAuthorization.status === 403,
     String(assistantAuthorization.status));
@@ -721,6 +747,8 @@ try {
   check('the Worshipful Master can review, sign and publish the minutes to officers',
     authorizedMinutes.status === 200 && authorizedMinutes.payload.minutes.status === 'ready_for_distribution'
       && Boolean(authorizedMinutes.payload.minutes.masterAttestedAt));
+  check('Master signing does not require re-confirming corrected attendance groups', authorizedMinutes.status===200
+    && Object.values(authorizedMinutes.payload.minutes.draft.attendanceReview).every(flag=>flag===false));
   check('publication immediately signals every signed in officer with minutes access',
     officerEvents.includes('event: minutes_records_changed') && officerEvents.includes('"reason":"published"'));
   const minutesForOfficerAfterSigning = await api('GET', '/api/minutes', { token: officerToken });
@@ -869,6 +897,8 @@ try {
   ownSource.append('transcriptText', 'Meeting date: 2026-09-03. The Lodge opened at 7:30 PM. The committee reported. The Lodge closed at 9:00 PM.');
   const ownMinutes = await api('POST', '/api/minutes/generate', { token: wmToken, body: ownSource, raw: true });
   const ownId = ownMinutes.payload.minutes?.id;
+  const ownAttendanceGate=await api('POST', `/api/minutes/${ownId}/preparer-attest`, {token:wmToken});
+  check('an owner acting as actual preparer still has the Secretary preparation requirements',ownAttendanceGate.status===409);
   const ownReadyDraft = structuredClone(ownMinutes.payload.minutes.draft);
   ownReadyDraft.officerAttendance = ownReadyDraft.officerAttendance.map((officer) => ({...officer, status:'present'}));
   ownReadyDraft.attendanceReview = {officerRoll:true, otherPresent:true, otherExcused:true};

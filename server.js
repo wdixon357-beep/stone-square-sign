@@ -1,3 +1,4 @@
+import { omitClosingPrayerCommentary } from './minutes-closing-commentary.js';
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
 import { initBuildingStoreSchema } from './building-store.js';
 import { mountBuildingStore } from './building-store-routes.js';
@@ -27,9 +28,9 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
-import { minutesChanges } from './minutes-changes.js';
+import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
-import { attendanceReviewIssues, closingReviewIssues } from './minutes-format.js';
+import { attendanceReviewIssues, attendanceRecordIssues, closingReviewIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
@@ -1062,9 +1063,10 @@ const transcriptFromUpload = async (file) => {
 
 // Upgrade only an unsigned working copy. Captured attestation snapshots and
 // pending/final records retain the format in which they were submitted.
-const workingMinutesDraft = (row, value = JSON.parse(row.draft_json)) => normalizeMinutesDraft({
-  ...value, ...(row.status === 'draft' ? {closingFormatVersion: 2} : {}),
-});
+const workingMinutesDraft = (row, value = JSON.parse(row.draft_json)) => {
+  const draft = normalizeMinutesDraft({...value, ...(row.status === 'draft' ? {closingFormatVersion: 2} : {})});
+  return ['draft','awaiting_master_attestation'].includes(row.status) ? omitClosingPrayerCommentary(draft) : draft;
+};
 const minutesForResponse = (row) => ({
   createdByUserId: row.created_by_user_id,
   sourceUploadedByUserId: row.source_uploaded_by_user_id || row.created_by_user_id,
@@ -2211,12 +2213,16 @@ app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, 
     // A client cannot downgrade the required review by sending an old version.
     // Only untouched, already-attested legacy records retain the older gate.
     const requireStationCoverage = !masterReview || Number(JSON.parse(row.draft_json).officerAttendanceVersion) >= 2;
-    const draft = normalizeMinutesDraft(requireStationCoverage
-      ? {...req.body.draft, officerAttendanceVersion:2} : req.body.draft);
+    const draft = omitClosingPrayerCommentary(normalizeMinutesDraft(requireStationCoverage
+      ? {...req.body.draft, officerAttendanceVersion:2} : req.body.draft));
+    if (masterReview || req.user.role === 'owner' && Number(row.preparer_user_id || row.created_by_user_id) !== req.user.id) {
+      const recorded = masterReview ? JSON.parse(row.submitted_draft_json || 'null') : JSON.parse(row.draft_json);
+      draft.attendanceReview = preparerAttendanceReviewForEdit(recorded, draft);
+    }
     if (row.status === 'draft' || Number(JSON.parse(row.draft_json).closingFormatVersion) >= 2) draft.closingFormatVersion = 2;
     if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     const time = nowIso();
-    const changes = masterReview ? minutesChanges(JSON.parse(row.submitted_draft_json || row.draft_json), draft) : [];
+    const changes = masterReview ? reviewedMinutesChanges(row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null, JSON.parse(row.draft_json), draft, JSON.parse(row.master_changes_json || '[]')) : [];
     const saved = await dbRun(
       `UPDATE meeting_minutes SET meeting_date = ?, draft_json = ?, updated_by_user_id = ?,
        updated_at = ?, master_changes_json = ? WHERE id = ? AND status = ? AND updated_at = ?`,
@@ -2242,7 +2248,8 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     if (row.created_by_user_id !== req.user.id) {
       return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
     }
-    const draft = JSON.parse(row.draft_json);
+    const draft = omitClosingPrayerCommentary(JSON.parse(row.draft_json));
+    if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     draft.officerAttendanceVersion = 2;
     draft.closingFormatVersion = 2;
     const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
@@ -2297,9 +2304,12 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'awaiting_master_attestation') return res.status(409).json({ error: 'The preparing officer must attest to the draft first.' });
-    const draft = JSON.parse(row.draft_json);
-    const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
-    if (reviewIssues.length) return res.status(409).json({ error: `The preparing officer must complete the required attendance review before these minutes can be signed. ${reviewIssues.join(' ')}` });
+    const draft = omitClosingPrayerCommentary(JSON.parse(row.draft_json));
+    if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
+    const attestedDraftJson = JSON.stringify(draft);
+    const changes = reviewedMinutesChanges(row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null, JSON.parse(row.draft_json), draft, JSON.parse(row.master_changes_json || '[]'));
+    const reviewIssues = [...attendanceRecordIssues(draft), ...closingReviewIssues(draft)];
+    if (reviewIssues.length) return res.status(409).json({ error: `The recorded attendance or closing details are incomplete. ${reviewIssues.join(' ')}` });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
     await assertApprovedSignature(req.user, asBuffer(signature.signature_bytes));
@@ -2309,22 +2319,24 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
       const result = await dbRun(
       `UPDATE meeting_minutes SET status = 'ready_for_distribution', master_attested_by_user_id = ?,
        master_attested_at = ?, master_signature_bytes = ?, authorized_by_user_id = ?, authorized_at = ?,
-       preparer_review_seen_at = NULL, updated_by_user_id = ?, updated_at = ?
+       preparer_review_seen_at = NULL, draft_json = ?, master_changes_json = ?, updated_by_user_id = ?, updated_at = ?
        WHERE id = ? AND status = 'awaiting_master_attestation' AND updated_at = ?`,
-      [req.user.id, time, signatureBytes, req.user.id, time, req.user.id, time, row.id, row.updated_at],
+      [req.user.id, time, signatureBytes, req.user.id, time, attestedDraftJson, JSON.stringify(changes), req.user.id, time, row.id, row.updated_at],
     );
-      if (result.changes) await dbRun(
-        `INSERT INTO meeting_minutes_attestations (id, minutes_id, user_id, phase, draft_json, signature_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [crypto.randomUUID(), row.id, req.user.id, 'master', row.draft_json, signatureBytes, time],
-      );
+      if (result.changes) {
+        await dbRun(
+          `INSERT INTO meeting_minutes_attestations (id, minutes_id, user_id, phase, draft_json, signature_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [crypto.randomUUID(), row.id, req.user.id, 'master', attestedDraftJson, signatureBytes, time],
+        );
+        await dbRun(
+          `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
+           VALUES (?, 'minutes_master_attested', ?, ?, ?, ?)`,
+          [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id, publishedToOfficers: true, changedFields: changes.map(change => change.field) }), time],
+        );
+      }
       return result;
     });
     if (!attested.changes) return res.status(409).json({ error: 'The record changed. Refresh before attesting.' });
-    await dbRun(
-      `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
-       VALUES (?, 'minutes_master_attested', ?, ?, ?, ?)`,
-      [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: row.id, publishedToOfficers: true }), time],
-    );
     const recipientCandidates = await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND (role IN ('secretary', 'assistant_secretary') OR id = ?)", [row.created_by_user_id]);
     const recipients = [...new Map(recipientCandidates
       .filter(candidate => hasPermission(candidate, 'minutes.prepare'))
@@ -2340,7 +2352,6 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     broadcast('minutes_review_changed');
     broadcast('minutes_completion_changed');
     broadcast('minutes_records_changed', { minutesId: row.id, reason: 'published' });
-    const changes = row.master_changes_json ? JSON.parse(row.master_changes_json) : [];
     const changedSections = changes.map(change => change.field).join(', ');
     const notificationWarnings = [];
     for (const recipient of recipients) {

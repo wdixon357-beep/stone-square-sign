@@ -24,6 +24,8 @@ class Element {
     };
   }
   append(...nodes) { this.children.push(...nodes); }
+  replaceChildren(...nodes) { this.children = [...nodes]; }
+  setAttribute(name,value) { (this.attributes ||= {})[name] = value; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
   emit(type) { for (const fn of this.listeners[type] || []) fn({ target: this }); }
   matches(selector) {
@@ -43,18 +45,19 @@ const elements = {
   minutesOfficerRollConfirmed: { checked: true },
   minutesOfficerAttendance: new Element('div'),
 };
-const state = { minutesOfficerAttendanceEdited: false };
-let record = { status: 'draft', draft: {} };
+const state = { minutesOfficerAttendanceEdited: false, user: {id: 2, role: 'assistant_secretary'} };
+let record = { status: 'draft', createdByUserId: 2, preparerUserId: 2, draft: {} };
 const context = {
   document: { createElement: tag => new Element(tag) },
   $: id => elements[id], minutesAttendance, state, currentMinutes: () => record, scheduleMinutesPreview: () => {},
 };
 vm.createContext(context);
+const presentationSource = app.slice(app.indexOf('const minutesAttendanceNeedsPreparerConfirmation ='), app.indexOf('const officerAttendanceEditor ='));
 const editorSource = app.slice(app.indexOf('const officerAttendanceEditor ='), app.indexOf('const minutesAttendanceIssues ='));
 const collectionSource = app.slice(app.indexOf('const collectMinutesOfficerAttendance ='), app.indexOf('const collectMinutesDraft ='));
 const gateSource = app.match(/const minutesAttendanceIssues = \(draft = collectMinutesDraft\(\)\) => \[[\s\S]*?\]\.filter\(Boolean\);/)?.[0];
 assert.ok(editorSource && collectionSource && gateSource);
-vm.runInContext(`${editorSource}\n${collectionSource}\n${gateSource}\nthis.edit = officerAttendanceEditor; this.collect = collectMinutesOfficerAttendance; this.version = minutesOfficerAttendanceVersion; this.issues = minutesAttendanceIssues;`, context);
+vm.runInContext(`${presentationSource}\n${editorSource}\n${collectionSource}\n${gateSource}\nthis.edit = officerAttendanceEditor; this.collect = collectMinutesOfficerAttendance; this.version = minutesOfficerAttendanceVersion; this.issues = minutesAttendanceIssues; this.needsPreparerConfirmation = minutesAttendanceNeedsPreparerConfirmation; this.isReview = minutesAttendanceIsReview; this.displayWarnings = minutesAttendanceDisplayWarnings; this.presentAttendance = updateMinutesAttendancePresentation;`, context);
 
 const row = context.edit({ name: 'Xavier M. White', title: 'Senior Warden', status: 'excused' });
 elements.minutesOfficerAttendance.append(row);
@@ -133,3 +136,62 @@ assert.match(app, /Promise\.all\(\[minutesDatesReady, minutesAttendanceReady\]\)
 assert.match(html, /station coverage and any late arrivals/);
 assert.doesNotMatch(html, /PM Mobley|SW White/, 'Meeting examples must not become template defaults');
 console.log('PASS: web officer coverage, late arrivals, duration, stale-data clearing, saved values and legacy review compatibility');
+
+// The person preparing the draft keeps the existing confirmation workflow.
+// The owner can glance over that same record without acquiring those tasks.
+for (const id of ['minutesAttendanceSummary','minutesAttendanceReview','minutesAttendanceEyebrow','minutesAttendanceTitle','minutesAttendanceBadge','minutesAttendanceReviewNote','minutesAttendancePreparerInstructions','minutesOfficerAttendanceInstructions','minutesOfficerRollConfirmation','minutesOtherPresentConfirmation','minutesOtherExcusedConfirmation','minutesAttendanceFields','toggleMinutesAttendanceEdit']) elements[id] = new Element('div');
+const displayedText = element => [element.textContent || '',...element.children.map(displayedText)].filter(Boolean).join(' ');
+record = {status:'draft',createdByUserId:2,preparerUserId:2,draft:{officerAttendance:[{name:'Officer Example',title:'Example Office',status:'present'}],present:['Other Brother'],excused:[],visitors:[]}};
+state.user={id:2,role:'assistant_secretary'};
+context.presentAttendance(record);
+assert.equal(context.needsPreparerConfirmation(record),true);
+assert.equal(elements.minutesAttendanceSummary.classList.contains('hidden'),true);
+assert.equal(elements.minutesAttendanceFields.classList.contains('hidden'),false);
+for (const id of ['minutesOfficerRollConfirmation','minutesOtherPresentConfirmation','minutesOtherExcusedConfirmation']) assert.equal(elements[id].classList.contains('hidden'),false);
+state.user={id:1,role:'owner'};
+context.presentAttendance(record);
+assert.equal(context.needsPreparerConfirmation(record),false);
+assert.equal(elements.minutesAttendanceSummary.classList.contains('hidden'),false);
+assert.equal(elements.minutesAttendanceFields.classList.contains('hidden'),true);
+assert.match(displayedText(elements.minutesAttendanceSummary),/Officer Example.*Present.*Other Brother/);
+assert.match(elements.minutesAttendanceReviewNote.textContent,/Secretary's Office is completing attendance/);
+for (const id of ['minutesOfficerRollConfirmation','minutesOtherPresentConfirmation','minutesOtherExcusedConfirmation','minutesAttendancePreparerInstructions','minutesOfficerAttendanceInstructions']) assert.equal(elements[id].classList.contains('hidden'),true);
+assert.equal(elements.toggleMinutesAttendanceEdit.classList.contains('hidden'),false);
+const preparerRecord={...record,createdByUserId:1,preparerUserId:1};
+context.presentAttendance(preparerRecord);
+assert.equal(context.needsPreparerConfirmation(preparerRecord),true,'The owner acting as actual preparer still completes preparation requirements');
+assert.equal(elements.minutesOfficerRollConfirmation.classList.contains('hidden'),false);
+assert.equal(context.needsPreparerConfirmation({...preparerRecord,preparerUserId:3}),false,'The assigned preparer identity takes precedence over the original creator');
+assert.equal(context.needsPreparerConfirmation({...preparerRecord,preparerUserId:null}),true,'Older draft identity falls back to the recorded preparing creator');
+record.status='awaiting_master_attestation';state.minutesAttendanceEditing=true;
+context.presentAttendance(record);
+assert.equal(elements.minutesAttendanceSummary.classList.contains('hidden'),true);
+assert.equal(elements.minutesAttendanceFields.classList.contains('hidden'),false);
+assert.equal(elements.toggleMinutesAttendanceEdit.attributes['aria-expanded'],'true');
+assert.equal(elements.toggleMinutesAttendanceEdit.textContent,'Done editing attendance');
+for (const id of ['minutesOfficerRollConfirmation','minutesOtherPresentConfirmation','minutesOtherExcusedConfirmation']) assert.equal(elements[id].classList.contains('hidden'),true,'Optional master corrections never reveal preparer confirmation controls');
+elements.minutesOfficerRollConfirmed.checked=true;
+const masterRow=context.edit({name:'Officer Example',title:'Example Office',status:'present'});
+masterRow.querySelector('[data-field="status"]').value='absent';masterRow.querySelector('[data-field="status"]').emit('change');
+assert.equal(elements.minutesOfficerRollConfirmed.checked,false,'An optional master correction does not fabricate a new preparer confirmation');
+assert.equal(masterRow.querySelector('[data-field="status"]').querySelector('option[value="not_recorded"]').textContent,'Not recorded','The master sees a recorded-state label, not a per-person confirmation task');
+record.status='ready_for_distribution';context.presentAttendance(record);
+assert.equal(elements.minutesAttendanceSummary.classList.contains('hidden'),false);
+assert.equal(elements.minutesAttendanceFields.classList.contains('hidden'),true);
+assert.equal(elements.toggleMinutesAttendanceEdit.classList.contains('hidden'),true,'Signed records retain the recorded view without an edit action');
+assert.doesNotMatch(elements.minutesAttendanceReviewNote.textContent,/can edit|make a correction/,'Finalized attendance does not promise an unavailable edit');
+context.presentAttendance(record,{...record.draft,officerAttendance:[{name:'Regular Example',title:'Example Office',status:'absent',stationCoverage:'filled',actingName:'Covering Example',actingWholeMeeting:false}]});
+const inconsistentText=displayedText(elements.minutesAttendanceSummary);
+assert.match(inconsistentText,/Covering Example.*Partial coverage is recorded, but the regular officer's arrival is not recorded/);
+assert.doesNotMatch(inconsistentText,/until .* arrived/,'A malformed legacy partial duration never invents the regular officer arrival');
+const generatedWarning='Confirm attendance for Officer Example: the source mentions the officer but does not establish an attendance status.';
+const warningDraft={warnings:[generatedWarning,'Keep this substantive unresolved meeting question.'],officerAttendance:[{name:'Officer Example',status:'present'}]};
+assert.deepEqual(Array.from(context.displayWarnings(warningDraft)),['Keep this substantive unresolved meeting question.']);
+assert.deepEqual(warningDraft.warnings,[generatedWarning,'Keep this substantive unresolved meeting question.'],'Warning projection does not rewrite the retained draft');
+warningDraft.officerAttendance[0].status='not_recorded';
+assert.deepEqual(Array.from(context.displayWarnings(warningDraft)),['The preparing officer still needs to record attendance for Officer Example.','Keep this substantive unresolved meeting question.']);
+state.user={id:2,role:'assistant_secretary'};record.status='draft';
+assert.deepEqual(Array.from(context.displayWarnings(warningDraft)),warningDraft.warnings,'The preparer still receives the original required attendance reminder');
+assert.match(html,/id="toggleMinutesAttendanceEdit"[^>]*aria-expanded="false"[^>]*aria-controls="minutesAttendanceFields"/);
+assert.match(app,/updateMinutesAttendancePresentation\(item, collectMinutesDraft\(\)\)/,'Returning to the glance view displays the current unsaved corrections');
+console.log('PASS: preparer-only confirmations, owner glance view, optional corrections, truthful warning projection and finalized read-only attendance');

@@ -1,3 +1,4 @@
+import { omitClosingPrayerCommentary } from './minutes-closing-commentary.js';
 import { MINUTES_REPORT_RULES } from './report-rules.js';
 import { minutesDateParts, minutesDateValue } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
@@ -603,7 +604,7 @@ export const generateMinutesDraft = async (transcript, {
   if (source.length < 100) throw Object.assign(new Error('The transcript is too short to create reliable minutes.'), { statusCode: 400 });
   if (source.length > 500_000) throw Object.assign(new Error('The transcript is too long. Upload the Plaud text export for one meeting.'), { statusCode: 400 });
 
-  if (testResponse) return normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2});
+  if (testResponse) return omitClosingPrayerCommentary(normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2}));
   const localDraft = organizeMeetingSource(source, { sourceType });
   if (typeof generateStructured === 'function') {
     const sourceLines = minutesSourceLines(source);
@@ -613,7 +614,7 @@ export const generateMinutesDraft = async (transcript, {
       instructions: generationInstructions,
       input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, sourceLines}),
     });
-    return checkedGeneratedDraft(response, source, localDraft, schema, sourceLines);
+    return omitClosingPrayerCommentary(checkedGeneratedDraft(response, source, localDraft, schema, sourceLines));
   }
-  return normalizeMinutesDraft(localDraft);
+  return omitClosingPrayerCommentary(normalizeMinutesDraft(localDraft));
 };

@@ -84,6 +84,49 @@ struct MinutesAttendanceReview: Codable, Equatable {
     var otherPresent: Bool = false
     var otherExcused: Bool = false
 }
+enum MinutesAttendanceWorkflow {
+    static func requiresPreparerConfirmation(status: String?, preparerUserID: Int?, createdByUserID: Int?, viewerUserID: Int?) -> Bool {
+        guard status == "draft", let preparer = preparerUserID ?? createdByUserID, let viewerUserID else { return false }
+        return preparer == viewerUserID
+    }
+    static func statusLabel(_ status: String, preparing: Bool) -> String {
+        switch status {
+        case "present": return "Present"
+        case "arrived_late": return "Arrived later"
+        case "excused": return "Excused"
+        case "absent": return "Absent"
+        default: return preparing ? "Needs confirmation" : "Not recorded"
+        }
+    }
+    static func coverageSummary(_ row: MinutesAttendance) -> String? {
+        guard row.requiresStationCoverage || row.hasStationCoverageValues else { return nil }
+        if !row.requiresStationCoverage { return "Recorded station coverage differs from the attendance status." }
+        if row.actingWholeMeeting == false && row.status != "arrived_late" {
+            return "Partial coverage is recorded, but the regular officer's arrival is not recorded."
+        }
+        if row.stationCoverage == "vacant" {
+            return row.status == "arrived_late" ? "Station remained vacant until the regular officer arrived." : "Station remained vacant."
+        }
+        if row.stationCoverage == "filled", let name = row.actingName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            if row.actingWholeMeeting == true { return "Covered by \(name) for the whole meeting." }
+            if row.actingWholeMeeting == false { return "Covered by \(name) until the regular officer arrived." }
+            return "Covered by \(name); duration not recorded."
+        }
+        return "Station coverage not recorded."
+    }
+    static func visibleReminders(_ warnings: [String], officers: [MinutesAttendance], preparing: Bool) -> [String] {
+        guard !preparing else { return warnings }
+        let prefix = "Confirm attendance for "
+        let suffix = ": the source mentions the officer but does not establish an attendance status."
+        return warnings.compactMap { warning in
+            guard warning.hasPrefix(prefix), warning.hasSuffix(suffix) else { return warning }
+            let name = String(warning.dropFirst(prefix.count).dropLast(suffix.count))
+            if officers.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame
+                && ["present", "arrived_late", "excused", "absent"].contains($0.status) }) { return nil }
+            return "The preparing officer still needs to record attendance for \(name)."
+        }
+    }
+}
 struct MinutesFinance: Codable, Equatable {
     var date: String?; var reference: String?; var party: String?; var description: String?; var amount: String?
 }
@@ -478,12 +521,22 @@ struct MeetingMinutesView: View {
     @State private var readonlyRecord: MinutesRecord?
     @State private var deferredRecordsRefresh = false
     @State private var editorPane = 0
+    @State private var changingAttendance = false
     let onExit: () -> Void
     init(workspace: MinutesWorkspace, onExit: @escaping () -> Void = {}) {
         self.workspace = workspace
         self.onExit = onExit
     }
     private var editable: Bool { model.user?.can("minutes.prepare") == true && (workspace.selected?.status == "draft" || (workspace.selected?.status == "awaiting_master_attestation" && model.user?.role == "owner")) }
+    private var preparingAttendance: Bool {
+        MinutesAttendanceWorkflow.requiresPreparerConfirmation(status: workspace.selected?.status,
+            preparerUserID: workspace.selected?.preparerUserId, createdByUserID: workspace.selected?.createdByUserId,
+            viewerUserID: model.user?.id)
+    }
+    private var attendanceReminders: [String] {
+        MinutesAttendanceWorkflow.visibleReminders(workspace.draft?.warnings ?? [],
+            officers: workspace.draft?.officerAttendance ?? [], preparing: preparingAttendance)
+    }
     private func text(_ key: WritableKeyPath<MinutesDraft, String?>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key] ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 })
     }
@@ -492,6 +545,7 @@ struct MeetingMinutesView: View {
     }
     private func attendanceConfirmation(_ key: WritableKeyPath<MinutesAttendanceReview, Bool>) -> Binding<Bool> {
         Binding(get: { workspace.draft?.attendanceReview?[keyPath: key] ?? false }, set: { value in
+            guard preparingAttendance else { return }
             if key == \.officerRoll, workspace.selected?.status == "draft" {
                 workspace.draft?.officerAttendanceVersion = 2
             }
@@ -503,12 +557,15 @@ struct MeetingMinutesView: View {
     private func attendanceNames(_ key: WritableKeyPath<MinutesDraft, [String]>, confirmation: WritableKeyPath<MinutesAttendanceReview, Bool>) -> Binding<String> {
         Binding(get: { workspace.draft?[keyPath: key].joined(separator: "\n") ?? "" }, set: { value in
             workspace.draft?[keyPath: key] = value.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            var review = workspace.draft?.attendanceReview ?? MinutesAttendanceReview()
-            review[keyPath: confirmation] = false
-            workspace.draft?.attendanceReview = review
+            if preparingAttendance {
+                var review = workspace.draft?.attendanceReview ?? MinutesAttendanceReview()
+                review[keyPath: confirmation] = false
+                workspace.draft?.attendanceReview = review
+            }
         })
     }
     private func resetOfficerConfirmation() {
+        guard preparingAttendance else { return }
         if workspace.selected?.status == "draft" { workspace.draft?.officerAttendanceVersion = 2 }
         var review = workspace.draft?.attendanceReview ?? MinutesAttendanceReview()
         review.officerRoll = false
@@ -575,6 +632,7 @@ struct MeetingMinutesView: View {
             openRequestedSignedMinutes()
         }
         .onChange(of: model.requestedMinutesRecordID) { _, _ in openRequestedSignedMinutes() }
+        .onChange(of: workspace.selected?.id) { _, _ in changingAttendance = false }
         .onChange(of: model.minutesRecordsRevision) { _, _ in
             if workspace.dirty { deferredRecordsRefresh = true }
             else { Task { await workspace.refresh() } }
@@ -745,8 +803,8 @@ struct MeetingMinutesView: View {
                         Spacer()
                         if workspace.selected?.status == "draft" { Button("Reorganize source") { confirmReorganize = true } }
                     }
-                    if !(workspace.draft?.warnings.isEmpty ?? true) {
-                        DisclosureGroup("Review reminders") { ForEach(workspace.draft?.warnings ?? [], id: \.self) { Text($0).font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3) } }
+                    if !attendanceReminders.isEmpty {
+                        DisclosureGroup("Review reminders") { ForEach(attendanceReminders, id: \.self) { Text($0).font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3) } }
                     }
                     if let changes = workspace.selected?.masterChanges, !changes.isEmpty {
                         GroupBox("Worshipful Master's corrections") {
@@ -766,27 +824,7 @@ struct MeetingMinutesView: View {
                         }
                     }
                     metadata.disabled(!editable)
-                    GroupBox("Required attendance review") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Label("Required before submission", systemImage: attendanceReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                                .font(.caption.weight(.bold)).foregroundStyle(attendanceReady ? Color.green : SignTheme.gold)
-                            Text("Confirm every officer's attendance and both other-Brother lists. For an excused, absent or late-arriving officer, record who covered the station or confirm that it remained vacant.")
-                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            Text("Officers present, excused, absent or arriving late").font(.headline).foregroundStyle(SignTheme.navy)
-                            ForEach(workspace.draft?.officerAttendance.indices ?? 0..<0, id: \.self) { i in
-                                officerAttendanceEditor(i)
-                            }
-                            Toggle("I reviewed the complete officer roll, including station coverage and late arrivals.", isOn: attendanceConfirmation(\.officerRoll))
-                            Divider()
-                            namesEditor("Other Brothers present", binding: attendanceNames(\.present, confirmation: \.otherPresent))
-                            Toggle("I confirmed this list, including if no other Brothers were present.", isOn: attendanceConfirmation(\.otherPresent))
-                            namesEditor("Other Brothers excused", binding: attendanceNames(\.excused, confirmation: \.otherExcused))
-                            Toggle("I confirmed this list, including if no other Brothers were excused.", isOn: attendanceConfirmation(\.otherExcused))
-                            Divider()
-                            namesEditor("Visitors, if any", binding: names(\.visitors))
-                        }.padding(10)
-                    }.disabled(!editable)
-                    if editable { Button("Add officer or pro tem") { workspace.draft?.officerAttendance.append(MinutesAttendance(name: "", title: "", status: "not_recorded")); resetOfficerConfirmation() } }
+                    attendance
                     ForEach(workspace.draft?.sections.indices ?? 0..<0, id: \.self) { i in
                         VStack(alignment: .leading, spacing: 8) {
                             TextField("Section heading", text: Binding(get: { workspace.draft?.sections[i].heading ?? "" }, set: { workspace.draft?.sections[i].heading = $0 })).font(.headline)
@@ -809,6 +847,96 @@ struct MeetingMinutesView: View {
             }.padding(14)
         }
     }
+    @ViewBuilder private var attendance: some View {
+        if preparingAttendance {
+            GroupBox("Required attendance review") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Required before submission", systemImage: attendanceReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.bold)).foregroundStyle(attendanceReady ? Color.green : SignTheme.gold)
+                    Text("Confirm every officer's attendance and both other-Brother lists. For an excused, absent or late-arriving officer, record who covered the station or confirm that it remained vacant.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    attendanceFields
+                }.padding(10)
+            }.disabled(!editable)
+        } else {
+            GroupBox("Recorded attendance") {
+                VStack(alignment: .leading, spacing: 14) {
+                    if workspace.selected?.status == "draft" {
+                        Text("The Secretary's Office is completing attendance. You can look over the recorded entries and make a correction if needed.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Recorded by \(workspace.selected?.preparer ?? workspace.selected?.createdBy ?? "the preparing officer"). You do not need to confirm attendance again.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    attendanceSummary
+                    if editable {
+                        DisclosureGroup("Change attendance", isExpanded: $changingAttendance) {
+                            attendanceFields.padding(.top, 10)
+                        }
+                    }
+                }.padding(10)
+            }
+        }
+    }
+    private var attendanceFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Officers present, excused, absent or arriving late").font(.headline).foregroundStyle(SignTheme.navy)
+            ForEach(workspace.draft?.officerAttendance.indices ?? 0..<0, id: \.self) { i in officerAttendanceEditor(i) }
+            if preparingAttendance {
+                Toggle("I reviewed the complete officer roll, including station coverage and late arrivals.", isOn: attendanceConfirmation(\.officerRoll))
+            }
+            Divider()
+            namesEditor("Other Brothers present", binding: attendanceNames(\.present, confirmation: \.otherPresent))
+            if preparingAttendance {
+                Toggle("I confirmed this list, including if no other Brothers were present.", isOn: attendanceConfirmation(\.otherPresent))
+            }
+            namesEditor("Other Brothers excused", binding: attendanceNames(\.excused, confirmation: \.otherExcused))
+            if preparingAttendance {
+                Toggle("I confirmed this list, including if no other Brothers were excused.", isOn: attendanceConfirmation(\.otherExcused))
+            }
+            Divider()
+            namesEditor("Visitors, if any", binding: names(\.visitors))
+            if editable {
+                Button("Add officer or pro tem") {
+                    workspace.draft?.officerAttendance.append(MinutesAttendance(name: "", title: "", status: "not_recorded"))
+                    resetOfficerConfirmation()
+                }
+            }
+        }
+    }
+    private var attendanceSummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(workspace.draft?.officerAttendance.indices ?? 0..<0, id: \.self) { i in
+                if let row = workspace.draft?.officerAttendance[i] {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .top, spacing: 14) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(row.title.isEmpty ? "Officer" : row.title).font(.caption).foregroundStyle(.secondary)
+                                Text(row.name.isEmpty ? "Name not recorded" : row.name).font(.body.weight(.medium))
+                            }
+                            Spacer(minLength: 8)
+                            Text(MinutesAttendanceWorkflow.statusLabel(row.status, preparing: false))
+                                .font(.callout.weight(.semibold)).foregroundStyle(SignTheme.navy)
+                        }
+                        if let coverage = MinutesAttendanceWorkflow.coverageSummary(row) {
+                            Text(coverage).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Divider()
+            attendanceSummaryNames("Other Brothers present", values: workspace.draft?.present ?? [])
+            attendanceSummaryNames("Other Brothers excused", values: workspace.draft?.excused ?? [])
+            attendanceSummaryNames("Visitors", values: workspace.draft?.visitors ?? [])
+        }
+    }
+    private func attendanceSummaryNames(_ label: String, values: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(values.isEmpty ? "None listed." : values.joined(separator: ", "))
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+        }
+    }
     private func officerText(_ index: Int, key: WritableKeyPath<MinutesAttendance, String>) -> Binding<String> {
         Binding(get: { workspace.draft?.officerAttendance[index][keyPath: key] ?? "" }, set: { value in
             workspace.draft?.officerAttendance[index][keyPath: key] = value
@@ -829,7 +957,7 @@ struct MeetingMinutesView: View {
                     workspace.draft?.officerAttendance[index].setStatus(value)
                     resetOfficerConfirmation()
                 })) {
-                    Text("Needs confirmation").tag("not_recorded")
+                    Text(MinutesAttendanceWorkflow.statusLabel("not_recorded", preparing: preparingAttendance)).tag("not_recorded")
                     Text("Present").tag("present")
                     Text("Excused").tag("excused")
                     Text("Absent").tag("absent")
@@ -927,7 +1055,7 @@ struct MeetingMinutesView: View {
             Text("Record actions").font(.headline)
             Button("Download saved Word record") { Task { await workspace.downloadWord() } }.disabled(workspace.dirty)
             if let record = workspace.selected {
-                if record.status == "draft" && model.user?.can("minutes.prepare") == true && record.createdByUserId == model.user?.id {
+                if preparingAttendance && model.user?.can("minutes.prepare") == true {
                     Button(actionLabel("preparer-attest")) { pendingAction = "preparer-attest" }.disabled(workspace.dirty || !attendanceReady)
                 }
                 if model.user?.role == "owner" && record.status == "awaiting_master_attestation" {

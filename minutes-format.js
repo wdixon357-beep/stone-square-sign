@@ -104,7 +104,7 @@ export function closingReviewIssues(draft) {
   ].filter(Boolean);
 }
 
-export function attendanceReviewIssues(draft = {}) {
+export function attendanceReviewIssues(draft = {}, {requireConfirmation = true} = {}) {
   const review = draft.attendanceReview || {};
   const rows = Array.isArray(draft.officerAttendance) ? draft.officerAttendance : [];
   const unresolved = CURRENT_OFFICERS.filter((officer) => {
@@ -117,14 +117,18 @@ export function attendanceReviewIssues(draft = {}) {
   return [
     draft.warnings?.includes(UNCITED_PRESIDING_WARNING) && !String(draft.presiding || '').trim()
       && 'Enter and verify the presiding officer from the meeting record before attesting.',
-    !review.officerRoll && 'Confirm that you reviewed the complete officer roll.',
+    requireConfirmation && !review.officerRoll && 'Confirm that you reviewed the complete officer roll.',
     unresolved.length && `Record Present, Arrived later, Excused, or Absent for every Lodge officer. Still incomplete: ${unresolved.map((officer) => officer.name).join(', ')}.`,
     unresolvedAdditional.length && `Record attendance for each added officer or pro tem entry. Still incomplete: ${unresolvedAdditional.map((entry) => entry.name).join(', ')}.`,
     ...attendanceCoverageIssues(draft),
-    !review.otherPresent && 'Confirm the Other Brothers Present list, including when no other Brothers were present.',
-    !review.otherExcused && 'Confirm the Other Brothers Excused list, including when no other Brothers were excused.',
+    requireConfirmation && !review.otherPresent && 'Confirm the Other Brothers Present list, including when no other Brothers were present.',
+    requireConfirmation && !review.otherExcused && 'Confirm the Other Brothers Excused list, including when no other Brothers were excused.',
   ].filter(Boolean);
 }
+
+// The preparer confirms the roll. Master review validates recorded facts without
+// asking the Master to repeat the preparer's checklist.
+export const attendanceRecordIssues = draft => attendanceReviewIssues(draft, {requireConfirmation:false});
 
 export function detectPrayerFacts(source) {
   // Require past-tense evidence about this meeting. Requests, future plans and
