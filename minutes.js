@@ -91,15 +91,15 @@ export const MINUTES_GENERATION_SCHEMA = {
       expenses: {...MINUTES_SCHEMA.properties.expenses, maxItems: 0},
       actionItems: {...MINUTES_SCHEMA.properties.actionItems, maxItems: 0},
       sections: {type:'array', items:{type:'object', additionalProperties:false,
-        required:['heading','body','sourceQuotes'], properties:{
+        required:['heading','body','sourceLineIds'], properties:{
           ...MINUTES_SCHEMA.properties.sections.items.properties,
-          sourceQuotes:{type:'array',items:{type:'string'}},
+          sourceLineIds:{type:'array',items:{type:'integer',minimum:1}},
         }}},
     }},
     evidence: {
       type: 'array', items: {
-        type: 'object', additionalProperties: false, required: ['field', 'quote'],
-        properties: {field: {type: 'string'}, quote: {type: 'string'}},
+        type: 'object', additionalProperties: false, required: ['field', 'sourceLineIds'],
+        properties: {field: {type: 'string'}, sourceLineIds: {type:'array',items:{type:'integer',minimum:1}}},
       },
     },
   },
@@ -114,22 +114,49 @@ const otherAttendanceNames = (list, officerAttendance, attendanceVersion) => lis
 ));
 
 
-// Source exports can wrap a sentence across lines while the model cites the
-// same words with ordinary spaces. Resolve only whitespace differences, then
-// retain the exact original source span for every downstream evidence check.
-function exactSourceQuote(source, quote) {
-  if (source.includes(quote)) return quote;
-  const words = quote.trim().split(/\s+/).filter(Boolean);
-  if (words.length < 2) return null;
-  const escaped = words.map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const match = new RegExp(escaped.join('\\s+')).exec(source);
-  return match?.[0] || null;
-}
+// The model selects immutable source positions; it never retypes evidence.
+// Keep blank lines and original characters so IDs remain stable and repeated
+// text at different positions cannot be credited to the wrong occurrence.
+export const minutesSourceLines = source => {
+  if (typeof source !== 'string') throw new TypeError('Minutes source must be text.');
+  return source.split('\n').map((text, index) => ({line:index + 1, text}));
+};
+
+export const minutesGenerationSchemaForLineCount = lineCount => {
+  if (!Number.isSafeInteger(lineCount) || lineCount < 1) throw new RangeError('A positive source line count is required.');
+  const schema = structuredClone(MINUTES_GENERATION_SCHEMA);
+  schema.properties.draft.properties.sections.items.properties.sourceLineIds.items.maximum = lineCount;
+  schema.properties.evidence.items.properties.sourceLineIds.items.maximum = lineCount;
+  return schema;
+};
+
+const resolveSourceCatalogLineIds = (lines, ids) => {
+  if (!Array.isArray(ids) || ids.some(id => !Number.isSafeInteger(id) || id < 1 || id > lines.length)) {
+    throw new RangeError('Source line references must identify existing lines.');
+  }
+  const sorted = [...new Set(ids)].sort((left, right) => left - right);
+  const groups = [];
+  for (const id of sorted) {
+    const last = groups.at(-1);
+    if (last && id === last.lastLine + 1) last.lastLine = id;
+    else groups.push({firstLine:id,lastLine:id});
+  }
+  return groups.map(({firstLine,lastLine}) => {
+    const quote = lines.slice(firstLine - 1,lastLine).map(line => line.text).join('\n');
+    if (!quote.trim()) throw new RangeError('Source line references must include recorded source text.');
+    return {quote,firstLine,lastLine};
+  });
+};
+
+export const resolveMinutesSourceLineIds = (source, ids) => resolveSourceCatalogLineIds(minutesSourceLines(source), ids);
 
 function validateGeneratedShape(value, schema, path = 'response') {
   const type = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
   const allowed = Array.isArray(schema.type) ? schema.type : [schema.type];
-  if (!allowed.includes(type)) throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
+  const integer = type === 'number' && allowed.includes('integer') && Number.isSafeInteger(value);
+  if (!allowed.includes(type) && !integer) throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
+  if (type === 'number' && (!Number.isFinite(value) || schema.minimum != null && value < schema.minimum
+    || schema.maximum != null && value > schema.maximum)) throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
   if (schema.enum && !schema.enum.includes(value)) throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
   if (type === 'string' && schema.minLength != null && [...value].length < schema.minLength) {
     throw generationError(`Minutes generation returned an invalid ${path}. Please try again.`);
@@ -173,25 +200,26 @@ const withoutNegatedFact = (text, pattern) => pattern ? text.replace(new RegExp(
 const negatedProcedure = (verbs, extra = '') => new RegExp(String.raw`\b(?:(?:not|never|wasn't|isn't|weren't)\s+(?:yet\s+)?(?:been\s+)?(?:properly\s+)?(?:unanimously\s+)?(?:${verbs})|(?:no one|nobody|no brother|no member|no person)\s+(?:${verbs})${extra ? `|${extra}` : ''})\b`, 'i');
 
 
-function checkedGeneratedDraft(response, source, localDraft) {
+function checkedGeneratedDraft(response, source, localDraft, schema, sourceLines) {
   const sectionEvidenceError = () => generationError('The meeting section source references are incomplete or invalid. Your source has not been changed.', 'MINUTES_SECTION_EVIDENCE_INVALID');
-  // Do not adopt a cached legacy parallel-index response or guess which later
-  // heading its orphaned quote belonged to. A deliberate new request uses the
-  // changed schema/cache key and must supply section-local evidence.
+  // Never guess positions for an older free-quotation or parallel-index
+  // contract. Its audited cache remains intact; an explicit new request uses
+  // the changed schema/input hash and selects source lines directly.
+  if (Array.isArray(response?.draft?.sections) && response.draft.sections.some(section => section && Object.hasOwn(section,'sourceQuotes'))
+    || Array.isArray(response?.evidence) && response.evidence.some(item => item && Object.hasOwn(item,'quote'))) {
+    throw generationError('Minutes generation returned an older source-reference format. Your source has not been changed. Request a new organization of these minutes.',
+      'MINUTES_SOURCE_LINE_CONTRACT_REQUIRED');
+  }
   if (Array.isArray(response?.draft?.sections) && response.draft.sections.some(section =>
-    section && typeof section === 'object' && (!Array.isArray(section.sourceQuotes)
-      || section.sourceQuotes.some(quote => typeof quote !== 'string')))) throw sectionEvidenceError();
-  validateGeneratedShape(response, MINUTES_GENERATION_SCHEMA);
+    section && typeof section === 'object' && !Array.isArray(section.sourceLineIds))) throw sectionEvidenceError();
+  validateGeneratedShape(response, schema);
   if (response.evidence.some(item => /^sections(?:\[|\.|$)/.test(item.field))) throw sectionEvidenceError();
   const evidence = structuredClone(response.evidence);
   const generated = structuredClone(response.draft);
   generated.sections = generated.sections.map((section, index) => {
-    const {heading, body, sourceQuotes} = section;
-    if (body.trim() ? !sourceQuotes.length : sourceQuotes.length) throw sectionEvidenceError();
-    for (const quote of sourceQuotes) {
-      if (!quote.trim()) throw sectionEvidenceError();
-      evidence.push({field:`sections[${index}].body`,quote});
-    }
+    const {heading, body, sourceLineIds} = section;
+    if (body.trim() ? !sourceLineIds.length : sourceLineIds.length) throw sectionEvidenceError();
+    if (sourceLineIds.length) evidence.push({field:`sections[${index}].body`,sourceLineIds});
     return {heading,body};
   });
   // Retain this nullable wire field for older provider schemas only. It is no
@@ -244,17 +272,17 @@ function checkedGeneratedDraft(response, source, localDraft) {
     const warningReference = /^warnings\[(0|[1-9]\d*)\]$/.exec(item.field);
     const existingWarning = warningReference && Object.hasOwn(generated.warnings, warningReference[1]);
     const allowedField = requiredFields.has(item.field) || item.field === 'meetingType' || existingWarning;
-    const quote = item.quote.trim() && exactSourceQuote(source, item.quote);
-    if (!allowedField || !quote) {
-      console.warn('Minutes source reference rejected:', !allowedField ? 'invalid_field' : 'quote_not_found', allowedField ? item.field : 'unsupported');
+    let spans = [];
+    if (allowedField) {
+      try { spans = resolveSourceCatalogLineIds(sourceLines,item.sourceLineIds); } catch { /* Fail closed below without logging source text. */ }
+    }
+    if (!allowedField || !spans.length) {
+      console.warn('Minutes source reference rejected:', !allowedField ? 'invalid_field' : 'invalid_source_lines', allowedField ? item.field : 'unsupported');
       throw generationError('Minutes generation returned a source reference that could not be verified. Please try again.',
         /^sections\[/.test(item.field) ? 'MINUTES_SECTION_EVIDENCE_INVALID' : 'MINUTES_SOURCE_VERIFICATION_FAILED');
     }
     const entries = references.get(item.field) || [];
-    const start = source.indexOf(quote);
-    const firstLine = source.slice(0, start).split('\n').length;
-    const lastLine = firstLine + quote.split('\n').length - 1;
-    entries.push({...item, quote, firstLine, lastLine}); references.set(item.field, entries);
+    entries.push(...spans.map(span => ({field:item.field,...span}))); references.set(item.field, entries);
   }
   if ([...requiredFields].some(field => !references.has(field))) {
     throw generationError('Minutes generation did not supply source references for all extracted content. Please try again.');
@@ -578,12 +606,14 @@ export const generateMinutesDraft = async (transcript, {
   if (testResponse) return normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2});
   const localDraft = organizeMeetingSource(source, { sourceType });
   if (typeof generateStructured === 'function') {
+    const sourceLines = minutesSourceLines(source);
+    const schema = minutesGenerationSchemaForLineCount(sourceLines.length);
     const response = await generateStructured({
-      purpose: 'minutes', schemaName: 'stone_square_meeting_minutes', schema: MINUTES_GENERATION_SCHEMA,
+      purpose: 'minutes', schemaName: 'stone_square_meeting_minutes', schema,
       instructions: generationInstructions,
-      input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, source}),
+      input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, sourceLines}),
     });
-    return checkedGeneratedDraft(response, source, localDraft);
+    return checkedGeneratedDraft(response, source, localDraft, schema, sourceLines);
   }
   return normalizeMinutesDraft(localDraft);
 };

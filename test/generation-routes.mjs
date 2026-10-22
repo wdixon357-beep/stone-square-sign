@@ -109,15 +109,21 @@ const fetchImpl = async (url, options) => {
     const title=input.source.includes('Source note mentions OpenAI')?'Source note mentions OpenAI':'Synthetic report notes';
     result={suggestions:[{field:'title',value:title,quote:title}],warnings:['GPT-5.6 Luna organized the report. Review each suggestion.', 'Historical GPT-5.6 Terra notice.']};
   } else if (body.text.format.name === 'stone_square_meeting_minutes') {
-    const local = await generateMinutesDraft(input.source, {sourceType:input.sourceType});
+    if ('source' in input || !Array.isArray(input.sourceLines) || !input.sourceLines.every((entry,index)=>entry.line===index+1 && typeof entry.text==='string')) throw Error('Invalid or duplicated minutes source catalog');
+    const source=input.sourceLines.map(entry=>entry.text).join('\\n');
+    const lineIds=input.sourceLines.map(entry=>entry.line);
+    const local = await generateMinutesDraft(source, {sourceType:input.sourceType});
     const draft = Object.fromEntries(Object.keys(MINUTES_SCHEMA.properties).map(key=>[key,local[key]]));
-    if (!body.text.format.schema.properties.draft.properties.sections.items.required.includes('sourceQuotes')) throw Error('Minutes provider schema omitted section-local evidence');
+    if (!body.text.format.schema.properties.draft.properties.sections.items.required.includes('sourceLineIds')) throw Error('Minutes provider schema omitted section-local evidence');
     for (const field of ['income','expenses','actionItems']) {
       if (body.text.format.schema.properties.draft.properties[field].maxItems !== 0) throw Error('Minutes provider schema permits an unsupported '+field+' table');
     }
-    draft.sections = configuration.sections || draft.sections.map(section=>({...section,sourceQuotes:section.body.trim()?[input.source]:[]}));
+    for (const ids of [body.text.format.schema.properties.draft.properties.sections.items.properties.sourceLineIds,body.text.format.schema.properties.evidence.items.properties.sourceLineIds]) {
+      if(ids.items.type!=='integer'||ids.items.minimum!==1||ids.items.maximum!==lineIds.length) throw Error('Minutes source IDs are not bounded to this request');
+    }
+    draft.sections = configuration.sections || draft.sections.map(section=>({...section,sourceLineIds:section.body.trim()?lineIds:[]}));
     const evidence=[];
-    const add=field=>evidence.push({field,quote:input.source});
+    const add=field=>evidence.push({field,sourceLineIds:lineIds});
     for(const field of ['meetingDate','degree','openingTime','closingTime','prayerRequested','closingPrayerGiven','presiding','quorum','nextMeeting']) if(draft[field]!==null && draft[field]!=='')add(field);
     if(draft.meetingType!=='Stated Communication')add('meetingType');
     for(const field of ['present','excused','visitors','sensitiveReview'])draft[field].forEach((_,index)=>add(field+'['+index+']'));
@@ -128,12 +134,12 @@ const fetchImpl = async (url, options) => {
     result={draft,evidence:[...evidence,...(configuration.extraEvidence||[])]};
     if (mode === 'forbidden_actions') draft.actionItems = Array.from({length:14},(_,index)=>'Synthetic unsupported action '+(index+1));
     if (mode === 'default_metadata_citation' || mode === 'default_metadata_invalid_section') {
-      result.evidence.unshift({field:'meetingType',quote:'compiled_notes'});
-      if (mode === 'default_metadata_invalid_section') draft.sections.find(section=>section.body.trim()).sourceQuotes=['compiled_notes'];
+      result.evidence.unshift({field:'meetingType',sourceLineIds:[1]});
+      if (mode === 'default_metadata_invalid_section') draft.sections.find(section=>section.body.trim()).sourceLineIds=[];
     }
     if (mode === 'procedural_omission' || mode === 'unsupported_second') {
       const body = '- The minutes of the previous meeting were reviewed. The source states that the minutes were approved as submitted, but it does not identify a mover, seconder, vote method or tally.';
-      draft.sections = [{heading:'Reading of the Minutes',body:body + (mode === 'unsupported_second' ? ' Brother Example seconded the motion.' : ''),sourceQuotes:[input.source]}];
+      draft.sections = [{heading:'Reading of the Minutes',body:body + (mode === 'unsupported_second' ? ' Brother Example seconded the motion.' : ''),sourceLineIds:lineIds}];
     }
   } else {
     const empty=()=>({value:null,evidence:''});
@@ -376,7 +382,7 @@ try {
   await control({mode:'default_metadata_invalid_section'});
   const invalidMetadata = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(metadataSource+'\nA distinct source-verification case.'));
   const invalidMetadataIncident = (await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===invalidMetadata.data.incidentReference);
-  check('Ignoring an optional default reference never accepts metadata as a real section quote',
+  check('Ignoring an optional default reference never accepts metadata as a real section evidence',
     invalidMetadata.status===502 && invalidMetadataIncident?.category==='MINUTES_SECTION_EVIDENCE_INVALID');
   assert.deepEqual((await api('/api/minutes',assistant.token)).data.minutes,beforeInvalidMetadata);
   check('A genuine source-reference failure leaves all saved minutes untouched',true);
@@ -400,15 +406,15 @@ try {
     'The Lodge closed at 9:00 PM.',
   ];
   const sectionSource = sourceLines.join('\n');
-  const sourcedSection = (heading, line) => ({heading,body:'- '+sourceLines[line-1],sourceQuotes:[sourceLines[line-1]]});
+  const sourcedSection = (heading, line) => ({heading,body:'- '+sourceLines[line-1],sourceLineIds:[line]});
   const sectionFixture = [
     sourcedSection('Opening',3),
-    {heading:'Balloting',body:'',sourceQuotes:[]},
+    {heading:'Balloting',body:'',sourceLineIds:[]},
     sourcedSection('Reading of the Minutes',4),
-    {heading:'Elections',body:'',sourceQuotes:[]},
+    {heading:'Elections',body:'',sourceLineIds:[]},
     sourcedSection('Committee Reports',5),
     sourcedSection("Treasurer's Report",6),
-    {heading:'Petitions',body:'',sourceQuotes:[]},
+    {heading:'Petitions',body:'',sourceLineIds:[]},
     sourcedSection('Old Business',7),
     sourcedSection('New Business and Motions',8),
     sourcedSection('Sickness and Distress',9),
@@ -419,20 +425,20 @@ try {
   const sectionResult = await api('/api/minutes/generate',sectionAssistant.token,'POST',minutesForm(sectionSource));
   assert.equal(sectionResult.status,201,JSON.stringify(sectionResult.data));
   const sectionMinutes = sectionResult.data.minutes;
-  const originalSectionInput=JSON.parse((await readFile(inputsFile,'utf8')).trim().split('\n').at(-1)).input.source;
+  const originalSectionInput=JSON.parse((await readFile(inputsFile,'utf8')).trim().split('\n').at(-1)).input.sourceLines.map(entry=>entry.text).join('\n');
   // Multipart text fields use CRLF on the wire. Retain that exact accepted
   // source when comparing the later reorganization request.
   assert.equal(originalSectionInput.replace(/\r\n/g,'\n'),sectionSource);
-  check('Assistant Secretary multipart generation accepts interleaved empty agenda sections with section-local quotes',
+  check('Assistant Secretary multipart generation accepts interleaved empty agenda sections with section-local source lines',
     sectionMinutes.status==='draft' && await providerCalls()===beforeSectionFixture+1
       && sectionMinutes.draft.sections.some(section=>section.heading==='Old Business' && section.body.includes('reservation motion was tabled'))
       && sectionMinutes.draft.sections.some(section=>section.heading==='New Business and Motions' && section.body.includes('Fish and two sides')));
   check('Every populated section retains its own source-line comment after empty sections are removed',
     [['Opening',3],['Reading of the Minutes',4],['Committee Reports',5],["Treasurer's Report",6],['Old Business',7],['New Business and Motions',8],['Sickness and Distress',9],['Prayer and Closing',10]]
       .every(([heading,line])=>sectionMinutes.draft.warnings.includes(`Source reference: ${heading}, line ${line}.`)));
-  check('Internal section quotes do not change the saved public draft shape',
+  check('Internal source line references do not change the saved public draft shape',
     sectionMinutes.draft.sections.every(section=>Object.keys(section).sort().join(',')==='body,heading')
-      && !JSON.stringify(sectionMinutes).includes('sourceQuotes'));
+      && !JSON.stringify(sectionMinutes).includes('sourceLineIds'));
   let reopenedSectionMinutes = (await api('/api/minutes',sectionAssistant.token)).data.minutes.find(item=>item.id===sectionMinutes.id);
   check('The sourced Assistant Secretary draft reopens unchanged with no automatic review or signatures',
     JSON.stringify(reopenedSectionMinutes.draft)===JSON.stringify(sectionMinutes.draft)
@@ -445,17 +451,17 @@ try {
     sectionCached.status===200 && await providerCalls()===beforeSectionCache
       && JSON.stringify(sectionCached.data.draft)===JSON.stringify(sectionMinutes.draft));
   const sectionAttestation = await api(`/api/minutes/${sectionMinutes.id}/preparer-attest`,sectionAssistant.token,'POST',{expectedUpdatedAt:sectionMinutes.updatedAt});
-  check('Accepted section quotes never confirm attendance or bypass the preparer attestation checks',
+  check('Accepted source lines never confirm attendance or bypass the preparer attestation checks',
     sectionAttestation.status===409 && await providerCalls()===beforeSectionCache);
 
   const invalidSectionCases = [
     // The adapter's strict wire-schema check catches a missing required field
     // before the minutes-specific quote verifier receives the response.
-    {name:'missing embedded quotes',mutate:sections=>{delete sections[4].sourceQuotes;},category:'GENERATION_INVALID_RESPONSE'},
-    {name:'empty quotes on populated text',mutate:sections=>{sections[4].sourceQuotes=[];}},
-    {name:'a quotation absent from the source',mutate:sections=>{sections[4].sourceQuotes=['The Scholarship Committee approved an unsupported budget.'];}},
-    {name:'evidence attached to an empty section',mutate:sections=>{sections[1].sourceQuotes=[sourceLines[4]];}},
-    {name:'obsolete parallel section indexes',extraEvidence:[{field:'sections[4].body',quote:sourceLines[4]}]},
+    {name:'missing embedded line references',mutate:sections=>{delete sections[4].sourceLineIds;},category:'GENERATION_INVALID_RESPONSE'},
+    {name:'empty line references on populated text',mutate:sections=>{sections[4].sourceLineIds=[];}},
+    {name:'an out-of-bounds source line',mutate:sections=>{sections[4].sourceLineIds=[9999];},category:'GENERATION_INVALID_RESPONSE'},
+    {name:'evidence attached to an empty section',mutate:sections=>{sections[1].sourceLineIds=[5];}},
+    {name:'obsolete parallel section indexes',extraEvidence:[{field:'sections[4].body',sourceLineIds:[5]}]},
     {name:'an unsupported affirmative second',mutate:sections=>{sections[8].body+=' Brother Example seconded the motion.';},category:'MINUTES_UNSUPPORTED_SECOND'},
   ];
   const sectionRecordsBefore = (await api('/api/minutes',sectionAssistant.token)).data.minutes.length;
@@ -474,7 +480,7 @@ try {
         && incident.userId===sectionAssistant.user.id && await providerCalls()===callsBefore+1
         && (await api('/api/minutes',sectionAssistant.token)).data.minutes.length===sectionRecordsBefore);
   }
-  const invalidReorganization=structuredClone(sectionFixture);invalidReorganization[4].sourceQuotes=[];
+  const invalidReorganization=structuredClone(sectionFixture);invalidReorganization[4].sourceLineIds=[];
   await control({mode:'section_fixture',sections:invalidReorganization});
   const beforeRejectedReorganization=await providerCalls();
   const rejectedReorganization=await api(`/api/minutes/${sectionMinutes.id}/reorganize`,sectionAssistant.token,'POST',{
@@ -484,11 +490,11 @@ try {
   reopenedSectionMinutes=(await api('/api/minutes',sectionAssistant.token)).data.minutes.find(item=>item.id===sectionMinutes.id);
   assert.equal(rejectedReorganization.status,502,JSON.stringify(rejectedReorganization.data));
   assert.equal(await providerCalls(),beforeRejectedReorganization+1,'reorganization explicitly requests one new interpretation');
-  assert.equal(inputs.at(-1).input.source,originalSectionInput,'reorganization receives the original stored source');
+  assert.equal(inputs.at(-1).input.sourceLines.map(entry=>entry.text).join('\n'),originalSectionInput,'reorganization receives the original stored source');
   assert.deepEqual(reopenedSectionMinutes,sectionMinutes,'rejection does not rewrite any saved draft or workflow field');
   check('Rejected section reorganization retains the original source and the previously saved unsigned draft',
     rejectedReorganization.status===502 && await providerCalls()===beforeRejectedReorganization+1
-      && inputs.at(-1).input.source===originalSectionInput
+      && inputs.at(-1).input.sourceLines.map(entry=>entry.text).join('\n')===originalSectionInput
       && reopenedSectionMinutes.updatedAt===sectionMinutes.updatedAt
       && JSON.stringify(reopenedSectionMinutes.draft)===JSON.stringify(sectionMinutes.draft)
       && reopenedSectionMinutes.preparerAttestedAt==null && reopenedSectionMinutes.masterAttestedAt==null);

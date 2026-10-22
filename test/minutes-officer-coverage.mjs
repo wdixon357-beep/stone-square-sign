@@ -47,25 +47,25 @@ const padded = text => `Meeting date: October 15, 2026\n${text}\nThe Lodge opene
 const response = row => ({draft:{meetingDate:null,meetingType:'Stated Communication',degree:null,openingTime:null,closingTime:null,
   prayerRequested:null,closingPrayerGiven:null,presiding:null,quorum:null,nextMeeting:null,present:[],excused:[],visitors:[],
   officerAttendance:[row],income:[],expenses:[],sections:[],warnings:[],sensitiveReview:[],actionItems:[]},evidence:[]});
-const cited = (row,quote) => {
+const cited = row => {
   const output=response(row);
-  for(const field of ['status','stationCoverage','actingName','actingWholeMeeting']) if(row[field] !== null && row[field] !== 'not_recorded') output.evidence.push({field:`officerAttendance[0].${field}`,quote});
+  for(const field of ['status','stationCoverage','actingName','actingWholeMeeting']) if(row[field] !== null && row[field] !== 'not_recorded') output.evidence.push({field:`officerAttendance[0].${field}`,sourceLineIds:[2]});
   return output;
 };
 const originalFetch=globalThis.fetch;
 globalThis.fetch=()=>{throw new Error('Officer coverage tests must not access a network or a live Lodge record.');};
 try {
-  const partial = await generateMinutesDraft(padded(partialSource),{generateStructured:async()=>cited(expectedPartial,partialSource)});
+  const partial = await generateMinutesDraft(padded(partialSource),{generateStructured:async()=>cited(expectedPartial)});
   assert.deepEqual(senior(partial.officerAttendance),expectedPartial);
   assert.equal(partial.officerAttendanceVersion,2);
   const fullRow={...expectedPartial,status:'excused',actingWholeMeeting:true};
-  const full=await generateMinutesDraft(padded(fullSource),{generateStructured:async()=>cited(fullRow,fullSource)});
+  const full=await generateMinutesDraft(padded(fullSource),{generateStructured:async()=>cited(fullRow)});
   assert.deepEqual(senior(full.officerAttendance),fullRow);
   const vacantRow={...expectedPartial,status:'absent',stationCoverage:'vacant',actingName:null,actingWholeMeeting:null};
-  const vacant=await generateMinutesDraft(padded(vacantSource),{generateStructured:async()=>cited(vacantRow,vacantSource)});
+  const vacant=await generateMinutesDraft(padded(vacantSource),{generateStructured:async()=>cited(vacantRow)});
   assert.deepEqual(senior(vacant.officerAttendance),vacantRow);
   const unsupportedQuote='PM Mobley discussed the Senior Warden with SW White.';
-  const unsupported=await generateMinutesDraft(padded(unsupportedQuote),{generateStructured:async()=>cited(expectedPartial,unsupportedQuote)});
+  const unsupported=await generateMinutesDraft(padded(unsupportedQuote),{generateStructured:async()=>cited(expectedPartial)});
   assert.equal(senior(unsupported.officerAttendance).status,'not_recorded');
   assert.equal(senior(unsupported.officerAttendance).stationCoverage,null);
   assert.equal(senior(unsupported.officerAttendance).actingName,null);
@@ -74,17 +74,17 @@ try {
   const independentlyAttending='Brother Henry Example';
   for (const field of ['present','excused']) {
     const attendanceQuote=`${field === 'present' ? 'Present' : 'Excused'}: ${independentlyAttending}`;
-    const independentlySourced=cited({...expectedPartial,actingName:independentlyAttending},unsupportedQuote);
+    const independentlySourced=cited({...expectedPartial,actingName:independentlyAttending});
     independentlySourced.draft[field]=[independentlyAttending];
-    independentlySourced.evidence.push({field:`${field}[0]`,quote:attendanceQuote});
+    independentlySourced.evidence.push({field:`${field}[0]`,sourceLineIds:[3]});
     const preserved=await generateMinutesDraft(padded(`${unsupportedQuote}\n${attendanceQuote}`),{generateStructured:async()=>independentlySourced});
     assert.deepEqual(preserved[field],[independentlyAttending],`rejecting an unsupported station assignment preserves independently sourced ${field} attendance`);
     assert.equal(senior(preserved.officerAttendance).actingName,null);
   }
   const absentPartial={...expectedPartial,status:'excused'};
-  const incoherent=await generateMinutesDraft(padded(fullSource),{generateStructured:async()=>cited(absentPartial,fullSource)});
+  const incoherent=await generateMinutesDraft(padded(fullSource),{generateStructured:async()=>cited(absentPartial)});
   assert.equal(senior(incoherent.officerAttendance).actingWholeMeeting,null,'a generated partial assignment never claims an unrecorded arrival');
-  const uncited=cited(expectedPartial,partialSource);uncited.evidence=uncited.evidence.filter(item=>!item.field.endsWith('.actingName'));
+  const uncited=cited(expectedPartial);uncited.evidence=uncited.evidence.filter(item=>!item.field.endsWith('.actingName'));
   await assert.rejects(generateMinutesDraft(padded(partialSource),{generateStructured:async()=>uncited}),/all extracted content/,'each non-null coverage fact requires source evidence');
   const oldShape=response({name:'Xavier M. White',title:'Senior Warden',status:'present'});
   await assert.rejects(generateMinutesDraft(padded(partialSource),{generateStructured:async()=>oldShape}),/incomplete/,'new generation cannot bypass the strict coverage shape');
