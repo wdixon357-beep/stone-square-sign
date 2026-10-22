@@ -526,6 +526,32 @@ try {
   const closingPrayerDraft = await generateMinutesDraft(source, {generateStructured: async () => unsupportedClosingPrayer});
   assert.equal(closingPrayerDraft.closingPrayerGiven, null, 'an unsupported closing prayer remains unconfirmed');
   assert.ok(closingPrayerDraft.warnings.some(warning => /Chaplain gave the closing prayer/.test(warning)));
+  for (const phrase of ['It was denied that the Chaplain gave the closing prayer.', 'The Secretary doubted that the Chaplain gave the closing prayer.', 'It is false that the Chaplain gave the closing prayer.', 'The Chaplain gave the closing prayer, or perhaps another Brother did.']) {
+    const uncertainSource=source.replace('The Chaplain gave the closing prayer and prayed for the sick and distressed.',phrase);
+    const candidate=response(uncertainSource);
+    candidate.evidence.find(entry=>entry.field==='closingPrayerGiven').sourceLineIds=ids(phrase,uncertainSource);
+    const unconfirmed=await generateMinutesDraft(uncertainSource,{generateStructured:async()=>structuredClone(candidate)});
+    assert.equal(unconfirmed.closingPrayerGiven,null,'Denial, doubt or alternative actor cannot validate a positive flag');
+    candidate.draft.sections[4].body+='\n- The Chaplain gave the closing prayer.';
+    candidate.draft.sections[4].sourceLineIds=[...ids(phrase,uncertainSource),...ids('The Lodge closed at 9:00 PM.',uncertainSource)];
+    await assert.rejects(()=>generateMinutesDraft(uncertainSource,{generateStructured:async()=>candidate}),/closingPrayerGiven without a verified source reference/,'An invented affirmative prayer remains rejected after unsupported metadata is cleared');
+  }
+  for (const correction of ['That is false.', 'That did not happen.', 'Correction: no closing prayer was given.']) {
+    const correctedSource=source.replace('The Chaplain gave the closing prayer and prayed for the sick and distressed.','The Chaplain gave the closing prayer.\n'+correction);
+    const candidate=response(correctedSource);
+    candidate.evidence.find(entry=>entry.field==='closingPrayerGiven').sourceLineIds=ids('The Chaplain gave the closing prayer.',correctedSource);
+    const unconfirmed=await generateMinutesDraft(correctedSource,{generateStructured:async()=>structuredClone(candidate)});
+    assert.equal(unconfirmed.closingPrayerGiven,null,'Selecting only an affirmative line cannot omit the full source adjacent correction');
+    candidate.draft.sections[4].body+='\n- The Chaplain gave the closing prayer.';
+    candidate.draft.sections[4].sourceLineIds=[...ids('The Chaplain gave the closing prayer.',correctedSource),...ids('The Lodge closed at 9:00 PM.',correctedSource)];
+    await assert.rejects(()=>generateMinutesDraft(correctedSource,{generateStructured:async()=>candidate}),/closingPrayerGiven without a verified source reference/);
+  }
+  const genericSource=source.replace('The Chaplain gave the closing prayer and prayed for the sick and distressed.','The Chaplain gave the closing prayer.');
+  const genericResult=response(genericSource);
+  genericResult.evidence.find(entry=>entry.field==='closingPrayerGiven').sourceLineIds=ids('The Chaplain gave the closing prayer.',genericSource);
+  const genericDraft=await generateMinutesDraft(genericSource,{generateStructured:async()=>genericResult});
+  assert.equal(genericDraft.closingPrayerGiven,true,'A source-cited completed Chaplain closing prayer is sufficient for version3');
+  assert.equal(genericDraft.closingFormatVersion,3);
   await rejectResponse(result => {result.draft.present[0] = 'Brother Missing Name';}, /not established/);
   const unsupportedOfficerAttendance = response();
   unsupportedOfficerAttendance.draft.officerAttendance = [{name:'WM Dixon-Saunders',title:'Worshipful Master',status:'present',stationCoverage:null,actingName:null,actingWholeMeeting:null}];

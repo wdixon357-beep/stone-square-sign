@@ -1,4 +1,4 @@
-import { omitClosingPrayerCommentary } from './minutes-closing-commentary.js';
+import { currentMinutesEditorialDraft } from './minutes-editorial.js';
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
 import { initBuildingStoreSchema } from './building-store.js';
 import { mountBuildingStore } from './building-store-routes.js';
@@ -1065,7 +1065,7 @@ const transcriptFromUpload = async (file) => {
 // pending/final records retain the format in which they were submitted.
 const workingMinutesDraft = (row, value = JSON.parse(row.draft_json)) => {
   const draft = normalizeMinutesDraft({...value, ...(row.status === 'draft' ? {closingFormatVersion: 2} : {})});
-  return ['draft','awaiting_master_attestation'].includes(row.status) ? omitClosingPrayerCommentary(draft) : draft;
+  return ['draft','awaiting_master_attestation'].includes(row.status) ? currentMinutesEditorialDraft(draft) : draft;
 };
 const minutesForResponse = (row) => ({
   createdByUserId: row.created_by_user_id,
@@ -2213,13 +2213,13 @@ app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, 
     // A client cannot downgrade the required review by sending an old version.
     // Only untouched, already-attested legacy records retain the older gate.
     const requireStationCoverage = !masterReview || Number(JSON.parse(row.draft_json).officerAttendanceVersion) >= 2;
-    const draft = omitClosingPrayerCommentary(normalizeMinutesDraft(requireStationCoverage
+    const draft = currentMinutesEditorialDraft(normalizeMinutesDraft(requireStationCoverage
       ? {...req.body.draft, officerAttendanceVersion:2} : req.body.draft));
     if (masterReview || req.user.role === 'owner' && Number(row.preparer_user_id || row.created_by_user_id) !== req.user.id) {
       const recorded = masterReview ? JSON.parse(row.submitted_draft_json || 'null') : JSON.parse(row.draft_json);
       draft.attendanceReview = preparerAttendanceReviewForEdit(recorded, draft);
     }
-    if (row.status === 'draft' || Number(JSON.parse(row.draft_json).closingFormatVersion) >= 2) draft.closingFormatVersion = 2;
+    draft.closingFormatVersion = 3;
     if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     const time = nowIso();
     const changes = masterReview ? reviewedMinutesChanges(row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null, JSON.parse(row.draft_json), draft, JSON.parse(row.master_changes_json || '[]')) : [];
@@ -2248,10 +2248,10 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     if (row.created_by_user_id !== req.user.id) {
       return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
     }
-    const draft = omitClosingPrayerCommentary(JSON.parse(row.draft_json));
+    const draft = currentMinutesEditorialDraft(JSON.parse(row.draft_json));
     if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     draft.officerAttendanceVersion = 2;
-    draft.closingFormatVersion = 2;
+    draft.closingFormatVersion = 3;
     const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
     if (reviewIssues.length) return res.status(409).json({ error: reviewIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
@@ -2304,7 +2304,7 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
     const row = await getMinutesRow(req.params.id);
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'awaiting_master_attestation') return res.status(409).json({ error: 'The preparing officer must attest to the draft first.' });
-    const draft = omitClosingPrayerCommentary(JSON.parse(row.draft_json));
+    const draft = currentMinutesEditorialDraft(JSON.parse(row.draft_json));
     if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     const attestedDraftJson = JSON.stringify(draft);
     const changes = reviewedMinutesChanges(row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null, JSON.parse(row.draft_json), draft, JSON.parse(row.master_changes_json || '[]'));

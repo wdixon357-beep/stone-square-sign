@@ -619,6 +619,15 @@ try {
   await api('PUT', `/api/minutes/${minutesId}`, {token: asstToken, body: {draft: {...revisedDraft, closingTime: null, prayerRequested: null, closingPrayerGiven: null}}});
   const incompleteClosing = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token: asstToken});
   check('unconfirmed closing details cannot be signed as a complete record', incompleteClosing.status === 409 && /closing time/.test(incompleteClosing.payload.error) && /Chaplain/.test(incompleteClosing.payload.error));
+  await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken, body:{draft:{...revisedDraft,openingTime:null}}});
+  const missingOpening=await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
+  check('new minutes cannot be submitted without actual opening time', missingOpening.status===409 && /opening time/i.test(missingOpening.payload.error));
+  await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken, body:{draft:{...revisedDraft,closingTime:'945'}}});
+  const ambiguousClock=await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
+  check('compact ambiguous closing time cannot be attested', ambiguousClock.status===409 && /closing time.*(?:AM|24-hour)/i.test(ambiguousClock.payload.error));
+  const afterClockRejection=await api('GET','/api/minutes',{token:asstToken});
+  const clockRecord=afterClockRejection.payload.minutes.find(row=>row.id===minutesId);
+  check('time rejection preserves source, draft and unsigned state', clockRecord.status==='draft' && clockRecord.draft.closingTime==='945' && !clockRecord.preparerAttestedAt);
   revisedDraft.sections[0].body += ' The officers were examined in their stations and duties.';
   await api('PUT', `/api/minutes/${minutesId}`, { token: asstToken, body: { draft: revisedDraft } });
   const incompleteAttendance = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
@@ -840,8 +849,8 @@ try {
   const secretarySubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
   check('a secretary can attest without the retired WM prayer-request question', secretarySubmission.status === 200
     && secretarySubmission.payload.minutes.draft.prayerRequested === null
-    && secretarySubmission.payload.minutes.draft.closingFormatVersion === 2
-    && secretarySubmission.payload.minutes.submittedDraft.closingFormatVersion === 2);
+    && secretarySubmission.payload.minutes.draft.closingFormatVersion === 3
+    && secretarySubmission.payload.minutes.submittedDraft.closingFormatVersion === 3);
   const secretaryPending = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('McDuffie submission creates the same dated alert and immediate email', secretarySubmission.status === 200
     && secretaryPending.payload.alerts.some(a => a.id === secretaryMinutesId && a.submittedBy === 'William M. McDuffie' && a.title.includes('September 3, 2026'))

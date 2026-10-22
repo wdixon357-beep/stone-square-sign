@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {COMMON_REPORT_RULES,MINUTES_REPORT_RULES,TREASURY_REPORT_RULES,REPORT_RULES_VERSION} from '../report-rules.js';
+const standing=await readFile(new URL('../REPORT-RULES.md',import.meta.url),'utf8');
+assert.equal(REPORT_RULES_VERSION,'2026-10-21.3');
+assert.ok(MINUTES_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
+assert.ok(TREASURY_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
+for (const rules of [MINUTES_REPORT_RULES,standing]) {
+  assert.match(rules,/each meaningful matter once/i,'A meaningful matter is consolidated rather than repeated across sections');
+  assert.match(rules,/Upcoming Events and Reminders, Good of the Order or another/i,'The repeated-reminder path is explicitly covered');
+  assert.match(rules,/unique facts|genuinely distinct/i,'Consolidation cannot erase unique facts or distinct decisions');
+  assert.match(rules,/missing-procedure commentary/i,'Missing procedural detail is excluded from narrative');
+  assert.match(rules,/private (?:preparing-officer )?warnings/i,'Unresolved procedure and reading questions can stay private');
+  assert.match(rules,/No vote was taken/i,'An explicit negative outcome is distinguished from absent evidence');
+  assert.match(rules,/reading status is unknown/i,'An unknown reading status has an explicit handling rule');
+  assert.match(rules,/omit (?:any reading-status sentence|that status) from (?:the minutes|narrative)/i,'Unknown reading is omitted rather than made into filler');
+  assert.match(rules,/Bro\. Reese, PM Cooke and PM Collins/,'Verified titles and surnames are retained');
+  assert.match(rules,/not a first name alone/i,'First-name-only narrative is prohibited');
+  assert.match(rules,/Unidentified source references/,'Source-reference dumps have an explicit narrative prohibition');
+  assert.match(rules,/private preparer review/i,'Original unresolved source remains available privately');
+  assert.match(rules,/Sickness and Distress/i);assert.match(rules,/separate (?:actual |verified )?closing prayer/i,'Separate prayer events require separate evidence');
+  assert.match(rules,/structured (?:field|unknowns)/i,'Unknown closing information remains structured, never invented');
+  assert.match(rules,/(?:Do not add generic narrative filler|never invent a prayer)/i,'Unknown closure cannot be replaced by generic filler');
+  assert.match(rules,/meeting-specific practice discussion, plan or schedule/i,'A single meeting practice plan cannot become a global policy');
+  assert.doesNotMatch(rules,/Speaker\s*[156]\b/i,'No record-specific speaker-number mapping enters standing rules');
+}
+assert.doesNotMatch(MINUTES_REPORT_RULES,/Otherwise state that whether it was read needs confirmation/i,'Retired public read-aloud filler instruction is gone');
+assert.match(MINUTES_REPORT_RULES,/Never treat a discussion into approval|Never turn a discussion into approval/,'Source-backed decision distinctions remain');
+assert.match(MINUTES_REPORT_RULES,/Do not describe a motion as properly made, seconded, carried, unanimous, defeated, tabled or withdrawn unless/,'Procedural factual validation is not weakened');
+assert.match(MINUTES_REPORT_RULES,/Use true only for explicit completed facts, false only for an explicit negative, and null when unconfirmed/,'Prayer truth values still require evidence');
+assert.match(MINUTES_REPORT_RULES,/sourceLineIds/,'Exact source-line verification remains required');
+assert.match(MINUTES_REPORT_RULES,/Set income, expenses and actionItems to empty arrays/,'No duplicate financial/action tables are reintroduced');
+assert.match(MINUTES_REPORT_RULES,/Do not create a separate routine statement or confirmation that the Worshipful Master requested prayer/,'Retired routine WM prayer paragraph remains prohibited');
+assert.match(standing,/Already filed or signed documents retain their original text and rendering/,'Historical snapshots remain protected');
+console.log('PASS: minutes narrative rules keep missing details private, consolidate each matter once, retain established titles and separately verified prayer facts without meeting-specific defaults.');

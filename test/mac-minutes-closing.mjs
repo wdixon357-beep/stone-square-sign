@@ -11,7 +11,7 @@ assert.match(modelSource, /var prayerRequested: Bool\?/, 'Preserve the legacy pr
 assert.doesNotMatch(native, /prayerPicker\([^\n]*key: \\\.prayerRequested\)/, 'No separate WM prayer-request picker remains');
 assert.match(native, /prayerPicker\([^\n]*key: \\\.closingPrayerGiven\)/, 'The actual closing prayer remains a separate confirmation');
 assert.match(native, /TextField\("Closing time", text: text\(\\\.closingTime\)\)/, 'Keep the closing time field');
-assert.match(native, /if record\.status == "draft" \{ draft\.closingFormatVersion = 2 \}/, 'Only an unsubmitted draft upgrades on save');
+assert.match(native.slice(native.indexOf('func save() async'), native.indexOf('func remove(')), /draft\.closingFormatVersion = 3/, 'An explicit editable save upgrades current formatting without rewriting captured snapshots');
 assert.doesNotMatch(native.slice(native.indexOf('func save() async'), native.indexOf('func remove(')), /prayerRequested\s*=/, 'Saving must never overwrite a legacy prayer-request value');
 
 if (process.platform !== 'darwin') {

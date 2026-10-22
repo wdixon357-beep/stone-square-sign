@@ -1404,7 +1404,7 @@ const collectMinutesDraft = () => ({
   organizerVersion: currentMinutes()?.draft.organizerVersion || 2,
   sourceType: currentMinutes()?.draft.sourceType || 'transcript',
   officerAttendanceVersion: minutesOfficerAttendanceVersion(),
-  closingFormatVersion: currentMinutes()?.status === 'draft' ? 2 : currentMinutes()?.draft.closingFormatVersion || 1,
+  closingFormatVersion: 3,
   meetingDate: minutesDates.minutesDateValue($('minutesMeetingDate').value) || null,
   meetingType: $('minutesMeetingType').value === 'other'
     ? $('minutesMeetingTypeOther').value.trim()

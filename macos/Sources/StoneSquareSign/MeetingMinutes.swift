@@ -411,7 +411,7 @@ final class MinutesWorkspace: ObservableObject {
     }
     func save() async {
         guard let record = selected, var draft else { return }
-        if record.status == "draft" { draft.closingFormatVersion = 2 }
+        draft.closingFormatVersion = 3
         if record.status == "draft", (draft.officerAttendanceVersion ?? 0) < 2 {
             draft.officerAttendanceVersion = 2
             var review = draft.attendanceReview ?? MinutesAttendanceReview()
@@ -1026,13 +1026,14 @@ struct MeetingMinutesView: View {
                     ForEach(["First Degree", "Second Degree", "Third Degree", "Round Table"], id: \.self) { Text($0).tag($0) }
                 }
                 HStack { TextField("Opening time", text: text(\.openingTime)); TextField("Closing time", text: text(\.closingTime)) }
+                Text("Enter both actual times, including AM or PM, before submission. Explicit 24-hour times such as 19:30 are also accepted.").font(.caption).foregroundStyle(.secondary)
                 TextField("Presiding officer", text: text(\.presiding))
                 Picker("Quorum", selection: text(\.quorum)) { Text("Needs review").tag(""); Text("Yes").tag("Yes"); Text("No").tag("No") }
                 MinutesDateField(title: "Next meeting date", value: text(\.nextMeeting), preservingDetails: true)
                 Divider()
                 Text("Prayer and closing").font(.headline).foregroundStyle(SignTheme.navy)
                 Text("Confirm the Chaplain's closing prayer for this meeting. The closing section uses the closing time above.").font(.caption).foregroundStyle(.secondary)
-                prayerPicker("Chaplain gave the closing prayer and prayed for the sick and distressed", key: \.closingPrayerGiven)
+                prayerPicker("Chaplain gave the closing prayer", key: \.closingPrayerGiven)
             }.textFieldStyle(.roundedBorder).padding(10)
         }
     }
