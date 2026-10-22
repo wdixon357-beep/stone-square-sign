@@ -28,6 +28,7 @@ enum ClientError: LocalizedError {
 }
 
 enum ReliabilityPresentation { case foreground, background }
+enum ReliableCancellationPolicy { case reportFailure, supersededMinutesPreview }
 
 struct ReliabilityNotice: Identifiable {
     let id = UUID()
@@ -220,10 +221,28 @@ enum ReliableTransport {
         return SHA256.hash(data: Data("\(origin)\n\(token ?? "anonymous")".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    static func perform(session: URLSession, request: URLRequest, path: String, token: String?, presentation: ReliabilityPresentation = .foreground) async throws -> (Data, HTTPURLResponse) {
+    private static func permitsExpectedCancellation(_ policy: ReliableCancellationPolicy, request: URLRequest, path: String) -> Bool {
+        // Only an explicitly superseded, read-only minutes preview may opt out.
+        // Mutation requests keep their normal failure and uncertain-outcome audit.
+        let endpoint = path.split(separator: "?").first.map(String.init) ?? path
+        return policy == .supersededMinutesPreview
+            && request.httpMethod?.uppercased() == "POST"
+            && request.url?.path == endpoint
+            && endpoint.range(of: #"^/api/minutes/[^/?#]+/preview$"#, options: .regularExpression) != nil
+    }
+
+    private static func isExpectedCancellation(_ error: Error) -> Bool {
+        Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+            || ((error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled)
+    }
+
+    static func perform(session: URLSession, request: URLRequest, path: String, token: String?, presentation: ReliabilityPresentation = .foreground,
+                        cancellationPolicy: ReliableCancellationPolicy = .reportFailure) async throws -> (Data, HTTPURLResponse) {
         let presentation = ReliabilityCenter.presentation(for: path, requested: presentation)
         let method = request.httpMethod ?? "GET"
         let mayRetry = method == "GET" || method == "HEAD"
+        let expectsCancellation = permitsExpectedCancellation(cancellationPolicy, request: request, path: path)
+        if expectsCancellation { try Task.checkCancellation() }
         let productionService = request.url?.host == URL(string: defaultServerAddress)?.host
         let context = contextFingerprint(url: request.url, token: token) ?? "invalid-origin"
         let epoch = ReliabilityCenter.shared.begin(context: context)
@@ -231,6 +250,7 @@ enum ReliableTransport {
         for attempt in 1...(mayRetry ? 2 : 1) {
             do {
                 let (data, response) = try await session.data(for: request)
+                if expectsCancellation { try Task.checkCancellation() }
                 guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
                 if (200..<300).contains(http.statusCode) {
                     let recoveredReferences = ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch)
@@ -268,6 +288,7 @@ enum ReliableTransport {
             } catch let client as ClientError {
                 throw client
             } catch {
+                if expectsCancellation && isExpectedCancellation(error) { throw CancellationError() }
                 reference = reference ?? newReference()
                 if mayRetry && attempt == 1 {
                     if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {

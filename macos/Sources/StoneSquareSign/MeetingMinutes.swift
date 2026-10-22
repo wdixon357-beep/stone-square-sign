@@ -413,14 +413,14 @@ final class MinutesWorkspace: ObservableObject {
             }
         }
     }
-    func request(_ path: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json") async throws -> Data {
+    func request(_ path: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json", cancellationPolicy: ReliableCancellationPolicy = .reportFailure) async throws -> Data {
         guard let baseURL, let url = URL(string: path, relativeTo: baseURL), !token.isEmpty else { throw ClientError.invalidServer }
         var request = URLRequest(url: url)
         request.httpMethod = method; request.httpBody = body; request.timeoutInterval = 90
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("mac",forHTTPHeaderField:"X-Stone-Square-Client")
-        let (data, response) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token)
+        let (data, response) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token, cancellationPolicy: cancellationPolicy)
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 404 && path == "/api/treasury" {
                 throw ClientError.serviceUpdateRequired("Treasurer Reports is installed on this Mac. The shared Lodge service must be updated before banking records and reports can be opened here.")
@@ -613,10 +613,10 @@ final class MinutesWorkspace: ObservableObject {
         previewTask = Task {
             do {
                 try await Task.sleep(for: .milliseconds(700))
-                let bytes = try await request("/api/minutes/\(id)/preview", method: "POST", body: JSONEncoder().encode(["draft": draft]))
+                let bytes = try await request("/api/minutes/\(id)/preview", method: "POST", body: JSONEncoder().encode(["draft": draft]), cancellationPolicy: .supersededMinutesPreview)
                 guard !Task.isCancelled, expected == revision, selected?.id == id else { return }
                 pdf = bytes; previewMessage = "Preview matches the current fields."
-            } catch { if !Task.isCancelled && expected == revision { previewMessage = error.localizedDescription } }
+            } catch { if !(error is CancellationError) && !Task.isCancelled && expected == revision { previewMessage = error.localizedDescription } }
         }
     }
     func downloadWord() async {
