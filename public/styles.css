@@ -1116,3 +1116,5 @@ body:has(#appCard:not(.hidden)) { background: #f2f5f6; }
   .sidebar-brand small { font-size: 9px; }
 }
 @media (prefers-reduced-motion: reduce) { .home-primary-action, .nav-group-title > span { transition: none; } }
+
+.minutes-time-help { grid-column: 1 / -1; margin: 0; }
