@@ -20,27 +20,42 @@ struct MinutesAttendance: Codable, Equatable {
     var status: String
     var stationCoverage: String? = nil
     var actingName: String? = nil
+    var actingRole: String? = nil
     var actingWholeMeeting: Bool? = nil
 
     var requiresStationCoverage: Bool { ["excused", "absent", "arrived_late"].contains(status) }
     var hasStationCoverageValues: Bool {
-        stationCoverage != nil || !(actingName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || actingWholeMeeting != nil
+        stationCoverage != nil || !(actingName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || actingRole != nil || actingWholeMeeting != nil
     }
     func reviewComplete(requiringCoverage: Bool) -> Bool {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               ["present", "excused", "absent", "arrived_late"].contains(status) else { return false }
         guard requiringCoverage else { return true }
+        if let actingRole, actingRole != assistantRole || stationCoverage != "filled" { return false }
         let coverage = ["filled", "vacant"].contains(stationCoverage ?? "") ? stationCoverage : nil
         let hasActingName = !(actingName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        guard requiresStationCoverage else { return coverage == nil && !hasActingName && actingWholeMeeting == nil }
+        guard requiresStationCoverage else { return coverage == nil && !hasActingName && actingRole == nil && actingWholeMeeting == nil }
         guard let coverage else { return false }
-        if coverage == "vacant" { return !hasActingName && actingWholeMeeting == nil }
+        if coverage == "vacant" { return !hasActingName && actingRole == nil && actingWholeMeeting == nil }
         guard !(actingName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !Self.sameOfficer(actingName ?? "", name),
               let actingWholeMeeting else { return false }
         return actingWholeMeeting || status == "arrived_late"
     }
-    private static func sameOfficer(_ left: String, _ right: String) -> Bool {
+    var assistantRole: String? {
+        switch title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "treasurer": return "Assistant Treasurer"
+        case "secretary": return "Assistant Secretary"
+        default: return nil
+        }
+    }
+    mutating func selectAssistant(role: String, name: String) {
+        guard role == assistantRole, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let changed = stationCoverage != "filled" || actingName != name || actingRole != role
+        stationCoverage = "filled"; actingName = name; actingRole = role
+        if changed { actingWholeMeeting = nil }
+    }
+    static func sameOfficer(_ left: String, _ right: String) -> Bool {
         func tokens(_ value: String) -> [String] {
             value.lowercased()
                 .replacingOccurrences(of: #"\b(?:past\s+master|brother|bro|pm|hpm|jr|sr|ii|iii|iv)\b"#, with: "", options: .regularExpression)
@@ -64,14 +79,14 @@ struct MinutesAttendance: Codable, Equatable {
         guard status != value else { return }
         status = value
         if !requiresStationCoverage {
-            stationCoverage = nil; actingName = nil; actingWholeMeeting = nil
+            stationCoverage = nil; actingName = nil; actingRole = nil; actingWholeMeeting = nil
         } else if value != "arrived_late", actingWholeMeeting == false {
             actingWholeMeeting = nil
         }
     }
     mutating func setCoverage(_ value: String?) {
         stationCoverage = value
-        if value != "filled" { actingName = nil; actingWholeMeeting = nil }
+        if value != "filled" { actingName = nil; actingRole = nil; actingWholeMeeting = nil }
     }
     mutating func setWholeMeeting(_ value: Bool?) {
         actingWholeMeeting = value
@@ -108,11 +123,24 @@ enum MinutesAttendanceWorkflow {
             return row.status == "arrived_late" ? "Station remained vacant until the regular officer arrived." : "Station remained vacant."
         }
         if row.stationCoverage == "filled", let name = row.actingName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-            if row.actingWholeMeeting == true { return "Covered by \(name) for the whole meeting." }
-            if row.actingWholeMeeting == false { return "Covered by \(name) until the regular officer arrived." }
-            return "Covered by \(name); duration not recorded."
+            let covering = row.actingRole == row.assistantRole ? [row.actingRole, name].compactMap { $0 }.joined(separator: " ") : name
+            if row.actingWholeMeeting == true { return "Covered by \(covering) for the whole meeting." }
+            if row.actingWholeMeeting == false { return "Covered by \(covering) until the regular officer arrived." }
+            return "Covered by \(covering); duration not recorded."
         }
         return "Station coverage not recorded."
+    }
+    static func assistantCoverageIssue(_ row: MinutesAttendance, officers: [MinutesAttendance]) -> String? {
+        guard let role = row.actingRole else { return nil }
+        guard role == row.assistantRole, row.stationCoverage == "filled" else {
+            return "Select the correct assistant for this station or choose another covering Brother."
+        }
+        let assistants = officers.filter { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(role) == .orderedSame }
+        guard assistants.count == 1, let assistant = assistants.first,
+              MinutesAttendance.sameOfficer(row.actingName ?? "", assistant.name) else {
+            return "The \(role)'s recorded name does not match this coverage. Review the officer roll and select station coverage again."
+        }
+        return nil
     }
     static func visibleReminders(_ warnings: [String], officers: [MinutesAttendance], preparing: Bool) -> [String] {
         guard !preparing else { return warnings }
@@ -134,6 +162,7 @@ struct MinutesDraft: Codable, Equatable {
     var organizerVersion: Int?
     var officerAttendanceVersion: Int?
     var closingFormatVersion: Int?
+    var meetingDetailsVersion: Int?
     var sourceType: String?
     var meetingDate: String?; var meetingType: String; var degree: String?
     var openingTime: String?; var closingTime: String?; var presiding: String?; var quorum: String?; var nextMeeting: String?
@@ -161,12 +190,70 @@ struct MinutesPayload: Decodable { let minutes: MinutesRecord; let notificationW
 struct ReorganizedPayload: Decodable { let draft: MinutesDraft }
 struct MinutesSavePayload: Encodable { let draft: MinutesDraft; let expectedUpdatedAt: String }
 
+
+struct MinutesMeetingDetails: Codable, Equatable {
+    var meetingDate = ""
+    var meetingType = ""
+    var degree = ""
+    var openingTime = ""
+    var closingTime = ""
+    var presiding = ""
+    var quorum = ""
+    var nextMeeting = ""
+
+    init() {}
+    init(draft: MinutesDraft) {
+        meetingDate = draft.meetingDate ?? ""; meetingType = draft.meetingType; degree = draft.degree ?? ""
+        openingTime = draft.openingTime ?? ""; closingTime = draft.closingTime ?? ""
+        presiding = draft.presiding ?? ""; quorum = draft.quorum ?? ""; nextMeeting = draft.nextMeeting ?? ""
+    }
+    private static func trimmed(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
+    static func dateValue(_ value: String) -> String? {
+        let value = trimmed(value)
+        guard let match = MinutesDateText.match(value), match.range == value.startIndex..<value.endIndex else { return nil }
+        let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX")
+        format.calendar = MinutesDateText.calendar; format.timeZone = MinutesDateText.calendar.timeZone; format.dateFormat = "yyyy-MM-dd"
+        return format.string(from: match.date)
+    }
+    static func validTime(_ value: String) -> Bool {
+        let value = trimmed(value)
+        return value.range(of: #"^(?:(?:0?[1-9]|1[0-2])(?::[0-5][0-9])?\s*(?:a\.?m\.?|p\.?m\.?)|(?:[01][0-9]|2[0-3]):[0-5][0-9])$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+    var hasValues: Bool { [meetingDate, meetingType, degree, openingTime, closingTime, presiding, quorum, nextMeeting].contains { !Self.trimmed($0).isEmpty } }
+    var missingFields: [String] {
+        var fields: [String] = []
+        if Self.dateValue(meetingDate) == nil { fields.append("meeting date") }
+        if Self.trimmed(meetingType).isEmpty || Self.trimmed(meetingType).count > 100 { fields.append("meeting type") }
+        if !["First Degree", "Second Degree", "Third Degree", "Round Table"].contains(Self.trimmed(degree)) { fields.append("degree") }
+        if !Self.validTime(openingTime) { fields.append("opening time with AM or PM") }
+        if !Self.validTime(closingTime) { fields.append("closing time with AM or PM") }
+        if Self.trimmed(presiding).isEmpty || Self.trimmed(presiding).count > 160 { fields.append("presiding officer") }
+        if !["Yes", "No"].contains(Self.trimmed(quorum)) { fields.append("quorum") }
+        if Self.dateValue(nextMeeting) == nil { fields.append("next meeting date") }
+        return fields
+    }
+    var isComplete: Bool { missingFields.isEmpty }
+    var normalized: MinutesMeetingDetails {
+        var value = self
+        value.meetingDate = Self.dateValue(meetingDate) ?? Self.trimmed(meetingDate)
+        value.nextMeeting = Self.dateValue(nextMeeting) ?? Self.trimmed(nextMeeting)
+        value.meetingType = Self.trimmed(meetingType); value.openingTime = Self.trimmed(openingTime)
+        value.closingTime = Self.trimmed(closingTime); value.presiding = Self.trimmed(presiding)
+        value.degree = Self.trimmed(degree); value.quorum = Self.trimmed(quorum)
+        return value
+    }
+    var completionMessage: String { "Complete the meeting details before creating or submitting minutes: " + missingFields.joined(separator: ", ") + "." }
+}
+struct MinutesClaimPayload: Encodable { let meetingDetails: MinutesMeetingDetails }
+struct MinutesReorganizePayload: Encodable { let expectedUpdatedAt: String; let meetingDetails: MinutesMeetingDetails }
+
 @MainActor
 final class MinutesWorkspace: ObservableObject {
     @Published var records: [MinutesRecord] = []
     @Published var selected: MinutesRecord?
     @Published var draft: MinutesDraft?
     @Published var source = "" { didSet { if source != oldValue { persistLocalSourceDraft() } } }
+    @Published var meetingDetails = MinutesMeetingDetails() { didSet { if meetingDetails != oldValue { persistLocalSourceDraft() } } }
     @Published var sourceType = "auto" { didSet { if sourceType != oldValue { persistLocalSourceDraft() } } }
     @Published var fileURL: URL? { didSet { if fileURL != oldValue { persistLocalSourceDraft() } } }
     @Published var sourceFileName = ""
@@ -183,6 +270,9 @@ final class MinutesWorkspace: ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var revision = 0
     private var configuredUserID: Int?
+    private var accountEpoch: UInt64 = 0
+    private struct AccountContext: Equatable { let userID: Int?; let epoch: UInt64 }
+    private var accountContext: AccountContext { AccountContext(userID: configuredUserID, epoch: accountEpoch) }
     private var restoringLocalDraft = false
     private let persistenceDirectory: URL?
     private let session: URLSession
@@ -192,6 +282,7 @@ final class MinutesWorkspace: ObservableObject {
         let sourceType: String
         let storedFileName: String?
         let originalFileName: String?
+        let meetingDetails: MinutesMeetingDetails?
         let savedAt: Date
     }
 
@@ -213,23 +304,24 @@ final class MinutesWorkspace: ObservableObject {
     private func loadLocalSourceDraft(for userID: Int) {
         restoringLocalDraft = true
         defer { restoringLocalDraft = false }
-        source = ""; sourceType = "auto"; fileURL = nil; sourceFileName = ""; localDraftSaved = false
+        source = ""; sourceType = "auto"; fileURL = nil; sourceFileName = ""; meetingDetails = MinutesMeetingDetails(); localDraftSaved = false
         guard let url = draftURL(for: userID), let data = try? Data(contentsOf: url),
               let saved = try? JSONDecoder().decode(LocalSourceDraft.self, from: data),
               Date().timeIntervalSince(saved.savedAt) < 30 * 86400 else { return }
         source = saved.source
         sourceType = ["auto", "compiled_notes", "transcript"].contains(saved.sourceType) ? saved.sourceType : "auto"
+        meetingDetails = saved.meetingDetails ?? MinutesMeetingDetails()
         if let name = saved.storedFileName,
            let stored = persistenceDirectory?.appendingPathComponent(name),
            FileManager.default.fileExists(atPath: stored.path) {
             fileURL = stored
             sourceFileName = saved.originalFileName ?? stored.lastPathComponent
         }
-        localDraftSaved = !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fileURL != nil
+        localDraftSaved = !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fileURL != nil || meetingDetails.hasValues
     }
     func persistLocalSourceDraft() {
         guard !restoringLocalDraft, let userID = configuredUserID, let url = draftURL(for: userID) else { return }
-        let hasSource = !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fileURL != nil
+        let hasSource = !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fileURL != nil || meetingDetails.hasValues
         guard hasSource else {
             try? FileManager.default.removeItem(at: url)
             localDraftSaved = false
@@ -247,6 +339,7 @@ final class MinutesWorkspace: ObservableObject {
             sourceType: sourceType,
             storedFileName: storedFileName,
             originalFileName: sourceFileName.isEmpty ? fileURL?.lastPathComponent : sourceFileName,
+            meetingDetails: meetingDetails,
             savedAt: Date()
         )
         do {
@@ -292,7 +385,7 @@ final class MinutesWorkspace: ObservableObject {
                 }
             }
         }
-        source = ""; sourceType = "auto"; fileURL = nil; sourceFileName = ""; localDraftSaved = false
+        source = ""; sourceType = "auto"; fileURL = nil; sourceFileName = ""; meetingDetails = MinutesMeetingDetails(); localDraftSaved = false
         restoringLocalDraft = false
     }
     func prepareForDisplay() {
@@ -300,11 +393,24 @@ final class MinutesWorkspace: ObservableObject {
     }
 
     func configure(_ model: AppModel) {
-        baseURL = URL(string: model.serverAddress.trimmingCharacters(in: .whitespacesAndNewlines))
-        token = model.webSessionToken ?? ""
-        if let userID = model.user?.id, configuredUserID != userID {
-            configuredUserID = userID
-            loadLocalSourceDraft(for: userID)
+        let nextURL = URL(string: model.serverAddress.trimmingCharacters(in: .whitespacesAndNewlines))
+        let nextToken = model.webSessionToken ?? ""
+        let nextUserID = model.user?.id
+        let userChanged = configuredUserID != nextUserID
+        if userChanged || baseURL != nextURL || token != nextToken {
+            accountEpoch &+= 1
+            busy = false
+        }
+        baseURL = nextURL; token = nextToken
+        if userChanged {
+            generationStatus = nil; message = ""; messageIsWarning = false
+            configuredUserID = nextUserID
+            if let nextUserID { loadLocalSourceDraft(for: nextUserID) }
+            else {
+                restoringLocalDraft = true
+                source = ""; sourceType = "auto"; fileURL = nil; sourceFileName = ""; meetingDetails = MinutesMeetingDetails(); localDraftSaved = false
+                restoringLocalDraft = false
+            }
         }
     }
     func request(_ path: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json") async throws -> Data {
@@ -327,9 +433,14 @@ final class MinutesWorkspace: ObservableObject {
         return data
     }
     func refresh() async {
+        let context = accountContext
         await refreshGenerationStatus()
-        do { records = try JSONDecoder().decode(MinutesListPayload.self, from: await request("/api/minutes")).minutes }
-        catch { message = error.localizedDescription }
+        guard accountContext == context else { return }
+        do {
+            let result = try await request("/api/minutes")
+            guard accountContext == context else { return }
+            records = try JSONDecoder().decode(MinutesListPayload.self, from: result).minutes
+        } catch { if accountContext == context { message = error.localizedDescription } }
     }
     func openReviewedRecord(id: String) async -> Bool {
         do {
@@ -346,7 +457,12 @@ final class MinutesWorkspace: ObservableObject {
             return false
         }
     }
-    func refreshGenerationStatus() async { generationStatus = await GenerationStatus.load(using: self) }
+    func refreshGenerationStatus() async {
+        let context = accountContext
+        let status = await GenerationStatus.load(using: self)
+        guard accountContext == context else { return }
+        generationStatus = status
+    }
     func open(_ record: MinutesRecord) {
         previewTask?.cancel(); revision += 1
         selected = record; draft = record.draft; pdf = nil; message = ""; messageIsWarning = false; dirty = false
@@ -354,11 +470,16 @@ final class MinutesWorkspace: ObservableObject {
         updatePreview()
     }
     func close() { previewTask?.cancel(); revision += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
-    private func sourceUploadBody() throws -> (body: Data, contentType: String) {
+    private func sourceUploadBody(includingMeetingDetails: Bool) throws -> (body: Data, contentType: String) {
         let boundary = "Minutes-\(UUID().uuidString)"
         var body = Data()
         func append(_ text: String) { body.append(Data(text.utf8)) }
         append("--\(boundary)\r\nContent-Disposition: form-data; name=\"sourceType\"\r\n\r\n\(sourceType)\r\n")
+        if includingMeetingDetails {
+            let details = try JSONEncoder().encode(meetingDetails.normalized)
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"meetingDetails\"\r\n\r\n")
+            body.append(details); append("\r\n")
+        }
         if let fileURL {
             let bytes = try Data(contentsOf: fileURL)
             if bytes.count > 12 * 1024 * 1024 { throw ClientError.server("Choose a file smaller than 12 MB.") }
@@ -375,37 +496,52 @@ final class MinutesWorkspace: ObservableObject {
         return (body, "multipart/form-data; boundary=\(boundary)")
     }
     func generate() async {
-        busy = true; defer { busy = false }
+        guard meetingDetails.isComplete else { message = meetingDetails.completionMessage; return }
+        let context = accountContext
+        busy = true; defer { if accountContext == context { busy = false } }
         do {
-            let upload = try sourceUploadBody()
+            let upload = try sourceUploadBody(includingMeetingDetails: true)
             let result = try await request("/api/minutes/generate", method: "POST", body: upload.body, contentType: upload.contentType)
+            guard accountContext == context else { return }
             let record = try JSONDecoder().decode(MinutesPayload.self, from: result).minutes
-            await refresh(); clearLocalSourceDraft(); open(record)
-        } catch { message = error.localizedDescription }
+            await refresh()
+            guard accountContext == context else { return }
+            clearLocalSourceDraft(); open(record)
+        } catch { if accountContext == context { message = error.localizedDescription } }
+        guard accountContext == context else { return }
         await refreshGenerationStatus()
     }
     func handoff() async {
-        busy = true; defer { busy = false }
+        let context = accountContext
+        busy = true; defer { if accountContext == context { busy = false } }
         do {
-            let upload = try sourceUploadBody()
+            let upload = try sourceUploadBody(includingMeetingDetails: false)
             let data = try await request("/api/minutes/handoff", method: "POST", body: upload.body, contentType: upload.contentType)
+            guard accountContext == context else { return }
             let payload = try JSONDecoder().decode(MinutesPayload.self, from: data)
             clearLocalSourceDraft()
             await refresh()
+            guard accountContext == context else { return }
             message = (["Transcript sent to Adrian Reese and William McDuffie. It is waiting for one of them to claim it."] + (payload.notificationWarnings ?? [])).joined(separator: " ")
             messageIsWarning = payload.notificationWarnings?.isEmpty == false
-        } catch { message = error.localizedDescription }
+        } catch { if accountContext == context { message = error.localizedDescription } }
     }
-    func claim(_ record: MinutesRecord) async {
-        busy = true; defer { busy = false }
+    func claim(_ record: MinutesRecord, meetingDetails: MinutesMeetingDetails) async {
+        guard meetingDetails.isComplete else { message = meetingDetails.completionMessage; return }
+        let context = accountContext
+        busy = true; defer { if accountContext == context { busy = false } }
         do {
-            let data = try await request("/api/minutes/\(record.id)/claim", method: "POST", body: Data("{}".utf8))
+            let data = try await request("/api/minutes/\(record.id)/claim", method: "POST", body: JSONEncoder().encode(MinutesClaimPayload(meetingDetails: meetingDetails.normalized)))
+            guard accountContext == context else { return }
             let claimed = try JSONDecoder().decode(MinutesPayload.self, from: data).minutes
             await refresh()
+            guard accountContext == context else { return }
             open(claimed)
             message = "This source is assigned to you. Review every section before attesting."
         } catch {
+            guard accountContext == context else { return }
             await refresh()
+            guard accountContext == context else { return }
             message = error.localizedDescription
         }
     }
@@ -432,19 +568,28 @@ final class MinutesWorkspace: ObservableObject {
         catch { message = error.localizedDescription }
     }
     func reorganize() async {
-        guard let record = selected else { return }
-        busy = true; defer { busy = false }
+        guard let record = selected, let draft else { return }
+        let details = MinutesMeetingDetails(draft: draft)
+        guard details.isComplete else { message = details.completionMessage; return }
+        let context = accountContext
+        busy = true; defer { if accountContext == context { busy = false } }
         do {
-            let data = try await request("/api/minutes/\(record.id)/reorganize", method: "POST", body: JSONEncoder().encode(["expectedUpdatedAt": record.updatedAt]))
+            let data = try await request("/api/minutes/\(record.id)/reorganize", method: "POST", body: JSONEncoder().encode(MinutesReorganizePayload(expectedUpdatedAt: record.updatedAt, meetingDetails: details.normalized)))
+            guard accountContext == context else { return }
             let replacement = try JSONDecoder().decode(ReorganizedPayload.self, from: data).draft
             guard selected?.id == record.id, selected?.updatedAt == record.updatedAt else { await refreshGenerationStatus(); return }
-            draft = replacement
+            self.draft = replacement
             dirty = true; updatePreview(); message = "Reorganized from the original source. Review before saving."
-        } catch { message = error.localizedDescription }
+        } catch { if accountContext == context { message = error.localizedDescription } }
+        guard accountContext == context else { return }
         await refreshGenerationStatus()
     }
     func action(_ action: String, body: [String: String] = [:]) async {
         guard let record = selected else { return }
+        if action == "preparer-attest", let draft {
+            let details = MinutesMeetingDetails(draft: draft)
+            guard details.isComplete else { message = details.completionMessage; return }
+        }
         busy = true; defer { busy = false }
         do {
             let data = try await request("/api/minutes/\(record.id)/\(action)", method: "POST", body: JSONEncoder().encode(body))
@@ -522,6 +667,8 @@ struct MeetingMinutesView: View {
     @State private var deferredRecordsRefresh = false
     @State private var editorPane = 0
     @State private var changingAttendance = false
+    @State private var claimingRecord: MinutesRecord?
+    @State private var claimMeetingDetails = MinutesMeetingDetails()
     let onExit: () -> Void
     init(workspace: MinutesWorkspace, onExit: @escaping () -> Void = {}) {
         self.workspace = workspace
@@ -574,11 +721,13 @@ struct MeetingMinutesView: View {
     private var stationCoverageRequired: Bool {
         workspace.selected?.status == "draft" || (workspace.draft?.officerAttendanceVersion ?? 0) >= 2
     }
+    private var meetingDetailsReady: Bool { workspace.draft.map { MinutesMeetingDetails(draft: $0).isComplete } ?? false }
     private var attendanceReady: Bool {
         guard let draft = workspace.draft, let review = draft.attendanceReview else { return false }
         return review.officerRoll && review.otherPresent && review.otherExcused
             && draft.presidingReviewComplete
             && draft.officerAttendance.allSatisfy { $0.reviewComplete(requiringCoverage: stationCoverageRequired) }
+            && draft.officerAttendance.allSatisfy { MinutesAttendanceWorkflow.assistantCoverageIssue($0, officers: draft.officerAttendance) == nil }
     }
     private func openRequestedSignedMinutes() {
         guard let id = model.requestedMinutesRecordID,
@@ -603,7 +752,7 @@ struct MeetingMinutesView: View {
                     }
                     if editable { Button("Save corrections") { Task { await workspace.save() } }.buttonStyle(.borderedProminent) }
                 } else {
-                    if !workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.fileURL != nil {
+                    if !workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.fileURL != nil || workspace.meetingDetails.hasValues {
                         Button("Save draft and exit") {
                             workspace.persistLocalSourceDraft()
                             if workspace.localDraftSaved { onExit() }
@@ -638,6 +787,25 @@ struct MeetingMinutesView: View {
             else { Task { await workspace.refresh() } }
         }
         .sheet(isPresented: $showingHistory) { FinalReportBrowserView(kind: .minutes, onClose: { showingHistory = false }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700) }
+        .sheet(item: $claimingRecord) { record in
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Meeting details before creating minutes").font(.title2.weight(.semibold))
+                Text("Enter all eight details for this meeting. The uploaded source remains unchanged.").foregroundStyle(.secondary)
+                ScrollView { MinutesMeetingDetailsFields(details: $claimMeetingDetails).padding(2) }
+                if !workspace.message.isEmpty { Text(workspace.message).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+                HStack {
+                    Button("Cancel") { claimingRecord = nil }
+                    Spacer()
+                    Button("Claim and create draft") {
+                        Task {
+                            await workspace.claim(record, meetingDetails: claimMeetingDetails)
+                            if workspace.selected?.id == record.id { claimingRecord = nil }
+                        }
+                    }.buttonStyle(.borderedProminent).disabled(!claimMeetingDetails.isComplete || workspace.busy)
+                }
+            }.padding(22).frame(minWidth: 520, idealWidth: 600, minHeight: 590, idealHeight: 680)
+                .interactiveDismissDisabled(workspace.busy)
+        }
         .sheet(item: $readonlyRecord) { record in
             FinalReportBrowserView(kind: .minutes, initialSelection: record.id, onClose: { readonlyRecord = nil }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700)
         }
@@ -686,13 +854,22 @@ struct MeetingMinutesView: View {
                         Text(model.user?.role == "owner"
                              ? "Upload the source for Adrian Reese or William McDuffie to claim, or create the draft yourself."
                              : "Use compiled meeting notes or a corrected transcript. Attendance and agenda sections are organized for your review.").foregroundStyle(.secondary)
+                        GroupBox("Meeting details for the draft") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(model.user?.role == "owner"
+                                     ? "Complete all eight details to create your own draft. Sending source notes to the Secretaries sends only the source, without these details."
+                                     : "Enter all eight details. Your entries carry into the draft and preview.")
+                                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                MinutesMeetingDetailsFields(details: $workspace.meetingDetails)
+                            }.padding(10)
+                        }
                         GenerationStatusView(status: workspace.generationStatus)
                         Picker("Source format", selection: $workspace.sourceType) {
                             Text("Detect automatically").tag("auto"); Text("Compiled meeting notes").tag("compiled_notes"); Text("Meeting transcript").tag("transcript")
                         }.frame(maxWidth: 380)
                         TextEditor(text: $workspace.source).font(.body).frame(minHeight: 150).padding(5).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                         if workspace.localDraftSaved {
-                            Label("Saved privately on this Mac until you send it to the Secretaries or create the minutes draft.", systemImage: "checkmark.circle.fill")
+                            Label("Source and meeting details are saved privately on this Mac. Entered details apply when you create the draft.", systemImage: "checkmark.circle.fill")
                                 .font(.caption).foregroundStyle(.green)
                         }
                         AdaptiveControlBar {
@@ -748,7 +925,7 @@ struct MeetingMinutesView: View {
         }
     }
     private var createMinutesButton: some View {
-        Button("Create draft minutes") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace.fileURL == nil)
+        Button("Create draft minutes") { Task { await workspace.generate() } }.buttonStyle(.borderedProminent).disabled(!workspace.meetingDetails.isComplete || (workspace.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && workspace.fileURL == nil))
     }
     private var handoffMinutesButton: some View {
         Button("Send to Adrian and McDuffie") { Task { await workspace.handoff() } }
@@ -785,7 +962,11 @@ struct MeetingMinutesView: View {
     @ViewBuilder private func recordActionControls(_ record: MinutesRecord) -> some View {
         Text(minutesStatusLabel(record.status)).font(.caption).foregroundStyle(.secondary)
         if record.status == "awaiting_preparer", ["secretary", "assistant_secretary"].contains(model.user?.role ?? "") {
-            Button("Claim and create draft") { Task { await workspace.claim(record) } }.buttonStyle(.borderedProminent)
+            Button("Enter meeting details") {
+                claimMeetingDetails = MinutesMeetingDetails()
+                workspace.message = ""
+                claimingRecord = record
+            }.buttonStyle(.borderedProminent)
         } else if !["awaiting_preparer", "organizing"].contains(record.status) {
             Button(mayReview(record) ? "Review" : "View PDF") {
                 if mayReview(record) { workspace.open(record) } else { readonlyRecord = record }
@@ -981,23 +1162,57 @@ struct MeetingMinutesView: View {
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         }
     }
+    private func assistantCoverage(for row: MinutesAttendance) -> (role: String, name: String)? {
+        guard let role = row.assistantRole else { return nil }
+        let candidates = (workspace.draft?.officerAttendance ?? []).filter {
+            $0.title.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(role) == .orderedSame
+        }
+        guard candidates.count == 1, let assistant = candidates.first,
+              !assistant.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return (role, assistant.name)
+    }
     private func stationCoverageEditor(_ index: Int, row: MinutesAttendance) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let assistant = assistantCoverage(for: row)
+        return VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text("Station coverage").font(.caption.weight(.semibold))
-            Picker("Was the station filled?", selection: Binding(get: { workspace.draft?.officerAttendance[index].stationCoverage ?? "" }, set: { value in
-                workspace.draft?.officerAttendance[index].setCoverage(value.isEmpty ? nil : value)
+            if let issue = MinutesAttendanceWorkflow.assistantCoverageIssue(row, officers: workspace.draft?.officerAttendance ?? []) {
+                Text(issue).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            Picker("Who covered the station?", selection: Binding(get: {
+                let current = workspace.draft?.officerAttendance[index]
+                return current?.actingRole == row.assistantRole && current?.actingRole != nil ? "assistant" : (current?.stationCoverage ?? "")
+            }, set: { value in
+                if value == "assistant", let assistant {
+                    workspace.draft?.officerAttendance[index].selectAssistant(role: assistant.role, name: assistant.name)
+                } else {
+                    workspace.draft?.officerAttendance[index].setCoverage(value.isEmpty ? nil : value)
+                    workspace.draft?.officerAttendance[index].actingRole = nil
+                }
                 resetOfficerConfirmation()
             })) {
                 Text("Choose coverage").tag("")
+                if let role = row.assistantRole {
+                    Text("The \(role) covered the station").tag("assistant").disabled(assistant == nil)
+                }
                 Text("Another Brother served").tag("filled")
                 Text("Station remained vacant").tag("vacant")
             }.frame(maxWidth: .infinity, alignment: .leading)
+            if let role = row.assistantRole, assistant == nil {
+                Text("Record the \(role)'s name in the officer roll to select that assistant, or enter another covering Brother.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if row.stationCoverage == "filled" {
-                TextField("Brother who filled the station", text: Binding(get: { workspace.draft?.officerAttendance[index].actingName ?? "" }, set: { value in
-                    workspace.draft?.officerAttendance[index].actingName = value.isEmpty ? nil : value
-                    resetOfficerConfirmation()
-                }))
+                if let role = row.actingRole, role == row.assistantRole {
+                    Text("\(role): \(row.actingName ?? "Name not recorded")")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    TextField("Brother who filled the station", text: Binding(get: { workspace.draft?.officerAttendance[index].actingName ?? "" }, set: { value in
+                        workspace.draft?.officerAttendance[index].actingName = value.isEmpty ? nil : value
+                        workspace.draft?.officerAttendance[index].actingRole = nil
+                        resetOfficerConfirmation()
+                    }))
+                }
                 Text("Did that Brother serve for the whole meeting?").font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
                 Picker("Whole meeting", selection: Binding(get: { workspace.draft?.officerAttendance[index].actingWholeMeeting.map { $0 ? "yes" : "no" } ?? "" }, set: { value in
@@ -1034,6 +1249,10 @@ struct MeetingMinutesView: View {
                 Text("Prayer and closing").font(.headline).foregroundStyle(SignTheme.navy)
                 Text("Confirm the Chaplain's closing prayer for this meeting. The closing section uses the closing time above.").font(.caption).foregroundStyle(.secondary)
                 prayerPicker("Chaplain gave the closing prayer", key: \.closingPrayerGiven)
+                if preparingAttendance && !meetingDetailsReady, let draft = workspace.draft {
+                    Text(MinutesMeetingDetails(draft: draft).completionMessage).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }.textFieldStyle(.roundedBorder).padding(10)
         }
     }
@@ -1057,7 +1276,7 @@ struct MeetingMinutesView: View {
             Button("Download saved Word record") { Task { await workspace.downloadWord() } }.disabled(workspace.dirty)
             if let record = workspace.selected {
                 if preparingAttendance && model.user?.can("minutes.prepare") == true {
-                    Button(actionLabel("preparer-attest")) { pendingAction = "preparer-attest" }.disabled(workspace.dirty || !attendanceReady)
+                    Button(actionLabel("preparer-attest")) { pendingAction = "preparer-attest" }.disabled(workspace.dirty || !attendanceReady || !meetingDetailsReady)
                 }
                 if model.user?.role == "owner" && record.status == "awaiting_master_attestation" {
                     Button(actionLabel("master-attest")) { pendingAction = "master-attest" }.disabled(workspace.dirty)
@@ -1073,6 +1292,46 @@ struct MeetingMinutesView: View {
                 }
             }
         }.buttonStyle(.bordered)
+    }
+}
+
+private struct MinutesMeetingDetailsFields: View {
+    @Binding var details: MinutesMeetingDetails
+    @State private var enteringOtherType = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            MinutesDateField(title: "Meeting date", value: $details.meetingDate, preservingDetails: false)
+            Picker("Meeting type", selection: Binding(get: {
+                if enteringOtherType || (!details.meetingType.isEmpty && details.meetingType != "Stated Communication") { return "Other" }
+                return details.meetingType
+            }, set: { value in
+                enteringOtherType = value == "Other"
+                details.meetingType = value == "Stated Communication" ? value : ""
+            })) {
+                Text("Choose meeting type").tag("")
+                Text("Stated Communication").tag("Stated Communication")
+                Text("Other").tag("Other")
+            }
+            if enteringOtherType || (!details.meetingType.isEmpty && details.meetingType != "Stated Communication") {
+                TextField("Type the meeting name", text: $details.meetingType)
+            }
+            Picker("Degree", selection: $details.degree) {
+                Text("Choose degree").tag("")
+                ForEach(["First Degree", "Second Degree", "Third Degree", "Round Table"], id: \.self) { Text($0).tag($0) }
+            }
+            HStack {
+                TextField("Opening time", text: $details.openingTime)
+                TextField("Closing time", text: $details.closingTime)
+            }
+            Text("Use actual times with AM or PM, such as 7:30 PM. Explicit 24-hour times such as 19:30 are also accepted.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField("Presiding officer", text: $details.presiding)
+            Picker("Quorum", selection: $details.quorum) {
+                Text("Choose quorum").tag(""); Text("Yes").tag("Yes"); Text("No").tag("No")
+            }
+            MinutesDateField(title: "Next meeting date", value: $details.nextMeeting, preservingDetails: false)
+        }.textFieldStyle(.roundedBorder)
     }
 }
 

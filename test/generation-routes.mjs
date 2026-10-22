@@ -73,7 +73,8 @@ async function officer(owner, role) {
 }
 const bankingForm = (intent = 'save') => {const form = new FormData(); form.set('sourceText', notes); form.set('intent', intent); return form;};
 const fixtureForCycle = report => {const draft=structuredClone(completeTreasuryFixture);Object.assign(draft,{previousMeetingDate:report.draft.previousMeetingDate,periodStart:report.draft.periodStart,periodEnd:report.draft.periodEnd});draft.transactions.forEach(row=>row.date=report.draft.periodStart);return draft;};
-const minutesForm = (source = minutesSource) => {const form = new FormData(); form.set('transcriptText', source); return form;};
+const enteredDetails = {meetingDate:'2026-09-17',meetingType:'Stated Communication',degree:'Third Degree',openingTime:'7:30 PM',closingTime:'9:00 PM',presiding:'Test WM',quorum:'Yes',nextMeeting:'2026-10-01'};
+const minutesForm = (source = minutesSource, details = enteredDetails) => {const form = new FormData(); form.set('transcriptText', source); if (details !== undefined) form.set('meetingDetails',JSON.stringify(details)); return form;};
 
 await writeFile(loaderFile, `
 import {appendFile, readFile, access} from 'node:fs/promises';
@@ -159,7 +160,21 @@ try {
   await control({mode: 'success'});
   await start(false);
   let owner = await registerOwner();
-  check('Missing key keeps minutes generation local', (await api('/api/minutes/generate', owner.token, 'POST', minutesForm())).status === 201);
+  const originalLocal = await api('/api/minutes/generate', owner.token, 'POST', minutesForm());
+  check('Missing key keeps minutes generation local', originalLocal.status === 201);
+  const initialLocalRecords=(await api('/api/minutes',owner.token)).data.minutes;
+  for (const field of Object.keys(enteredDetails)) {
+    const incomplete={...enteredDetails,[field]:''};
+    const rejected=await api('/api/minutes/generate',owner.token,'POST',minutesForm(minutesSource,incomplete));
+    check(`Missing entered ${field} is rejected before generation or record creation`,rejected.status===400 && /Enter|Select/.test(rejected.data.error) && await providerCalls()===0);
+  }
+  assert.deepEqual((await api('/api/minutes',owner.token)).data.minutes,initialLocalRecords);
+  check('Invalid intake preserves every existing source and saved draft',true);
+  const localRecord=originalLocal.data.minutes;
+  const revisedDetails={...enteredDetails,openingTime:'7:45 PM',closingTime:'9:45 PM',presiding:'Bro. Synthetic Presider'};
+  const replacement=await api(`/api/minutes/${localRecord.id}/reorganize`,owner.token,'POST',{expectedUpdatedAt:localRecord.updatedAt,meetingDetails:revisedDetails});
+  check('Reorganization carries explicit current meeting details without overwriting the saved record',replacement.status===200 && replacement.data.draft.openingTime==='7:45 PM' && replacement.data.draft.presiding==='Bro. Synthetic Presider' && (await api('/api/minutes',owner.token)).data.minutes.find(item=>item.id===localRecord.id).draft.openingTime==='7:30 PM');
+  check('A source conflict stays private and explicit while source-derived business remains intact',replacement.data.draft.warnings.some(w=>w.includes('entered opening time differs')) && JSON.stringify(replacement.data.draft.sections)===JSON.stringify(localRecord.draft.sections));
   check('Missing key keeps treasury generation local', (await api('/api/treasury/generate', owner.token, 'POST', bankingForm('complete'))).status === 201);
   let localSaved=(await api('/api/treasury/generate',owner.token,'POST',bankingForm('save'))).data.report;
   check('Local upload stores a provider-neutral prefilled marker',localSaved.status==='awaiting_preparer'&&localSaved.draft.extractionNotes.includes('Application: uploaded banking information organized into this prefilled report.'));

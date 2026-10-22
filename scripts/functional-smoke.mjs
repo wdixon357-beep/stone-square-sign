@@ -19,6 +19,7 @@ const excluded = new Set([
   'mac-minutes-dates.mjs',
   'mac-minutes-attendance.mjs',
   'mac-minutes-closing.mjs',
+  'mac-minutes-meeting-details.mjs',
   'mac-reliability.mjs',
   'mac-report.mjs',
   'mac-submission.mjs',

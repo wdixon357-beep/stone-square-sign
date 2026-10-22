@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {COMMON_REPORT_RULES,MINUTES_REPORT_RULES,TREASURY_REPORT_RULES,REPORT_RULES_VERSION} from '../report-rules.js';
 const standing=await readFile(new URL('../REPORT-RULES.md',import.meta.url),'utf8');
-assert.equal(REPORT_RULES_VERSION,'2026-10-21.3');
+assert.equal(REPORT_RULES_VERSION,'2026-10-21.4');
 assert.ok(MINUTES_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
 assert.ok(TREASURY_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
 for (const rules of [MINUTES_REPORT_RULES,standing]) {

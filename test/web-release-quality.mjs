@@ -44,7 +44,7 @@ assert.match(server, /WHERE id = \? AND status = 'awaiting_preparer' AND prepare
 assert.match(server, /recoverStaleMinutesClaims/, 'interrupted minutes generation must return stale claims to the shared queue');
 assert.match(server, /releaseMinutesClaim\(req\.params\.id, req\.user\.id, 'generation_failed'\)/, 'failed minutes generation must immediately release the claim');
 assert.match(nativeMinutes, /func handoff\(\) async/, 'the Mac app must submit a meeting source handoff');
-assert.match(nativeMinutes, /func claim\(_ record: MinutesRecord\) async/, 'the Mac app must claim a waiting meeting source');
+assert.match(nativeMinutes, /func claim\(_ record: MinutesRecord, meetingDetails: MinutesMeetingDetails\) async/, 'the Mac app must claim a waiting meeting source with the preparer meeting details');
 assert.match(html, /id="minutesAttendanceReview"[\s\S]*Officers present, excused and absent[\s\S]*Other Brothers present[\s\S]*Other Brothers excused/, 'the website must show the required separated attendance review');
 for (const id of ['minutesOfficerRollConfirmed', 'minutesOtherPresentConfirmed', 'minutesOtherExcusedConfirmed']) {
   assert.match(html, new RegExp(`id="${id}"`), `the website must include ${id}`);
@@ -102,7 +102,7 @@ assert.match(html, /id="exitMinutesEditor"[^>]*>Exit and keep saved draft</, 'me
 assert.match(app, /uploaded transcript and last saved draft will remain available/, 'exiting minutes must explain what remains saved');
 assert.match(html, /id="handoffMinutes"[^>]*>Send to Adrian and McDuffie</, 'the Worshipful Master must have a clear transcript handoff action');
 assert.match(app, /\/api\/minutes\/handoff/, 'the website must send the source to the private Secretary Office queue');
-assert.match(app, /\/api\/minutes\/\$\{item\.id\}\/claim/, 'either Secretary must be able to claim an unassigned source');
+assert.match(app, /\/api\/minutes\/\$\{id\}\/claim/, 'either Secretary must be able to claim the selected unassigned source after entering the meeting details');
 assert.match(server, /status = 'organizing', preparer_user_id = \?, claimed_at = \?/, 'the Secretary claim must atomically assign the preparer before generation');
 assert.match(server, /WHERE id = \? AND status = 'awaiting_preparer' AND preparer_user_id IS NULL/, 'duplicate Secretary claims must be rejected at the database write');
 assert.match(nativeMinutes, /Save draft and exit/, 'the Mac app must provide the same save and exit action');

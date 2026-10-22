@@ -184,6 +184,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-workflow b { width: 25px; height: 25px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; color: var(--navy); background: var(--gold-soft); font: 700 11px Georgia, serif; }
 .minutes-generator { display: grid; gap: 12px; }
 .minutes-generator textarea { min-height: 140px; resize: vertical; }
+.minutes-intake-details { display: grid; gap: 12px; margin: 2px 0 8px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fffdf7; }
+.minutes-intake-details h3 { margin: 0; color: var(--navy); font-size: 18px; }
+.minutes-intake-details > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.minutes-intake-grid > * { min-width: 0; }
+.minutes-claim-body form { display: grid; gap: 18px; }
+.minutes-claim-body .row-buttons { flex-wrap: wrap; }
 .minutes-list { display: grid; }
 .minutes-available-notice { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 0 0 20px; padding: 18px 20px; border: 1px solid #d8aa4d; border-left: 5px solid var(--gold); border-radius: 12px; background: linear-gradient(135deg, #fff9e8, #fffdf7); box-shadow: 0 10px 26px rgba(118,80,12,.12); }
 .minutes-available-notice strong { display: block; color: var(--navy); font-size: 15px; }

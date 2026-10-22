@@ -6,6 +6,7 @@ import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { organizeMeetingSource, extractOfficerCoverage, officerNameMatches } from './minutes-organizer.js';
 import { normalizeOfficerCoverage, sameAttendancePerson } from './public/minutes-attendance.js';
 import { cleanMinutesSectionsForPresentation, detectPrayerFacts, UNCITED_PRESIDING_WARNING } from './minutes-format.js';
+import {MINUTES_MEETING_DETAILS_FIELDS, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails} from './public/minutes-meeting-details.js';
 
 const nullableText = { type: ['string', 'null'] };
 
@@ -550,10 +551,11 @@ export const normalizeMinutesDraft = (value = {}) => {
   organizerVersion: value.organizerVersion || 1,
   officerAttendanceVersion: attendanceVersion,
   closingFormatVersion: Number(value.closingFormatVersion) >= 3 ? 3 : Number(value.closingFormatVersion) >= 2 ? 2 : 1,
+  ...(Number(value.meetingDetailsVersion) >= 1 ? {meetingDetailsVersion:1} : {}),
   sourceType: value.sourceType === 'compiled_notes' ? 'compiled_notes' : 'transcript',
   meetingDate: minutesDateValue(value.meetingDate) || null,
   meetingType: /^(?:regular )?stated communication$/i.test(String(value.meetingType || ''))
-    ? 'Stated Communication' : String(value.meetingType || 'Stated Communication').trim(),
+    ? 'Stated Communication' : String(value.meetingType || (Number(value.meetingDetailsVersion) >= 1 ? '' : 'Stated Communication')).trim(),
   degree: canonicalDegree(value.degree),
   openingTime: value.openingTime ? String(value.openingTime).trim() : null,
   closingTime: value.closingTime ? String(value.closingTime).trim() : null,
@@ -599,12 +601,18 @@ export const generateMinutesDraft = async (transcript, {
   testResponse = process.env.NODE_ENV === 'test' ? process.env.MINUTES_TEST_RESPONSE : '',
   sourceType = 'auto',
   generateStructured,
+  meetingDetails,
 } = {}) => {
+  if (meetingDetails !== undefined) {
+    const issues = minutesMeetingDetailsIssues(meetingDetails);
+    if (issues.length) throw Object.assign(new Error(issues.join(' ')), {statusCode:400, code:'MINUTES_MEETING_DETAILS_REQUIRED'});
+  }
+  const finish = draft => applyMinutesMeetingDetails(currentMinutesEditorialDraft(draft), meetingDetails);
   const source = String(transcript || '').trim();
   if (source.length < 100) throw Object.assign(new Error('The transcript is too short to create reliable minutes.'), { statusCode: 400 });
   if (source.length > 500_000) throw Object.assign(new Error('The transcript is too long. Upload the Plaud text export for one meeting.'), { statusCode: 400 });
 
-  if (testResponse) return currentMinutesEditorialDraft(normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2}));
+  if (testResponse) return finish(normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2}));
   const localDraft = organizeMeetingSource(source, { sourceType });
   localDraft.closingPrayerGiven = detectPrayerFacts(source, {closingFormatVersion:3}).closingPrayerGiven;
   if (typeof generateStructured === 'function') {
@@ -615,7 +623,35 @@ export const generateMinutesDraft = async (transcript, {
       instructions: generationInstructions,
       input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, sourceLines}),
     });
-    return currentMinutesEditorialDraft(checkedGeneratedDraft(response, source, localDraft, schema, sourceLines));
+    return finish(checkedGeneratedDraft(response, source, localDraft, schema, sourceLines));
   }
-  return currentMinutesEditorialDraft(normalizeMinutesDraft(localDraft));
+  return finish(normalizeMinutesDraft(localDraft));
 };
+
+export function applyMinutesMeetingDetails(draft, supplied) {
+  if (supplied === undefined) return draft;
+  const issues = minutesMeetingDetailsIssues(supplied);
+  if (issues.length) throw Object.assign(new Error(issues.join(' ')), {statusCode:400, code:'MINUTES_MEETING_DETAILS_REQUIRED'});
+  const details = normalizeMinutesMeetingDetails(supplied);
+  const labels = {meetingDate:'meeting date',meetingType:'meeting type',degree:'degree',openingTime:'opening time',closingTime:'closing time',presiding:'presiding officer',quorum:'quorum',nextMeeting:'next meeting date'};
+  const compare = (field, value) => {
+    if (field === 'meetingDate' || field === 'nextMeeting') return minutesDateParts(value)?.iso || value;
+    if (field === 'openingTime' || field === 'closingTime') {
+      const time = /^(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?$/i.exec(String(value || '').trim());
+      if (time) return `${String(Number(time[1]) % 12 + (time[3].toLowerCase() === 'p' ? 12 : 0)).padStart(2,'0')}:${time[2] || '00'}`;
+    }
+    return String(value || '').trim();
+  };
+  const warnings = (draft.warnings || []).filter(warning => ![
+    'Enter the meeting date. Event dates in the notes are not used as the meeting date.',
+    'Confirm the opening time.', 'Confirm the closing time.', UNCITED_PRESIDING_WARNING,
+  ].includes(warning));
+  for (const field of MINUTES_MEETING_DETAILS_FIELDS) {
+    if (draft[field] && compare(field,draft[field]) !== compare(field,details[field])) {
+      warnings.push(`The entered ${labels[field]} differs from the organized source value. Review the source and the entered detail before submission.`);
+    }
+  }
+  // Keep original source and provider citations untouched. These values are
+  // authenticated officer entries, not model-verified transcript assertions.
+  return normalizeMinutesDraft({...draft, ...details, meetingDetailsVersion:1, warnings:[...new Set(warnings)]});
+}

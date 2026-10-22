@@ -39,6 +39,7 @@ const attendanceRowsForComparison = draft => JSON.stringify((Array.isArray(draft
   name: String(row?.name || '').trim(), title: String(row?.title || '').trim(),
   status: row?.status || 'not_recorded', stationCoverage: row?.stationCoverage || null,
   actingName: String(row?.actingName || '').trim() || null,
+  actingRole: String(row?.actingRole || '').trim() || null,
   actingWholeMeeting: typeof row?.actingWholeMeeting === 'boolean' ? row.actingWholeMeeting : null,
 })).sort());
 const attendanceNamesForComparison = (draft, key) => JSON.stringify((Array.isArray(draft?.[key]) ? draft[key] : [])

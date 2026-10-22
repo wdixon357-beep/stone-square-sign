@@ -132,7 +132,7 @@ const absentDraft = { officerAttendanceVersion: 2, attendanceReview: confirmed,
   officerAttendance: [{ name: 'Regular Officer', title: 'Example office', status: 'absent' }] };
 assert.ok(context.issues(absentDraft).some(issue => issue.includes('covered the station')));
 assert.equal(context.issues({ ...absentDraft, officerAttendanceVersion: 1 }).length, 0, 'Legacy attested drafts retain their original completion requirements');
-assert.match(app, /Promise\.all\(\[minutesDatesReady, minutesAttendanceReady\]\)/, 'The attendance controls must load before the dashboard initializes');
+assert.match(app, /Promise\.all\(\[minutesDatesReady, minutesAttendanceReady, minutesMeetingDetailsReady\]\)/, 'The attendance and meeting detail controls must load before the dashboard initializes');
 assert.match(html, /station coverage and any late arrivals/);
 assert.doesNotMatch(html, /PM Mobley|SW White/, 'Meeting examples must not become template defaults');
 console.log('PASS: web officer coverage, late arrivals, duration, stale-data clearing, saved values and legacy review compatibility');
@@ -195,3 +195,39 @@ assert.deepEqual(Array.from(context.displayWarnings(warningDraft)),warningDraft.
 assert.match(html,/id="toggleMinutesAttendanceEdit"[^>]*aria-expanded="false"[^>]*aria-controls="minutesAttendanceFields"/);
 assert.match(app,/updateMinutesAttendancePresentation\(item, collectMinutesDraft\(\)\)/,'Returning to the glance view displays the current unsaved corrections');
 console.log('PASS: preparer-only confirmations, owner glance view, optional corrections, truthful warning projection and finalized read-only attendance');
+
+// Assistant coverage is a deliberate role-and-person selection, not an inferred
+// attendance status or a default duration. Existing custom coverage stays valid.
+record = {status:'draft',createdByUserId:2,preparerUserId:2,draft:{officerAttendance:[
+  {name:'Treasurer Example',title:'Treasurer',status:'excused'},
+  {name:'Assistant Example',title:'Assistant Treasurer',status:'not_recorded'},
+]}};
+const treasurer = context.edit(record.draft.officerAttendance[0]);
+elements.minutesOfficerAttendance.replaceChildren(treasurer);
+const treasurerControl = field => treasurer.querySelector(`[data-field="${field}"]`);
+assert.equal(treasurerControl('stationCoverage').value,'','Assistant coverage is never selected merely because the regular officer is excused');
+assert.match(treasurerControl('stationCoverage').querySelector('option[value="assistant"]').textContent,/Assistant Treasurer.*Assistant Example/);
+treasurerControl('stationCoverage').value='assistant';treasurerControl('stationCoverage').emit('change');
+let assistantSelection=context.collect()[0];
+assert.equal(assistantSelection.stationCoverage,'filled');
+assert.equal(assistantSelection.actingRole,'Assistant Treasurer');
+assert.equal(assistantSelection.actingName,'Assistant Example');
+assert.equal(assistantSelection.actingWholeMeeting,null,'Choosing the assistant does not infer duration');
+assert.equal(assistantSelection.status,'excused','Choosing the assistant does not rewrite regular attendance');
+assert.equal(record.draft.officerAttendance[1].status,'not_recorded','Choosing the assistant does not claim the assistant was present');
+treasurerControl('actingWholeMeeting').value='true';treasurerControl('actingWholeMeeting').emit('change');
+assistantSelection=context.collect()[0];
+assert.match(minutesAttendance.stationCoverageText(assistantSelection),/Assistant Treasurer Assistant Example covered the station for the whole meeting/);
+const reopened=context.edit(assistantSelection);
+assert.equal(reopened.querySelector('[data-field="stationCoverage"]').value,'assistant','Explicit saved assistant role reopens as the matching role choice');
+treasurerControl('stationCoverage').value='filled';treasurerControl('stationCoverage').emit('change');
+treasurerControl('actingName').value='Another Brother';treasurerControl('actingWholeMeeting').value='true';
+assistantSelection=context.collect()[0];
+assert.equal(assistantSelection.actingRole,undefined,'Custom coverage clears the assistant label');
+assert.equal(assistantSelection.actingName,'Another Brother');
+record.draft.officerAttendance=[{name:'Secretary Example',title:'Secretary',status:'absent'},{name:'Secretary Assistant',title:'Assistant Secretary',status:'present'}];
+const secretary=context.edit(record.draft.officerAttendance[0]);
+assert.match(secretary.querySelector('option[value="assistant"]').textContent,/Assistant Secretary.*Secretary Assistant/);
+const generic=context.edit({name:'Other Officer',title:'Junior Deacon',status:'absent'});
+assert.equal(generic.querySelector('option[value="assistant"]'),null,'Other stations retain their named covering-Brother choice');
+console.log('PASS: explicit assistant coverage options preserve actual identity, duration, attendance and custom choices');

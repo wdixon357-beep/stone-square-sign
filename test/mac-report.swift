@@ -483,20 +483,31 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
             "POST /api/minutes/handoff": (201, try JSONEncoder().encode(MinutesSingleEnvelope(minutes: waitingRecord, notificationWarnings: []))),
             "GET /api/minutes": (200, try JSONEncoder().encode(MinutesEnvelope(minutes: [waitingRecord]))),
         ]
+        await organizing.generate()
+        precondition(GenerationFixture.requests.isEmpty && organizing.message.contains("meeting date"), "Missing details cannot start a provider-backed generation")
+        await organizing.claim(waitingRecord, meetingDetails: MinutesMeetingDetails())
+        precondition(GenerationFixture.requests.isEmpty, "Missing details cannot claim or start generation")
         await organizing.handoff()
         let handoffRequest = GenerationFixture.requests.first { $0.path == "/api/minutes/handoff" }!
         let handoffBody = String(data: handoffRequest.body, encoding: .utf8) ?? ""
-        precondition(handoffRequest.method == "POST" && handoffBody.contains("Synthetic transcript sent by the Worshipful Master") && handoffBody.contains("transcript"))
+        precondition(handoffRequest.method == "POST" && handoffBody.contains("Synthetic transcript sent by the Worshipful Master") && handoffBody.contains("transcript") && !handoffBody.contains("name=\"meetingDetails\""))
         precondition(organizing.source.isEmpty && organizing.records.first?.status == "awaiting_preparer" && organizing.message.contains("sent to Adrian Reese and William McDuffie"))
         print("PASS: native owner handoff sends the source to both Secretary offices and refreshes the shared queue")
 
+        var completeMeetingDetails = MinutesMeetingDetails()
+        completeMeetingDetails.meetingDate = "2026-09-17"; completeMeetingDetails.meetingType = "Stated Communication"
+        completeMeetingDetails.degree = "Third Degree"; completeMeetingDetails.openingTime = "7:30 PM"; completeMeetingDetails.closingTime = "9:45 PM"
+        completeMeetingDetails.presiding = "WM Test"; completeMeetingDetails.quorum = "Yes"; completeMeetingDetails.nextMeeting = "2026-10-01"
         GenerationFixture.requests = []
         GenerationFixture.routeResponses = [
             "POST /api/minutes/waiting-minutes/claim": (200, try JSONEncoder().encode(MinutesSingleEnvelope(minutes: claimedRecord, notificationWarnings: []))),
             "GET /api/minutes": (200, try JSONEncoder().encode(MinutesEnvelope(minutes: [claimedRecord]))),
         ]
-        await organizing.claim(waitingRecord)
+        await organizing.claim(waitingRecord, meetingDetails: completeMeetingDetails)
         precondition(GenerationFixture.requests.first?.method == "POST" && GenerationFixture.requests.first?.path == "/api/minutes/waiting-minutes/claim")
+        let claimBody = try JSONSerialization.jsonObject(with: GenerationFixture.requests.first!.body) as! [String: Any]
+        let enteredClaimDetails = claimBody["meetingDetails"] as! [String: String]
+        precondition(enteredClaimDetails.count == 8 && enteredClaimDetails["openingTime"] == "7:30 PM" && enteredClaimDetails["meetingDate"] == "2026-09-17")
         precondition(organizing.selected?.id == claimedRecord.id && organizing.selected?.status == "draft" && organizing.message.contains("assigned to you"))
         print("PASS: native Secretary claim opens the generated draft owned by the successful claimant")
 
@@ -506,9 +517,22 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
             "POST /api/minutes/waiting-minutes/claim": (409, Data(#"{"error":"This source has already been claimed by William M. McDuffie."}"#.utf8)),
             "GET /api/minutes": (200, try JSONEncoder().encode(MinutesEnvelope(minutes: [waitingRecord]))),
         ]
-        await organizing.claim(waitingRecord)
+        await organizing.claim(waitingRecord, meetingDetails: completeMeetingDetails)
         precondition(organizing.selected == nil && organizing.records.first?.id == waitingRecord.id && organizing.message.contains("already been claimed"))
         print("PASS: native claim conflict refreshes the queue and explains that another Secretary claimed it")
+        organizing.source = "Synthetic notes for a fully entered meeting."
+        organizing.meetingDetails = completeMeetingDetails
+        GenerationFixture.requests = []
+        GenerationFixture.routeResponses = [
+            "POST /api/minutes/generate": (201, try JSONEncoder().encode(MinutesSingleEnvelope(minutes: claimedRecord, notificationWarnings: []))),
+            "GET /api/minutes": (200, try JSONEncoder().encode(MinutesEnvelope(minutes: [claimedRecord]))),
+        ]
+        await organizing.generate()
+        let generatedRequest = GenerationFixture.requests.first { $0.path == "/api/minutes/generate" }!
+        let generatedBody = String(data: generatedRequest.body, encoding: .utf8) ?? ""
+        precondition(generatedBody.contains("name=\"meetingDetails\"") && generatedBody.contains("7:30 PM") && generatedBody.contains("2026-09-17"))
+        precondition(!organizing.meetingDetails.hasValues && organizing.source.isEmpty && organizing.selected?.id == claimedRecord.id)
+        print("PASS: native direct generation transmits all entered metadata separately and clears the private intake only after success")
         GenerationFixture.routeResponses = [:]
         let status = await GenerationStatus.load(using: organizing)
         precondition(status?.explanation(forOwner: true).hasPrefix("Luna enabled.") == true && status?.allowance(forOwner: true)?.contains("$4.75 remaining of $5.00") == true)
@@ -526,6 +550,7 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         localMinutes.configure(reportApp)
         localMinutes.source = "Synthetic unfinished minutes source."
         localMinutes.sourceType = "compiled_notes"
+        localMinutes.meetingDetails = completeMeetingDetails
         let selectedFile = scratch.appendingPathComponent("minutes-source.txt")
         try Data("Synthetic file source".utf8).write(to: selectedFile)
         localMinutes.selectSourceFile(selectedFile)
@@ -536,35 +561,90 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         let restoredMinutes = MinutesWorkspace(session: generationSession, persistenceDirectory: minutesDraftDirectory)
         restoredMinutes.configure(reportApp)
         precondition(restoredMinutes.source == localMinutes.source)
-        precondition(restoredMinutes.sourceType == "compiled_notes")
+        precondition(restoredMinutes.sourceType == "compiled_notes" && restoredMinutes.meetingDetails == completeMeetingDetails)
         precondition(restoredMinutes.sourceFileName == "minutes-source.txt")
         precondition(restoredMinutes.fileURL != nil)
         precondition(restoredMinutes.localDraftSaved)
         reportApp.user = User(id: 502, email: "other@example.invalid", name: "Other Officer", role: "secretary", hasSignature: true)
         let isolatedMinutes = MinutesWorkspace(session: generationSession, persistenceDirectory: minutesDraftDirectory)
         isolatedMinutes.configure(reportApp)
-        precondition(isolatedMinutes.source.isEmpty && isolatedMinutes.fileURL == nil && !isolatedMinutes.localDraftSaved)
+        precondition(isolatedMinutes.source.isEmpty && isolatedMinutes.fileURL == nil && !isolatedMinutes.meetingDetails.hasValues && !isolatedMinutes.localDraftSaved)
         reportApp.user = User(id: 501, email: "owner@example.invalid", name: "QA Owner", role: "owner", hasSignature: true)
         restoredMinutes.clearLocalSourceDraft()
-        precondition(restoredMinutes.source.isEmpty && restoredMinutes.fileURL == nil && !restoredMinutes.localDraftSaved)
+        precondition(restoredMinutes.source.isEmpty && restoredMinutes.fileURL == nil && !restoredMinutes.meetingDetails.hasValues && !restoredMinutes.localDraftSaved)
         print("PASS: unfinished minutes source and selected files persist privately per user, stale errors clear on return, and explicit clearing removes the local draft")
 
-        organizing.selected = minutesRecord; organizing.draft = changedDraft
+        var completeReorganizeDraft = changedDraft
+        completeReorganizeDraft.meetingDate = completeMeetingDetails.meetingDate; completeReorganizeDraft.meetingType = completeMeetingDetails.meetingType
+        completeReorganizeDraft.degree = completeMeetingDetails.degree; completeReorganizeDraft.openingTime = completeMeetingDetails.openingTime
+        completeReorganizeDraft.closingTime = completeMeetingDetails.closingTime; completeReorganizeDraft.presiding = completeMeetingDetails.presiding
+        completeReorganizeDraft.quorum = completeMeetingDetails.quorum; completeReorganizeDraft.nextMeeting = completeMeetingDetails.nextMeeting
+        organizing.selected = minutesRecord; organizing.draft = completeReorganizeDraft
         GenerationFixture.response = try JSONEncoder().encode(["draft": minutesRecord.draft])
         await organizing.reorganize()
         let minutesRequest = GenerationFixture.requests.last { $0.path.hasSuffix("/reorganize") }!
-        let minutesRequestBody = try JSONSerialization.jsonObject(with: minutesRequest.body) as! [String: String]
-        precondition(minutesRequest.method == "POST" && minutesRequestBody["expectedUpdatedAt"] == minutesRecord.updatedAt)
+        let minutesRequestBody = try JSONSerialization.jsonObject(with: minutesRequest.body) as! [String: Any]
+        let reorganizeDetails = minutesRequestBody["meetingDetails"] as! [String: String]
+        precondition(minutesRequest.method == "POST" && minutesRequestBody["expectedUpdatedAt"] as? String == minutesRecord.updatedAt && reorganizeDetails["closingTime"] == "9:45 PM" && reorganizeDetails.count == 8)
         precondition(organizing.draft == minutesRecord.draft && organizing.dirty && organizing.selected?.updatedAt == minutesRecord.updatedAt)
         print("PASS: minutes reorganization sends the opened version and leaves the replacement unsaved")
-        organizing.close(); organizing.selected = minutesRecord; organizing.draft = changedDraft; organizing.dirty = true
+        organizing.close(); organizing.selected = minutesRecord; organizing.draft = completeReorganizeDraft; organizing.dirty = true
         GenerationFixture.beforeReply = { request in
             if request.url!.path.hasSuffix("/reorganize") { organizing.selected?.updatedAt = "2026-09-12T19:00:00.000Z" }
         }
         await organizing.reorganize()
-        precondition(organizing.draft == changedDraft && organizing.dirty)
+        precondition(organizing.draft == completeReorganizeDraft && organizing.dirty)
         print("PASS: late minutes generation cannot overwrite an editor whose record version changed")
         organizing.close(); GenerationFixture.beforeReply = nil
+
+        let accountApp = AppModel(session: generationSession, savedSessionToken: "synthetic-token")
+        accountApp.serverAddress = "https://generation-fixture.invalid"
+        let oldMinutesUser = User(id: 801, email: "old-minutes@example.invalid", name: "Old Minutes Officer", role: "secretary", hasSignature: true)
+        let newMinutesUser = User(id: 802, email: "new-minutes@example.invalid", name: "New Minutes Officer", role: "assistant_secretary", hasSignature: true)
+        for operation in ["generate", "handoff", "claim", "reorganize"] {
+            let directory = scratch.appendingPathComponent("minutes-context-" + operation)
+            let contextWorkspace = MinutesWorkspace(session: generationSession, persistenceDirectory: directory)
+            accountApp.user = oldMinutesUser; contextWorkspace.configure(accountApp)
+            contextWorkspace.source = "Retain the old officer's original source for " + operation
+            contextWorkspace.meetingDetails = completeMeetingDetails
+            contextWorkspace.generationStatus = try JSONDecoder().decode(GenerationStatus.self, from: Data(#"{"configured":true,"administratorDetails":true,"monthlyLimitDollars":5,"remainingDollars":4.75}"#.utf8))
+            contextWorkspace.message = "Old account status."
+            contextWorkspace.configure(accountApp)
+            precondition(contextWorkspace.generationStatus != nil && contextWorkspace.message == "Old account status.", "Ordinary same-user configuration preserves current status")
+            if operation == "reorganize" { contextWorkspace.selected = minutesRecord; contextWorkspace.draft = completeReorganizeDraft; contextWorkspace.dirty = true }
+            var nextDetails = completeMeetingDetails; nextDetails.meetingDate = "2026-11-05"; nextDetails.nextMeeting = "2026-12-03"
+            let path = operation == "generate" ? "/api/minutes/generate" : operation == "handoff" ? "/api/minutes/handoff" : operation == "claim" ? "/api/minutes/waiting-minutes/claim" : "/api/minutes/\(minutesRecord.id)/reorganize"
+            GenerationFixture.routeResponses = [
+                "POST " + path: (200, operation == "reorganize" ? try JSONEncoder().encode(["draft": minutesRecord.draft]) : try JSONEncoder().encode(MinutesSingleEnvelope(minutes: claimedRecord, notificationWarnings: []))),
+            ]
+            GenerationFixture.requests = []
+            GenerationFixture.beforeReply = { request in
+                guard request.url?.path == path else { return }
+                accountApp.user = newMinutesUser; contextWorkspace.configure(accountApp)
+                precondition(contextWorkspace.generationStatus == nil && contextWorkspace.message.isEmpty, "New account receives no prior cached generation status or message")
+                contextWorkspace.source = "Keep the new officer's source."
+                contextWorkspace.meetingDetails = nextDetails
+                contextWorkspace.message = "Current account message."
+                contextWorkspace.busy = true
+            }
+            switch operation {
+            case "generate": await contextWorkspace.generate()
+            case "handoff": await contextWorkspace.handoff()
+            case "claim": await contextWorkspace.claim(waitingRecord, meetingDetails: completeMeetingDetails)
+            default: await contextWorkspace.reorganize()
+            }
+            precondition(contextWorkspace.source == "Keep the new officer's source." && contextWorkspace.meetingDetails == nextDetails, "Late " + operation + " cannot clear the new account's source or details")
+            precondition(contextWorkspace.message == "Current account message." && contextWorkspace.busy, "Late " + operation + " cannot change the new account message or operation state")
+            if operation != "reorganize" { precondition(contextWorkspace.selected == nil && contextWorkspace.draft == nil, "Late " + operation + " cannot open the old account record") }
+            else { precondition(contextWorkspace.draft == completeReorganizeDraft, "Late reorganization cannot replace a different context") }
+            precondition(GenerationFixture.requests.count == 1, "Account changes do not cause retries or old-context follow-up reads")
+            GenerationFixture.beforeReply = nil
+            accountApp.user = oldMinutesUser
+            let restored = MinutesWorkspace(session: generationSession, persistenceDirectory: directory); restored.configure(accountApp)
+            precondition(restored.source == "Retain the old officer's original source for " + operation && restored.meetingDetails == completeMeetingDetails, "Original account local input remains exact")
+        }
+        GenerationFixture.routeResponses = [:]
+        print("PASS: held minutes generate, handoff, claim and reorganize responses preserve both accounts' input and cannot clear current work, open old records, change current busy state or trigger retries")
 
         let treasuryDraft = TreasuryDraft(version: 1, periodStart: "", periodEnd: "", presentedOn: "", bankName: "", accounts: [], transactions: [], funds: [], obligations: [], fundsReviewed: false, obligationsReviewed: false, sourceReviewed: false, remarks: "Synthetic saved report.", unmappedLines: [], sourceNames: [], extractionNotes: [])
         let treasuryRecord = TreasuryRecord(id: "synthetic-treasury", status: "draft", revision: 3, createdByUserId: 9, preparerUserId: 9, uploadedBy: "QA Uploader", createdBy: "QA Preparer", preparerRole: "treasury_preparer", draft: treasuryDraft)
@@ -704,7 +784,7 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         await reportApp.refresh(silent: true)
         precondition(reportApp.user?.permissions == [] && reportApp.user?.canReadDues == false && reportApp.documents.isEmpty)
         print("PASS: periodic account refresh applies changed permissions without another sign-in")
-        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/auth/me" || $0.path == "/api/generation/status" || $0.path == "/api/proposals" || $0.path == "/api/minutes" || $0.path == "/api/minutes/handoff" || $0.path.hasSuffix("/claim") || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
+        precondition(GenerationFixture.requests.allSatisfy { $0.path == "/api/auth/me" || $0.path == "/api/generation/status" || $0.path == "/api/proposals" || $0.path == "/api/minutes" || $0.path == "/api/minutes/handoff" || $0.path == "/api/minutes/generate" || $0.path.hasSuffix("/claim") || $0.path.hasSuffix("/reorganize") || $0.path.hasSuffix("/organize") })
         print("PASS: generation and proposal fixtures make no signing or document delivery requests")
         let buildingPayload = Data(#"{"requests":[{"id":"request-1","organization":"Synthetic group","contactName":"QA Contact","contact":"qa@example.invalid","date":"2026-11-01","start":"","end":"","spaces":["Front yard"],"bathroomAccess":true,"description":"Synthetic request","status":"pending","note":"","revision":"r1","requesterNotified":false}],"canDecide":true}"#.utf8)
         let building = BuildingRequestsWorkspace()

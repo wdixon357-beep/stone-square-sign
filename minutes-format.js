@@ -2,6 +2,7 @@ import { formatMinutesDate, minutesDateParts } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { attendanceCoverageIssues } from './public/minutes-attendance.js';
+import {hasExplicitMinutesTime} from './public/minutes-meeting-details.js';
 
 // One presentation model for the live PDF and Word record. Formatting never
 // supplies a motion, an outcome, a name, or a time missing from the record.
@@ -103,13 +104,7 @@ export function preparerOffice(name, role) {
   return { assistant_secretary: 'Assistant Secretary', secretary: 'Secretary', owner: 'Worshipful Master' }[role] || '';
 }
 
-const hasExplicitClockTime = value => {
-  const text = String(value || '').trim();
-  // Officer-entered values need an explicit meridiem or a complete 24-hour
-  // clock. Never turn compact digits or an ambiguous 9:45 into a time.
-  return /^(?:0?[1-9]|1[0-2])(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)$/i.test(text)
-    || /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(text);
-};
+const hasExplicitClockTime = hasExplicitMinutesTime;
 
 export function closingReviewIssues(draft) {
   if (Number(draft.closingFormatVersion) >= 3) return [

@@ -57,7 +57,7 @@ assert.equal(closingReviewIssues(noClosingFacts).length,2);
 const unrelatedNote = 'WM Dixon-Saunders asked the Chaplain to pray for Brother Example before his procedure.';
 assert.ok(documentSections({...noClosingFacts,sections:[{heading:'Sickness and Distress',body:unrelatedNote}]}).some(section=>section.body.includes(unrelatedNote)), 'Specific sickness prayers are not routine boilerplate');
 assert.match(MINUTES_REPORT_RULES, /Set the legacy prayerRequested field to null/);
-assert.equal(REPORT_RULES_VERSION,'2026-10-21.3');
+assert.equal(REPORT_RULES_VERSION,'2026-10-21.4');
 const web = await fs.readFile(new URL('../public/index.html',import.meta.url),'utf8');
 assert.doesNotMatch(web,/id="minutesPrayerRequested"/);
 assert.match(web,/id="minutesClosingPrayerGiven"/);

@@ -36,6 +36,7 @@ samplePage.drawText('William M. McDuffie, Secretary', { x: 72, y: 610, size: 12,
 samplePage.drawText('Adrian Reese, Assistant Secretary', { x: 72, y: 580, size: 12, font: sampleFont });
 const PDF = Buffer.from(await samplePdf.save());
 const deliveredMail = [];
+const enteredMinutesDetails={meetingDate:'2026-09-03',meetingType:'Stated Communication',degree:'Third Degree',openingTime:'7:30 PM',closingTime:'9:04 PM',presiding:'Worshipful Master W. Aaron Dixon-Saunders',quorum:'Yes',nextMeeting:'2026-09-17'};
 const minutesTestDraft = {
   meetingDate: '2026-09-03',
   meetingType: 'Stated Communication',
@@ -498,9 +499,12 @@ try {
     handoffForSecretary.payload.minutes.some(item => item.id === handoffId && item.status === 'awaiting_preparer')
       && handoffForAssistant.payload.minutes.some(item => item.id === handoffId && item.status === 'awaiting_preparer')
       && !handoffForFinalReader.payload.minutes.some(item => item.id === handoffId));
+  const unfilledClaim=await api('POST', `/api/minutes/${handoffId}/claim`, {token:secToken,body:{meetingDetails:{}}});
+  const stillUnclaimed=(await api('GET','/api/minutes',{token:secToken})).payload.minutes.find(row=>row.id===handoffId);
+  check('all8details are required before claiming or organizing a source',unfilledClaim.status===400 && stillUnclaimed.status==='awaiting_preparer' && stillUnclaimed.preparerUserId==null);
   const [secretaryClaim, assistantClaim] = await Promise.all([
-    api('POST', `/api/minutes/${handoffId}/claim`, { token: secToken }),
-    api('POST', `/api/minutes/${handoffId}/claim`, { token: asstToken }),
+    api('POST', `/api/minutes/${handoffId}/claim`, { token: secToken, body:{meetingDetails:enteredMinutesDetails} }),
+    api('POST', `/api/minutes/${handoffId}/claim`, { token: asstToken, body:{meetingDetails:enteredMinutesDetails} }),
   ]);
   const claims = [secretaryClaim, assistantClaim];
   const winningClaimIndex = claims.findIndex(result => result.status === 200);
@@ -530,7 +534,7 @@ try {
   shortHandoffForm.append('transcriptText', 'Too short to generate reliable minutes.');
   const shortHandoff = await api('POST', '/api/minutes/handoff', { token: wmToken, body: shortHandoffForm, raw: true });
   const shortHandoffId = shortHandoff.payload.minutes?.id;
-  const failedClaim = await api('POST', `/api/minutes/${shortHandoffId}/claim`, { token: secToken });
+  const failedClaim = await api('POST', `/api/minutes/${shortHandoffId}/claim`, { token: secToken, body:{meetingDetails:enteredMinutesDetails} });
   const afterFailedClaim = await api('GET', '/api/minutes', { token: asstToken });
   const releasedSource = afterFailedClaim.payload.minutes?.find(item => item.id === shortHandoffId);
   check('a failed generation returns the source to both Secretaries instead of stranding it',
@@ -540,6 +544,7 @@ try {
   await api('DELETE', `/api/minutes/${shortHandoffId}`, { token: wmToken });
 
   const ownerMinutesForm = new FormData();
+  ownerMinutesForm.append('meetingDetails',JSON.stringify(enteredMinutesDetails));
   ownerMinutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '
     + 'A quorum was present. The Lodge discussed business, acted on a motion, and closed in due form. '
     + 'This is a synthetic Plaud transcript used only to verify the owner minutes workflow.');
@@ -564,6 +569,7 @@ try {
   check('a deleted draft cannot be retrieved through preview', deletedPreview.status === 404);
   const mailBeforeMinutes = deliveredMail.length;
   const minutesForm = new FormData();
+  minutesForm.append('meetingDetails',JSON.stringify(enteredMinutesDetails));
   minutesForm.append('transcriptText', 'The Worshipful Master opened the Lodge in due form. '
     + 'A quorum was present. The Lodge discussed business, acted on a motion, and closed in due form. '
     + 'This is a synthetic Plaud transcript used only by the automated test.');
@@ -628,6 +634,11 @@ try {
   const afterClockRejection=await api('GET','/api/minutes',{token:asstToken});
   const clockRecord=afterClockRejection.payload.minutes.find(row=>row.id===minutesId);
   check('time rejection preserves source, draft and unsigned state', clockRecord.status==='draft' && clockRecord.draft.closingTime==='945' && !clockRecord.preparerAttestedAt);
+  for (const field of Object.keys(enteredMinutesDetails)) {
+    await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken,body:{draft:{...revisedDraft,[field]:null}}});
+    const blocked=await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
+    check(`preparer cannot submit without entered ${field}`,blocked.status===409);
+  }
   revisedDraft.sections[0].body += ' The officers were examined in their stations and duties.';
   await api('PUT', `/api/minutes/${minutesId}`, { token: asstToken, body: { draft: revisedDraft } });
   const incompleteAttendance = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
@@ -836,6 +847,7 @@ try {
     `${minutesNotices.length} notices`);
 
   const secretarySource = new FormData();
+  secretarySource.append('meetingDetails',JSON.stringify(enteredMinutesDetails));
   secretarySource.append('transcriptText', 'The Lodge opened in due form with a quorum present. The Secretary recorded the business of the meeting, the motion and its disposition. The Lodge closed in due form after completing its business.');
   const secretaryDraft = await api('POST', '/api/minutes/generate', { token: secToken, body: secretarySource, raw: true });
   const secretaryMinutesId = secretaryDraft.payload.minutes?.id;
@@ -903,6 +915,7 @@ try {
     secretaryApproved.status === 200 && secretaryApproved.payload.minutes.status === 'approved_by_lodge');
 
   const ownSource = new FormData();
+  ownSource.append('meetingDetails',JSON.stringify(enteredMinutesDetails));
   ownSource.append('transcriptText', 'Meeting date: 2026-09-03. The Lodge opened at 7:30 PM. The committee reported. The Lodge closed at 9:00 PM.');
   const ownMinutes = await api('POST', '/api/minutes/generate', { token: wmToken, body: ownSource, raw: true });
   const ownId = ownMinutes.payload.minutes?.id;

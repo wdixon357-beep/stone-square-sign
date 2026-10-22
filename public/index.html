@@ -342,6 +342,21 @@
               <div class="panel-title"><div><p class="eyebrow">NEW DRAFT</p><h2>Add your meeting source</h2></div><span class="file-badge">TXT DOCX PDF</span></div>
               <p class="helper">Use compiled meeting notes or a corrected Plaud transcript. The Worshipful Master can send the source to Adrian Reese and William McDuffie without creating the draft. Either Secretary may then claim it, and the other cannot duplicate the work.</p>
               <p id="minutesGenerationStatus" class="helper generation-status" role="status"></p>
+              <section class="minutes-intake-details" aria-labelledby="minutesIntakeTitle">
+                <h3 id="minutesIntakeTitle">Enter the meeting details</h3>
+                <p>Complete all eight details before creating the draft. Your entries carry into the draft and preview.<span class="owner-only"> You can still hand off source material without filling them in.</span></p>
+                <div class="minutes-meta-grid minutes-intake-grid" id="minutesIntakeFields">
+                <div><label for="minutesIntakeMeetingDate">Meeting date</label><div class="minutes-date-control"><input id="minutesIntakeMeetingDate" type="text" placeholder="Choose or enter the meeting date" autocomplete="off" /><input id="minutesIntakeMeetingDateCalendar" type="date" aria-label="Choose meeting date" title="Choose meeting date" /></div></div>
+                <div><label for="minutesIntakeMeetingType">Meeting type</label><select id="minutesIntakeMeetingType"><option value="">Choose meeting type</option><option value="Stated Communication">Stated Communication</option><option value="other">Other</option></select><input id="minutesIntakeMeetingTypeOther" class="hidden" type="text" aria-label="Other meeting type" placeholder="Enter the meeting type" maxlength="100" /></div>
+                <div><label for="minutesIntakeDegree">Degree</label><select id="minutesIntakeDegree"><option value="">Choose degree</option><option value="First Degree">First Degree</option><option value="Second Degree">Second Degree</option><option value="Third Degree">Third Degree</option><option value="Round Table">Round Table</option></select></div>
+                <div><label for="minutesIntakeQuorum">Quorum</label><select id="minutesIntakeQuorum"><option value="">Choose Yes or No</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
+                <div><label for="minutesIntakeOpeningTime">Opening time</label><input id="minutesIntakeOpeningTime" type="text" placeholder="7:30 PM" aria-describedby="minutesIntakeTimeHelp" /></div>
+                <div><label for="minutesIntakeClosingTime">Closing time</label><input id="minutesIntakeClosingTime" type="text" placeholder="9:45 PM" aria-describedby="minutesIntakeTimeHelp" /></div>
+                <p id="minutesIntakeTimeHelp" class="muted minutes-time-help">Enter the actual times with AM or PM, or use 24-hour times such as 19:30. Do not enter an event's scheduled time.</p>
+                <div><label for="minutesIntakePresiding">Presiding officer</label><input id="minutesIntakePresiding" type="text" placeholder="Enter the officer who presided" maxlength="160" /></div>
+                <div><label for="minutesIntakeNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesIntakeNextMeeting" type="text" placeholder="Choose or enter the next meeting date" autocomplete="off" /><input id="minutesIntakeNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
+              </div>
+              </section>
               <label for="minutesSourceType">Source format</label><select id="minutesSourceType"><option value="auto">Detect automatically</option><option value="compiled_notes">Compiled meeting notes</option><option value="transcript">Meeting transcript</option></select>
               <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose meeting notes or a transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
               <input id="minutesTranscriptFile" class="visually-hidden" type="file" accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
@@ -570,6 +585,7 @@
               <div>
                 <label for="minutesMeetingType">Meeting type</label>
                 <select id="minutesMeetingType">
+                  <option value="">Choose meeting type</option>
                   <option value="Stated Communication">Stated Communication</option>
                   <option value="other">Other</option>
                 </select>
@@ -672,6 +688,29 @@
               <button id="recordMinutesApproval" class="primary" type="button">Record Lodge approval</button>
             </section>
             <p id="minutesEditorMessage" class="message" role="status"></p>
+          </form>
+        </div>
+      </section>
+
+      <section id="minutesClaimModal" class="modal hidden" aria-hidden="true" aria-modal="true" role="dialog" aria-labelledby="minutesClaimTitle">
+        <div class="modal-body minutes-claim-body">
+          <button id="closeMinutesClaim" class="modal-close" type="button" aria-label="Cancel claiming the source">&times;</button>
+          <p class="eyebrow">SECRETARY'S OFFICE</p><h2 id="minutesClaimTitle">Enter the meeting details</h2>
+          <p>Complete all eight details, then create the draft. The source will be assigned to you when you continue.</p>
+          <form id="minutesClaimForm">
+            <div class="minutes-meta-grid minutes-intake-grid" id="minutesClaimFields">
+                <div><label for="minutesClaimMeetingDate">Meeting date</label><div class="minutes-date-control"><input id="minutesClaimMeetingDate" type="text" placeholder="Choose or enter the meeting date" autocomplete="off" /><input id="minutesClaimMeetingDateCalendar" type="date" aria-label="Choose meeting date" title="Choose meeting date" /></div></div>
+                <div><label for="minutesClaimMeetingType">Meeting type</label><select id="minutesClaimMeetingType"><option value="">Choose meeting type</option><option value="Stated Communication">Stated Communication</option><option value="other">Other</option></select><input id="minutesClaimMeetingTypeOther" class="hidden" type="text" aria-label="Other meeting type" placeholder="Enter the meeting type" maxlength="100" /></div>
+                <div><label for="minutesClaimDegree">Degree</label><select id="minutesClaimDegree"><option value="">Choose degree</option><option value="First Degree">First Degree</option><option value="Second Degree">Second Degree</option><option value="Third Degree">Third Degree</option><option value="Round Table">Round Table</option></select></div>
+                <div><label for="minutesClaimQuorum">Quorum</label><select id="minutesClaimQuorum"><option value="">Choose Yes or No</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
+                <div><label for="minutesClaimOpeningTime">Opening time</label><input id="minutesClaimOpeningTime" type="text" placeholder="7:30 PM" aria-describedby="minutesClaimTimeHelp" /></div>
+                <div><label for="minutesClaimClosingTime">Closing time</label><input id="minutesClaimClosingTime" type="text" placeholder="9:45 PM" aria-describedby="minutesClaimTimeHelp" /></div>
+                <p id="minutesClaimTimeHelp" class="muted minutes-time-help">Enter the actual times with AM or PM, or use 24-hour times such as 19:30. Do not enter an event's scheduled time.</p>
+                <div><label for="minutesClaimPresiding">Presiding officer</label><input id="minutesClaimPresiding" type="text" placeholder="Enter the officer who presided" maxlength="160" /></div>
+                <div><label for="minutesClaimNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesClaimNextMeeting" type="text" placeholder="Choose or enter the next meeting date" autocomplete="off" /><input id="minutesClaimNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
+              </div>
+            <p id="minutesClaimMessage" class="message" role="status"></p>
+            <div class="row-buttons"><button id="cancelMinutesClaim" class="secondary" type="button">Cancel</button><button id="createClaimedMinutes" class="primary" type="submit">Claim and create draft</button></div>
           </form>
         </div>
       </section>

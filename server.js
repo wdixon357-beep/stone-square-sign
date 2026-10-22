@@ -28,6 +28,7 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
+import {MINUTES_MEETING_DETAILS_FIELDS, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails} from './public/minutes-meeting-details.js';
 import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
 import { attendanceReviewIssues, attendanceRecordIssues, closingReviewIssues } from './minutes-format.js';
@@ -1061,6 +1062,19 @@ const transcriptFromUpload = async (file) => {
   return file.buffer.toString('utf8');
 };
 
+const enteredMinutesMeetingDetails = value => {
+  let details = value;
+  if (typeof details === 'string') {
+    try { details = JSON.parse(details); } catch { details = null; }
+  }
+  const issues = minutesMeetingDetailsIssues(details);
+  if (details && typeof details === 'object' && Object.keys(details).some(key => !MINUTES_MEETING_DETAILS_FIELDS.includes(key))) {
+    issues.push('Use only the eight meeting detail fields.');
+  }
+  if (issues.length) throw Object.assign(new Error(issues.join(' ')), {statusCode:400, code:'MINUTES_MEETING_DETAILS_REQUIRED'});
+  return normalizeMinutesMeetingDetails(details);
+};
+
 // Upgrade only an unsigned working copy. Captured attestation snapshots and
 // pending/final records retain the format in which they were submitted.
 const workingMinutesDraft = (row, value = JSON.parse(row.draft_json)) => {
@@ -2074,6 +2088,7 @@ app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
       if (!['secretary', 'assistant_secretary'].includes(req.user.role)) {
         return res.status(403).json({ error: 'The Secretary or Assistant Secretary claims a minutes source from this queue.' });
       }
+      const meetingDetails = enteredMinutesMeetingDetails(req.body?.meetingDetails);
       await recoverStaleMinutesClaims();
       const row = await getMinutesRow(req.params.id);
       if (!row) return res.status(404).json({ error: 'Meeting minutes source not found.' });
@@ -2094,7 +2109,7 @@ app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
       claimed = true;
       broadcast('minutes_records_changed', { minutesId: row.id, reason: 'source_claimed', preparer: req.user.name });
       const sourceType = String(JSON.parse(row.draft_json || '{}').sourceType || 'auto');
-      const draft = await generateMinutesDraft(row.transcript_text, { sourceType, generateStructured: generationFor(req.user.id) });
+      const draft = await generateMinutesDraft(row.transcript_text, { sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
       const savedAt = nowIso();
       const saved = await dbRun(
         `UPDATE meeting_minutes SET meeting_date = ?, draft_json = ?, status = 'draft',
@@ -2108,7 +2123,7 @@ app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
         action: 'minutes_source_claimed',
         ip: req.ip,
         userAgent: req.get('user-agent') || '',
-        details: { minutesId: row.id, sourceUploadedByUserId: row.source_uploaded_by_user_id },
+        details: { minutesId: row.id, sourceUploadedByUserId: row.source_uploaded_by_user_id, enteredMeetingDetails: meetingDetails },
       });
       broadcast('minutes_records_changed', { minutesId: row.id, reason: 'draft_created', preparer: req.user.name });
       res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
@@ -2128,10 +2143,11 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
   rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 60 * 60 * 1000 }),
   minutesUpload.single('transcriptFile'), async (req, res, next) => {
     try {
+      const meetingDetails = enteredMinutesMeetingDetails(req.body?.meetingDetails);
       const uploadedText = await transcriptFromUpload(req.file);
       const transcript = uploadedText || String(req.body.transcriptText || '').trim();
       if (!transcript) return res.status(400).json({ error: 'Choose meeting notes or a transcript, or paste the text.' });
-      const draft = await generateMinutesDraft(transcript, { sourceType: req.body.sourceType, generateStructured: generationFor(req.user.id) });
+      const draft = await generateMinutesDraft(transcript, { sourceType: req.body.sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
       const id = crypto.randomUUID();
       const time = nowIso();
       await dbRun(
@@ -2146,7 +2162,7 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
       await dbRun(
         `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
          VALUES (?, 'minutes_draft_created', ?, ?, ?, ?)`,
-        [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: id }), time],
+        [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: id, enteredMeetingDetails: meetingDetails }), time],
       );
       res.status(201).json({ minutes: minutesForResponse(await getMinutesRow(id)) });
     } catch (error) {
@@ -2193,7 +2209,9 @@ app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, rateL
     if (!canOpenWorkingMinutes(req.user, row)) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'draft') return res.status(409).json({ error: 'Reopen this record before preparing corrections.' });
     if (req.body.expectedUpdatedAt !== row.updated_at) return res.status(409).json({ error: 'The record changed. Refresh before reorganizing.' });
-    const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType, generateStructured: generationFor(req.user.id) });
+    const meetingDetails = enteredMinutesMeetingDetails(req.body.meetingDetails
+      ?? Object.fromEntries(MINUTES_MEETING_DETAILS_FIELDS.map(field => [field, JSON.parse(row.draft_json)[field]])));
+    const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
     const current = await getMinutesRow(row.id);
     if (!current || current.status !== 'draft' || current.updated_at !== row.updated_at) return res.status(409).json({ error: 'The record changed while its source was being organized. Reopen it before continuing.' });
     res.json({ draft });
@@ -2214,7 +2232,7 @@ app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, 
     // Only untouched, already-attested legacy records retain the older gate.
     const requireStationCoverage = !masterReview || Number(JSON.parse(row.draft_json).officerAttendanceVersion) >= 2;
     const draft = currentMinutesEditorialDraft(normalizeMinutesDraft(requireStationCoverage
-      ? {...req.body.draft, officerAttendanceVersion:2} : req.body.draft));
+      ? {...req.body.draft, officerAttendanceVersion:2, meetingDetailsVersion:1} : {...req.body.draft, meetingDetailsVersion:1}));
     if (masterReview || req.user.role === 'owner' && Number(row.preparer_user_id || row.created_by_user_id) !== req.user.id) {
       const recorded = masterReview ? JSON.parse(row.submitted_draft_json || 'null') : JSON.parse(row.draft_json);
       draft.attendanceReview = preparerAttendanceReviewForEdit(recorded, draft);
@@ -2252,7 +2270,7 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
     if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
     draft.officerAttendanceVersion = 2;
     draft.closingFormatVersion = 3;
-    const reviewIssues = [...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
+    const reviewIssues = [...minutesMeetingDetailsIssues(draft), ...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
     if (reviewIssues.length) return res.status(409).json({ error: reviewIssues.join(' ') });
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
