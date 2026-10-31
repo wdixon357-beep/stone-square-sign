@@ -795,7 +795,7 @@ final class AppModel: ObservableObject {
 
     func signatureAuthorizationPreview(requestID: String) async throws -> Data {
         guard user?.role == "owner", let baseURL else { throw ClientError.unauthorized("Only the Worshipful Master can authorize a signature request.") }
-        let safeID = AssistantWorkspace.routeID(requestID)
+        let safeID = requestID.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_"))) ?? ""
         let path = "/api/assistant/signature-requests/\(safeID)/preview"
         guard let url = URL(string: path, relativeTo: baseURL) else { throw ClientError.invalidServer }
         var request = URLRequest(url: url)
