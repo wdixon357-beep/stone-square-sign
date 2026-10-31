@@ -1186,3 +1186,6 @@ body:has(#appCard:not(.hidden)) { background: #f2f5f6; }
   .assistant-workspace .row-buttons > button { flex: 1 1 160px; }
   .assistant-token-region { padding: 14px; }
 }
+@media (max-width: 600px) {
+  .assistant-workspace .row-buttons > button { flex: 0 1 auto; min-height: 44px; }
+}
