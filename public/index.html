@@ -140,6 +140,7 @@
             <div class="nav-group" data-group="documents"><button class="nav-group-title" type="button" data-open-group="documents" aria-expanded="false">Documents And Approvals <span aria-hidden="true">⌄</span></button>
             <button id="correspondenceNav" class="nav-item hidden" type="button"><span>LTR</span> Lodge Correspondence</button>
             <button id="queueNav" class="nav-item signer-only" type="button"><span>◫</span> Live Queue</button>
+            <button id="attestationsNav" class="nav-item owner-only" type="button"><span>MY</span> My Attestations</button>
             <button id="builderNav" class="nav-item owner-only" type="button"><span>＋</span> Create Dispensation</button>
             <button id="approvalsNav" class="nav-item signer-only" type="button"><span>&#10003;</span> Approvals</button>
             <button id="proposalsNav" class="nav-item warden-only" type="button"><span>&#9998;</span> My Dispensation Proposals</button>
@@ -152,6 +153,7 @@
             </div>
             <div class="nav-group" data-group="people"><button class="nav-group-title" type="button" data-open-group="people" aria-expanded="false">People And Lodge <span aria-hidden="true">⌄</span></button>
             <button id="accessNav" class="nav-item owner-only" type="button"><span>ACC</span> Officer Access</button>
+            <button id="assistantNav" class="nav-item owner-only" type="button"><span>MU</span> Muse Assistant</button>
             <button id="memberAccessNav" class="nav-item owner-only" type="button"><span>MEM</span> Member Access</button>
             <button id="candidateTrackerSidebar" class="nav-item candidate-only" type="button"><span>CT</span> Candidate Tracker</button>
             <button id="suggestionsNav" class="nav-item suggestions-only" type="button"><span>SB</span> Suggestion Box</button>
@@ -218,6 +220,8 @@
               <button id="minutesMenuCard" class="document-menu-card minutes-only" type="button"><i>MIN</i><span><strong>Meeting Minutes</strong><small id="minutesMenuDescription">Read finalized meeting minutes</small></span><b>›</b></button>
               <button id="agendaMenuCard" class="document-menu-card owner-only" type="button"><i>AG</i><span><strong>Agenda Creator</strong><small>Create, save, resume, and preview Lodge agenda drafts</small></span><b>›</b></button>
               <button id="activityMenuCard" class="document-menu-card owner-only" type="button"><i>ACT</i><span><strong>Dashboard Activity</strong><small>Account sign-ins, areas visited, interactions and estimated active time</small></span><b>›</b></button>
+              <button id="assistantMenuCard" class="document-menu-card owner-only" type="button"><i>MU</i><span><strong>Muse Assistant</strong><small>Manage separate assistant access and review proposed changes</small></span><b>›</b></button>
+              <button id="attestationsMenuCard" class="document-menu-card owner-only" type="button"><i>MY</i><span><strong>My Attestations</strong><small>Review documents that require your own signature or attestation</small></span><b>›</b></button>
               <button id="memberAccessMenuCard" class="document-menu-card owner-only" type="button"><i>MEM</i><span><strong>Member Access</strong><small>Review roster email matches and create Brother accounts</small></span><b>›</b></button>
               <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small id="treasuryMenuDescription">Read finalized treasurer reports</small></span><b>›</b></button>
               <button id="candidateMenuCard" class="document-menu-card candidate-only" type="button"><i>CT</i><span><strong>Candidate Tracker</strong><small id="candidateMenuDescription">Open the Candidate Tracker</small></span><b>›</b></button>
@@ -227,6 +231,8 @@
           </section>
           <section id="groupLandingSection" class="group-landing hidden" aria-live="polite"><div class="content-head"><div><p class="eyebrow">STONE SQUARE LODGE NO. 22</p><h1 id="groupLandingTitle">Dashboard tools</h1><p id="groupLandingDescription"></p></div></div><div id="groupLandingLinks" class="group-landing-links"></div></section>
           <section id="settingsSection" class="hidden"><div class="content-head"><div><h1>My Settings</h1><p>Your account and signed-in devices.</p></div></div><div class="panel"><h2 id="settingsName"></h2><p id="settingsEmail"></p><p>New sign-ins last up to 90 days and renew when used near expiration. Older sign-ins may have a different expiration. Sign out when finished on a shared device.</p><div class="row-buttons"><button id="settingsSignature" class="secondary" type="button">Manage my signature</button><button id="settingsSignout" class="secondary" type="button">Sign out on this device</button></div></div><section class="panel device-sessions"><div class="panel-title"><div><p class="eyebrow">ACCOUNT SECURITY</p><h2>Signed-in devices</h2></div><button id="refreshDeviceSessions" class="secondary" type="button">Refresh</button></div><p class="helper">Review devices that can open your Lodge account. End any sign-in you do not recognize.</p><p id="deviceSessionsMessage" class="message" role="status"></p><div id="deviceSessionsList"></div><button id="revokeOtherSessions" class="secondary danger-text" type="button">Sign out all other devices</button></section></section>
+          <section id="assistantSection" class="assistant-workspace hidden" aria-label="Muse Assistant"></section>
+          <section id="attestationsSection" class="assistant-workspace hidden" aria-label="My Attestations"></section>
           <section id="buildingSection" class="hidden"></section>
           <section id="calendarSection" class="hidden"></section>
           <section id="activitySection" class="hidden"></section>
@@ -739,7 +745,8 @@
           <div id="finalReviewFields" class="paste-review-fields"></div>
           <p>The officer section is intentionally blank. The selected officer completes it when signing.</p>
           <iframe id="dispensationPreviewFrame" class="pdf-frame" title="Dispensation PDF preview"></iframe>
-          <div class="row-buttons"><button id="backFromFinalReview" class="secondary" type="button">Back to questions</button><button id="sendDispensation" class="primary" type="button">Send for officer signature</button></div>
+          <p class="helper">This action applies your saved Worshipful Master signature and sends the document for the officer's signature.</p>
+          <div class="row-buttons"><button id="backFromFinalReview" class="secondary" type="button">Back to questions</button><button id="sendDispensation" class="primary" type="button">Sign and send for officer signature</button></div>
           <p id="finalReviewMessage" class="message" role="status"></p>
         </div>
       </section>

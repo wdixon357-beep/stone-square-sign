@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { dbAll, dbGet, dbRun } from './db.js';
+import { withTransaction } from './db.js';
+import { assertAssistantRecordUnchanged } from './assistant-access.js';
 import { AGENDA_OFFICERS } from './agenda.js';
 import { resolvePermissions } from './access-control.js';
 
@@ -296,22 +298,26 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
   app.post('/api/correspondence/:id/return', requireAuth, async (req, res, next) => {
     try {
       if (!eligible(req.user)) return denied(res);
-      const row = await dbGet('SELECT * FROM correspondence_drafts WHERE id=?', [req.params.id]);
-      if (!row) return res.status(404).json({ error: 'Letter not found.' });
-      if (row.status !== 'awaiting_secretary') return res.status(409).json({ error: 'Only an unsigned assigned letter can be returned for correction.' });
-      if (req.user.role !== 'owner' && row.assigned_to_user_id !== req.user.id &&
-          !(row.signing_mode === 'either' && [row.shared_signer_1_id, row.shared_signer_2_id].includes(req.user.id))) return denied(res);
       const note = clean(req.body?.reason, 1000);
       if (!note) return res.status(400).json({ error: 'Say what needs to change before returning this letter.' });
+      const result = await withTransaction(async () => {
+      const row = await dbGet('SELECT * FROM correspondence_drafts WHERE id=? FOR UPDATE', [req.params.id]);
+      if (!row) throw Object.assign(new Error('Letter not found.'), {statusCode:404});
+      if (row.status !== 'awaiting_secretary') throw Object.assign(new Error('Only an unsigned assigned letter can be returned for correction.'), {statusCode:409});
+      if (req.user.role !== 'owner' && row.assigned_to_user_id !== req.user.id &&
+          !(row.signing_mode === 'either' && [row.shared_signer_1_id, row.shared_signer_2_id].includes(req.user.id))) throw Object.assign(new Error('This letter is not assigned to you.'), {statusCode:403});
+      await assertAssistantRecordUnchanged(req);
       const now = nextRevisionTime(row);
       const updated = await dbRun(`UPDATE correspondence_drafts SET status='draft',assigned_to_user_id=NULL,
         shared_signer_1_id=NULL,shared_signer_2_id=NULL,submitted_at=NULL,return_note=?,updated_at=? WHERE id=? AND status='awaiting_secretary' AND updated_at=?`,
       [note, now, row.id, row.updated_at]);
-      if (!updated.changes) return res.status(409).json({ error: 'The letter changed. Refresh before returning it.' });
+      if (!updated.changes) throw Object.assign(new Error('The letter changed. Refresh before returning it.'), {statusCode:409});
       await dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',
         [req.user.id, 'correspondence_returned_for_correction', req.ip, JSON.stringify({ id: row.id, reason: note }), now]);
-      res.json({ draft: dto(await dbGet('SELECT * FROM correspondence_drafts WHERE id=?', [row.id])) });
-      broadcast?.('correspondence_changed', { id: row.id });
+      return { draft: dto(await dbGet('SELECT * FROM correspondence_drafts WHERE id=?', [row.id])) };
+      });
+      res.json(result);
+      broadcast?.('correspondence_changed', { id: result.draft.id });
     } catch (error) { next(error); }
   });
   app.post('/api/correspondence/:id/sign', requireAuth, async (req, res, next) => {

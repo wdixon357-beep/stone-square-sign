@@ -1,4 +1,5 @@
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
+import { assertAssistantRecordUnchanged } from './assistant-access.js';
 export const CAPABILITIES = [
  ['building.request','Request use of the Lodge building'],['building.view','View building requests'],['building.decide','Approve or decline building requests'],['calendar.view','View Lodge Calendar'],['calendar.manage','Manage Lodge Calendar events'],
  ['reports.create','Prepare reports'],['minutes.view','View finished meeting minutes'],['minutes.prepare','Prepare and edit meeting minutes'],
@@ -93,6 +94,7 @@ export function mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged=
  const table=match[1]==='user'?'users':'invitations',id=Number(match[2]);
  await withTransaction(async()=>{
  const account=await dbGet(`SELECT * FROM ${table} WHERE id=? FOR UPDATE`,[id]);
+ await assertAssistantRecordUnchanged(req);
  if(!account||(table==='invitations'&&(account.used_at||account.expires_at<=new Date().toISOString())))throw Object.assign(new Error('Officer account or pending invitation not found.'),{statusCode:404});
  if(account.role==='owner')throw Object.assign(new Error('The Worshipful Master administrator retains full access.'),{statusCode:403});
  const permissions=normalizePermissions(req.body.permissions,account.role),stored=permissionsForStorage(req.body.permissions,account.role);

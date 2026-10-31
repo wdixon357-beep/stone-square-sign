@@ -52,6 +52,8 @@ const state = {
   duesLedger: null,
 };
 let treasuryWorkspace;
+let assistantWorkspace;
+let assistantWorkspaceLoading;
 let agendaWorkspace;
 let correspondenceWorkspace;
 let buildingCalendarWorkspace;
@@ -231,6 +233,7 @@ const restoreWebDrafts = () => {
 
 const hasUnsavedWorkspace = section => ({
   proposals: state.proposalDirty,
+  proposalReview: state.proposalReviewDirty,
   builder: state.dispensationDirty,
   minutes: state.minutesSourceDirty,
   treasury: Boolean(treasuryWorkspace?.dirty),
@@ -239,6 +242,7 @@ const hasUnsavedWorkspace = section => ({
   calendar: Boolean(buildingCalendarWorkspace?.calendarDirty),
   building: Boolean(buildingCalendarWorkspace?.hasUnsavedRequest?.()),
   queue: Boolean($('accessControls')?.dirtyAccessKeys?.size),
+  assistant: typeof assistantWorkspace !== 'undefined' && Boolean(assistantWorkspace?.dirty),
 }[section] || false);
 
 document.addEventListener('keydown', event => {
@@ -646,6 +650,7 @@ const applyWorkspacePermissions = user => {
   $('builderMasterName').textContent = user.name;
   $('landingGreeting').textContent = `${easternGreeting()}, ${user.name}`;
   $('landingRole').textContent = roleLabel(user.role);
+  if (user.role !== 'owner') assistantWorkspace?.dispose();
   document.querySelectorAll('.owner-only').forEach((element) => {
     element.classList.toggle('hidden', user.role !== 'owner');
   });
@@ -688,6 +693,7 @@ const clearMemberAccessInvite = () => {
 };
 
 const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
+  assistantWorkspace?.dispose();
   state.user = user;
   legacyReportBridge.request();
   clearMemberAccessInvite();
@@ -720,7 +726,7 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   } else hide($('serviceHealthAlert'));
   resetMinutesPreparationContext();
   restoreWebDrafts();
-  const supportedDeepLinks = new Set(['home','building','calendar','reports','correspondence','minutes','treasury','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports']);
+  const supportedDeepLinks = new Set(['home','building','calendar','reports','correspondence','minutes','treasury','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports','assistant','attestations']);
   showWorkspaceSection(supportedDeepLinks.has(requestedWorkspaceSection) ? requestedWorkspaceSection : 'home');
   hide($('authCard'));
   show($('appCard'));
@@ -778,6 +784,7 @@ const refreshSessionPermissions = async () => {
       state.authEpoch += 1;
       state.user = null;
       legacyReportBridge.clear();
+      if (typeof assistantWorkspace !== 'undefined') assistantWorkspace?.dispose();
       clearMemberAccessInvite();
       hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
       setMessage(authMessage, 'Your session is no longer authorized. Sign in again to continue.', true);
@@ -1090,7 +1097,7 @@ const dashboardGroupForSection = section => ({
   home: 'home', calendar: 'meetings', minutes: 'meetings', agenda: 'meetings', reports: 'meetings', receivedReports: 'meetings',
   correspondence: 'documents', queue: 'documents', builder: 'documents', approvals: 'documents', proposals: 'documents', proposalReview: 'documents',
   dues: 'dues', myDues: 'dues', treasury: 'dues',
-  access: 'people', memberAccess: 'people', suggestions: 'people', building: 'people',
+  access: 'people', memberAccess: 'people', suggestions: 'people', building: 'people', assistant: 'people', attestations: 'documents',
   activity: 'account', settings: 'account',
 })[section] || 'more';
 
@@ -1335,6 +1342,7 @@ if (typeof MutationObserver !== 'undefined') {
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (state.activeSection && section !== state.activeSection && hasUnsavedWorkspace(state.activeSection)
       && !window.confirm('Leave this unfinished work? It will stay in this browser tab so you can return to it.')) return false;
+  state.assistantReviewEpoch = (state.assistantReviewEpoch || 0) + 1;
   const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], correspondence: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.ledger'], myDues: ['dues.self'], suggestions: ['suggestions.create'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
   if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
   if (section === 'correspondence' && !['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role)) section = 'home';
@@ -1346,8 +1354,14 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (section === 'calendar' && !skipLoad) buildingCalendarWorkspace?.calendar();
   $('settingsSection').classList.toggle('hidden', section !== 'settings');
   $('settingsNav').classList.toggle('active', section === 'settings');
-  if(['activity','memberAccess','builder','proposalReview','agenda','receivedReports'].includes(section)&&state.user?.role!=='owner')section='home';
+  if(['activity','memberAccess','builder','proposalReview','agenda','receivedReports','assistant','attestations'].includes(section)&&state.user?.role!=='owner')section='home';
+  if (state.activeSection !== section) assistantWorkspace?.leave();
   state.activeSection = section;
+  $('assistantSection').classList.toggle('hidden', section !== 'assistant');
+  $('attestationsSection').classList.toggle('hidden', section !== 'attestations');
+  $('assistantNav').classList.toggle('active', section === 'assistant');
+  $('attestationsNav').classList.toggle('active', section === 'attestations');
+  if (['assistant', 'attestations'].includes(section) && !skipLoad) void renderAssistantWorkspace(section);
   resetWorkspaceScroll();
   activityTracker?.visit(section);
   $('activitySection').classList.toggle('hidden',section!=='activity');
@@ -1409,7 +1423,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (suggestions && !skipLoad) renderSuggestions();
   if (approvals && !skipLoad) renderApprovals();
   if (minutes && !skipLoad) renderMinutes();
-  if ((proposals || proposalReview) && !skipLoad) renderProposals();
+  if ((proposals || proposalReview) && !skipLoad && !(proposalReview && state.proposalReviewDirty)) renderProposals();
   /* Zeffy payments arrive from outside the app, so no in-app event can announce
    * them. While the dues page is the one on screen, re-read it on a timer so two
    * officers looking at once see the same figures. */
@@ -1434,9 +1448,116 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
     dues: 'Dues Ledger', myDues: 'My Dues', treasury: 'Treasurer Reports',
     access: 'Officer Access', memberAccess: 'Member Access', suggestions: 'Suggestion Box',
     building: 'Building Requests', activity: 'Dashboard Activity', settings: 'My Settings',
+    assistant: 'Muse Assistant', attestations: 'My Attestations',
   };
   $('workspaceTitle').textContent = sectionTitles[section] || 'Lodge Dashboard';
   return true;
+};
+
+// Queue navigation only opens current, record-specific review. It never submits an action.
+const openAssistantReview = async item => {
+  const userId = state.user?.id, epoch = state.authEpoch;
+  state.assistantReviewEpoch = (state.assistantReviewEpoch || 0) + 1;
+  let reviewEpoch = state.assistantReviewEpoch;
+  const current = () => state.user?.role === 'owner' && state.user?.id === userId && state.authEpoch === epoch && state.assistantReviewEpoch === reviewEpoch;
+  const navigate = (section, options) => { const result = showWorkspaceSection(section, options); reviewEpoch = state.assistantReviewEpoch; return result; };
+  if (!current() || !item || (!item.recordId && !['profile','createDispensation'].includes(item.section))) return;
+  const ensureClean = () => {
+  if (state.minutesEditorDirty) throw new Error('Save or close your open minutes corrections before opening another review.');
+  if (item.section === 'minutes' && state.minutesSourceDirty) throw new Error('Save or finish the meeting source already open before opening another review.');
+  if (item.section === 'treasury' && (treasuryWorkspace?.dirty || treasuryWorkspace?.busy)) throw new Error('Save or finish the banking work already open before opening another review.');
+  if (item.section === 'correspondence' && (correspondenceWorkspace?.dirty || correspondenceWorkspace?.busy)) throw new Error('Save or finish the letter already open before opening another review.');
+  if (item.section === 'building' && buildingCalendarWorkspace?.hasUnsavedRequest?.()) throw new Error('Finish the building request already open before opening another review.');
+  if (item.section === 'proposalReview' && state.proposalReviewDirty) throw new Error('Finish your open proposal review before opening another review.');
+  };
+  ensureClean();
+  const section = item.section;
+  const targetRoot = $(({minutes:'minutesSection',documents:'queueSection',queue:'queueSection',treasury:'treasurySection',correspondence:'correspondenceSection',building:'buildingSection',proposalReview:'proposalReviewSection'})[section]);
+  const wasInert = Boolean(targetRoot?.inert);
+  if (targetRoot) targetRoot.inert = true;
+  try {
+  if (section === 'minutes') {
+    if (!navigate('minutes', { skipLoad: true })) return;
+    const { minutes = [] } = await apiFetch('/api/minutes');
+    if (!current()) return;
+    ensureClean();
+    const record = minutes.find(record => record.id === item.recordId);
+    if (!record) throw new Error('These minutes are no longer available to your account. Refresh My Attestations.');
+    state.minutes = minutes;
+    await Promise.all([minutesDatesReady, minutesAttendanceReady, minutesMeetingDetailsReady]);
+    if (current()) { ensureClean(); openMinutesEditor(record.id); }
+  } else if (['documents', 'queue'].includes(section)) {
+    if (!navigate('queue', { skipLoad: true })) return;
+    const { document: record } = await apiFetch(`/api/documents/${encodeURIComponent(item.recordId)}`);
+    if (!current()) return;
+    ensureClean();
+    const assignedUnsigned = record?.signers?.some(signer => !signer.signed_at && !signer.superseded_at && (signer.user_id === userId || (!signer.user_id && signer.signer_role === state.user.role)));
+    if (!assignedUnsigned || ['completed', 'rescinded'].includes(record.status)) throw new Error('This document is not currently waiting for your signature. Refresh My Attestations.');
+    await openSignerModal(record.id, record.title || record.original_name);
+  } else if (section === 'treasury') {
+    if (!navigate('treasury', { skipLoad: true })) return;
+    const { reports = [] } = await apiFetch('/api/treasury');
+    if (!current()) return;
+    ensureClean();
+    const record = reports.find(record => record.id === item.recordId);
+    if (!record) throw new Error('This report is no longer available to your account. Refresh My Attestations.');
+    treasuryWorkspace?.open(record);
+  } else if (section === 'correspondence') {
+    if (!navigate('correspondence', { skipLoad: true })) return;
+    const [available, response] = await Promise.all([apiFetch('/api/correspondence/signers'), apiFetch('/api/correspondence')]);
+    if (!current()) return;
+    ensureClean();
+    const record = response.drafts?.find(record => record.id === item.recordId);
+    if (!record) throw new Error('This letter is no longer available to your account. Refresh My Attestations.');
+    correspondenceWorkspace.signers = available.signers || [];
+    correspondenceWorkspace.drafts = response.drafts || [];
+    correspondenceWorkspace.bind();
+    await correspondenceWorkspace.open(record);
+  } else if (section === 'createDispensation') {
+    if (state.dispensationDirty) throw new Error('Save or finish the dispensation already open before opening another review.');
+    navigate('builder');
+  } else if (section === 'proposalReview') {
+    if (!navigate('proposalReview', { skipLoad: true })) return;
+    await renderProposals();
+    if (!current()) return;
+    ensureClean();
+    const record = [...$('proposalReviewList').querySelectorAll('[data-proposal-id]')].find(element => element.dataset.proposalId === item.recordId);
+    if (!record) throw new Error('This proposal is no longer available. Refresh My Attestations.');
+    record.tabIndex = -1; record.focus({ preventScroll: true }); record.scrollIntoView({ behavior: 'auto', block: 'start' });
+  } else if (section === 'profile') {
+    if (!navigate('settings', { skipLoad: true })) return;
+    if (current()) await openSignatureSetup(false);
+  } else if (section === 'building') {
+    if (!navigate('building', { skipLoad: true })) return;
+    await buildingCalendarWorkspace?.building();
+    if (!current()) return;
+    ensureClean();
+    const control = [...$('buildingSection').querySelectorAll('[data-id]')].find(element => element.dataset.id === item.recordId);
+    const record = control?.closest('.building-request');
+    if (!record) throw new Error('This agreement has changed or is no longer waiting for your action. Refresh My Attestations.');
+    record.tabIndex = -1; record.focus({ preventScroll: true }); record.scrollIntoView({ behavior: 'auto', block: 'start' });
+  } else throw new Error('This personal action must be opened from its original Dashboard tool. No action has been submitted.');
+  } finally { if (targetRoot) targetRoot.inert = wasInert; }
+};
+
+const renderAssistantWorkspace = async section => {
+  if (state.user?.role !== 'owner') return;
+  const userId = state.user.id, epoch = state.authEpoch;
+  const current = () => state.user?.role === 'owner' && state.user?.id === userId && state.authEpoch === epoch && state.activeSection === section;
+  try {
+    if (!assistantWorkspace) {
+      assistantWorkspaceLoading ||= import(`/assistant-access.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`);
+      const { AssistantWorkspace } = await assistantWorkspaceLoading;
+      if (!current()) return;
+      assistantWorkspace ||= new AssistantWorkspace({ api: apiFetch, user: () => state.user, context: () => `${state.user?.id}:${state.authEpoch}`, accessRoot: $('assistantSection'), attestationsRoot: $('attestationsSection'), openReview: openAssistantReview });
+    }
+    if (current()) await assistantWorkspace.show(section === 'assistant' ? 'access' : 'attestations');
+  } catch (error) {
+    if (!current()) return;
+    assistantWorkspaceLoading = null;
+    const root = $(section === 'assistant' ? 'assistantSection' : 'attestationsSection');
+    root.replaceChildren(); const message = document.createElement('p'); message.setAttribute('role', 'status'); message.textContent = error.message || 'This workspace could not load. Open it again to retry.'; root.append(message);
+  }
 };
 
 const MINUTES_STATUS = {
@@ -2519,6 +2640,8 @@ const renderProposals = async () => {
   target.replaceChildren(...proposals.map((p) => {
     const card = document.createElement('article');
     card.className = 'card';
+    card.dataset.proposalId = p.id;
+    card.addEventListener('input', () => { state.proposalReviewDirty = true; });
     const head = document.createElement('div');
     head.className = 'row';
     head.append(
@@ -2581,12 +2704,14 @@ const renderProposals = async () => {
       const row = document.createElement('div');
       row.className = 'two';
       const decide = async (decision) => {
+        if (decision === 'approve' && !window.confirm('Approve this proposal and apply your saved Worshipful Master signature to the new dispensation? The existing workflow will notify the officers.')) return;
         row.querySelectorAll('button').forEach((b) => { b.disabled = true; });
         try {
           const payload = await apiFetch(`/api/proposals/${p.id}/decision`, {
             method: 'POST',
             body: JSON.stringify({ decision, wmNote: note.value.trim(), ...editedFields() }),
           });
+          state.proposalReviewDirty = false;
           await renderProposals();
           setNotificationMessage($('proposalReviewMessage'), 'Proposal status updated and saved.', payload);
         } catch (error) {
@@ -2599,7 +2724,7 @@ const renderProposals = async () => {
         b.addEventListener('click', () => decide(decision));
         return b;
       };
-      row.append(mk('Approve', 'primary', 'approve'), mk('Send back', 'secondary', 'changes'), mk('Decline', 'secondary', 'decline'));
+      row.append(mk('Sign and approve', 'primary', 'approve'), mk('Send back', 'secondary', 'changes'), mk('Decline', 'secondary', 'decline'));
       card.append(note, row, problem);
     }
 
@@ -2684,6 +2809,10 @@ $('accessNav').addEventListener('click', () => {
   $('officerPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('officerPanel').focus({ preventScroll: true });
 });
+$('assistantNav').addEventListener('click', () => showWorkspaceSection('assistant'));
+$('assistantMenuCard').addEventListener('click', () => showWorkspaceSection('assistant'));
+$('attestationsNav').addEventListener('click', () => showWorkspaceSection('attestations'));
+$('attestationsMenuCard').addEventListener('click', () => showWorkspaceSection('attestations'));
 $('activityNav').addEventListener('click',()=>showWorkspaceSection('activity'));
 $('activityMenuCard').addEventListener('click',()=>showWorkspaceSection('activity'));
 $('memberAccessNav').addEventListener('click',()=>showWorkspaceSection('memberAccess'));
@@ -3603,6 +3732,7 @@ $('resetSubmit').addEventListener('click', async () => {
 
 $('logoutBtn').addEventListener('click', async () => {
   legacyReportBridge.clear();
+  assistantWorkspace?.dispose();
   state.realtimeAbort?.abort();
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   state.authEpoch += 1;

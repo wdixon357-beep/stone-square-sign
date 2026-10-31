@@ -8,6 +8,7 @@ import { readTreasurySources } from './treasury-source.js';
 import { buildTreasuryPdf } from './treasury-pdf.js';
 import { easternDate, treasuryReportingWindow, treasuryWindowForDraft, applyTreasuryMeetingCycle } from './treasury-period.js';
 import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
+import { assertAssistantRecordUnchanged } from './assistant-access.js';
 const error = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 const bytes = v => v ? Buffer.from(v) : null;
 const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*1024*1024, files:5, fields:6, fieldSize:180000 }, fileFilter:(_req,file,done)=>/\.(pdf|png|jpe?g|txt)$/i.test(file.originalname)?done(null,true):done(error(400,'Choose a PDF, PNG, JPG or TXT file.')) });
@@ -145,6 +146,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(typeof req.body.enabled!=='boolean')throw error(400,'Choose an active account and its bank record access.');
     await withTransaction(async()=>{
       const user=await dbGet('SELECT id,role,permissions_json,roster_id FROM users WHERE id=? AND access_revoked_at IS NULL FOR UPDATE',[Number(req.params.userId)]);
+      await assertAssistantRecordUnchanged(req);
       if(!user)throw error(400,'Choose an active account and its bank record access.');
       if(user.role==='owner')throw error(409,'The Worshipful Master retains full access.');
       const permissions=new Set(resolvePermissions(user));
@@ -178,12 +180,15 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     })});
   }));
   app.post('/api/treasury/alerts/:id/dismiss',requirePrepare,route(async(req,res)=>{
+    await withTransaction(async()=>{
+    await assertAssistantRecordUnchanged(req);
     const row=await dbGet("SELECT id FROM treasury_reports WHERE id=? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL",[req.params.id]);
     if(!row)throw error(404,'That banking-information alert is no longer active.');
     const time=new Date().toISOString();
     await dbRun(`INSERT INTO treasury_alert_dismissals (report_id,user_id,dismissed_at)
       VALUES (?,?,?) ON CONFLICT(report_id,user_id) DO UPDATE SET dismissed_at=excluded.dismissed_at`,[row.id,req.user.id,time]);
     await audit(req,row.id,'alert_dismissed');
+    });
     res.json({ok:true});
   }));
   app.get('/api/treasury',route(async(req,res)=>{
@@ -237,6 +242,9 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     if(!preparer||!canPrepare(preparer))throw error(400,'Choose an active officer with treasurer report preparation access.');
     const draft=JSON.parse(row.draft_json);draft.sourceReviewed=false;
     await withTransaction(async()=>{
+      await assertAssistantRecordUnchanged(req);
+      const currentPreparer=await dbGet("SELECT id,name,role,permissions_json,roster_id FROM users WHERE id=? AND access_revoked_at IS NULL FOR SHARE",[preparer.id]);
+      if(!currentPreparer||!canPrepare(currentPreparer)||currentPreparer.name!==preparer.name||currentPreparer.role!==preparer.role)throw error(409,'The preparing officer changed. Reopen the report before assigning.');
       const result=await dbRun("UPDATE treasury_reports SET preparer_user_id=?,preparer_name=?,preparer_role=?,status='draft',draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",[preparer.id,preparer.name,preparer.role,JSON.stringify(draft),new Date().toISOString(),row.id,row.revision]);
       if(!result.changes){
         const current=await fetchRecord(row.id);
@@ -288,8 +296,11 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     const row=await record(req);if(!editable(row,req.user))throw error(403,'This report is read-only. Only its assigned preparing officer can edit it. The Worshipful Master can take over the report first.');revision(req,row);
     const saved=JSON.parse(row.draft_json),meetingCycle=treasuryWindowForDraft(saved)||await reportingWindow();
     const draft=normalizeTreasury(applyTreasuryMeetingCycle(normalizeTreasury(req.body.draft),meetingCycle));
-    const result=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?',[JSON.stringify(draft),new Date().toISOString(),row.id,row.revision]);
-    if(!result.changes)throw error(409,'This report changed. Reopen it before saving.');await audit(req,row.id,'edited');res.json({report:serial(await fetchRecord(row.id))});
+    await withTransaction(async()=>{
+      await assertAssistantRecordUnchanged(req);
+      const result=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?',[JSON.stringify(draft),new Date().toISOString(),row.id,row.revision]);
+      if(!result.changes)throw error(409,'This report changed. Reopen it before saving.');await audit(req,row.id,'edited');
+    });res.json({report:serial(await fetchRecord(row.id))});
   }));
   app.get('/api/treasury/:id/pdf',route(async(req,res)=>{
     const row=await record(req),snapshot=finalized(row)?await signedSnapshot(row):null;
@@ -337,10 +348,10 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
   }));
   app.post('/api/treasury/:id/mark-distributed',requirePrepare,route(async(req,res)=>{
     const row=await record(req);revision(req,row);if(!['owner','secretary'].includes(req.user.role)||row.status!=='ready_for_distribution')throw error(403,'The Secretary records distribution after the preparing officer signs the report.');
-    const result=await dbRun("UPDATE treasury_reports SET status='distributed',revision=revision+1,updated_at=? WHERE id=? AND revision=?",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'distributed');broadcast('treasury_changed',{reason:'report_distributed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id))});
+    await withTransaction(async()=>{await assertAssistantRecordUnchanged(req);const result=await dbRun("UPDATE treasury_reports SET status='distributed',revision=revision+1,updated_at=? WHERE id=? AND revision=?",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'distributed');});broadcast('treasury_changed',{reason:'report_distributed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id))});
   }));
   app.delete('/api/treasury/:id',requirePrepare,route(async(req,res)=>{
     const row=await record(req);if(!['awaiting_preparer','draft'].includes(row.status)||row.preparer_attested_at)throw error(409,'Signed reports cannot be deleted.');if(req.user.role!=='owner'&&row.created_by_user_id!==req.user.id&&row.preparer_user_id!==req.user.id)throw error(403,'Only the preparer or Worshipful Master can delete this draft.');
-    const result=await dbRun("UPDATE treasury_reports SET deleted_at=?,revision=revision+1 WHERE id=? AND revision=? AND status IN ('draft','awaiting_preparer')",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'deleted');broadcast('treasury_changed',{reason:'report_deleted',reportId:row.id});res.json({ok:true});
+    await withTransaction(async()=>{await assertAssistantRecordUnchanged(req);const result=await dbRun("UPDATE treasury_reports SET deleted_at=?,revision=revision+1 WHERE id=? AND revision=? AND status IN ('draft','awaiting_preparer')",[new Date().toISOString(),row.id,row.revision]);if(!result.changes)throw error(409,'The report changed. Reopen it.');await audit(req,row.id,'deleted');});broadcast('treasury_changed',{reason:'report_deleted',reportId:row.id});res.json({ok:true});
   }));
 }

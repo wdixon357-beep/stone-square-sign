@@ -4,6 +4,7 @@ import { hasPermission, resolvePermissions } from './access-control.js';
 import { createBuildingAlertCache } from './building-alert-cache.js';
 import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
 import { mountBuildingAgreementRoutes } from './building-agreements.js';
+import { assistantBuildingProjection, assistantBuildingAlerts } from './assistant-building.js';
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode});
 const DATE=/^\d{4}-\d{2}-\d{2}$/;const TIME=/^(?:[01]\d|2[0-3]):[0-5]\d$/;
 export function validDate(value){return typeof value==='string'&&DATE.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;}
@@ -124,8 +125,9 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   await audit(req,'building_request_submitted',{refs:result.refs,dates:body.bookings.map(b=>b.date)});
   res.status(201).json(result);
  }catch(e){next(e)}});
- app.get('/api/building/requests',requireAuth,permit('building.view'),async(req,res,next)=>{try{const requests=await listRequests(req);res.setHeader('Cache-Control','private, no-store');res.json({requests,canDecide:hasPermission(req.user,'building.decide')&&(req.user.role==='owner'||req.user.role==='warden')});}catch(e){next(e)}});
+ app.get('/api/building/requests',requireAuth,permit('building.view'),async(req,res,next)=>{try{if(req.assistant)return res.json(await assistantBuildingProjection());const requests=await listRequests(req);res.setHeader('Cache-Control','private, no-store');res.json({requests,canDecide:hasPermission(req.user,'building.decide')&&(req.user.role==='owner'||req.user.role==='warden')});}catch(e){next(e)}});
  app.get('/api/building/alerts',requireAuth,permit('building.view'),async(req,res,next)=>{try{
+  if(req.assistant)return res.json(await assistantBuildingAlerts());
   // Refresh the authenticated portal view first. The small local record also lets
   // Adrian see a pending McDuffie-only agreement without granting signing rights.
   await listRequests(req,{background:true});

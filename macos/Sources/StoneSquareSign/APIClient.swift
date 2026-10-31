@@ -677,6 +677,8 @@ final class AppModel: ObservableObject {
     @Published var isError = false
     @Published var requestedSection: AppSection?
     @Published var requestedMinutesRecordID: String?
+    @Published var requestedDocumentReviewID: String?
+    @Published var requestedProposalReviewID: String?
     #if DEBUG
     @Published var serverAddress: String {
         didSet {
@@ -734,6 +736,9 @@ final class AppModel: ObservableObject {
     }
 
     var webSessionToken: String? { token }
+    var assistantAccountContext: String {
+        "\(user?.id ?? -1)|\(user?.role ?? "")|\(ReliableTransport.contextFingerprint(url: baseURL, token: token) ?? "signed-out")"
+    }
 
     private func sessionNoticeDismissalKey(for user: User) -> String {
         "session-notice-dismissed.v1.\(user.id)"
@@ -1638,6 +1643,8 @@ final class AppModel: ObservableObject {
         user = nil
         minutesReviewAlerts = []
         requestedMinutesRecordID = nil
+        requestedDocumentReviewID = nil
+        requestedProposalReviewID = nil
         treasuryAlerts = []
         buildingAlerts = []
         requestedBuildingRequestID = nil

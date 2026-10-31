@@ -475,6 +475,11 @@ struct WorkspaceView: View {
     @StateObject private var agendaWorkspace = AgendaWorkspace()
     @StateObject private var correspondenceWorkspace = CorrespondenceWorkspace()
     @StateObject private var activityPresence = ActivityPresence()
+    @StateObject private var assistantWorkspace = AssistantWorkspace()
+    @StateObject private var dispensationBuilderDraft = DispensationBuilderDraft()
+    @StateObject private var proposalReviewDraft = ProposalReviewDraft()
+    @State private var assistantNavigationError = ""
+    @State private var assistantNavigationEpoch = 0
 
     var body: some View {
         GeometryReader { window in
@@ -547,11 +552,16 @@ struct WorkspaceView: View {
         }
         .onAppear {
             AppUpdater.shared.setWorkspaceGuard(updateGuardID) {
-                AppUpdater.unfinishedReportWork(report: reportBrowser, minutes: minutesWorkspace, treasury: treasuryWorkspace, agenda: agendaWorkspace, operationInProgress: model.isBusy)
+                if let warning = AppUpdater.unfinishedReportWork(report: reportBrowser, minutes: minutesWorkspace, treasury: treasuryWorkspace, agenda: agendaWorkspace, operationInProgress: model.isBusy) { return warning }
+                if dispensationBuilderDraft.hasWork { return "Finish your dispensation draft before updating. Your entered details are still open." }
+                if proposalReviewDraft.hasWork { return "Finish or clear your Warden proposal changes before updating." }
+                if assistantWorkspace.busy || assistantWorkspace.accessDirty || assistantWorkspace.issuedToken != nil { return "Save or finish the Muse access action and close the token sheet before updating." }
+                return nil
             }
         }
         .onDisappear { activityPresence.stop(); AppUpdater.shared.setWorkspaceGuard(updateGuardID, check: nil) }
         .onChange(of:selection){_,section in
+            assistantNavigationEpoch += 1
             activityPresence.visit(section)
             alertsExpanded = false
             startExpanded = false
@@ -572,13 +582,13 @@ struct WorkspaceView: View {
                 }
             case .lodgeCalendar, .agenda, .minutes, .reportGenerator, .receivedReports:
                 meetingsExpanded = true
-            case .correspondence, .documents, .approvals, .createDispensation, .proposalReview:
+            case .correspondence, .documents, .approvals, .createDispensation, .proposalReview, .myAttestations:
                 documentsExpanded = true
             case .myDues, .dues, .treasury:
                 financeExpanded = true
             case .building, .candidateTracker, .access, .memberAccess, .suggestions:
                 peopleExpanded = true
-            case .activity, .profile, .settings, .mySettings:
+            case .activity, .profile, .settings, .mySettings, .museAssistant:
                 accountExpanded = true
             default: break
             }
@@ -594,6 +604,68 @@ struct WorkspaceView: View {
             guard let requested else { return }
             selection = requested
             model.requestedSection = nil
+        }
+        .alert("Review could not be opened", isPresented: Binding(get: { !assistantNavigationError.isEmpty }, set: { if !$0 { assistantNavigationError = "" } })) {
+            Button("OK") { assistantNavigationError = "" }
+        } message: { Text(assistantNavigationError) }
+    }
+
+    private func openAssistantReview(_ navigation: AssistantNavigation) {
+        guard model.user?.role == "owner" else { return }
+        let context = model.assistantAccountContext
+        assistantNavigationEpoch += 1
+        let navigationEpoch = assistantNavigationEpoch
+        Task {
+            do {
+                switch navigation.section {
+                case "minutes":
+                    guard let id = navigation.recordId else { throw ClientError.rejected("The request does not identify a minutes record.") }
+                    minutesWorkspace.configure(model)
+                    if minutesWorkspace.selected?.id == id { selection = .minutes; return }
+                    guard !minutesWorkspace.dirty, !minutesWorkspace.busy,
+                          minutesWorkspace.selected != nil || (minutesWorkspace.source.isEmpty && minutesWorkspace.fileURL == nil && !minutesWorkspace.meetingDetails.hasValues) else {
+                        throw ClientError.rejected("Save or finish the minutes already open before opening another review.")
+                    }
+                    let response: MinutesListPayload = try await model.request("/api/minutes")
+                    guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
+                    guard let record = response.minutes.first(where: { $0.id == id }) else { throw ClientError.rejected("That minutes record is no longer available. Refresh My Attestations.") }
+                    minutesWorkspace.open(record); selection = .minutes
+                case "treasury":
+                    guard let id = navigation.recordId else { throw ClientError.rejected("The request does not identify a treasury report.") }
+                    treasuryWorkspace.configure(model)
+                    if treasuryWorkspace.selected?.id == id { selection = .treasury; return }
+                    guard !treasuryWorkspace.dirty, !treasuryWorkspace.busy, treasuryWorkspace.bankingSource.isEmpty, treasuryWorkspace.bankingFiles.isEmpty else {
+                        throw ClientError.rejected("Save or finish the banking work already open before opening another review.")
+                    }
+                    let response: TreasuryList = try await model.request("/api/treasury")
+                    guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
+                    guard let record = response.reports.first(where: { $0.id == id }) else { throw ClientError.rejected("That treasury report is no longer available. Refresh My Attestations.") }
+                    treasuryWorkspace.open(record); selection = .treasury
+                case "correspondence":
+                    guard let id = navigation.recordId else { throw ClientError.rejected("The request does not identify a correspondence draft.") }
+                    correspondenceWorkspace.configure(model)
+                    if correspondenceWorkspace.selected?.id == id { selection = .correspondence; return }
+                    guard !correspondenceWorkspace.hasChanges, !correspondenceWorkspace.busy else { throw ClientError.rejected("Save the letter already open before opening another review.") }
+                    let response: AssistantCorrespondenceRecordsPayload = try await model.request("/api/correspondence")
+                    guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
+                    guard let record = response.drafts.first(where: { $0.id == id }) else { throw ClientError.rejected("That letter is no longer available. Refresh My Attestations.") }
+                    await correspondenceWorkspace.open(record)
+                    guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
+                    selection = .correspondence
+                case "documents":
+                    guard let id = navigation.recordId else { throw ClientError.rejected("The request does not identify a document.") }
+                    let response: DocumentsResponse = try await model.request("/api/documents")
+                    guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
+                    guard response.documents.contains(where: { $0.id == id }) else { throw ClientError.rejected("That document is no longer available. Refresh My Attestations.") }
+                    model.documents = response.documents; model.requestedDocumentReviewID = id; selection = .documents
+                case "building": model.requestedBuildingRequestID = navigation.recordId; selection = .building
+                case "createDispensation": selection = .createDispensation
+                case "proposalReview": model.requestedProposalReviewID = navigation.recordId; selection = .proposalReview
+                case "reportGenerator": selection = .reportGenerator
+                case "profile": selection = .profile
+                default: throw ClientError.rejected("This action has no supported review destination. Refresh My Attestations and open the record directly.")
+                }
+            } catch { if model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch { assistantNavigationError = error.localizedDescription } }
         }
     }
 
@@ -626,6 +698,8 @@ struct WorkspaceView: View {
         case .candidateTracker: return "Candidate Tracker"
         case .createDispensation: return "Create Dispensation"
         case .access: return "Officer Access"
+        case .museAssistant: return "Muse Assistant"
+        case .myAttestations: return "My Attestations"
         case .memberAccess: return "Member Access"
         case .activity: return "Dashboard Activity"
         case .dues: return "Dues Ledger"
@@ -704,7 +778,10 @@ struct WorkspaceView: View {
                         navGroup("Documents And Approvals", expanded: $documentsExpanded) {
                             if model.user?.canPrepareCorrespondence == true { navItem("Lodge Correspondence", mark: "LTR", section: .correspondence) }
                             if model.user?.can("documents.status") == true { navItem("Live Queue", mark: "◫", section: .documents) }
-                            if model.user?.role == "owner" { navItem("Create Dispensation", mark: "+", section: .createDispensation) }
+                            if model.user?.role == "owner" {
+                                navItem("My Attestations", mark: "MY", section: .myAttestations)
+                                navItem("Create Dispensation", mark: "+", section: .createDispensation)
+                            }
                             if model.user?.canReadApprovals == true { navItem("Approvals", mark: "✓", section: .approvals) }
                             if model.user?.canProposeDispensation == true || model.user?.role == "owner" {
                                 navItem(model.user?.role == "owner" ? "Warden Proposals" : "My Dispensation Proposals", mark: "✎", section: .proposalReview)
@@ -731,7 +808,10 @@ struct WorkspaceView: View {
                     }
                     if hasAccountTools {
                         navGroup("Account", expanded: $accountExpanded) {
-                            if model.user?.role == "owner" { navItem("Dashboard Activity", mark: "ACT", section: .activity) }
+                            if model.user?.role == "owner" {
+                                navItem("Muse Assistant", mark: "MUSE", section: .museAssistant)
+                                navItem("Dashboard Activity", mark: "ACT", section: .activity)
+                            }
                             if model.user?.canOpen(.mySettings) == true { navItem("My Settings", mark: "⚙", section: .mySettings) }
                             if model.user?.canOpen(.settings) == true { navItem("Service Settings", mark: "NET", section: .settings) }
                             if model.user?.canSign == true { navItem("Signature Profile", mark: "✎", section: .profile) }
@@ -904,6 +984,8 @@ struct WorkspaceView: View {
             .init(section: .dues, title: "Dues Ledger", symbol: "list.bullet.rectangle.portrait.fill"),
             .init(section: .treasury, title: "Treasurer Reports", symbol: "chart.bar.doc.horizontal.fill"),
             .init(section: .candidateTracker, title: "Candidate Tracker", symbol: "person.text.rectangle.fill"),
+            .init(section: .museAssistant, title: "Muse Assistant", symbol: "person.badge.key.fill"),
+            .init(section: .myAttestations, title: "My Attestations", symbol: "checkmark.seal"),
             .init(section: .access, title: "Officer Access", symbol: "person.badge.key.fill"),
             .init(section: .memberAccess, title: "Member Access", symbol: "person.3.fill"),
             .init(section: .suggestions, title: "Suggestion Box", symbol: "text.bubble.fill"),
@@ -1091,10 +1173,10 @@ struct WorkspaceView: View {
     private func toolBelongsToGroup(_ section: AppSection, group: String) -> Bool {
         switch group {
         case "Meetings And Reports": return [.lodgeCalendar, .minutes, .agenda, .reportGenerator, .receivedReports].contains(section)
-        case "Documents And Approvals": return [.correspondence, .documents, .createDispensation, .approvals, .proposalReview].contains(section)
+        case "Documents And Approvals": return [.correspondence, .documents, .createDispensation, .approvals, .proposalReview, .myAttestations].contains(section)
         case "Dues And Finance": return [.dues, .myDues, .treasury].contains(section)
         case "People And Lodge": return [.access, .memberAccess, .candidateTracker, .suggestions, .building].contains(section)
-        case "Account": return [.activity, .mySettings, .settings, .profile].contains(section)
+        case "Account": return [.activity, .mySettings, .settings, .profile, .museAssistant].contains(section)
         default: return false
         }
     }
@@ -1142,7 +1224,9 @@ struct WorkspaceView: View {
             else { FinalReportBrowserView(kind: .treasury) }
         case .candidateTracker:
             NativeCandidateTrackerView()
-        case .createDispensation: DispensationBuilderView()
+        case .createDispensation: DispensationBuilderView(draft: dispensationBuilderDraft)
+        case .museAssistant: MuseAssistantView(workspace: assistantWorkspace, openReview: openAssistantReview)
+        case .myAttestations: MyAttestationsView(workspace: assistantWorkspace, openReview: openAssistantReview)
         case .access: OfficerAccessView()
         case .memberAccess: if model.user?.role == "owner" { MemberAccessView() }
         case .activity: if model.user?.role == "owner" {OfficerActivityView()}
@@ -1151,7 +1235,7 @@ struct WorkspaceView: View {
         case .suggestions: SuggestionBoxView()
         case .approvals: ApprovalsView()
         case .proposalReview:
-            if model.user?.role == "owner" { ProposalReviewView() }
+            if model.user?.role == "owner" { ProposalReviewView(draft: proposalReviewDraft) }
             else if model.user?.canProposeDispensation == true { MyDispensationProposalsView() }
             else { ContentUnavailableView("Proposal access is not assigned", systemImage: "lock") }
         case .profile: SignatureProfileView()
@@ -1673,11 +1757,50 @@ struct CandidateRecordEditorView: View {
     }
 }
 
+@MainActor final class DispensationBuilderDraft: ObservableObject {
+    @Published var title: String = ""
+    @Published var requestDate: Date = Date()
+    @Published var signerChoice: String = "both"
+    @Published var requestDetails: String = ""
+    @Published var eventDate: Date = Date()
+    @Published var eventTime: Date = Date()
+    @Published var locationName: String = ""
+    @Published var streetAddress: String = ""
+    @Published var cityState: String = ""
+    @Published var worshipfulMasterAddress: String = ""
+    @Published var personalInfoConfirmed: Bool = false
+    @Published var pastedDetails: String = ""
+    @Published var parsedDraft: ParsedDispensationResponse? = nil
+    @Published var previewDocument: PDFDocument? = nil
+    @Published var step: Int = 0
+    var profilesInitialized = false
+    var hasWork: Bool { !pastedDetails.isEmpty || !title.isEmpty || !requestDetails.isEmpty || !locationName.isEmpty || !streetAddress.isEmpty || !cityState.isEmpty }
+}
+
 struct DispensationBuilderView: View {
     @EnvironmentObject var model: AppModel
-    @State private var title = ""
-    @State private var requestDate = Date()
-    @State private var signerChoice = "both"
+    @ObservedObject private var draft: DispensationBuilderDraft
+    init(draft: DispensationBuilderDraft) {
+        self.draft = draft
+        _title = Binding(get: { draft.title }, set: { draft.title = $0 })
+        _requestDate = Binding(get: { draft.requestDate }, set: { draft.requestDate = $0 })
+        _signerChoice = Binding(get: { draft.signerChoice }, set: { draft.signerChoice = $0 })
+        _requestDetails = Binding(get: { draft.requestDetails }, set: { draft.requestDetails = $0 })
+        _eventDate = Binding(get: { draft.eventDate }, set: { draft.eventDate = $0 })
+        _eventTime = Binding(get: { draft.eventTime }, set: { draft.eventTime = $0 })
+        _locationName = Binding(get: { draft.locationName }, set: { draft.locationName = $0 })
+        _streetAddress = Binding(get: { draft.streetAddress }, set: { draft.streetAddress = $0 })
+        _cityState = Binding(get: { draft.cityState }, set: { draft.cityState = $0 })
+        _worshipfulMasterAddress = Binding(get: { draft.worshipfulMasterAddress }, set: { draft.worshipfulMasterAddress = $0 })
+        _personalInfoConfirmed = Binding(get: { draft.personalInfoConfirmed }, set: { draft.personalInfoConfirmed = $0 })
+        _pastedDetails = Binding(get: { draft.pastedDetails }, set: { draft.pastedDetails = $0 })
+        _parsedDraft = Binding(get: { draft.parsedDraft }, set: { draft.parsedDraft = $0 })
+        _previewDocument = Binding(get: { draft.previewDocument }, set: { draft.previewDocument = $0 })
+        _step = Binding(get: { draft.step }, set: { draft.step = $0 })
+    }
+    @Binding private var title: String
+    @Binding private var requestDate: Date
+    @Binding private var signerChoice: String
 
     /* The builder asks one question and the server takes a list. Sending to both is the
      * ordinary case: either Secretary may sign and the first one to do it finishes it. */
@@ -1692,19 +1815,19 @@ struct DispensationBuilderView: View {
     private static func signerLabel(for choice: String) -> String {
         signerLabels[choice] ?? signerLabels["both"]!
     }
-    @State private var requestDetails = ""
-    @State private var eventDate = Date()
-    @State private var eventTime = Date()
-    @State private var locationName = ""
-    @State private var streetAddress = ""
-    @State private var cityState = ""
-    @State private var worshipfulMasterAddress = ""
-    @State private var personalInfoConfirmed = false
-    @State private var pastedDetails = ""
-    @State private var parsedDraft: ParsedDispensationResponse?
+    @Binding private var requestDetails: String
+    @Binding private var eventDate: Date
+    @Binding private var eventTime: Date
+    @Binding private var locationName: String
+    @Binding private var streetAddress: String
+    @Binding private var cityState: String
+    @Binding private var worshipfulMasterAddress: String
+    @Binding private var personalInfoConfirmed: Bool
+    @Binding private var pastedDetails: String
+    @Binding private var parsedDraft: ParsedDispensationResponse?
     @State private var showingPasteReview = false
-    @State private var previewDocument: PDFDocument?
-    @State private var step = 0
+    @Binding private var previewDocument: PDFDocument?
+    @Binding private var step: Int
 
     private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -1806,6 +1929,7 @@ struct DispensationBuilderView: View {
                             ReviewField(label: "Send to", value: Self.signerLabel(for: signerChoice))
                             ReviewField(label: "Your address", value: worshipfulMasterAddress)
                         }
+                        Text("Your final tap applies your saved Worshipful Master signature and sends the request for the selected officer signature. Review the complete document first.").font(.callout.weight(.semibold))
                         Text("The officer's section is intentionally blank in this preview. The selected officer completes it when signing.")
                             .font(.caption).foregroundStyle(.secondary)
                         if let previewDocument {
@@ -1817,7 +1941,7 @@ struct DispensationBuilderView: View {
                         HStack {
                             Button("Back to remaining questions") { step = 1 }
                             Spacer()
-                            Button("Send for officer signature", systemImage: "paperplane.fill") { create() }
+                            Button("Sign and send for officer signature", systemImage: "paperplane.fill") { create() }
                                 .buttonStyle(.borderedProminent).tint(.accentColor).controlSize(.large)
                                 .disabled(model.isBusy || previewDocument == nil)
                         }
@@ -1874,6 +1998,8 @@ struct DispensationBuilderView: View {
     }
 
     private func applySavedProfiles() {
+        guard !draft.profilesInitialized else { return }
+        draft.profilesInitialized = true
         worshipfulMasterAddress = model.submissionProfiles
             .first(where: { $0.role == "worshipful_master" })?.address ?? ""
         personalInfoConfirmed = false
@@ -2526,8 +2652,17 @@ struct DocumentsView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf]) { result in
             if case .success(let url) = result { Task { await model.upload(url: url) } }
         }
+        .task { openRequestedDocumentReview() }
+        .onChange(of: model.requestedDocumentReviewID) { _, _ in openRequestedDocumentReview() }
         .sheet(item: $signingDocument) { document in SignatureApprovalView(document: document) }
         .sheet(item: $viewingDocument) { document in PDFPreviewView(document: document) }
+    }
+    private func openRequestedDocumentReview() {
+        guard let id = model.requestedDocumentReviewID,
+              let document = model.documents.first(where: { $0.id == id }) else { return }
+        model.requestedDocumentReviewID = nil
+        if document.needsSignature && !document.isTerminal { signingDocument = document }
+        else { viewingDocument = document }
     }
 }
 
@@ -4459,12 +4594,20 @@ struct ApprovalsView: View {
  * Xavier and Jamal work on their phones through the web page, because the Mac build is
  * ad hoc signed and only runs on the machine it was built on. So the proposing side is
  * deliberately web only and this is the deciding side. */
+@MainActor final class ProposalReviewDraft: ObservableObject {
+    @Published var notes: [String: String] = [:]
+    @Published var edits: [String: [String: String]] = [:]
+    var hasWork: Bool { notes.values.contains(where: { !$0.isEmpty }) || !edits.isEmpty }
+}
+
 struct ProposalReviewView: View {
     @EnvironmentObject var model: AppModel
-    @State private var notes: [String: String] = [:]
+    @ObservedObject var draft: ProposalReviewDraft
+    @State private var focusedProposalID: String?
+    private var notes: [String: String] { get { draft.notes } nonmutating set { draft.notes = newValue } }
     @State private var busyID: String?
     @State private var pendingDecision: PendingDecision?
-    @State private var edits: [String: [String: String]] = [:]
+    private var edits: [String: [String: String]] { get { draft.edits } nonmutating set { draft.edits = newValue } }
 
     private func editBinding(_ proposal: WardenProposal, _ key: String, _ original: String?) -> Binding<String> {
         Binding(
@@ -4486,7 +4629,7 @@ struct ProposalReviewView: View {
         }
         var button: String {
             switch decision {
-            case "approve": return "Approve proposal"
+            case "approve": return "Sign and approve proposal"
             case "changes": return "Send back"
             default: return "Decline proposal"
             }
@@ -4494,6 +4637,7 @@ struct ProposalReviewView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 NativeWorkspaceHeader(title: "Warden Proposals", subtitle: "Review proposals and respond to the preparing Warden", symbol: "square.and.pencil").padding(.horizontal, -22)
@@ -4569,21 +4713,29 @@ struct ProposalReviewView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(nsColor: .controlBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay { RoundedRectangle(cornerRadius: 8).stroke(focusedProposalID == proposal.id ? SignTheme.gold : .clear, lineWidth: 2) }
+                        .id(proposal.id)
                     }
                 }
             }
             .padding(30)
         }
-        .updateDraftGuard(active: notes.values.contains(where: { !$0.isEmpty }) || busyID != nil, reason: "Finish or clear your proposal note before updating.")
-        .task { await model.loadProposals() }
+        .updateDraftGuard(active: notes.values.contains(where: { !$0.isEmpty }) || !edits.isEmpty || busyID != nil, reason: "Finish or clear your proposal note before updating.")
+        .task { await model.loadProposals(); focusRequestedProposal(proxy) }
+        .onChange(of: model.requestedProposalReviewID) { _, _ in focusRequestedProposal(proxy) }
         .alert(item: $pendingDecision) { pending in
             Alert(
                 title: Text(pending.title),
-                message: Text("This records your decision and notifies the proposing officer.\((notes[pending.proposal.id] ?? "").isEmpty ? "" : " Your note will be included.")"),
+                message: Text("\(pending.decision == "approve" ? "This creates the dispensation with your saved Worshipful Master signature and notifies the proposing officer." : "This records your decision and notifies the proposing officer.")\((notes[pending.proposal.id] ?? "").isEmpty ? "" : " Your note will be included.")"),
                 primaryButton: .default(Text(pending.button)) { decide(pending.proposal, pending.decision) },
                 secondaryButton: .cancel()
             )
         }
+        }
+    }
+    private func focusRequestedProposal(_ proxy: ScrollViewProxy) {
+        guard let id = model.requestedProposalReviewID, model.proposals.contains(where: { $0.id == id }) else { return }
+        focusedProposalID = id; proxy.scrollTo(id, anchor: .top); model.requestedProposalReviewID = nil
     }
 
     private func decide(_ proposal: WardenProposal, _ decision: String) {

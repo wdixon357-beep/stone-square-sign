@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { dbAll, dbGet, dbRun } from './db.js';
+import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
+import { assertAssistantRecordUnchanged } from './assistant-access.js';
 import { agendaFileName, agendaIssues, buildAgendaPdf, defaultAgendaDraft, normalizeAgendaDraft } from './agenda.js';
 
 const now = () => new Date().toISOString();
@@ -49,14 +50,18 @@ export function mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit }) 
   });
   app.put('/api/agendas/:id', ...guarded, async (req, res, next) => {
     try {
-      const current = await dbGet('SELECT * FROM agendas WHERE id=? AND deleted_at IS NULL', [req.params.id]);
-      if (!current) return res.status(404).json({ error: 'Agenda not found.' });
-      if (Number(req.body?.revision) !== Number(current.revision)) return res.status(409).json({ error: 'This agenda changed on another screen. Refresh before saving again.' });
-      const draft = normalizeAgendaDraft(req.body?.draft);
-      const stamp = now(), revision = Number(current.revision) + 1;
-      await dbRun('UPDATE agendas SET meeting_date=?,draft_json=?,revision=?,updated_by_user_id=?,updated_at=? WHERE id=? AND revision=?',
-        [draft.meetingDate || null, JSON.stringify(draft), revision, req.user.id, stamp, req.params.id, current.revision]);
-      await addAudit({ userId: req.user.id, documentId: req.params.id, action: 'agenda_edited', ip: req.ip, userAgent: req.get('user-agent') || '', details: { revision } });
+      await withTransaction(async()=>{
+        const current = await dbGet('SELECT * FROM agendas WHERE id=? AND deleted_at IS NULL FOR UPDATE', [req.params.id]);
+        if (!current) throw Object.assign(new Error('Agenda not found.'),{statusCode:404});
+        await assertAssistantRecordUnchanged(req);
+        if (Number(req.body?.revision) !== Number(current.revision)) throw Object.assign(new Error('This agenda changed on another screen. Refresh before saving again.'),{statusCode:409});
+        const draft = normalizeAgendaDraft(req.body?.draft);
+        const stamp = now(), revision = Number(current.revision) + 1;
+        const changed=await dbRun('UPDATE agendas SET meeting_date=?,draft_json=?,revision=?,updated_by_user_id=?,updated_at=? WHERE id=? AND revision=?',
+          [draft.meetingDate || null, JSON.stringify(draft), revision, req.user.id, stamp, req.params.id, current.revision]);
+        if (!changed.changes) throw Object.assign(new Error('This agenda changed. Refresh before saving again.'),{statusCode:409});
+        await addAudit({ userId: req.user.id, documentId: req.params.id, action: 'agenda_edited', ip: req.ip, userAgent: req.get('user-agent') || '', details: { revision } });
+      });
       res.json({ agenda: record(await dbGet('SELECT * FROM agendas WHERE id=?', [req.params.id])) });
     } catch (error) { next(error); }
   });
@@ -81,11 +86,14 @@ export function mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit }) 
   });
   app.delete('/api/agendas/:id', ...guarded, async (req, res, next) => {
     try {
-      const current = await dbGet('SELECT * FROM agendas WHERE id=? AND deleted_at IS NULL', [req.params.id]);
-      if (!current) return res.status(404).json({ error: 'Agenda not found.' });
-      if (req.body?.revision != null && Number(req.body.revision) !== Number(current.revision)) return res.status(409).json({ error: 'This agenda changed on another screen. Refresh before deleting it.' });
-      await dbRun('UPDATE agendas SET deleted_at=?,updated_at=? WHERE id=?', [now(), now(), req.params.id]);
-      await addAudit({ userId: req.user.id, documentId: req.params.id, action: 'agenda_deleted', ip: req.ip, userAgent: req.get('user-agent') || '', details: { meetingDate: current.meeting_date } });
+      await withTransaction(async()=>{
+        const current = await dbGet('SELECT * FROM agendas WHERE id=? AND deleted_at IS NULL FOR UPDATE', [req.params.id]);
+        if (!current) throw Object.assign(new Error('Agenda not found.'),{statusCode:404});
+        await assertAssistantRecordUnchanged(req);
+        if (req.body?.revision != null && Number(req.body.revision) !== Number(current.revision)) throw Object.assign(new Error('This agenda changed on another screen. Refresh before deleting it.'),{statusCode:409});
+        await dbRun('UPDATE agendas SET deleted_at=?,updated_at=? WHERE id=? AND revision=?', [now(), now(), req.params.id,current.revision]);
+        await addAudit({ userId: req.user.id, documentId: req.params.id, action: 'agenda_deleted', ip: req.ip, userAgent: req.get('user-agent') || '', details: { meetingDate: current.meeting_date } });
+      });
       res.json({ ok: true });
     } catch (error) { next(error); }
   });

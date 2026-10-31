@@ -80,7 +80,7 @@ struct User: Codable, Identifiable, Equatable {
         case .lodgeCalendar: return can("calendar.view") || can("calendar.manage")
         case .profile: return canSign
         case .mySettings, .settings: return can("settings.manage")
-        case .activity, .access, .memberAccess, .createDispensation: return role == "owner"
+        case .activity, .access, .memberAccess, .createDispensation, .museAssistant, .myAttestations: return role == "owner"
         }
     }
 
@@ -284,7 +284,7 @@ struct LocationMatch: Codable, Identifiable {
 }
 struct LocationSearchResponse: Codable { let matches: [LocationMatch] }
 
-enum AppSection: Hashable { case activity, approvals, home, building, lodgeCalendar, reportGenerator, correspondence, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, memberAccess, dues, myDues, suggestions, profile, mySettings, settings }
+enum AppSection: Hashable { case museAssistant, myAttestations, activity, approvals, home, building, lodgeCalendar, reportGenerator, correspondence, receivedReports, minutes, agenda, treasury, documents, candidateTracker, createDispensation, proposalReview, access, memberAccess, dues, myDues, suggestions, profile, mySettings, settings }
 
 // MARK: - Dues
 // Mirrors the /api/dues payload. Restricted server side to the Worshipful Master,

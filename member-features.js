@@ -1,4 +1,5 @@
 import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
+import { assertAssistantRecordUnchanged } from './assistant-access.js';
 import { buildDuesLedger, duesConfigured, duesPaymentLinks } from './dues.js';
 import { DUES_MANAGEMENT_ROLES, hasPermission } from './access-control.js';
 import { prepareManualDuesPayment } from './dues-assistant.js';
@@ -99,6 +100,7 @@ export function mountMemberFeatures(app, {
         };
         if (await useRecordedSubmission()) return;
         const brother = await dbGet('SELECT id,first_name,last_name FROM roster WHERE id=? FOR UPDATE', [rosterId]);
+        await assertAssistantRecordUnchanged(req);
         if (!brother) throw failure(404, 'That Brother was not found on the Lodge roster.');
         if (await useRecordedSubmission()) return;
         if (source && await dbGet(`SELECT 1 FROM dues_adjustments a
@@ -141,6 +143,7 @@ export function mountMemberFeatures(app, {
       let id;
       await withTransaction(async () => {
         const original = await dbGet('SELECT * FROM dues_adjustments WHERE id=? FOR UPDATE', [originalId]);
+        await assertAssistantRecordUnchanged(req);
         if (!original) throw failure(404, 'The original dues entry was not found.');
         if (original.transaction_type === 'reversal') throw failure(400, 'A reversal cannot be reversed. Record a new, verified entry if another correction is needed.');
         if (await dbGet('SELECT 1 FROM dues_adjustments WHERE reverses_adjustment_id=?', [originalId])) throw failure(409, 'That entry has already been reversed.');
@@ -191,7 +194,10 @@ export function mountMemberFeatures(app, {
       const id = Number(req.params.id); const status = clean(req.body?.status, 30); const response = clean(req.body?.response, 3000);
       if (!Number.isSafeInteger(id) || id < 1 || !STATUSES.has(status)) throw failure(400, 'Choose a valid suggestion status.');
       if (status === 'Responded' && !response) throw failure(400, 'Add the response before marking this suggestion Responded.');
-      const updated = await dbRun(`UPDATE suggestions SET status=?,owner_response=?,reviewed_by_user_id=?,updated_at=? WHERE id=?`, [status, response || null, req.user.id, nowIso(), id]);
+      const updated = await withTransaction(async()=>{
+        await assertAssistantRecordUnchanged(req);
+        return dbRun(`UPDATE suggestions SET status=?,owner_response=?,reviewed_by_user_id=?,updated_at=? WHERE id=?`, [status, response || null, req.user.id, nowIso(), id]);
+      });
       if (!updated.changes) throw failure(404, 'That suggestion was not found.');
       res.json({ message: 'Suggestion status updated.' });
     } catch (error) { next(error); }
@@ -220,6 +226,7 @@ export function mountMemberFeatures(app, {
       const name = `${brother.first_name} ${brother.last_name}`.trim(); const token = generateToken();
       const expiresAt = new Date(Date.now() + 7*86400000).toISOString();
       await withTransaction(async () => {
+        await assertAssistantRecordUnchanged(req);
         if (await dbGet('SELECT 1 FROM users WHERE roster_id=? AND access_revoked_at IS NULL', [rosterId])) throw failure(409, 'This Brother already has an active account.');
         if (await dbGet('SELECT 1 FROM users WHERE lower(email)=lower(?) AND access_revoked_at IS NULL', [email])) throw failure(409, 'That email already belongs to an active account. Link it from Member Access instead of creating a duplicate.');
         await dbRun('DELETE FROM invitations WHERE roster_id=? AND used_at IS NULL', [rosterId]);

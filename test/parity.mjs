@@ -41,6 +41,8 @@ const PAIRS = {
   profileButton: 'profile',
   settingsNav: 'mySettings',
   accessNav: 'access',
+  assistantNav: 'museAssistant',
+  attestationsNav: 'myAttestations',
 };
 
 /* Deliberate asymmetries. Each needs a reason, so the list stays honest. */
@@ -184,7 +186,7 @@ check('both clients send the officer list rather than a single officer',
   && read('macos/Sources/StoneSquareSign/APIClient.swift').includes('"signerRoles"'));
 check('both clients default a new dispensation to both Secretaries',
   /SIGNER_CHOICES\.both/.test(read('public/app.js'))
-  && /signerChoice = "both"/.test(macBuilder));
+  && /@Published var signerChoice: String = "both"/.test(macViews));
 
 check('both clients can open a document already sent to one Secretary',
   read('public/app.js').includes('/offer-to-both')

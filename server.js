@@ -46,6 +46,9 @@ import { createDispensationMissiveDrafts, initDispensationMissiveDraftSchema } f
 import { mountMemberFeatures } from './member-features.js';
 import { initSignaturePolicySchema, signatureProfilePolicyForUser, assertApprovedSignature } from './signature-policy.js';
 import { initMinutesSignatureRevisionSchema, createMinutesSignatureRevisions } from './minutes-signature-revisions.js';
+import { initAssistantSchema, mountAssistantRoutes, assertAssistantRecordUnchanged } from './assistant-access.js';
+import { installAssistantGateway } from './assistant-gateway.js';
+import { mountAssistantMcp } from './assistant-mcp.js';
 
 dotenv.config();
 
@@ -343,6 +346,7 @@ const INVITABLE_ROLES = ACCOUNT_ROLES.filter((role) => role !== 'member');
 
 const requireAuth = async (req, res, next) => {
   try {
+    if (req.assistant && req.user) return next();
     const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     const headerToken = bearer || req.headers['x-lodge-token'];
     const cookieToken = cookieValues(req)[WEB_SESSION_COOKIE];
@@ -1148,6 +1152,7 @@ app.use((req, res, next) => {
   }
   next();
 });
+installAssistantGateway(app, { expectedOrigin: req => new URL(requestBaseUrl(req)).origin });
 mountBuildingStore(app);
 app.use(express.json({ limit: '4mb' }));
 app.use('/api', (_req, res, next) => {
@@ -1411,6 +1416,7 @@ app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
 
 app.get('/api/auth/me', requireAuth, async (req, res, next) => {
   try {
+    if (req.assistant) return res.json({ user: await userForResponse(req.user), assistant: { id: req.assistant.id, name: req.assistant.name }, session: null });
     if (isWebClient(req) && !req.authViaCookie) setWebSessionCookie(res, req.authRawToken);
     res.json({ user: await userForResponse(req.user), session: { lifetimeDays: SESSION_POLICY.lifetimeDays, expiresAt: req.user.expires_at } });
   } catch (error) {
@@ -1703,6 +1709,7 @@ app.post('/api/officers/invite', requireAuth, requireOwner, rateLimit({ key: 'in
     const token = generateToken();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
       await lockOfficeRole(role);
       const existingAccount = await dbGet('SELECT 1 FROM users WHERE email = ? AND access_revoked_at IS NULL', [email]);
       if (existingAccount) throw httpError(409, 'That email already has an active account.');
@@ -1757,6 +1764,7 @@ app.put('/api/admin/accounts/:id/role', requireAuth, requireOwner, async(req,res
   if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({error:'Choose an active account.'});
   if(!ACCOUNT_ROLES.includes(role))return res.status(400).json({error:'Choose an available account role.'});
   await withTransaction(async()=>{
+      await assertAssistantRecordUnchanged(req);
    const account=await dbGet('SELECT id,name,email,role,permissions_json,roster_id,access_revoked_at FROM users WHERE id=? FOR UPDATE',[id]);
    if(!account||account.access_revoked_at)throw httpError(404,'Active account not found.');
    if(account.role==='owner'||id===req.user.id)throw httpError(403,'The Worshipful Master administrator account is permanent.');
@@ -1787,6 +1795,7 @@ app.put('/api/officers/invitations/role', requireAuth, requireOwner, async (req,
     if (!['warden', 'assistant_treasurer'].includes(role)) return res.status(400).json({ error: 'Choose an available invitation office.' });
     if (role === 'warden' && !WARDEN_EMAILS.has(email)) return res.status(403).json({ error: 'This address is not configured for a Warden seat.' });
     await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
       const invite = await dbGet('SELECT id, role, permissions_json, roster_id FROM invitations WHERE email = ? AND used_at IS NULL AND expires_at > ? FOR UPDATE', [email, nowIso()]);
       if (!invite) throw httpError(404, 'An active pending invitation was not found.');
       if (role === 'assistant_treasurer') {
@@ -1819,10 +1828,11 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
       return res.status(403).json({ error: 'The Worshipful Master administrator account cannot be revoked.' });
     }
     const revokedAt = nowIso();
+    await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
     await dbRun('UPDATE users SET access_revoked_at = ? WHERE id = ?', [revokedAt, account.id]);
     await endUserActivity(account.id, 'Access revoked');
     await dbRun('DELETE FROM sessions WHERE user_id = ?', [account.id]);
-    disconnectRealtimeUser(account.id);
     await dbRun('DELETE FROM reset_codes WHERE user_id = ?', [account.id]);
     await dbRun('DELETE FROM invitations WHERE email = ? AND used_at IS NULL', [email]);
     await dbRun('DELETE FROM profile_signatures WHERE user_id = ?', [account.id]);
@@ -1837,6 +1847,8 @@ app.post('/api/officers/revoke', requireAuth, requireOwner, rateLimit({ key: 're
       userAgent: req.get('user-agent') || '',
       details: { revokedUserId: account.id, email: account.email, name: account.name, role: account.role, revokedAt },
     });
+    });
+    disconnectRealtimeUser(account.id);
     broadcast('queue_changed', { reason: 'access_revoked', userId: account.id });
     res.json({ message: `${account.name}'s access has been revoked.` });
   } catch (error) {
@@ -1990,7 +2002,7 @@ const recoverStaleMinutesClaims = async () => {
 };
 app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) => {
   try {
-    await recoverStaleMinutesClaims();
+    if (!req.assistant) await recoverStaleMinutesClaims();
     const rows = await dbAll(
       `SELECT m.*,
          creator.name AS created_by_name, creator.role AS created_by_role, updater.name AS updated_by_name,
@@ -2181,6 +2193,7 @@ app.delete('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, re
     }
     const time = nowIso();
     const removed = await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
       const result = await dbRun(
         `UPDATE meeting_minutes SET status = 'deleted', updated_at = ?, updated_by_user_id = ?
          WHERE id = ? AND status IN ('awaiting_preparer', 'draft') AND preparer_attested_at IS NULL
@@ -2396,11 +2409,14 @@ app.post('/api/minutes/:id/mark-distributed', requireAuth, requireSecretaryOrOwn
       return res.status(409).json({ error: 'The Worshipful Master must attest to the minutes first.' });
     }
     const time = nowIso();
+    await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
     await dbRun(
       `UPDATE meeting_minutes SET status = 'distributed', distributed_by_user_id = ?,
        distributed_at = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
       [req.user.id, time, req.user.id, time, row.id],
     );
+    });
     broadcast('minutes_records_changed', { minutesId: row.id, reason: 'distributed' });
     res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
   } catch (error) {
@@ -2443,6 +2459,8 @@ app.post('/api/minutes/:id/reopen', requireAuth, requireOwner, async (req, res, 
     if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status === 'approved_by_lodge') return res.status(409).json({ error: 'An approved Lodge record cannot be reopened here.' });
     const time = nowIso();
+    await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
     await dbRun(
       `UPDATE meeting_minutes SET status = 'draft', submitted_for_review_at = NULL,
        preparer_attested_at = NULL, master_attested_by_user_id = NULL, master_attested_at = NULL, master_signature_bytes = NULL, submitted_draft_json = NULL, master_changes_json = NULL, preparer_signature_bytes = NULL,
@@ -2450,6 +2468,7 @@ app.post('/api/minutes/:id/reopen', requireAuth, requireOwner, async (req, res, 
        distributed_at = NULL, updated_by_user_id = ?, updated_at = ? WHERE id = ?`,
       [req.user.id, time, row.id],
     );
+    });
     broadcast('minutes_review_changed');
     broadcast('minutes_records_changed', { minutesId: row.id, reason: 'reopened' });
     res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
@@ -2671,6 +2690,7 @@ app.put('/api/submission-profiles/:role', requireAuth, requireOwner, async (req,
       return res.status(400).json({ error: 'Save the officer name and a separate mailing address.' });
     }
     await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
       await dbRun(`INSERT INTO submission_profiles (role, name, address, source_reference, updated_at)
         VALUES (?, ?, ?, ?, ?) ON CONFLICT(role) DO UPDATE SET name = excluded.name,
         address = excluded.address, source_reference = excluded.source_reference, updated_at = excluded.updated_at`,
@@ -2881,22 +2901,23 @@ app.post('/api/dispensations/preview', requireAuth, requireOwner, rateLimit({ ke
       .filter((role) => ['secretary', 'assistant_secretary'].includes(role));
     const personalInfoConfirmed = req.body?.personalInfoConfirmed === true;
     if (!dateParts(requestDate) || !dateParts(eventDate) || !requestDetails || !eventTime || !locationName
-        || !streetAddress || !cityState || !worshipfulMasterAddress || !personalInfoConfirmed
+        || !streetAddress || !cityState || !worshipfulMasterAddress || (!req.assistant && !personalInfoConfirmed)
         || signerRoles.length === 0) {
       return res.status(400).json({ error: 'Complete the remaining Lodge questions before reviewing the PDF.' });
     }
-    const savedSignature = await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
+    const savedSignature = req.assistant ? null : await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);
     const ownerSignature = asBuffer(savedSignature?.signature_bytes);
-    if (!ownerSignature?.length) {
+    if (!req.assistant && !ownerSignature?.length) {
       return res.status(409).json({ error: 'Save your Worshipful Master signature before reviewing the PDF.' });
     }
-    await assertApprovedSignature(req.user, ownerSignature);
+    if (!req.assistant) await assertApprovedSignature(req.user, ownerSignature);
     const pdfBytes = await createDispensationPdf({
       fields: { requestDate, eventDate, requestDetails, eventTime, locationName, streetAddress, cityState, worshipfulMasterAddress },
       ownerName: req.user.name,
       ownerSignature,
     });
     res.setHeader('Content-Type', 'application/pdf');
+    if (req.assistant) res.setHeader('X-Stone-Square-Preview', 'unsigned');
     res.setHeader('Content-Disposition', 'inline; filename="dispensation-preview.pdf"');
     return res.send(pdfBytes);
   } catch (error) {
@@ -3594,6 +3615,7 @@ app.post('/api/documents/:id/rescind', requireAuth, requireOwner, rateLimit({ ke
   try {
     const reason = String(req.body?.reason || '').trim().slice(0, 500);
     const result = await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
       const document = await dbGet('SELECT * FROM documents WHERE id = ? FOR UPDATE', [req.params.id]);
       if (!document) throw httpError(404, 'Document not found.');
       if (document.owner_user_id !== req.user.id) throw httpError(403, 'Only the document owner can rescind this document.');
@@ -3625,6 +3647,7 @@ app.post('/api/documents/:id/rescind', requireAuth, requireOwner, rateLimit({ ke
 app.post('/api/documents/:id/offer-to-both', requireAuth, requireOwner, rateLimit({ key: 'offer-to-both', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
   try {
     const result = await withTransaction(async () => {
+      await assertAssistantRecordUnchanged(req);
       const document = await dbGet('SELECT * FROM documents WHERE id = ? FOR UPDATE', [req.params.id]);
       if (!document) throw httpError(404, 'Document not found.');
       if (document.owner_user_id !== req.user.id) throw httpError(403, 'Only the document owner can change who may sign this document.');
@@ -3696,7 +3719,8 @@ app.get('/api/documents/:id/audit', requireAuth, requireDocumentAccess, async (r
       return res.status(403).json({ error: 'You do not have access to this record.' });
     }
     const events = await dbAll(
-      `SELECT a.action, a.created_at, u.name AS actor_name
+      `SELECT a.action, a.created_at, a.actor_type, a.actor_id, a.on_behalf_of_user_id, a.assistant_request_id,
+              CASE WHEN a.actor_type='assistant' THEN a.actor_name ELSE u.name END AS actor_name
        FROM audit_events a LEFT JOIN users u ON u.id = a.user_id
        WHERE a.document_id = ? ORDER BY a.created_at`,
       [document.id],
@@ -3727,6 +3751,8 @@ app.get('/api/generation/status', requireAuth, async (req, res, next) => {
 });
 
 mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged:disconnectRealtimeUser});
+mountAssistantRoutes(app, { requireAuth, requireOwner });
+mountAssistantMcp(app, { requireAuth, port: PORT });
 mountBuildingCalendar(app,{requireAuth,sendBuildingEmail:sendEmail});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
 mountArchiveRoutes(app, { requireAuth });
@@ -3828,6 +3854,7 @@ await initAgendaSchema();
 await initTreasurySchema();
 await initGenerationSchema();
 await initActivitySchema();
+await initAssistantSchema();
 
 if (dispensationSubmissions.automaticDeliveryEnabled) dispensationSubmissions.startWorker(broadcast);
 // Bootstrap the durable queue once, then wake after committed workflow events.

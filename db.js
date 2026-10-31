@@ -47,6 +47,42 @@ let connectionIdentity;
 let closeDriver;
 let beginTransaction;
 const transactionQuery = new AsyncLocalStorage();
+const auditActor = new AsyncLocalStorage();
+
+// Service execution is attributed separately from the human account whose
+// existing office/record rules the route still checks. Context never changes a
+// user's role, signature, or consent, and follows direct module audit inserts.
+export const withAuditActor = (context, callback) => {
+  if (!context?.assistantId || !Number.isSafeInteger(Number(context.ownerUserId))) {
+    throw new Error('A verified assistant and owner are required for audit context.');
+  }
+  return auditActor.run(Object.freeze({
+    assistantId: String(context.assistantId), assistantName: String(context.assistantName || 'Muse Assistant'),
+    ownerUserId: Number(context.ownerUserId), requestId: context.requestId ? String(context.requestId) : null,
+  }), callback);
+};
+export const getAuditActor = () => auditActor.getStore() || null;
+
+export async function initAuditActorSchema(exec = dbRun) {
+  await addColumn(exec, 'audit_events', 'actor_type', "TEXT NOT NULL DEFAULT 'human'");
+  await addColumn(exec, 'audit_events', 'actor_id', 'TEXT');
+  await addColumn(exec, 'audit_events', 'actor_name', 'TEXT');
+  await addColumn(exec, 'audit_events', 'on_behalf_of_user_id', 'INTEGER REFERENCES users(id)');
+  await addColumn(exec, 'audit_events', 'assistant_request_id', 'TEXT');
+}
+
+export const assistantAuditInsert = (sql, params, context = auditActor.getStore()) => {
+  if (!context || !/^\s*INSERT\s+INTO\s+(?:"audit_events"|audit_events)(?:\s|\()/i.test(sql)) return { sql, params };
+  const match = sql.match(/^(\s*INSERT\s+INTO\s+"?audit_events"?\s*\()([^)]*)(\)\s*VALUES\s*\()([\s\S]*)(\)\s*(?:RETURNING\s+[\s\S]*?)?;?\s*)$/i);
+  if (!match || /\b(actor_type|actor_id|actor_name|on_behalf_of_user_id|assistant_request_id)\b/i.test(match[2])
+      || /\)\s*,\s*\(/.test(match[4])) {
+    throw new Error('Assistant audit attribution requires one explicit audit insert.');
+  }
+  return {
+    sql: `${match[1]}${match[2]},actor_type,actor_id,actor_name,on_behalf_of_user_id,assistant_request_id${match[3]}${match[4]},?,?,?,?,?${match[5]}`,
+    params: [...params, 'assistant', context.assistantId, context.assistantName, context.ownerUserId, context.requestId],
+  };
+};
 
 // An opaque in-process identity for caches. It changes on every connect() and
 // exposes neither a connection string nor access to the underlying driver.
@@ -179,7 +215,8 @@ export const connect = async () => {
 
 const run = async (sql, params = []) => {
   if (!query) throw new Error('connect() was never called');
-  return (transactionQuery.getStore() || query)(toPgPlaceholders(sql), params);
+  const attributed = assistantAuditInsert(sql, params);
+  return (transactionQuery.getStore() || query)(toPgPlaceholders(attributed.sql), attributed.params);
 };
 
 export const withTransaction = async (callback) => {
@@ -299,6 +336,7 @@ export const initSchema = async (exec = run) => {
     details_json TEXT,
     created_at TEXT NOT NULL
   )`);
+  await initAuditActorSchema(exec);
   /* Plaud transcripts and the minutes built from them remain private officer records.
    * Nothing in this table is exposed to viewers or Wardens. Authorization to circulate
    * a draft is separate from the Lodge's later approval of the official minutes. */
