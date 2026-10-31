@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 const root = path.resolve(new URL('..', import.meta.url).pathname);
 if (process.platform !== 'darwin') { console.log('Native offscreen rendering requires macOS.'); process.exit(0); }
 const source = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/AssistantAccess.swift'), 'utf8');
+const signatureSource = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/AssistantSignatureAuthorization.swift'), 'utf8');
 const sharedViews = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/Views.swift'), 'utf8');
 const theme = sharedViews.slice(sharedViews.indexOf('enum SignTheme'), sharedViews.indexOf('private enum GrandViewPortal'));
 const header = sharedViews.slice(sharedViews.indexOf('struct NativeWorkspaceHeader'), sharedViews.indexOf('struct AdaptiveWorkspaceSplit'));
@@ -24,22 +25,26 @@ const request = { id:'SYNTHETIC-REQUEST', actionId:'minutes.prepare', title:'Rev
 const attestation = { id:'SYNTHETIC-ATTESTATION', kind:'minutes', recordId:'SYNTHETIC-MINUTES', title:'October meeting minutes (synthetic)', status:'awaiting_master_attestation', section:'minutes', actionLabel:'Review and attest as Worshipful Master', attestationText:'I reviewed the current meeting minutes and the corrections shown against the preparing officer’s submitted record. I attest to this current record as Worshipful Master.', effects:['Applies your saved Worshipful Master signature.','Files the signed minutes and makes the completed record available to authorized officers.','Distribution to the Craft remains a separate action.'], revision:'SYNTHETIC-REVISION-4', requestId:null, ready:true, reason:'The preparing officer’s original attestation and attendance review remain attached to this record.' };
 const payload = {assistant:{id:'SYNTHETIC-MUSE',name:'Muse',enabled:true,expiresAt:'2026-11-07T15:00:00Z',permissions:['minutes.view','minutes.prepare','treasury.view'],createdAt:null,updatedAt:null},capabilities,requests:[request],attestations:[attestation,{...attestation,id:'SYNTHETIC-BUILDING',kind:'building',recordId:'SYNTHETIC-BUILDING',title:'Community room request (synthetic)',section:'building',actionLabel:'Review Building Request',status:'pending',reason:'Approval applies your saved signature. Review the agreement first.'}],activity:[]};
 const raw=x=>`#"${JSON.stringify(x)}"#`;
-const out=path.join(root,'output/muse-assistant-build/native'); fs.mkdirSync(out,{recursive:true,mode:0o700}); fs.chmodSync(out,0o700);
+const out=process.env.STONE_SQUARE_NATIVE_RENDER_OUTPUT || path.join(root,'output/muse-assistant-build/native'); fs.mkdirSync(out,{recursive:true,mode:0o700}); fs.chmodSync(out,0o700);
 const scratch=fs.mkdtempSync(path.join(os.tmpdir(),'muse-native-render-'));
 try {
   const bundle=path.join(scratch,'MuseAssistantRender.app'), contents=path.join(bundle,'Contents'), macos=path.join(contents,'MacOS'); fs.mkdirSync(macos,{recursive:true});
   fs.writeFileSync(path.join(contents,'Info.plist'),`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.stonesquare.synthetic.muse.${Date.now()}</string><key>CFBundleExecutable</key><string>MuseAssistantRender</string><key>LSUIElement</key><true/></dict></plist>`);
   const swiftFile=path.join(scratch,'render.swift'), binary=path.join(macos,'MuseAssistantRender');
-  fs.writeFileSync(swiftFile,`${source}\n${theme}\n${header}\n${date}
+  fs.writeFileSync(swiftFile,`${source}\n${signatureSource}\n${theme}\n${header}\n${date}
 struct CorrespondenceRecord: Decodable {}
 struct User { let id: Int; let role: String }
 @MainActor final class AppModel: ObservableObject {
     let user: User? = User(id: 987654, role: "owner")
     let assistantAccountContext = "OFFSCREEN-SYNTHETIC-ONLY"
     func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws -> T {
+        if path == "/api/assistant/signature-requests" && method == "GET" {
+            return try JSONDecoder().decode(T.self, from: Data("{\\"requests\\":[]}".utf8))
+        }
         precondition(path == "/api/assistant/workspace" && method == "GET", "Render fixture cannot mutate or contact a service")
         return try JSONDecoder().decode(T.self, from: Data(${raw(payload)}.utf8))
     }
+    func signatureAuthorizationPreview(requestID: String) async throws -> Data { preconditionFailure("This synthetic queue contains no signature request") }
 }
 @main struct RenderAssistantViews {
     @MainActor static func main() async throws {

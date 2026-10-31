@@ -51,6 +51,8 @@ jobs:
       - name: Exercise synthetic native sessions, minutes, and reports
         run: |
           node test/mac-session.mjs
+          node test/mac-assistant-access.mjs
+          node test/mac-signature-authorization.mjs
           node test/mac-reliability.mjs
           node test/mac-preview-cancellation.mjs
           node test/mac-minutes-dates.mjs

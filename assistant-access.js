@@ -69,8 +69,8 @@ async function activity(row, actorType, action, requestId = null, details = {}) 
 
 export async function createAssistantService({ ownerUserId, name = 'Muse Assistant', permissions = [], expiresInDays = 7, enabled = true }) {
   await requireCurrentOwner(ownerUserId);
-  if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > 30 || typeof enabled !== 'boolean') {
-    throw assistantError(400, 'Choose an expiry from 1 to 30 days and a valid access setting.');
+  if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > 365 || typeof enabled !== 'boolean') {
+    throw assistantError(400, 'Choose an expiry from 1 to 365 days and a valid access setting.');
   }
   if (!Array.isArray(permissions) || permissions.some(id => {
     const item = assistantCapability(id); return !item || !['standing','approval'].includes(item.mode);
@@ -125,7 +125,7 @@ export async function authenticateAssistantToken(rawToken) {
   authProof.set(assistant,{ tokenHash: row.token_hash, tokenVersion: row.token_version });
   return { assistant, user };
 }
-async function currentAssistant(assistant) {
+export async function currentAssistant(assistant) {
   const proof = authProof.get(assistant);
   if (!proof) throw assistantError(401, 'A verified Muse Assistant credential is required.');
   const row = validService(await dbGet('SELECT * FROM assistant_services WHERE id=?',[assistant.id]));
@@ -510,7 +510,7 @@ export function mountAssistantRoutes(app,{requireAuth,requireOwner}) {
     const row = await currentAssistant(req.assistant);
     res.json({assistant:safeService(row),capabilities:ASSISTANT_CAPABILITIES.filter(action=>hasGrant(row,action)||action.mode==='personal'),
       instructions:{requests:'/api/assistant/requests',mcp:'/api/assistant/mcp',approvalHeader:'X-Assistant-Request-Id',idempotencyHeader:'Idempotency-Key',
-        personalActions:'Queue review only. The owner must review and tap in the website or Mac app.',automaticRetryAllowed:false}});
+        personalActions:'Direct signing remains blocked. For supported signing actions, request_signature prepares a frozen document confirmation. The authenticated owner authorizes and the system applies the signature; signature_status reads the receipt. Other personal actions use the existing owner workflow.',signatureRequests:'/api/assistant/signature-requests',signatureTools:['request_signature','signature_status'],supportedSignatureActions:['documents.sign','owner.minutes-preparer','owner.minutes-master','owner.treasury-attest','owner.dispensation-sign'],unsupportedSignatureActions:['owner.proposals-decide','building.decide','owner.report-signature'],automaticRetryAllowed:false}});
   }));
   app.get('/api/assistant/requests',requireAuth,route(async(req,res)=>{
     if (req.assistant) { const row = await currentAssistant(req.assistant); return res.json({requests:await listRequests(row.owner_user_id,row.id)}); }

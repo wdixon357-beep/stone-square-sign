@@ -60,6 +60,13 @@ await findButton(accessRoot, 'Create or replace token').emit('click'); assert.ma
 await accessRoot.querySelectorAll('form')[0].emit('submit'); await settle();
 const saved = calls.find(call => call.method === 'PUT'); assert.equal(saved.body.expiresInDays, 7); assert.ok(saved.body.permissions.includes('minutes.prepare')); assert.ok(!saved.body.permissions.includes('minutes.master'));
 assert.equal(calls.filter(call => call.path.endsWith('/token')).length, 1, 'Saving permissions never issues a token');
+const annualAccess = { name: 'Muse Lodge helper', permissions: ['minutes.prepare'], expiresInDays: 365, enabled: true };
+await workspace.saveAccess(annualAccess);
+assert.equal(calls.filter(call => call.method === 'PUT').at(-1).body.expiresInDays, 365);
+const accessSaves = calls.filter(call => call.method === 'PUT').length;
+await workspace.saveAccess({ ...annualAccess, expiresInDays: 366 });
+assert.equal(calls.filter(call => call.method === 'PUT').length, accessSaves, 'More than 365 days is rejected before saving');
+assert.equal(calls.filter(call => call.path.endsWith('/token')).length, 1, 'Extending access preserves the existing credential');
 await findButton(accessRoot, 'Approve this change').emit('click'); assert.match(accessRoot.textContent, /not yet recorded as executed/);
 assert.equal(calls.find(call => call.path.endsWith('/decision')).body.fingerprint, 'synthetic-fingerprint');
 

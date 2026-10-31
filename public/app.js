@@ -54,6 +54,9 @@ const state = {
 let treasuryWorkspace;
 let assistantWorkspace;
 let assistantWorkspaceLoading;
+let signatureAuthorization;
+let signatureAuthorizationLoading;
+let pendingSignatureRequest = new URLSearchParams(window.location.search).get('signatureRequest');
 let agendaWorkspace;
 let correspondenceWorkspace;
 let buildingCalendarWorkspace;
@@ -246,7 +249,7 @@ const hasUnsavedWorkspace = section => ({
 }[section] || false);
 
 document.addEventListener('keydown', event => {
-  const modal = document.querySelector('.modal:not(.hidden)');
+  const modal = [...document.querySelectorAll('.modal:not(.hidden)')].at(-1);
   if (!modal) return;
   if (event.key === 'Escape') {
     const close = modal.querySelector('.modal-close');
@@ -255,9 +258,11 @@ document.addEventListener('keydown', event => {
   }
   if (event.key !== 'Tab') return;
   const focusable = [...modal.querySelectorAll(modalFocusSelector)].filter(element => element.getClientRects().length);
-  if (!focusable.length) return;
+  if (!focusable.length) { event.preventDefault(); modal.tabIndex = -1; modal.focus({ preventScroll: true }); return; }
   const first = focusable[0], last = focusable.at(-1);
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  if (!modal.contains(document.activeElement) || !focusable.includes(document.activeElement)) {
+    event.preventDefault(); (event.shiftKey ? last : first).focus();
+  } else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 });
 
@@ -650,7 +655,7 @@ const applyWorkspacePermissions = user => {
   $('builderMasterName').textContent = user.name;
   $('landingGreeting').textContent = `${easternGreeting()}, ${user.name}`;
   $('landingRole').textContent = roleLabel(user.role);
-  if (user.role !== 'owner') assistantWorkspace?.dispose();
+  if (user.role !== 'owner') { assistantWorkspace?.dispose(); signatureAuthorization?.dispose(); }
   document.querySelectorAll('.owner-only').forEach((element) => {
     element.classList.toggle('hidden', user.role !== 'owner');
   });
@@ -694,6 +699,7 @@ const clearMemberAccessInvite = () => {
 
 const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   assistantWorkspace?.dispose();
+  signatureAuthorization?.dispose();
   state.user = user;
   legacyReportBridge.request();
   clearMemberAccessInvite();
@@ -746,7 +752,10 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   startRealtime();
   /* Only roles that actually sign are asked for a signature. This modal has no close button
    * when forced, so a role that can never sign would be trapped behind it with no way out. */
-  if (!user.hasSignature && can('signature.manage', user) && !signatureProfileLocked(user)) window.setTimeout(() => openSignatureSetup(true), 150);
+  if (pendingSignatureRequest) {
+    const id = pendingSignatureRequest; pendingSignatureRequest = null;
+    void openSignatureAuthorization(id);
+  } else if (!user.hasSignature && can('signature.manage', user) && !signatureProfileLocked(user)) window.setTimeout(() => openSignatureSetup(true), 150);
 };
 
 // Refresh access without rebuilding forms, clearing drafts, or restarting the workspace.
@@ -785,6 +794,7 @@ const refreshSessionPermissions = async () => {
       state.user = null;
       legacyReportBridge.clear();
       if (typeof assistantWorkspace !== 'undefined') assistantWorkspace?.dispose();
+      signatureAuthorization?.dispose();
       clearMemberAccessInvite();
       hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
       setMessage(authMessage, 'Your session is no longer authorized. Sign in again to continue.', true);
@@ -1549,7 +1559,7 @@ const renderAssistantWorkspace = async section => {
       assistantWorkspaceLoading ||= import(`/assistant-access.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`);
       const { AssistantWorkspace } = await assistantWorkspaceLoading;
       if (!current()) return;
-      assistantWorkspace ||= new AssistantWorkspace({ api: apiFetch, user: () => state.user, context: () => `${state.user?.id}:${state.authEpoch}`, accessRoot: $('assistantSection'), attestationsRoot: $('attestationsSection'), openReview: openAssistantReview });
+      assistantWorkspace ||= new AssistantWorkspace({ api: apiFetch, user: () => state.user, context: () => `${state.user?.id}:${state.authEpoch}`, accessRoot: $('assistantSection'), attestationsRoot: $('attestationsSection'), openReview: openAssistantReview, openSignatureRequest: openSignatureAuthorization });
     }
     if (current()) await assistantWorkspace.show(section === 'assistant' ? 'access' : 'attestations');
   } catch (error) {
@@ -1557,6 +1567,31 @@ const renderAssistantWorkspace = async section => {
     assistantWorkspaceLoading = null;
     const root = $(section === 'assistant' ? 'assistantSection' : 'attestationsSection');
     root.replaceChildren(); const message = document.createElement('p'); message.setAttribute('role', 'status'); message.textContent = error.message || 'This workspace could not load. Open it again to retry.'; root.append(message);
+  }
+};
+
+// A request link opens a separate owner confirmation without changing open forms or drafts.
+const openSignatureAuthorization = async id => {
+  const userId = state.user?.id, epoch = state.authEpoch;
+  try {
+    signatureAuthorizationLoading ||= import(`/signature-authorization.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`);
+    const { SignatureAuthorization } = await signatureAuthorizationLoading;
+    if (!state.user || state.user.id !== userId || state.authEpoch !== epoch) return;
+    signatureAuthorization ||= new SignatureAuthorization({
+      api: apiFetch, user: () => state.user, context: () => `${state.user?.id}:${state.authEpoch}`,
+      root: $('signatureAuthorizationModal'), onOpen: () => show($('signatureAuthorizationModal')),
+      onClose: () => hide($('signatureAuthorizationModal')),
+    });
+    await signatureAuthorization.open(id);
+  } catch (error) {
+    if (state.user?.id !== userId || state.authEpoch !== epoch) return;
+    signatureAuthorizationLoading = null;
+    const root = $('signatureAuthorizationModal'); root.replaceChildren();
+    const body = document.createElement('div'); body.className = 'modal-body signature-authorization-body';
+    const heading = document.createElement('h2'); heading.id = 'signatureAuthorizationTitle'; heading.textContent = 'Signature authorization';
+    const message = document.createElement('p'); message.setAttribute('role', 'status'); message.textContent = error.message || 'The confirmation could not load. No signature has been authorized.';
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'secondary'; close.textContent = 'Close'; close.addEventListener('click', () => hide(root));
+    body.append(heading, message, close); root.append(body); show(root);
   }
 };
 
@@ -3733,6 +3768,7 @@ $('resetSubmit').addEventListener('click', async () => {
 $('logoutBtn').addEventListener('click', async () => {
   legacyReportBridge.clear();
   assistantWorkspace?.dispose();
+  signatureAuthorization?.dispose();
   state.realtimeAbort?.abort();
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   state.authEpoch += 1;

@@ -194,8 +194,8 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
         } catch { if current(stamp, model) { message = error.localizedDescription } }
     }
     func save(_ model: AppModel, name: String, permissions: Set<String>, days: Int, enabled: Bool) async {
-        guard (1...30).contains(days), !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            message = "Enter a name and an expiry between 1 and 30 days."; return
+        guard (1...365).contains(days), !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "Enter a name and an expiry between 1 and 365 days."; return
         }
         guard let stamp = begin(model) else { return }
         defer { finish(stamp, model) }
@@ -330,7 +330,7 @@ struct MuseAssistantView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    Text("Muse can prepare and read the work you grant. You review each proposed change that needs approval. Your signatures and personal attestations always remain in your own review screen.")
+                    Text("Muse can prepare and read the work you grant. You review each proposed change that needs approval. After you review a document with Muse, one secure confirmation can authorize the system to apply your signature to that exact version.")
                         .fixedSize(horizontal: false, vertical: true)
                     accessForm
                     if let assistant = workspace.assistant {
@@ -345,6 +345,7 @@ struct MuseAssistantView: View {
                         }.assistantCard()
                     }
                     actionCatalog
+                    AssistantSignatureQueue()
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Requests and receipts").font(.title3.weight(.semibold))
                         if workspace.requests.isEmpty { Text(workspace.loaded ? "No assistant requests are recorded." : "Load the workspace to see requests.").foregroundStyle(.secondary) }
@@ -389,7 +390,13 @@ struct MuseAssistantView: View {
             Text("Access settings").font(.title3.weight(.semibold))
             TextField("Assistant name", text: $workspace.accessName).textFieldStyle(.roundedBorder)
             Toggle("Enable Muse access", isOn: $workspace.accessEnabled)
-            Stepper("Access expires in \(workspace.accessDays) day\(workspace.accessDays == 1 ? "" : "s")", value: $workspace.accessDays, in: 1...30)
+            HStack {
+                Text("Access duration in days")
+                TextField("Days", value: $workspace.accessDays, format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 80)
+                    .accessibilityLabel("Access duration in days")
+                Stepper("Adjust access duration", value: $workspace.accessDays, in: 1...365).labelsHidden()
+            }
             Text("Saving renews access for this number of days. Personal actions cannot be granted.").font(.caption).foregroundStyle(.secondary)
             if workspace.accessDirty { Text("Access edits are not saved. Save or reload them before creating a token.").font(.callout).foregroundStyle(.secondary) }
             Button("Save access") { Task { await workspace.save(model, name: workspace.accessName, permissions: workspace.accessPermissions, days: workspace.accessDays, enabled: workspace.accessEnabled) } }
@@ -430,8 +437,9 @@ struct MyAttestationsView: View {
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    Text("Open an item to review its exact statement and effects. Continue in the record's normal review screen. Nothing is signed or attested by opening this queue.").fixedSize(horizontal: false, vertical: true)
-                    if workspace.loaded && workspace.attestations.isEmpty { ContentUnavailableView("No pending personal reviews", systemImage: "checkmark.seal", description: Text("New work will appear here when it requires your own action.")) }
+                    Text("Open an item to review its exact statement and effects. Ordinary attestations continue in the record's normal review screen. Muse signature requests have one secure confirmation below. Opening this queue does not sign or attest anything.").fixedSize(horizontal: false, vertical: true)
+                    AssistantSignatureQueue()
+                    if workspace.loaded && workspace.attestations.isEmpty { ContentUnavailableView("No other pending personal reviews", systemImage: "checkmark.seal", description: Text("Record-specific reviews will appear here when they require your own action.")) }
                     ForEach(workspace.attestations) { item in
                         Button { selected = item } label: {
                             VStack(alignment: .leading, spacing: 8) {
@@ -551,7 +559,7 @@ private struct AssistantTokenSheet: View {
         }.padding(24).frame(width: 540)
     }
 }
-private struct AssistantEffects: View {
+struct AssistantEffects: View {
     let effects: [String]
     var body: some View {
         if !effects.isEmpty {
@@ -567,7 +575,7 @@ private struct AssistantStatus: View {
         if !message.isEmpty { Text(message).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(14).background(.bar) }
     }
 }
-private extension View {
+extension View {
     func assistantCard() -> some View {
         padding(18).background(SignTheme.surface, in: RoundedRectangle(cornerRadius: 12)).overlay { RoundedRectangle(cornerRadius: 12).stroke(SignTheme.cardLine) }
     }

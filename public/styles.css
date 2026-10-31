@@ -1175,6 +1175,44 @@ body:has(#appCard:not(.hidden)) { background: #f2f5f6; }
 .assistant-attestation-text { margin: 10px 0 22px; padding: 18px; background: var(--paper); border-radius: 12px; font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-review-reason { font-size: 14px; }
 .assistant-empty { padding: 24px 0; }
+.assistant-signature-requests { margin-top: 32px; padding: 24px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+.assistant-signature-requests .assistant-request:last-child { padding-bottom: 0; border-bottom: 0; }
+#signatureAuthorizationModal { z-index: 60; }
+.signature-authorization-body { width: min(960px, 100%); background: #fff; }
+.signature-authorization-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.signature-authorization-head h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.signature-authorization-head .signature-authorization-close { position: static; flex: 0 0 auto; width: auto; min-height: 44px; padding: 10px 16px; font-size: 13px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; color: var(--navy); }
+.signature-authorization-status { display: inline-block; margin: 20px 0 8px; padding: 7px 12px; border-radius: 7px; color: var(--navy) !important; background: var(--gold-soft); font-weight: 700; }
+.signature-authorization-body h3 { margin: 26px 0 10px; font-size: 17px; color: var(--navy); }
+.signature-authorization-body p, .signature-authorization-body li { line-height: 1.6; overflow-wrap: anywhere; }
+.signature-authorization-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 9px 18px; margin: 22px 0; font-size: 13px; }
+.signature-authorization-facts dt { color: var(--muted); }
+.signature-authorization-facts dd { margin: 0; overflow-wrap: anywhere; color: var(--ink); }
+.signature-authorization-body .assistant-attestation-text { background: var(--paper); }
+.signature-authorization-preview .pdf-frame { height: 480px; min-height: 0; }
+.signature-frozen-preview { height: 480px; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #e8edf2; }
+.signature-authorization-preview a { display: inline-block; min-height: 32px; padding: 5px 0; font-size: 13px; color: var(--navy); }
+.signature-authorization-body details { margin-top: 18px; font-size: 13px; }
+.signature-authorization-body summary { cursor: pointer; min-height: 32px; font-weight: 700; color: var(--navy); }
+.signature-document-digest { font-family: ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; }
+.signature-authorization-receipt { padding: 0 20px 16px; margin: 24px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.signature-authorization-receipt p { margin: 8px 0; font-size: 14px; }
+.signature-authorization-consent, .signature-authorization-reason { padding: 16px; border-left: 3px solid var(--gold); background: var(--paper); font-size: 14px !important; color: var(--ink) !important; }
+.signature-authorization-actions { flex-wrap: wrap; margin-top: 22px; }
+.signature-authorization-actions > button { min-height: 44px; white-space: normal; }
+.signature-authorization-body button:focus-visible, .signature-authorization-body a:focus-visible, .signature-authorization-body summary:focus-visible { outline: 2px solid var(--navy); outline-offset: 3px; }
+@media (max-width: 600px) {
+  .assistant-signature-requests { padding: 18px; }
+  #signatureAuthorizationModal { padding: 12px; }
+  .signature-authorization-body { padding: 22px 18px; max-height: calc(100dvh - 24px); }
+  .signature-authorization-head { gap: 12px; }
+  .signature-authorization-head h2 { font-size: 25px; }
+  .signature-authorization-facts { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .signature-authorization-facts dd { margin-bottom: 10px; }
+  .signature-authorization-preview .pdf-frame { height: 340px; }
+  .signature-frozen-preview { height: 340px; }
+  .signature-authorization-actions > button { flex: 0 1 auto; width: 100%; }
+}
 .assistant-workspace button:focus-visible, .assistant-workspace summary:focus-visible, .assistant-workspace input:focus-visible, .assistant-workspace select:focus-visible, .assistant-workspace textarea:focus-visible { outline: 2px solid var(--navy); outline-offset: 3px; }
 .assistant-workspace ::selection { background: var(--gold-soft); color: var(--navy); }
 @media (max-width: 720px) {

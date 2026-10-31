@@ -238,6 +238,16 @@ try {
     await fails(()=>access.authorizeAssistantRequest({assistant,method:'GET',originalUrl:'/api/dues/me',body:{}}),401);
     const other=await access.createAssistantService({ownerUserId:otherOwnerId,permissions:['dues.self']});assert.notEqual(other.id,service.id);
   });
+  await test('365-day access keeps the existing credential and rejects 366 days',async()=>{
+    await access.createAssistantService({ownerUserId:ownerId,permissions:['dues.self'],expiresInDays:7});
+    const issued=await access.rotateAssistantToken(ownerId);const savedToken=issued.token;
+    const before=await db.dbGet('SELECT token_hash,token_version FROM assistant_services WHERE owner_user_id=?',[ownerId]);
+    const saved=await access.createAssistantService({ownerUserId:ownerId,permissions:['dues.self'],expiresInDays:365});
+    const after=await db.dbGet('SELECT token_hash,token_version FROM assistant_services WHERE owner_user_id=?',[ownerId]);
+    assert.deepEqual(after,before);assert.equal((await access.authenticateAssistantToken(savedToken)).user.id,ownerId);
+    assert.ok(Date.parse(saved.expiresAt)>Date.now()+364*86400000);
+    await fails(()=>access.createAssistantService({ownerUserId:ownerId,permissions:['dues.self'],expiresInDays:366}),400);
+  });
 } finally { await db.close(); }
 if(failures.length) { console.error(`${failures.length} assistant foundation groups failed; ${passed} passed.`);process.exitCode=1; }
 else console.log(`All ${passed} assistant foundation adversarial groups passed.`);

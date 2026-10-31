@@ -34,8 +34,8 @@ const statusText = status => STATUS_LABELS[status] || text(status || 'Unverified
 
 /** An owner-only workspace. All signing remains in the existing human review flows. */
 export class AssistantWorkspace {
-  constructor({ api, user, context, accessRoot, attestationsRoot, openReview, confirm = message => window.confirm(message), clipboard = () => navigator.clipboard }) {
-    Object.assign(this, { api, user, context, accessRoot, attestationsRoot, openReview, confirm, clipboard });
+  constructor({ api, user, context, accessRoot, attestationsRoot, openReview, openSignatureRequest, confirm = message => window.confirm(message), clipboard = () => navigator.clipboard }) {
+    Object.assign(this, { api, user, context, accessRoot, attestationsRoot, openReview, openSignatureRequest, confirm, clipboard });
     this.sequence = 0; this.mode = null; this.dirty = false; this.busy = false; this.token = '';
   }
   ownerContext() { return this.user()?.role === 'owner' ? this.context() : null; }
@@ -47,7 +47,7 @@ export class AssistantWorkspace {
   }
   leave() { this.sequence++; this.mode = null; this.clearToken(); }
   dispose() {
-    this.leave(); this.dirty = false; this.busy = false; this.data = null;
+    this.leave(); this.dirty = false; this.busy = false; this.data = null; this.signatureRequests = null;
     this.accessRoot.replaceChildren(); this.attestationsRoot.replaceChildren();
   }
   async show(mode) {
@@ -64,8 +64,14 @@ export class AssistantWorkspace {
     root.setAttribute('aria-busy', 'true');
     const loading = notice(); loading.textContent = 'Loading current records…'; root.replaceChildren(loading);
     try {
-      const data = await this.api(mode === 'access' ? '/api/assistant/workspace' : '/api/assistant/attestations');
+      const [records, signatures] = await Promise.allSettled([
+        this.api(mode === 'access' ? '/api/assistant/workspace' : '/api/assistant/attestations'),
+        this.openSignatureRequest ? this.api('/api/assistant/signature-requests') : Promise.resolve(null),
+      ]);
       if (!this.current(context, sequence) || this.mode !== mode) return;
+      if (records.status !== 'fulfilled') throw records.reason;
+      const data = records.value;
+      this.signatureRequests = signatures.status === 'fulfilled' ? signatures.value?.requests || [] : null;
       if (mode === 'access') { this.data = data; this.renderAccess(data); }
       else this.renderAttestations(data.attestations || []);
       if (message) this.message.textContent = message;
@@ -87,16 +93,16 @@ export class AssistantWorkspace {
   }
   renderAccess(data) {
     const root = this.accessRoot; this.clearToken(); root.replaceChildren(); this.dirty = false;
-    this.heading(root, 'Muse Assistant', 'Choose what Muse can prepare, review requests, and keep your signatures and attestations in your own hands.');
+    this.heading(root, 'Muse Assistant', 'Choose what Muse can prepare, review requests, and authorize each exact signature yourself.');
     const boundary = node('div', undefined, 'assistant-boundary');
-    boundary.append(node('strong', 'Your own tap is always required'), node('p', 'Muse uses separate access. It cannot sign, attest, apply your saved signature, or take over your account. Your existing officer and record safeguards still apply.'));
+    boundary.append(node('strong', 'You authorize each signature'), node('p', 'Muse can request a secure confirmation for a supported document. Your own authenticated action authorizes that exact version and applies your saved signature. Muse receives the receipt. Your existing officer and record safeguards still apply.'));
     root.append(boundary);
     const assistant = data.assistant;
     const form = node('form', undefined, 'assistant-access-form');
     const settings = node('section', undefined, 'assistant-settings'); settings.append(node('h2', 'Access settings'));
     const nameLabel = node('label', 'Assistant name'); const name = node('input'); name.type = 'text'; name.maxLength = 80; name.required = true; name.value = assistant?.name || 'Muse'; nameLabel.append(name);
     const expiryLabel = node('label', 'Access expires after'); const expiry = node('select');
-    for (let day = 1; day <= 30; day++) { const option = node('option', `${day} ${day === 1 ? 'day' : 'days'}`); option.value = String(day); expiry.append(option); }
+    for (let day = 1; day <= 365; day++) { const option = node('option', `${day} ${day === 1 ? 'day' : 'days'}`); option.value = String(day); expiry.append(option); }
     expiry.value = '7'; expiryLabel.append(expiry);
     const enabledLabel = node('label', undefined, 'assistant-check'); const enabled = node('input'); enabled.type = 'checkbox'; enabled.checked = Boolean(assistant?.enabled); enabledLabel.append(enabled, node('span', 'Enable this assistant access'));
     settings.append(nameLabel, expiryLabel, enabledLabel);
@@ -147,6 +153,7 @@ export class AssistantWorkspace {
     instructions.append(node('p', 'Muse submits exact proposed changes for your approval. It must wait for its recorded approval and use a stable request key. An uncertain outcome needs verification before another attempt.'));
     connection.append(instructions); root.append(connection);
     this.renderRequests(root, data.requests || [], data.capabilities || []);
+    this.renderSignatureRequests(root);
     const activity = node('section', undefined, 'assistant-activity'); activity.append(node('h2', 'Recent assistant activity'));
     if (!(data.activity || []).length) activity.append(node('p', 'No assistant activity is recorded here. A saved token alone does not verify a connection.', 'helper'));
     for (const item of data.activity || []) {
@@ -157,7 +164,7 @@ export class AssistantWorkspace {
     root.append(activity);
   }
   async saveAccess(body) {
-    if (!Number.isInteger(body.expiresInDays) || body.expiresInDays < 1 || body.expiresInDays > 30) return;
+    if (!Number.isInteger(body.expiresInDays) || body.expiresInDays < 1 || body.expiresInDays > 365) return;
     const context = this.ownerContext(), sequence = this.sequence;
     if (context === null || this.busy) return;
     this.busy = true; this.setBusy(true); this.message.textContent = 'Saving assistant access…';
@@ -261,7 +268,8 @@ export class AssistantWorkspace {
   }
   renderAttestations(attestations) {
     const root = this.attestationsRoot; root.replaceChildren();
-    this.heading(root, 'My Attestations', 'Review each document and its effects. Signing and personal confirmations happen only when you act in the document’s own review.');
+    this.heading(root, 'My Attestations', 'Review each document and its effects. Muse signature requests open one secure confirmation for the exact document.');
+    this.renderSignatureRequests(root);
     if (!attestations.length) root.append(node('p', 'No personal signatures or attestations are currently waiting for you.', 'assistant-empty'));
     for (const item of attestations) {
       const article = node('article', undefined, 'assistant-attestation'); article.append(node('h2', item.title || 'Personal review'));
@@ -274,6 +282,22 @@ export class AssistantWorkspace {
       const message = notice();
       article.append(button(item.ready ? (item.actionLabel || 'Open document review') : 'Review requirements', () => this.openAttestation(item, message), 'primary'), message); root.append(article);
     }
+  }
+  renderSignatureRequests(root) {
+    if (!this.openSignatureRequest) return;
+    const section = node('section', undefined, 'assistant-signature-requests'); section.append(node('h2', 'Signature confirmations from Muse'));
+    if (this.signatureRequests === null) section.append(node('p', 'Signature requests could not load. Refresh to check their current status.', 'helper'));
+    else if (!this.signatureRequests.length) section.append(node('p', 'No Muse signature requests are recorded here.', 'helper'));
+    for (const request of this.signatureRequests || []) {
+      const article = node('article', undefined, 'assistant-request'); article.append(node('h3', request.title || 'Signature request'));
+      const label = request.status === 'pending' ? 'Awaiting your authorization' : request.status === 'completed' ? 'Signature applied' : statusText(request.status);
+      article.append(node('p', `${label} · Requested ${dateText(request.createdAt)}`, 'assistant-record-status'));
+      if (request.reason) article.append(node('p', request.reason, 'helper'));
+      if (request.status === 'pending' && request.expiresAt) article.append(node('p', `Expires ${dateText(request.expiresAt)}`, 'helper'));
+      article.append(button(request.status === 'completed' ? 'View signature receipt' : request.status === 'pending' ? 'Open signature confirmation' : 'View signature request', () => this.openSignatureRequest(request.id)));
+      section.append(article);
+    }
+    root.append(section);
   }
   async openAttestation(item, message) {
     const context = this.ownerContext(), sequence = this.sequence;

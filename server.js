@@ -49,6 +49,7 @@ import { initMinutesSignatureRevisionSchema, createMinutesSignatureRevisions } f
 import { initAssistantSchema, mountAssistantRoutes, assertAssistantRecordUnchanged } from './assistant-access.js';
 import { installAssistantGateway } from './assistant-gateway.js';
 import { mountAssistantMcp } from './assistant-mcp.js';
+import { initSignatureAuthorizationSchema, mountSignatureAuthorizationRoutes, registerSignatureOperation, signatureBindingValue } from './signature-authorizations.js';
 
 dotenv.config();
 
@@ -1020,19 +1021,23 @@ const sendCompletionNotice = async (document, signers, signedBytes) => {
     ...signers.map((signer) => signer.email),
   ].filter(Boolean));
   const name = document.title || document.original_name;
+  const warnings = [];
   for (const to of recipients) {
     try {
-      await sendEmail({
+      const sent = await sendEmail({
         to,
         subject: `Completed Lodge document: ${name}`,
         text: `All required signatures for ${name} have been captured. A signed PDF is attached for your records.`,
         // the executed copy, not the blank one that was uploaded
         attachment: { filename: `SIGNED ${document.original_name}`, content: signedBytes },
       });
+      if (!sent) warnings.push('The signed document is saved, but a completion copy could not be delivered.');
     } catch (error) {
       console.warn(`Completion email to ${to} failed:`, error.message);
+      warnings.push('The signed document is saved, but a completion copy could not be delivered.');
     }
   }
+  return [...new Set(warnings)];
 };
 
 const upload = multer({
@@ -2271,22 +2276,26 @@ app.put('/api/minutes/:id', requireAuth, requireMinutesAccess, async (req, res, 
   }
 });
 
-app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer, async (req, res, next) => {
-  try {
+// Shared domain operations contain database work only. Both direct human routes
+// and secure confirmation use them; delivery follows the outermost commit.
+const applyMinutesPreparerSignature = async req => withTransaction(async () => {
+    if (!hasPermission(req.user,'minutes.prepare')) throw httpError(403,'Minutes preparation access is required.');
+    await dbGet('SELECT id FROM users WHERE id=? FOR UPDATE',[req.user.id]);
+    await dbGet('SELECT id FROM meeting_minutes WHERE id=? FOR UPDATE',[req.params.id]);
     const row = await getMinutesRow(req.params.id);
-    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
-    if (row.status !== 'draft') return res.status(409).json({ error: 'Only a working draft can be attested and sent to the Worshipful Master.' });
+    if (!row) throw httpError(404, 'Meeting minutes not found.');
+    if (row.status !== 'draft') throw httpError(409, 'Only a working draft can be attested and sent to the Worshipful Master.');
     if (row.created_by_user_id !== req.user.id) {
-      return res.status(403).json({ error: 'The officer who prepared this draft must attest to it.' });
+      throw httpError(403, 'The officer who prepared this draft must attest to it.');
     }
     const draft = currentMinutesEditorialDraft(JSON.parse(row.draft_json));
-    if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
+    if (!draft.sections.some(section => section.body.trim())) throw httpError(400, 'The minutes need at least one section with meeting notes.');
     draft.officerAttendanceVersion = 2;
     draft.closingFormatVersion = 3;
     const reviewIssues = [...minutesMeetingDetailsIssues(draft), ...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
-    if (reviewIssues.length) return res.status(409).json({ error: reviewIssues.join(' ') });
+    if (reviewIssues.length) throw httpError(409, reviewIssues.join(' '));
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
-    if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
+    if (!signature) throw httpError(409, 'Save your signature profile before attesting to the minutes.');
     await assertApprovedSignature(req.user, asBuffer(signature.signature_bytes));
     const time = nowIso();
     const attestedDraftJson = JSON.stringify(draft);
@@ -2304,14 +2313,17 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
       );
       return result;
     });
-    if (!attestation.changes) return res.status(409).json({ error: 'The draft changed. Refresh before attesting.' });
+    if (!attestation.changes) throw httpError(409, 'The draft changed. Refresh before attesting.');
     await dbRun(
       `INSERT INTO audit_events (user_id, action, details_json, created_at) VALUES (?, 'minutes_preparer_attested', ?, ?)`,
       [req.user.id, JSON.stringify({ minutesId: row.id }), time],
     );
+    const owner = req.signatureAuthorizationSnapshot?.delivery?.ownerNoticeRecipient || await dbGet("SELECT email FROM users WHERE role = 'owner' AND access_revoked_at IS NULL ORDER BY id LIMIT 1");
+    return {row,time,owner};
+});
+const finishMinutesPreparerSignature = async ({row,owner},req) => {
     broadcast('minutes_review_changed');
     const alert = minutesReviewAlert(row);
-    const owner = await dbGet("SELECT email FROM users WHERE role = 'owner' AND access_revoked_at IS NULL ORDER BY id LIMIT 1");
     let noticeSent = false;
     if (owner?.email) {
       try {
@@ -2324,25 +2336,27 @@ app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer
         console.warn('Minutes review notice failed:', error.message);
       }
     }
-    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)), notificationWarnings: noticeSent ? [] : ['The signed draft is in the Worshipful Master\'s review queue, but the email notice could not be sent.'] });
-  } catch (error) {
-    next(error);
-  }
+    return { minutes: minutesForResponse(await getMinutesRow(row.id)), notificationWarnings: noticeSent ? [] : ['The signed draft is in the Worshipful Master\'s review queue, but the email notice could not be sent.'] };
+};
+app.post('/api/minutes/:id/preparer-attest', requireAuth, requireMinutesPreparer, async (req,res,next) => {
+  try { const outcome=await applyMinutesPreparerSignature(req);res.json(await finishMinutesPreparerSignature(outcome,req)); } catch(error) { next(error); }
 });
 
-app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req, res, next) => {
-  try {
+const applyMinutesMasterSignature = async req => withTransaction(async () => {
+    if (req.user.role!=='owner' || req.user.access_revoked_at) throw httpError(403,'Your Worshipful Master account is required.');
+    await dbGet('SELECT id FROM users WHERE id=? FOR UPDATE',[req.user.id]);
+    await dbGet('SELECT id FROM meeting_minutes WHERE id=? FOR UPDATE',[req.params.id]);
     const row = await getMinutesRow(req.params.id);
-    if (!row) return res.status(404).json({ error: 'Meeting minutes not found.' });
-    if (row.status !== 'awaiting_master_attestation') return res.status(409).json({ error: 'The preparing officer must attest to the draft first.' });
+    if (!row) throw httpError(404, 'Meeting minutes not found.');
+    if (row.status !== 'awaiting_master_attestation') throw httpError(409, 'The preparing officer must attest to the draft first.');
     const draft = currentMinutesEditorialDraft(JSON.parse(row.draft_json));
-    if (!draft.sections.some(section => section.body.trim())) return res.status(400).json({ error: 'The minutes need at least one section with meeting notes.' });
+    if (!draft.sections.some(section => section.body.trim())) throw httpError(400, 'The minutes need at least one section with meeting notes.');
     const attestedDraftJson = JSON.stringify(draft);
     const changes = reviewedMinutesChanges(row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null, JSON.parse(row.draft_json), draft, JSON.parse(row.master_changes_json || '[]'));
     const reviewIssues = [...attendanceRecordIssues(draft), ...closingReviewIssues(draft)];
-    if (reviewIssues.length) return res.status(409).json({ error: `The recorded attendance or closing details are incomplete. ${reviewIssues.join(' ')}` });
+    if (reviewIssues.length) throw httpError(409, `The recorded attendance or closing details are incomplete. ${reviewIssues.join(' ')}`);
     const signature = await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [req.user.id]);
-    if (!signature) return res.status(409).json({ error: 'Save your signature profile before attesting to the minutes.' });
+    if (!signature) throw httpError(409, 'Save your signature profile before attesting to the minutes.');
     await assertApprovedSignature(req.user, asBuffer(signature.signature_bytes));
     const time = nowIso();
     const attested = await withTransaction(async () => {
@@ -2367,19 +2381,22 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
       }
       return result;
     });
-    if (!attested.changes) return res.status(409).json({ error: 'The record changed. Refresh before attesting.' });
-    const recipientCandidates = await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND (role IN ('secretary', 'assistant_secretary') OR id = ?)", [row.created_by_user_id]);
+    if (!attested.changes) throw httpError(409, 'The record changed. Refresh before attesting.');
+    const recipientCandidates = req.signatureAuthorizationSnapshot?.delivery?.recipientCandidates || await dbAll("SELECT * FROM users WHERE access_revoked_at IS NULL AND (role IN ('secretary', 'assistant_secretary') OR id = ?)", [row.created_by_user_id]);
     const recipients = [...new Map(recipientCandidates
       .filter(candidate => hasPermission(candidate, 'minutes.prepare'))
       .map(candidate => [normalizeEmail(candidate.email), candidate]))
       .values()];
-    const activeUsers = await dbAll('SELECT * FROM users WHERE access_revoked_at IS NULL');
+    const activeUsers = req.signatureAuthorizationSnapshot?.delivery?.activeUsers || await dbAll('SELECT * FROM users WHERE access_revoked_at IS NULL');
     const alertUsers = activeUsers.filter(candidate => hasPermission(candidate, 'minutes.view'));
     for (const recipient of alertUsers) {
       await dbRun(`INSERT INTO minutes_distribution_alerts (minutes_id, user_id, created_at)
         VALUES (?, ?, ?) ON CONFLICT (minutes_id, user_id) DO UPDATE SET created_at = EXCLUDED.created_at, seen_at = NULL`,
       [row.id, recipient.id, time]);
     }
+    return {row,changes,time,recipients};
+});
+const finishMinutesMasterSignature = async ({row,changes,recipients},req) => {
     broadcast('minutes_review_changed');
     broadcast('minutes_completion_changed');
     broadcast('minutes_records_changed', { minutesId: row.id, reason: 'published' });
@@ -2395,10 +2412,10 @@ app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req
         if (!sent) notificationWarnings.push(`The reviewed record is available in the Dashboard, but the email notice to ${recipient.email} could not be sent.`);
       } catch (error) { console.warn('Minutes review completion notice failed:', error.message); notificationWarnings.push(`The reviewed record is available in the Dashboard, but the email notice to ${recipient.email} could not be sent.`); }
     }
-    res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)), notificationWarnings });
-  } catch (error) {
-    next(error);
-  }
+    return { minutes: minutesForResponse(await getMinutesRow(row.id)), notificationWarnings };
+};
+app.post('/api/minutes/:id/master-attest', requireAuth, requireOwner, async (req,res,next) => {
+  try { const outcome=await applyMinutesMasterSignature(req);res.json(await finishMinutesMasterSignature(outcome,req)); } catch(error) { next(error); }
 });
 
 app.post('/api/minutes/:id/mark-distributed', requireAuth, requireSecretaryOrOwner, async (req, res, next) => {
@@ -2936,7 +2953,7 @@ app.post('/api/dispensations/preview', requireAuth, requireOwner, rateLimit({ ke
  * it first is whoever signs it." The signer picker is gone from both clients. */
 const BOTH_SECRETARIES = ['secretary', 'assistant_secretary'];
 
-const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, userAgent, auditAction }) => {
+const applyDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, userAgent, auditAction, approvedSecretaries }) => withTransaction(async () => {
   const {
     requestDate, eventDate, requestDetails, eventTime, locationName,
     streetAddress, cityState, worshipfulMasterAddress, title,
@@ -2964,7 +2981,6 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
   const documentTitle = title || `Dispensation - ${requestDetails.slice(0, 90)}`;
   const fileName = `${documentTitle.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100) || 'dispensation'}.pdf`;
   const signerNames = [];
-  const notificationWarnings = [];
   const recipients = await withTransaction(async () => {
     const currentSignature = await lockSavedSignature(ownerUser);
     if (!currentSignature.equals(ownerSignature)) throw httpError(409, 'Your saved signature changed. Review the dispensation again before creating it.');
@@ -2986,7 +3002,7 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
     await dbRun('UPDATE documents SET signing_mode = ? WHERE id = ?', ['any', documentId]);
     const assigned = [];
     for (const role of BOTH_SECRETARIES) {
-      const officer = await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
+      const officer = approvedSecretaries ? approvedSecretaries.find(item=>item.role===role) : await dbGet('SELECT id, name, email FROM users WHERE role = ?', [role]);
       const officerName = officer?.name
         || (role === 'secretary' ? 'William McDuffie' : 'Adrian Reese');
       signerNames.push(officerName);
@@ -3003,6 +3019,10 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
     });
     return assigned;
   });
+  return {documentId,documentTitle,recipients};
+});
+const finishDispensationDocument = async ({documentId,documentTitle,recipients},{baseUrl}) => {
+  const notificationWarnings=[];
   for (const { officer, officerName } of recipients) {
     if (officer?.email && !officer.email.endsWith('.local')) {
       try {
@@ -3021,6 +3041,7 @@ const createDispensationDocument = async ({ fields, ownerUser, baseUrl, ip, user
   broadcast('queue_changed', { reason: 'dispensation_created', documentId });
   return { documentId, documentTitle, notificationWarnings };
 };
+const createDispensationDocument = async args => finishDispensationDocument(await applyDispensationDocument(args),args);
 
 app.post('/api/dispensations', requireAuth, requireOwner, rateLimit({ key: 'dispensation-create', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
   try {
@@ -3337,12 +3358,7 @@ app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, r
   } catch (error) { next(error); }
 });
 
-app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimit({ key: 'sign', maximum: 20, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
-  try {
-    if (req.body?.consent !== true) {
-      return res.status(400).json({ error: 'Confirm the electronic signature consent before signing.' });
-    }
-    const outcome = await withTransaction(async () => {
+const applyAssignedDocumentSignature = async req => withTransaction(async () => {
       const signatureBytes = await lockSavedSignature(req.user);
       const document = await dbGet('SELECT * FROM documents WHERE id = ? FOR UPDATE', [req.params.id]);
       if (!document) throw httpError(404, 'Document not found.');
@@ -3366,7 +3382,7 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       let officerAddress = '';
       let signerName = req.user.name;
       if (document.template_kind === 'dispensation_v1') {
-        const profile = await dbGet('SELECT name, address FROM submission_profiles WHERE role = ?', [req.user.role]);
+        const profile = req.signatureAuthorizationSnapshot?.delivery?.profile || await dbGet('SELECT name, address FROM submission_profiles WHERE role = ?', [req.user.role]);
         officerAddress = String(profile?.address || '').trim();
         signerName = String(profile?.name || '').trim();
         if (!signerName || !officerAddress || officerAddress.toLowerCase() === signerName.toLowerCase()) {
@@ -3435,19 +3451,17 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
           });
         }
       }
-      return { documentId: document.id, status, remaining: remaining.total };
-    });
-    const { documentId, status, remaining } = outcome;
+      const completedDocument = status === 'completed' ? await dbGet('SELECT * FROM documents WHERE id=?',[document.id]) : null;
+      const completeSigners = status === 'completed' ? (req.signatureAuthorizationSnapshot?.delivery?.completeSigners || await dbAll('SELECT ds.signer_name,u.email FROM document_signers ds LEFT JOIN users u ON u.id=ds.user_id WHERE ds.document_id=? ORDER BY ds.id',[document.id])) : [];
+      return { documentId: document.id, status, remaining: remaining.total, completedDocument, completeSigners };
+});
+const finishAssignedDocumentSignature = async (outcome,req) => {
+    const { documentId, status, remaining, completedDocument, completeSigners } = outcome;
+    const notificationWarnings = [];
     if (status === 'completed') void missiveDraftWorker.wake();
     let submission = null;
     if (status === 'completed') {
-      const completedDocument = await dbGet('SELECT * FROM documents WHERE id = ?', [documentId]);
-      const completeSigners = await dbAll(
-        `SELECT ds.signer_name, u.email FROM document_signers ds
-         LEFT JOIN users u ON u.id = ds.user_id WHERE ds.document_id = ?`,
-        [documentId],
-      );
-      await sendCompletionNotice(completedDocument, completeSigners, asBuffer(completedDocument.signed_bytes));
+      notificationWarnings.push(...await sendCompletionNotice(completedDocument,completeSigners,asBuffer(completedDocument.signed_bytes)));
       if (completedDocument.template_kind === 'dispensation_v1' && !completedDocument.submitted_at) {
         try {
           submission = dispensationSubmissions.automaticDeliveryEnabled ? await dispensationSubmissions.deliver(documentId, {
@@ -3457,12 +3471,13 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
           // Delivery must never undo an already captured signature.
           console.warn('Dispensation submission could not be prepared:', error.message);
           submission = { state: 'failed', message: 'The signature is saved. The submission needs attention in the document queue.' };
+          notificationWarnings.push(submission.message);
         }
       }
     }
     broadcast('queue_changed', { reason: 'document_signed', documentId, status });
     const submissionNote = submission ? ` ${submission.message}` : '';
-    res.json({
+    return {
       message: status === 'completed'
         ? `Document completed. Record copies are being delivered.${submissionNote}`
         : 'Signature captured.',
@@ -3470,11 +3485,97 @@ app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimi
       submitted: submission ? submission.state === 'sent' : null,
       submissionError: submission && ['failed', 'uncertain'].includes(submission.state) ? submission.message : null,
       submissionPacket: submission ? { state: submission.state, message: submission.message } : null,
+      notificationWarnings,
       nextStep: remaining === 0 ? 'No signatures remain.' : `${remaining} signature remains.`,
-    });
-  } catch (error) {
-    next(error);
-  }
+    };
+};
+app.post('/api/documents/:id/sign', requireAuth, requireDocumentAccess, rateLimit({ key:'sign',maximum:20,windowMs:60*60*1000 }), async(req,res,next) => {
+  try {
+    if(req.body?.consent!==true) throw httpError(400,'Confirm the electronic signature consent before signing.');
+    const outcome=await applyAssignedDocumentSignature(req);res.json(await finishAssignedDocumentSignature(outcome,req));
+  } catch(error) { next(error); }
+});
+
+const dispensationSignatureFields = body => ({
+  requestDate:String(body.requestDate||''),eventDate:String(body.eventDate||''),
+  requestDetails:String(body.requestDetails||'').trim().slice(0,600),eventTime:String(body.eventTime||'').trim().slice(0,40),
+  locationName:String(body.locationName||'').trim().slice(0,120),streetAddress:String(body.streetAddress||'').trim().slice(0,120),
+  cityState:String(body.cityState||'').trim().slice(0,120),worshipfulMasterAddress:String(body.worshipfulMasterAddress||'').trim().slice(0,160),
+  title:String(body.title||'').trim().slice(0,200),
+});
+registerSignatureOperation('owner.dispensation-sign',{
+  snapshot:async({owner,body,renderArtifact})=>{
+    const fields=dispensationSignatureFields(body);
+    if(!dateParts(fields.requestDate)||!dateParts(fields.eventDate)||!fields.requestDetails||!fields.eventTime||!fields.locationName||!fields.streetAddress||!fields.cityState||!fields.worshipfulMasterAddress)throw httpError(409,'Complete all Lodge questions before requesting signature authorization.');
+    const secretaries=await dbAll("SELECT id,name,email,role,access_revoked_at FROM users WHERE role IN ('secretary','assistant_secretary') ORDER BY id FOR SHARE");
+    return {title:fields.title||`Dispensation - ${fields.requestDetails.slice(0,90)}`,kind:'dispensation',signingRole:'worshipful_master',
+      statement:'I have reviewed this exact official dispensation and confirm the entered Lodge questions and personal information. I authorize the system to create this document with my approved saved Worshipful Master signature and request both Secretaries to complete their existing signing duty.',
+      effects:['Create this exact official dispensation with your saved Worshipful Master signature.','Assign the Secretary and Assistant Secretary; the first valid Secretary signature completes the existing either-officer requirement.','Send the existing signature-request notices to both Secretaries.','This does not apply a Secretary signature or send the dispensation to the District Deputy.'],
+      state:{fields,owner:{id:owner.id,name:owner.name,email:owner.email,role:owner.role},secretaries},delivery:{secretaries},
+      ...(renderArtifact?{artifact:await createDispensationPdf({fields,ownerName:owner.name,ownerSignature:null})}:{})};
+  },
+  apply:req=>applyDispensationDocument({fields:dispensationSignatureFields(req.body),ownerUser:req.user,baseUrl:requestBaseUrl(req),ip:req.ip,userAgent:req.get('user-agent')||'',approvedSecretaries:req.signatureAuthorizationSnapshot.delivery.secretaries}),
+  verifyOutcome:async(outcome,req)=>{
+    const document=await dbGet('SELECT id,owner_user_id,status FROM documents WHERE id=?',[outcome.documentId]);
+    const ownerSigner=await dbGet("SELECT user_id,signature_bytes,signed_at FROM document_signers WHERE document_id=? AND signer_role='worshipful_master'",[outcome.documentId]);
+    if(!document||document.owner_user_id!==req.user.id||document.status!=='partially_signed'||ownerSigner?.user_id!==req.user.id||!ownerSigner.signed_at)throw httpError(500,'The created signature receipt could not be verified.');
+    await assertApprovedSignature(req.user,asBuffer(ownerSigner.signature_bytes));
+  },
+  afterCommit:(outcome,req)=>finishDispensationDocument(outcome,{baseUrl:requestBaseUrl(req)}),
+});
+
+// The frozen PDF is a view of the saved record before this authorization.
+// Its exact bytes are retained; semantic inputs and renderer code are separately
+// bound so PDF creation timestamps cannot cause false stale conflicts.
+for (const phase of ['preparer','master']) registerSignatureOperation(`owner.minutes-${phase}`,{
+  snapshot:async({owner,action,renderArtifact,lock})=>{
+    if(phase==='preparer'&&!hasPermission(owner,'minutes.prepare'))throw httpError(403,'Minutes preparation access is required.');
+    if(lock)await dbGet('SELECT id FROM meeting_minutes WHERE id=? FOR UPDATE',[action.recordId]);
+    const row=await getMinutesRow(action.recordId);
+    if(!row)throw httpError(404,'Meeting minutes not found.');
+    if(phase==='preparer'&&(row.status!=='draft'||row.created_by_user_id!==owner.id))throw httpError(403,'Only the actual preparing officer can attest to their unsigned draft.');
+    if(phase==='master'&&row.status!=='awaiting_master_attestation')throw httpError(409,'The preparing officer must attest to this exact draft first.');
+    const draft=currentMinutesEditorialDraft(JSON.parse(row.draft_json));
+    if(!draft.sections.some(section=>section.body.trim()))throw httpError(409,'The minutes need a section with meeting notes.');
+    if(phase==='preparer'){draft.officerAttendanceVersion=2;draft.closingFormatVersion=3;}
+    const issues=phase==='preparer'?[...minutesMeetingDetailsIssues(draft),...attendanceReviewIssues(draft),...closingReviewIssues(draft)]:[...attendanceRecordIssues(draft),...closingReviewIssues(draft)];
+    if(issues.length)throw httpError(409,issues.join(' '));
+    const attestations=await dbAll('SELECT id,user_id,phase,draft_json,signature_bytes,created_at FROM meeting_minutes_attestations WHERE minutes_id=? ORDER BY id',[row.id]);
+    const context=await minutesArtifactContext(row,draft);
+    const users=await dbAll('SELECT id,email,name,role,permissions_json FROM users WHERE access_revoked_at IS NULL ORDER BY id FOR SHARE');
+    return {title:`Meeting minutes: ${row.meeting_date || draft.meetingDate}`,kind:'minutes',signingRole:phase,
+      statement:phase==='preparer'
+        ?'I have reviewed this exact minutes draft and source, meeting details, attendance, station coverage and required confirmations as the actual preparer. I authorize the system to apply my approved saved signature, freeze this submitted draft and send it to the Worshipful Master for review.'
+        :'I have reviewed these exact minutes, the submitted draft and recorded corrections. I authorize the system to apply my approved saved Worshipful Master signature, publish the signed minutes to Lodge officers and make them ready for the Secretary to distribute to the Craft.',
+      effects:phase==='preparer'?['Apply your preparer signature and retain this exact submitted snapshot.','Move this draft to the Worshipful Master review queue.','Send the existing review notice to the Worshipful Master.']
+        :['Apply your Worshipful Master signature and retain the signed attestation.','Make the signed minutes available to all authorized Lodge officers.','Create the existing internal availability alerts and email notices.','Mark the record ready for the Secretary to distribute; this does not record Lodge approval or distribution to the Craft.'],
+      delivery:{ownerNoticeRecipient:users.find(item=>item.role==='owner'),recipientCandidates:users.filter(item=>['secretary','assistant_secretary'].includes(item.role)||item.id===row.created_by_user_id),activeUsers:users},
+      state:{row,draft,context:signatureBindingValue(context),attestations:signatureBindingValue(attestations),users,owner:{id:owner.id,name:owner.name,role:owner.role,permissions:resolvePermissions(owner)}},
+      ...(renderArtifact?{artifact:await buildMinutesPdf(context)}:{})};
+  },apply:phase==='preparer'?applyMinutesPreparerSignature:applyMinutesMasterSignature,
+  afterCommit:phase==='preparer'?finishMinutesPreparerSignature:finishMinutesMasterSignature,
+});
+registerSignatureOperation('documents.sign',{
+  snapshot:async({owner,action,renderArtifact,lock})=>{
+    if(dispensationSubmissions.automaticDeliveryEnabled)throw httpError(409,'Secure document confirmation requires automatic District Deputy delivery to remain off.');
+    const document=await dbGet(`SELECT * FROM documents WHERE id=?${lock?' FOR UPDATE':''}`,[action.recordId]);
+    if(!document)throw httpError(404,'Document not found.');
+    if(document.status==='rescinded')throw httpError(409,'This document was rescinded.');
+    const signers=await dbAll('SELECT * FROM document_signers WHERE document_id=? ORDER BY id FOR SHARE',[document.id]);
+    const signer=signers.find(item=>!item.signed_at&&!item.superseded_at&&(item.user_id===owner.id||(!item.user_id&&item.signer_role===owner.role)));
+    if(!signer)throw httpError(403,'No pending signature is assigned to your account.');
+    const artifact=asBuffer(document.signed_bytes)||asBuffer(document.file_bytes);
+    if(!artifact?.length)throw httpError(409,'Document file is missing.');
+    const profile=document.template_kind==='dispensation_v1'?await dbGet('SELECT name,address FROM submission_profiles WHERE role=? FOR SHARE',[owner.role]):null;
+    if(document.template_kind==='dispensation_v1'&&(!String(profile?.name||'').trim()||!String(profile?.address||'').trim()||String(profile.address).trim().toLowerCase()===String(profile.name).trim().toLowerCase()))throw httpError(409,'Save the assigned signer name and mailing address before signing.');
+    const recipients=await dbAll('SELECT ds.id,ds.signer_name,u.email FROM document_signers ds LEFT JOIN users u ON u.id=ds.user_id WHERE ds.document_id=? ORDER BY ds.id',[document.id]);
+    return {title:document.title,kind:'document',signingRole:signer.signer_role,
+      statement:'I have reviewed this exact document and agree that my electronic signature represents my signature on it. I authorize the system to apply my approved saved signature in my assigned signing role and carry out the listed completion effects.',
+      effects:['Apply your saved signature in your assigned signing role.','Update the document status and, for an either-officer document, close any superseded pending assignment.','If this completes the document, send the existing record completion copies.','For a completed dispensation, prepare the owner-only unsent Missive draft and submission packet. Automatic District Deputy sending remains off.'],
+      delivery:{profile,completeSigners:recipients.map(item=>({...item,signer_name:item.id===signer.id?(profile?.name||owner.name):item.signer_name}))},
+      state:{document:signatureBindingValue(document),signers:signatureBindingValue(signers),profile,recipients,automaticDeliveryEnabled:dispensationSubmissions.automaticDeliveryEnabled,owner:{id:owner.id,name:owner.name,email:owner.email,role:owner.role}},
+      ...(renderArtifact?{artifact}:{})};
+  },apply:applyAssignedDocumentSignature,afterCommit:finishAssignedDocumentSignature,
 });
 
 dispensationSubmissions.mount(app, { requireAuth, requireOwner, upload, broadcast, rateLimit });
@@ -3752,6 +3853,7 @@ app.get('/api/generation/status', requireAuth, async (req, res, next) => {
 
 mountAccessRoutes(app,{requireAuth,requireOwner,onAccessChanged:disconnectRealtimeUser});
 mountAssistantRoutes(app, { requireAuth, requireOwner });
+mountSignatureAuthorizationRoutes(app, { requireAuth, requireOwner });
 mountAssistantMcp(app, { requireAuth, port: PORT });
 mountBuildingCalendar(app,{requireAuth,sendBuildingEmail:sendEmail});
 mountAgendaRoutes(app, { requireAuth, requireOwner, addAudit });
@@ -3855,6 +3957,7 @@ await initTreasurySchema();
 await initGenerationSchema();
 await initActivitySchema();
 await initAssistantSchema();
+await initSignatureAuthorizationSchema();
 
 if (dispensationSubmissions.automaticDeliveryEnabled) dispensationSubmissions.startWorker(broadcast);
 // Bootstrap the durable queue once, then wake after committed workflow events.

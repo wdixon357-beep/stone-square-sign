@@ -3,6 +3,7 @@ import { canonicalAssistantPath, isAssistantControlRoute, resolveAssistantAction
 import { withAuditActor } from './db.js';
 
 const prefix = 'ss22_muse_';
+const safeSigningMetadata = new Set(['signatureRequests','signatureTools','supportedSignatureActions','unsupportedSignatureActions']);
 const methodNames = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'all'];
 export function assistantResponse(value, depth = 0) {
   if (depth > 40) return null;
@@ -10,7 +11,7 @@ export function assistantResponse(value, depth = 0) {
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).filter(([key,item]) =>
     !/(?:token|password|secret|credential|assertion|inviteUrl|activationLink)/i.test(key)
-    && (!/signature/i.test(key) || typeof item === 'boolean'))
+    && (!/signature/i.test(key) || typeof item === 'boolean' || safeSigningMetadata.has(key)))
     .map(([key,item]) => [key,assistantResponse(item,depth + 1)]));
 }
 const tokenFor = req => {

@@ -793,6 +793,22 @@ final class AppModel: ObservableObject {
         return try decoder.decode(T.self, from: data)
     }
 
+    func signatureAuthorizationPreview(requestID: String) async throws -> Data {
+        guard user?.role == "owner", let baseURL else { throw ClientError.unauthorized("Only the Worshipful Master can authorize a signature request.") }
+        let safeID = AssistantWorkspace.routeID(requestID)
+        let path = "/api/assistant/signature-requests/\(safeID)/preview"
+        guard let url = URL(string: path, relativeTo: baseURL) else { throw ClientError.invalidServer }
+        var request = URLRequest(url: url)
+        request.setValue("application/pdf", forHTTPHeaderField: "Accept")
+        request.setValue("mac", forHTTPHeaderField: "X-Stone-Square-Client")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token)
+        guard (200..<300).contains(response.statusCode), response.mimeType?.lowercased() == "application/pdf" else {
+            throw ClientError.server("The frozen signature document could not be loaded. Nothing was signed by this check.")
+        }
+        return data
+    }
+
     /// Dues. The server refuses anyone who is not the Worshipful Master or a Secretary,
     /// so a failure here is reported rather than swallowed; a silent empty ledger would
     /// read as "nobody owes anything", which is the worst possible wrong answer.

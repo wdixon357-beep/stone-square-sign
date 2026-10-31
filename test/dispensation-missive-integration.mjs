@@ -118,9 +118,9 @@ try {
     rejectPacketRead = false;
   } finally { await new Promise(resolve => listener.close(resolve)); }
   const server = await readFile(new URL('../server.js', import.meta.url), 'utf8');
-  const transactionEnd = server.indexOf('return { documentId: document.id, status, remaining: remaining.total };');
+  const transactionEnd = server.indexOf('return { documentId: document.id, status, remaining: remaining.total, completedDocument, completeSigners };');
   assert.ok(server.lastIndexOf('await dispensationMissiveDrafts.enqueue(document.id', transactionEnd) > server.lastIndexOf("action: 'document_completed'", transactionEnd), 'Production signature enqueues before its transaction commits.');
-  assert.match(server.slice(transactionEnd), /const \{ documentId, status, remaining \} = outcome;\s*if \(status === 'completed'\) void missiveDraftWorker\.wake\(\);/, 'Production wakes only after the captured signature transaction returns.');
+  assert.match(server.slice(transactionEnd), /const \{ documentId, status, remaining, completedDocument, completeSigners \} = outcome;\s*const notificationWarnings = \[\];\s*if \(status === 'completed'\) void missiveDraftWorker\.wake\(\);/, 'Production wakes only after the captured signature transaction returns.');
   assert.match(server, /await dispensationMissiveDrafts\.requestRetry\([\s\S]{0,220}?\}\);\s*void missiveDraftWorker\.wake\(\);\s*broadcast\([\s\S]{0,200}?await dispensationSubmissions\.packet\(/, 'The retry mutation commits and wakes processing before response DTO reads.');
   assert.match(server, /void missiveDraftWorker\.start\(\)/);
   assert.doesNotMatch(server, /setInterval\(processMissiveDrafts/);

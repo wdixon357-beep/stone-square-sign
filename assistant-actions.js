@@ -216,9 +216,9 @@ export function resolveAssistantAction(method, path) {
 
 export function isAssistantControlRoute(method, path) {
   const pathname = canonicalAssistantPath(path).split('?')[0];
-  return (method === 'GET' && ['/api/assistant/me','/api/assistant/requests','/api/assistant/mcp'].includes(pathname))
-    || (method === 'GET' && /^\/api\/assistant\/requests\/[A-Za-z0-9_-]+$/.test(pathname))
-    || (method === 'POST' && ['/api/assistant/requests','/api/assistant/mcp'].includes(pathname));
+  return (method === 'GET' && ['/api/assistant/me','/api/assistant/requests','/api/assistant/signature-requests','/api/assistant/mcp'].includes(pathname))
+    || (method === 'GET' && /^\/api\/assistant\/(?:requests|signature-requests)\/[A-Za-z0-9_-]+$/.test(pathname))
+    || (method === 'POST' && ['/api/assistant/requests','/api/assistant/signature-requests','/api/assistant/mcp'].includes(pathname));
 }
 
 const tableExists = async name => Boolean((await dbGet('SELECT to_regclass(?) AS present',[`public.${name}`]))?.present);

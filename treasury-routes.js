@@ -9,6 +9,7 @@ import { buildTreasuryPdf } from './treasury-pdf.js';
 import { easternDate, treasuryReportingWindow, treasuryWindowForDraft, applyTreasuryMeetingCycle } from './treasury-period.js';
 import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
 import { assertAssistantRecordUnchanged } from './assistant-access.js';
+import { registerSignatureOperation } from './signature-authorizations.js';
 const error = (statusCode, message) => Object.assign(new Error(message), { statusCode });
 const bytes = v => v ? Buffer.from(v) : null;
 const upload = multer({ storage:multer.memoryStorage(), limits:{ fileSize:12*1024*1024, files:5, fields:6, fieldSize:180000 }, fileFilter:(_req,file,done)=>/\.(pdf|png|jpe?g|txt)$/i.test(file.originalname)?done(null,true):done(error(400,'Choose a PDF, PNG, JPG or TXT file.')) });
@@ -314,7 +315,8 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     const pdf=await buildTreasuryPdf({draft:finalized(row)&&snapshot?JSON.parse(snapshot.draft_json):draft,status:row.status,preparedBy:row.preparer_name,preparerRole:row.preparer_role,preparerSignature:bytes(snapshot?.signature_bytes)});
     res.type('application/pdf').send(pdf);
   }));
-  app.post('/api/treasury/:id/preparer-attest',requirePrepare,route(async(req,res)=>{
+  const applyTreasurySignature=async req=>withTransaction(async()=>{
+    req.treasuryAccess=await treasuryAccess(req.user);
     const initial=await record(req);revision(req,initial);
     if(initial.preparer_user_id!==req.user.id||initial.status!=='draft'||req.treasuryAccess!=='prepare')throw error(403,'Only the preparing officer can attest to an unsigned draft.');
     let row;const time=new Date().toISOString();
@@ -335,16 +337,48 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       const changed=await dbRun("UPDATE treasury_reports SET status='ready_for_distribution',submitted_json=draft_json,preparer_attested_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?",[time,time,row.id,row.revision]);
       if(!changed.changes)throw error(409,'This report changed. Reopen it before signing.');
       await dbRun('INSERT INTO treasury_attestations (id,report_id,phase,user_id,draft_json,signature_bytes,created_at) VALUES (?,?,?,?,?,?,?)',[crypto.randomUUID(),row.id,'preparer',req.user.id,row.draft_json,bytes(signature.signature_bytes),time]);await audit(req,row.id,'preparer_attested');
-      const waiting=await dbAll("SELECT id,draft_json,created_at FROM treasury_reports WHERE id<>? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL FOR UPDATE",[row.id]);
+      const waiting=req.signatureAuthorizationSnapshot?.delivery?.waiting || await dbAll("SELECT id,draft_json,created_at FROM treasury_reports WHERE id<>? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL FOR UPDATE",[row.id]);
       for(const pending of waiting.filter(item=>item.created_at<time&&treasuryPeriodCovered(JSON.parse(item.draft_json),[draft]))){
         const closed=await dbRun("UPDATE treasury_reports SET status='superseded',superseded_by_report_id=?,superseded_at=?,revision=revision+1,updated_at=? WHERE id=? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL AND created_at<?",[row.id,time,time,pending.id,time]);
         if(closed.changes)await audit(req,pending.id,'superseded_by_completed_report',{completedReportId:row.id});
       }
     });
-    const recipients=await dbAll("SELECT DISTINCT email FROM users WHERE access_revoked_at IS NULL AND (id=? OR role='secretary')",[row.preparer_user_id]);
+    const recipients=req.signatureAuthorizationSnapshot?.delivery?.recipients || await dbAll("SELECT DISTINCT email FROM users WHERE access_revoked_at IS NULL AND (id=? OR role='secretary')",[row.preparer_user_id]);
+    return {row,recipients};
+  });
+  const finishTreasurySignature=async({row,recipients},req)=>{
     const warnings=[];
     for(const recipient of recipients){try{const sent=await sendEmail({to:recipient.email,subject:"Treasurer report signed and ready for distribution",text:`${row.preparer_name} signed and finalized the treasurer report. Open the report to download the signed copy for distribution.\n\n${baseUrl(req)}/?section=treasury`});if(!sent)warnings.push('The report is saved, but an email notice could not be delivered.');}catch{warnings.push('The report is saved, but an email notice could not be delivered.');}}
-    broadcast('treasury_changed');res.json({report:serial(await fetchRecord(row.id)),notificationWarnings:[...new Set(warnings)]});
+    broadcast('treasury_changed');return {report:serial(await fetchRecord(row.id)),notificationWarnings:[...new Set(warnings)]};
+  };
+  registerSignatureOperation('owner.treasury-attest',{
+    snapshot:async({owner,action,body,renderArtifact,lock})=>{
+      if(!canPrepare(owner))throw error(403,'Treasurer report preparation access is required.');
+      if(lock)await dbGet('SELECT id FROM treasury_period_lock WHERE id=1 FOR UPDATE');
+      const row=await dbGet(`SELECT * FROM treasury_reports WHERE id=? AND deleted_at IS NULL${lock?' FOR UPDATE':''}`,[action.recordId]);
+      if(!row)throw error(404,'Treasurer report not found.');
+      if(row.preparer_user_id!==owner.id||row.status!=='draft')throw error(403,'Only the actual preparing officer can attest to an unsigned draft.');
+      if(body.revision!==row.revision)throw error(409,'This report changed. Ask Muse to prepare the current revision.');
+      const draft=normalizeTreasury(JSON.parse(row.draft_json)),calculation=calculateTreasury(draft);
+      if(!calculation.ready)throw error(409,calculation.issues.join(' '));
+      const snapshots=await dbAll("SELECT a.report_id,a.draft_json FROM treasury_attestations a JOIN treasury_reports r ON r.id=a.report_id WHERE a.phase='preparer' AND a.report_id<>? AND r.deleted_at IS NULL AND r.status IN ('ready_for_distribution','distributed') ORDER BY a.report_id,a.id",[row.id]);
+      const signed=snapshots.map(item=>normalizeTreasury(JSON.parse(item.draft_json))).filter(item=>item.periodStart&&item.periodEnd);
+      if(signed.some(item=>item.periodStart<=draft.periodEnd&&item.periodEnd>=draft.periodStart))throw error(409,'A finalized Treasurer Report already covers these dates.');
+      const expected=treasuryReportingWindow(draft.periodEnd,signed.map(item=>item.periodEnd));
+      if(draft.periodStart!==expected.periodStart)throw error(409,`This report must begin on ${expected.periodStart}. Reopen it before signing.`);
+      const sources=await dbAll("SELECT id,name,mime,account_label,encode(sha256(bytes),'hex') AS sha256 FROM treasury_sources WHERE report_id=? ORDER BY id",[row.id]);
+      const recipients=await dbAll("SELECT id,email,role FROM users WHERE access_revoked_at IS NULL AND (id=? OR role='secretary') ORDER BY id FOR SHARE",[row.preparer_user_id]);
+      const waiting=await dbAll("SELECT id,draft_json,created_at FROM treasury_reports WHERE id<>? AND deleted_at IS NULL AND status='awaiting_preparer' AND preparer_user_id IS NULL ORDER BY id FOR SHARE",[row.id]);
+      return {title:`Treasurer Report: ${draft.periodStart} to ${draft.periodEnd}`,kind:'treasury',signingRole:'preparer',
+        statement:'I have reviewed this exact Treasurer Report, its source records, financial entries, reporting period and required confirmations. I authorize the system to apply my approved saved signature as the actual preparing officer and finalize this report.',
+        effects:['Apply your saved signature and finalize this exact report.','Make the signed report available for distribution by the Secretary.','Send the existing report completion notices to the preparer and Secretary.','Close earlier unclaimed waiting reports whose periods are covered by this completed report.'],
+        delivery:{recipients,waiting},
+        state:{row,draft,calculation,sources,snapshots,recipients,waiting,owner:{id:owner.id,name:owner.name,role:owner.role,permissions:resolvePermissions(owner)}},
+        ...(renderArtifact?{artifact:await buildTreasuryPdf({draft,status:row.status,preparedBy:row.preparer_name,preparerRole:row.preparer_role})}:{})};
+    },apply:applyTreasurySignature,afterCommit:finishTreasurySignature,
+  });
+  app.post('/api/treasury/:id/preparer-attest',requirePrepare,route(async(req,res)=>{
+    const outcome=await applyTreasurySignature(req);res.json(await finishTreasurySignature(outcome,req));
   }));
   app.post('/api/treasury/:id/mark-distributed',requirePrepare,route(async(req,res)=>{
     const row=await record(req);revision(req,row);if(!['owner','secretary'].includes(req.user.role)||row.status!=='ready_for_distribution')throw error(403,'The Secretary records distribution after the preparing officer signs the report.');

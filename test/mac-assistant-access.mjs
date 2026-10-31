@@ -65,13 +65,17 @@ struct User { let id: Int; let role: String }
         precondition(workspace.canApprove(regular) && !workspace.canApprove(personal))
         await workspace.decide(personal, decision: "approve", note: "", model: model)
         precondition(model.calls.count == 1, "Personal actions must never submit approval")
-        await workspace.save(model, name: "Muse", permissions: [], days: 31, enabled: true)
+        await workspace.save(model, name: "Muse", permissions: [], days: 366, enabled: true)
         precondition(model.calls.count == 1)
         model.handler = { _, _, _ in Data(${raw({ assistant })}.utf8) }
         await workspace.save(model, name: "Muse", permissions: ["minutes.read", "minutes.attest", "future.unknown"], days: 7, enabled: true)
         let saved = try JSONSerialization.jsonObject(with: model.calls.last!.2!) as! [String: Any]
         precondition(saved["permissions"] as! [String] == ["minutes.read"], "Personal or unknown actions cannot be granted")
         precondition(saved["expiresInDays"] as! Int == 7)
+        await workspace.save(model, name: "Muse", permissions: ["minutes.read"], days: 365, enabled: true)
+        let annual = try JSONSerialization.jsonObject(with: model.calls.last!.2!) as! [String: Any]
+        precondition(annual["expiresInDays"] as! Int == 365 && workspace.accessDays == 365)
+        precondition(annual["permissions"] as! [String] == ["minutes.read"])
         model.handler = { _, _, _ in Data(${raw({ request: { ...request, status: 'approved' } })}.utf8) }
         await workspace.decide(regular, decision: "approve", note: "Exact synthetic review", model: model)
         let decision = try JSONSerialization.jsonObject(with: model.calls.last!.2!) as! [String: Any]

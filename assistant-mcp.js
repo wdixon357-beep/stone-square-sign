@@ -10,6 +10,8 @@ const tools = [
   { name: 'request_action', description: 'Propose one exact operation or place a personal action in William’s review queue. A proposal cannot approve itself. Exact files can be proposed with file metadata, but uploading bytes requires the direct API.', inputSchema: { ...object({ actionId:string, method:string, path:string, body:{type:'object'}, requestKey:string, title:string, files:{type:'array',items:{type:'object'}} }), required:['actionId','method','path','body','requestKey'] } },
   { name: 'requests', description: 'Read your own proposals and their approval or execution receipts.', inputSchema: object({requestId:string}) },
   { name: 'execute', description: 'Execute one still-current, human-approved nonpersonal proposal exactly once. The server uses the saved action, path and body. An uncertain outcome must be verified, never retried automatically.', inputSchema: { ...object({requestId:string}), required:['requestId'] } },
+  { name: 'request_signature', description: 'Prepare one supported document-specific signature request. Return its secure owner confirmation link. The authenticated owner must review the exact document, statement and effects and choose Authorize and apply signature. This tool never signs or confirms for the owner.', annotations: {readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}, inputSchema: { ...object({actionId:string,method:string,path:string,body:{type:'object'},requestKey:string}), required:['actionId','method','path','body','requestKey'] } },
+  { name: 'signature_status', description: 'Read your signature requests and their authoritative confirmation/application receipts. A link, queued request or reported chat approval is not a completed signature. Never repeat a signing operation after an uncertain response.', annotations: {readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}, inputSchema: object({requestId:string}) },
 ];
 const exactId = value => {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(value)) throw assistantError(400,'Use an exact request ID.');
@@ -61,6 +63,8 @@ export function createAssistantMcp({ port, fetchImpl = fetch }) {
       }
       case 'request_action': return forward(req,'/api/assistant/requests',{method:'POST',body:args});
       case 'requests': return forward(req,args.requestId ? `/api/assistant/requests/${exactId(args.requestId)}` : '/api/assistant/requests');
+      case 'request_signature': return forward(req,'/api/assistant/signature-requests',{method:'POST',body:args});
+      case 'signature_status': return forward(req,args.requestId ? `/api/assistant/signature-requests/${exactId(args.requestId)}` : '/api/assistant/signature-requests');
       case 'execute': {
         const requestId=exactId(args.requestId);
         const result=await forward(req,`/api/assistant/requests/${requestId}`);
@@ -84,7 +88,7 @@ export function createAssistantMcp({ port, fetchImpl = fetch }) {
     if (message.id===undefined) return res.status(202).end();
     try {
       let result;
-      if (message.method==='initialize') result={protocolVersion:protocolVersions.includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'stone-square-muse-assistant',version:'1.0.0'},instructions:'Use only granted actions. Proposals require the owner’s separate approval. Signatures and attestations require the owner’s own review and tap. Never retry uncertain business operations.'};
+      if (message.method==='initialize') result={protocolVersion:protocolVersions.includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-03-26',capabilities:{tools:{listChanged:false}},serverInfo:{name:'stone-square-muse-assistant',version:'1.1.0'},instructions:'Use only granted actions. Proposals require the owner’s separate approval. For a supported signature, request_signature returns a secure owner confirmation link. Only the authenticated owner can authorize and apply it; read signature_status for the receipt. A chat statement or tool argument is not server-verified owner authorization. Never retry uncertain business operations.'};
       else if (message.method==='ping') result={};
       else if (message.method==='tools/list') result={tools};
       else if (message.method==='tools/call') {

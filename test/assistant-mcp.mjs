@@ -15,8 +15,8 @@ const invoke=async(method,params={},extra={})=>{
 };
 assert.equal((await invoke('initialize',{protocolVersion:'2025-03-26'})).value.result.protocolVersion,'2025-03-26');
 const names=(await invoke('tools/list')).value.result.tools.map(tool=>tool.name);
-assert.deepEqual(names,['workspace','read','request_action','requests','execute']);
-assert(!names.some(name=>/sign|attest/.test(name)));
+assert.deepEqual(names,['workspace','read','request_action','requests','execute','request_signature','signature_status']);
+assert(!names.some(name=>/^(?:sign|attest|apply_signature|execute_signature)$/.test(name)));
 for(const path of ['https://untrusted.invalid/api/minutes','//untrusted.invalid/api/minutes','/api/../admin','/api/%6dinutes','/api/profile/signature','/api/reports/handoff','/api/unknown']){
  const result=await invoke('tools/call',{name:'read',arguments:{path}});
  assert.equal(result.value.result.isError,true,path);
@@ -38,4 +38,17 @@ proposal={...proposal,path:'/api/documents/1/sign',method:'POST'};
 assert.equal((await invoke('tools/call',{name:'execute',arguments:{requestId:'proposal-123'}})).value.result.isError,true);
 assert.equal(calls.length,before+1,'personal execution stops after reading proposal');
 assert.equal((await invoke('tools/list',{}, {assistant:null})).status,403);
-console.log('PASS: MCP fixed-loopback transport, exact saved execution, standing read allowlist, no personal tools, argument and credential isolation.');
+const signatureBody={actionId:'owner.minutes-master',method:'POST',path:'/api/minutes/synthetic-record/master-attest',body:{},requestKey:'signature-test-001'};
+assert(!(await invoke('tools/call',{name:'request_signature',arguments:signatureBody})).value.result.isError);
+assert.equal(calls.at(-1).url,'http://127.0.0.1:3719/api/assistant/signature-requests');
+assert.equal(calls.at(-1).options.method,'POST');
+assert.deepEqual(JSON.parse(calls.at(-1).options.body),signatureBody);
+assert(!(await invoke('tools/call',{name:'signature_status',arguments:{requestId:'signature-123'}})).value.result.isError);
+assert.equal(calls.at(-1).url,'http://127.0.0.1:3719/api/assistant/signature-requests/signature-123');
+assert.equal(calls.at(-1).options.method,'GET');
+const signatureCalls=calls.length;
+for(const args of [{requestId:'../confirm'},{requestId:'signature-123',consent:true},{requestId:'signature-123',ownerReviewed:true}]){
+ assert.equal((await invoke('tools/call',{name:'signature_status',arguments:args})).value.result.isError,true);
+}
+assert.equal(calls.length,signatureCalls,'Status tool cannot carry an owner confirmation');
+console.log('PASS: MCP fixed-loopback transport, exact saved execution, standing read allowlist, no assistant signing or confirmation tool, argument and credential isolation.');

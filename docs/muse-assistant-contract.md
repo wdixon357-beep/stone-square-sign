@@ -1,6 +1,6 @@
 # Muse Assistant access and attestation queue
 
-Local implementation contract. This feature is local until separately released.
+Service and client contract. Deployment and installed-version receipts establish which revision is live.
 
 ## Boundaries
 
@@ -13,7 +13,7 @@ The catalog covers this service's existing named permissions and owner-only work
 All responses are private/no-store. Human owner endpoints retain normal authenticated same-origin checks. Assistant access uses a separately issued bearer token; only a hash is stored. Revocation/expiry are checked on every request.
 
 - GET /api/assistant/workspace -> { assistant: null | {id,name,enabled,expiresAt,permissions,createdAt,updatedAt}, capabilities:[{id,label,group,mode,description,effects:[]}], requests:[], attestations:[], activity:[] }. Owner only. GET /api/assistant/me returns the assistant identity, permitted action catalog and integration instructions for the assistant token.
-- PUT /api/assistant/access {name,permissions:[actionId],expiresInDays,enabled} -> {assistant}. Owner only. Days 1..30, default7. A personal-mode catalog entry never becomes an executable permission.
+- PUT /api/assistant/access {name,permissions:[actionId],expiresInDays,enabled} -> {assistant}. Owner only. Days 1..365, default7. Saving a longer duration preserves the existing token; token rotation remains a separate action. A personal-mode catalog entry never becomes an executable permission.
 - POST /api/assistant/access/token -> {assistant,token}. Owner only. Token displayed once. Rotation immediately invalidates the previous token. No automatic issuance just by opening a page.
 - DELETE /api/assistant/access -> {ok:true}. Owner only, immediately revokes.
 - GET /api/assistant/requests -> {requests}; GET /api/assistant/requests/:id -> {request}. Owner or that assistant, never other officers. Requests include {id,actionId,title,method,path,body,status,fingerprint,createdAt,expiresAt,decidedAt,decisionNote,effects:[],navigation:{section,recordId}|null,receipt:null|object}.
@@ -35,7 +35,7 @@ Approval consumption and the legacy business transaction are separate. The durab
 
 ## Connection and current limits
 
-The local implementation exposes a JSON Streamable HTTP connector at POST `/api/assistant/mcp`. It supports `workspace`, `read`, `request_action`, `requests` and `execute`. It uses only the separate bearer credential and fixed local API forwarding. It has no signing tool, arbitrary network destination, owner assertion, private invitation link or reusable signature image. Direct API uploads bind exact file metadata, hashes and original upload order. The connector does not upload files.
+The connector exposes JSON Streamable HTTP at POST `/api/assistant/mcp`. It supports `workspace`, `read`, `request_action`, `requests`, `execute`, `request_signature` and `signature_status`. It uses only the separate bearer credential and fixed local API forwarding. It has no assistant signing or confirmation tool, arbitrary network destination, owner assertion, private invitation link or reusable signature image. Direct API uploads bind exact file metadata, hashes and original upload order. The connector does not upload files.
 
 After a separately approved release, the owner can save access, deliberately create a token, and configure a compatible Muse connector with the service URL plus `/api/assistant/mcp`. Opening either client does not issue a token. A token receipt does not establish that Muse supports this authentication method or has connected. Actual Muse connection remains unverified until its authenticated read succeeds. No new provider or subscription is needed by this implementation.
 
@@ -46,3 +46,16 @@ Treasury preparation preserves source names and extraction evidence exactly. Exi
 Creating a dispensation and approving a Warden proposal apply the saved Master signature, so both are personal actions. Muse can render an explicitly unsigned dispensation preview. Personal requests open the existing review tools, preserving unfinished work; they do not silently apply their proposed payload. A personal completion receipt must match the prior record version and any proposed preparation, or, for a new dispensation, the exact preparation plus the actual document, human signing row and creation audit. Unmatched work remains unresolved.
 
 The code and verification in this checkout are local. No production schema, account permission, credential, Lodge record, installed application, deployment, billing setting or monitoring schedule is changed by building and testing it.
+
+## Exact-document signature confirmation
+
+William may tell Muse that he has reviewed a document and wants his saved signature applied. That conversation lets Muse prepare a request. The authenticated owner then opens the secure link and deliberately selects **Authorize and apply signature**. This one confirmation applies the signature through the existing signing operation. The system applies it under William's authorization; Muse is the requester and can read the resulting receipt. An owner session establishes account authority, not a separate proof of physical human presence.
+
+- POST `/api/assistant/signature-requests` accepts an assistant-only `{actionId,method,path,body,requestKey}`. It freezes the eligible saved document's review PDF and binds the record state, statement, effects, owner, signature profile, assistant policy/token versions, implementation identity and expiry. A changed payload cannot reuse the request key. Muse cannot supply personal review flags or a signature image.
+- GET `/api/assistant/signature-requests` and GET `/:id` provide requests and receipts to the owner or originating assistant. GET `/:id/preview` is owner-only and serves the frozen PDF. The trusted HTTPS `/?signatureRequest=<id>` link carries an identifier, not authority. Normal browser login may be needed; native authentication is not copied into Muse or the browser.
+- POST `/:id/confirm` is authenticated-owner-only and requires `{fingerprint,consent:true}`. It rechecks the unchanged record and authority, then commits the existing business signature, authorization consumption and audit together. Delivery runs after that commit. A GET, chat statement, tool call or client navigation never signs.
+- POST `/:id/decline` is owner-only. Expired, revoked, changed or already consumed requests cannot be applied again. After an interrupted response, clients read the receipt instead of retrying a signing write. An unresolved processing or uncertain result remains blocked pending verification.
+
+Supported operations are Master and actual-preparer minutes attestations, the owner's own assigned treasury preparation, pending document signatures assigned to the owner, and creation of an official dispensation with the Master's signature. The new-dispensation confirmation lists the exact entered facts and both Secretary assignments; its saved receipt identifies the actual created document. It never supplies a Secretary signature or sends to the District Deputy. Preparation, attendance, source, financial and other officers' confirmation requirements remain enforced. Warden proposal decisions and external Building or Report Generator signing remain outside this contract until their complete document, authority, statements and delivery effects can be bound safely. This limit must be visible to Muse and the owner; it is not full impersonation of William.
+
+New signature requests share the existing 30-per-minute and 100-pending queue bounds. Their frozen PDFs also have a 64 MiB retained total per assistant across all states. Matching live requests are rejected before a second PDF is rendered; original-key retries return the existing status. Completed or expired history is not automatically deleted to make room. Oversized or nested creation fields are rejected before storage. Reaching capacity directs the owner to the existing personal workflow.
