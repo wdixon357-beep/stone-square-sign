@@ -855,18 +855,30 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         pickerBooking.endSelection = ISO8601DateFormatter().date(from: "2000-01-01T15:30:00Z")!
         precondition(pickerBooking.end == "10:30" && pickerBooking.valid)
         let newRequest = NewBuildingRequestWorkspace()
-        newRequest.draft.bookings = [BuildingBooking(date: "2026-11-01", start: "13:00", end: "15:00")]
+        let bookingToday = LodgeCalendarDates.calendar.startOfDay(for: Date())
+        let bookingDay = LodgeCalendarDates.key(LodgeCalendarDates.calendar.date(byAdding: .day, value: 14, to: bookingToday)!)
+        let pastBookingDay = LodgeCalendarDates.key(LodgeCalendarDates.calendar.date(byAdding: .day, value: -1, to: bookingToday)!)
+        newRequest.draft.bookings = [BuildingBooking(date: bookingDay, start: "13:00", end: "15:00")]
         newRequest.draft.spaces = ["Lodge building", "Back yard"]
         newRequest.draft.phone = ""; newRequest.draft.details = "Synthetic Lodge event"
         precondition(newRequest.draft.validationMessage == nil && !newRequest.canSubmit)
-        GenerationFixture.response = Data(#"{"busy":[{"date":"2026-11-01","start":"14:00","end":"16:00","label":"Pending hold","status":"pending","allDay":false}]}"#.utf8)
+        GenerationFixture.response = Data(#"{"busy":[{"date":"\#(bookingDay)","start":"14:00","end":"16:00","label":"Pending hold","status":"pending","allDay":false}]}"#.utf8)
         await newRequest.checkAvailability(using: reportApp)
         precondition(newRequest.conflicts.count == 1 && !newRequest.canSubmit)
         newRequest.draft.bookings[0].end = "14:00"
         precondition(!newRequest.availabilityCurrent)
         await newRequest.checkAvailability(using: reportApp)
         precondition(newRequest.conflicts.isEmpty && newRequest.canSubmit)
-        GenerationFixture.response = Data(#"{"busy":[{"date":"2026-11-01","label":"Unknown time","allDay":false}]}"#.utf8)
+        newRequest.draft.bookings[0].date = pastBookingDay
+        GenerationFixture.response = Data(#"{"busy":[]}"#.utf8)
+        await newRequest.checkAvailability(using: reportApp)
+        precondition(newRequest.availabilityCurrent && newRequest.conflicts.isEmpty)
+        precondition(newRequest.draft.validationMessage == "Choose today or an upcoming date." && !newRequest.canSubmit)
+        let beforePastSubmission = GenerationFixture.requests.count
+        let pastSubmitted = await newRequest.submit(using: reportApp)
+        precondition(!pastSubmitted && GenerationFixture.requests.count == beforePastSubmission, "Past dates cannot submit even when availability is clear")
+        newRequest.draft.bookings[0].date = bookingDay
+        GenerationFixture.response = Data(#"{"busy":[{"date":"\#(bookingDay)","label":"Unknown time","allDay":false}]}"#.utf8)
         await newRequest.checkAvailability(using: reportApp)
         precondition(!newRequest.availabilityWarning.isEmpty && !newRequest.canSubmit)
         newRequest.warningAcknowledged = true

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import express from 'express';
 import { PDFDocument } from 'pdf-lib';
-import { connect, initSchema, dbGet, dbRun, withTransaction, close } from '../db.js';
+import { connect, initSchema, dbAll, dbGet, dbRun, withTransaction, isDatabaseTransactionActive, close } from '../db.js';
 import { createDispensationSubmissions, initDispensationSubmissionSchema } from '../dispensation-submissions.js';
 import { createDispensationMissiveDrafts, initDispensationMissiveDraftSchema } from '../dispensation-missive-drafts.js';
 
@@ -119,12 +119,67 @@ try {
   } finally { await new Promise(resolve => listener.close(resolve)); }
   const server = await readFile(new URL('../server.js', import.meta.url), 'utf8');
   const transactionEnd = server.indexOf('return { documentId: document.id, status, remaining: remaining.total, completedDocument, completeSigners };');
+  assert.ok(transactionEnd >= 0, 'The production signature transaction is available for its sequencing checks.');
   assert.ok(server.lastIndexOf('await dispensationMissiveDrafts.enqueue(document.id', transactionEnd) > server.lastIndexOf("action: 'document_completed'", transactionEnd), 'Production signature enqueues before its transaction commits.');
-  assert.match(server.slice(transactionEnd), /const \{ documentId, status, remaining, completedDocument, completeSigners \} = outcome;\s*const notificationWarnings = \[\];\s*if \(status === 'completed'\) void missiveDraftWorker\.wake\(\);/, 'Production wakes only after the captured signature transaction returns.');
+  assert.match(server.slice(server.lastIndexOf("if (status === 'completed')", transactionEnd), transactionEnd), /if \(document\.template_kind === 'dispensation_v1' && !document\.submitted_at && !req\.signatureAuthorizationSnapshot\)\s*\{[\s\S]*?await dispensationMissiveDrafts\.enqueue\(document\.id/, 'Only the ordinary signing flow enqueues the legacy draft inside its transaction.');
+  assert.match(server.slice(transactionEnd), /const \{ documentId, status, remaining, completedDocument, completeSigners \} = outcome;\s*const notificationWarnings = \[\];\s*if \(status === 'completed' && !req\.signatureAuthorizationSnapshot\) void missiveDraftWorker\.wake\(\);/, 'Only the ordinary signing flow wakes the worker after its transaction returns.');
+
+  // Exercise the actual production signing functions against the isolated DB.
+  // PDF drawing and record-copy delivery are stubbed; outbox writes stay real.
+  const applyStart = server.indexOf('const applyAssignedDocumentSignature = async req =>');
+  const applyEnd = server.indexOf("app.post('/api/documents/:id/sign'", applyStart);
+  assert.ok(applyStart >= 0 && applyEnd > applyStart);
+  const signatureSource = server.slice(applyStart, applyEnd);
+  const calls = [];
+  const dependencies = {
+    withTransaction, dbAll, dbGet, dbRun,
+    lockSavedSignature: async () => Buffer.from('synthetic signature bytes'),
+    httpError: (statusCode, message) => Object.assign(new Error(message), { statusCode }),
+    asBuffer: value => value ? Buffer.from(value) : null,
+    fillDispensationOfficerInformation: async ({ pdfBytes }) => pdfBytes,
+    appendSignatureToPdf: async ({ pdfBytes }) => pdfBytes,
+    nowIso: () => at,
+    addAudit: async event => { calls.push(event.action); },
+    dispensationMissiveDrafts: { enqueue: async (...args) => {
+      assert.equal(isDatabaseTransactionActive(), true, 'Ordinary outbox enqueue shares the signature transaction.');
+      calls.push('enqueue'); return drafts.enqueue(...args);
+    } },
+    missiveDraftWorker: { wake: () => {
+      assert.equal(isDatabaseTransactionActive(), false, 'Worker wake follows the committed signature transaction.');
+      calls.push('wake');
+    } },
+    sendCompletionNotice: async () => { calls.push('record-copy'); return []; },
+    dispensationSubmissions: packets,
+    broadcast: () => {},
+  };
+  const productionSignatures = new Function(...Object.keys(dependencies), `${signatureSource}\nreturn { applyAssignedDocumentSignature, finishAssignedDocumentSignature };`)(...Object.values(dependencies));
+  await dbRun('INSERT INTO submission_profiles (role,name,address,updated_at) VALUES (?,?,?,?)', ['secretary', 'Fixture Secretary', '1 Synthetic Street', at]);
+  const productionRequest = id => ({ params: { id }, user: { ...owner, role: 'secretary' }, ip: '127.0.0.1', get: () => 'Synthetic test' });
+  await make('ordinary-production-signature'); await attach('ordinary-production-signature');
+  const ordinaryReq = productionRequest('ordinary-production-signature');
+  const ordinaryOutcome = await productionSignatures.applyAssignedDocumentSignature(ordinaryReq);
+  assert.equal(ordinaryOutcome.status, 'completed');
+  assert.equal(calls.includes('wake'), false, 'Capturing a signature cannot wake before its caller receives the transaction outcome.');
+  assert.ok(calls.indexOf('enqueue') > calls.indexOf('document_completed'));
+  assert.equal((await dbGet('SELECT state FROM dispensation_missive_drafts WHERE document_id=?', ['ordinary-production-signature'])).state, 'pending');
+  await productionSignatures.finishAssignedDocumentSignature(ordinaryOutcome, ordinaryReq);
+  assert.equal(calls.filter(value => value === 'wake').length, 1);
+
+  calls.length = 0;
+  await make('frozen-production-signature'); await attach('frozen-production-signature');
+  const frozenReq = { ...productionRequest('frozen-production-signature'), signatureAuthorizationSnapshot: { delivery: {
+    profile: { name: 'Fixture Secretary', address: '1 Synthetic Street' }, completeSigners: [],
+  } } };
+  const frozenOutcome = await productionSignatures.applyAssignedDocumentSignature(frozenReq);
+  await productionSignatures.finishAssignedDocumentSignature(frozenOutcome, frozenReq);
+  assert.equal(frozenOutcome.status, 'completed', 'The frozen-document signature still completes.');
+  assert.deepEqual(calls, ['document_signed', 'document_completed', 'record-copy'], 'The frozen flow keeps record-copy delivery while never enqueuing or waking Missive.');
+  assert.equal(await dbGet('SELECT 1 FROM dispensation_missive_drafts WHERE document_id=?', ['frozen-production-signature']), undefined, 'Frozen signature authorization must not create a legacy mail draft.');
+
   assert.match(server, /await dispensationMissiveDrafts\.requestRetry\([\s\S]{0,220}?\}\);\s*void missiveDraftWorker\.wake\(\);\s*broadcast\([\s\S]{0,200}?await dispensationSubmissions\.packet\(/, 'The retry mutation commits and wakes processing before response DTO reads.');
   assert.match(server, /void missiveDraftWorker\.start\(\)/);
   assert.doesNotMatch(server, /setInterval\(processMissiveDrafts/);
   assert.match(server, /missive-draft\/retry', requireAuth, requireOwner/);
   assert.match(server, /automaticDeliveryEnabled: false/);
-  console.log('PASS: combined signature/report outbox integration, owner privacy, immutable attachments, no historical backfill, no SMTP sending, and atomic rollback.');
+  console.log('PASS: combined signature/report outbox integration, frozen signatures exclude legacy drafts, owner privacy, immutable attachments, no historical backfill, no SMTP sending, and atomic rollback.');
 } finally { await close(); }
