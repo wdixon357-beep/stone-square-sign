@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
-import { dbAll, dbGet, dbRun, withTransaction } from './db.js';
+import { dbAll, dbGet, dbRun, withTransaction, withAuditActor } from './db.js';
 import { currentAssistant, requireHumanOwner } from './assistant-access.js';
+import { validateAssistantInstruction } from './assistant-instructions.js';
 import { canonicalAssistantPath, resolveAssistantAction, stableJson, digest, assistantError } from './assistant-actions.js';
 import { assertApprovedSignature } from './signature-policy.js';
 
@@ -63,6 +64,7 @@ export async function initSignatureAuthorizationSchema() {
     status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, processing_at TEXT, completed_at TEXT,
     reason TEXT, receipt_json TEXT, UNIQUE(assistant_id,request_key))`);
   await dbRun('CREATE INDEX IF NOT EXISTS assistant_signature_requests_owner ON assistant_signature_requests(owner_user_id,created_at DESC)');
+  await dbRun('ALTER TABLE assistant_signature_requests ADD COLUMN IF NOT EXISTS authorization_json TEXT');
 }
 async function ownerFor(id, lock = false) {
   const user = await dbGet(`SELECT * FROM users WHERE id=?${lock?' FOR UPDATE':''}`,[id]);
@@ -146,7 +148,7 @@ export async function createSignatureRequest(assistant, input) {
     const recentSince=new Date(Date.parse(createdAt)-60_000).toISOString();
     const pending=await dbGet(`SELECT
       (SELECT COUNT(*) FROM assistant_signature_requests WHERE assistant_id=? AND ((status='pending' AND expires_at>?) OR status IN ('processing','uncertain')))
-      +(SELECT COUNT(*) FROM assistant_requests WHERE assistant_id=? AND status IN ('pending','personal','approved','executing','uncertain') AND (expires_at>? OR status IN ('executing','uncertain'))) AS count`,[current.id,createdAt,current.id,createdAt]);
+      +(SELECT COUNT(*) FROM assistant_requests WHERE assistant_id=? AND status IN ('pending','personal','approved','authorized','executing','uncertain') AND (expires_at>? OR status IN ('executing','uncertain'))) AS count`,[current.id,createdAt,current.id,createdAt]);
     const recent=await dbGet(`SELECT (SELECT COUNT(*) FROM assistant_signature_requests WHERE assistant_id=? AND created_at>?)
       +(SELECT COUNT(*) FROM assistant_requests WHERE assistant_id=? AND created_at>?) AS count`,[current.id,recentSince,current.id,recentSince]);
     const retained=Number((await dbGet('SELECT COALESCE(SUM(octet_length(artifact_bytes)),0) AS bytes FROM assistant_signature_requests WHERE assistant_id=?',[current.id])).bytes);
@@ -192,20 +194,53 @@ async function validatePending(row, owner) {
 }
 export async function confirmSignatureRequest(ownerId,id,input,requestContext={}) {
   if (!keysOnly(input,['fingerprint','consent']) || input.consent!==true) throw fail(400,'SIGNATURE_CONSENT_REQUIRED','Choose Authorize and apply signature to confirm this exact version.');
+  return applySignatureRequest(ownerId,id,input,requestContext);
+}
+
+// A configured owner grant authorizes Muse to relay an instruction. This is
+// deliberately distinct from an authenticated owner confirmation or evidence
+// that a human personally reviewed the document in the Dashboard.
+export async function executeSignatureInstruction(assistant,id,input,requestContext={}) {
+  if (!keysOnly(input,['fingerprint','instruction','instructionReference']) || typeof input.fingerprint!=='string' || !input.fingerprint) {
+    throw fail(400,'INVALID_SIGNATURE_INSTRUCTION','Provide the exact request fingerprint and the instruction you received.');
+  }
+  const instruction = validateAssistantInstruction({instruction:input.instruction,...(input.instructionReference!==undefined?{instructionReference:input.instructionReference}:{})});
+  const service = await currentAssistant(assistant);
+  if (!service.signature_execution) throw fail(403,'SIGNATURE_DELEGATION_REQUIRED','The owner has not enabled instructed signatures for Muse. Use the secure owner confirmation.');
+  return withAuditActor({assistantId:service.id,assistantName:service.name,ownerUserId:service.owner_user_id,requestId:id},
+    () => applySignatureRequest(service.owner_user_id,id,input,requestContext,{assistant,instruction}));
+}
+
+async function requireSignatureDelegation(delegation,row) {
+  const service = await currentAssistant(delegation.assistant);
+  if (!service.signature_execution || service.id!==row.assistant_id || service.owner_user_id!==row.owner_user_id) {
+    throw fail(403,'SIGNATURE_DELEGATION_REQUIRED','This signature request is not covered by the current owner delegation.');
+  }
+  return service;
+}
+
+async function applySignatureRequest(ownerId,id,input,requestContext={},delegation=null) {
   // Persist processing before any business write. A crash or unknown commit
   // outcome cannot turn a second click into another signing attempt.
   let claimed = false;
   try {
     const existing = await withTransaction(async () => {
-      const owner = await ownerFor(ownerId,true), row = await findRequest(id,ownerId,null,true);
+      const owner = await ownerFor(ownerId,true), row = await findRequest(id,ownerId,delegation?delegation.assistant.id:null,true);
       if (row.fingerprint!==input.fingerprint) throw fail(409,'SIGNATURE_FINGERPRINT_MISMATCH','This confirmation differs from the version displayed. Reopen it.');
+      const service = delegation ? await requireSignatureDelegation(delegation,row) : null;
       if (terminal.has(currentStatus(row)) || row.status==='processing') return serializeSignatureRequest(row);
       try { await validatePending(row,owner); } catch(error) {
         if (error.statusCode && error.statusCode<500 && error.code!=='SIGNATURE_REQUEST_EXPIRED') {error.code='SIGNATURE_REQUEST_STALE';error.statusCode=409;}
         throw error;
       }
-      await dbRun("UPDATE assistant_signature_requests SET status='processing',processing_at=? WHERE id=? AND status='pending'",[now(),id]);
-      await audit(row,'signature_authorization_confirmed',{authorizedByUserId:owner.id,applicationActor:'system',statement:row.statement,effects:parse(row.effects_json,[]),artifactSHA256:row.artifact_sha256});
+      const authorization = delegation ? {source:'owner_delegation',ownerUserId:owner.id,assistantId:service.id,
+        policyVersion:service.policy_version,tokenVersion:service.token_version,receivedAt:now(),
+        ...delegation.instruction,instructionProvenance:'relayed_by_assistant',independentHumanVerification:false}
+        : {source:'owner_confirmation',ownerUserId:owner.id,receivedAt:now()};
+      await dbRun("UPDATE assistant_signature_requests SET status='processing',processing_at=?,authorization_json=? WHERE id=? AND status='pending'",[now(),stableJson(authorization),id]);
+      await audit(row,delegation?'signature_instruction_authorized':'signature_authorization_confirmed',{
+        authorizedByUserId:owner.id,applicationActor:delegation?'assistant':'system',authorization,
+        statement:row.statement,effects:parse(row.effects_json,[]),artifactSHA256:row.artifact_sha256});
       claimed = true;
       return null;
     });
@@ -218,19 +253,25 @@ export async function confirmSignatureRequest(ownerId,id,input,requestContext={}
   let operation, outcome, appliedRequest;
   try {
     await withTransaction(async () => {
-      const owner = await ownerFor(ownerId,true), row = await findRequest(id,ownerId,null,true);
+      const owner = await ownerFor(ownerId,true), row = await findRequest(id,ownerId,delegation?delegation.assistant.id:null,true);
       if (row.status!=='processing') throw fail(409,'SIGNATURE_REQUEST_NOT_PENDING','This request already has a recorded outcome.');
+      if (delegation) await requireSignatureDelegation(delegation,row);
       const validated = await validatePending(row,owner); operation = validated.operation;
-      const req = {...requestContext,user:owner,assistant:null,params:{id:validated.action.recordId},body:validated.body,signatureAuthorizationSnapshot:validated.snapshot};
+      const authorization = parse(row.authorization_json);
+      if (!authorization || authorization.source!==(delegation?'owner_delegation':'owner_confirmation')) throw fail(409,'SIGNATURE_AUTHORIZATION_MISMATCH','The signing authorization changed. Read the request status before continuing.');
+      const req = {...requestContext,user:owner,assistant:null,params:{id:validated.action.recordId},body:validated.body,
+        signatureAuthorizationSnapshot:validated.snapshot,signatureExecutionAuthorization:authorization};
       appliedRequest = req;
       outcome = await operation.apply(req);
       if(!validated.action.recordId && (typeof outcome?.documentId!=='string'||!outcome.documentId))throw fail(500,'SIGNATURE_RECORD_UNVERIFIED','The created record could not be verified.');
       await operation.verifyOutcome?.(outcome,req);
       const completedAt = now(), receipt = {authorizedBy:{userId:owner.id,name:owner.name},requestedBy:{assistantId:row.assistant_id,
         name:(await dbGet('SELECT name FROM assistant_services WHERE id=?',[row.assistant_id]))?.name || 'Muse Assistant'},appliedBy:'system',
+        authorization,executedBy:delegation?{type:'assistant',assistantId:row.assistant_id}:{type:'owner',userId:owner.id},
         recordId:outcome?.documentId || validated.action.recordId,actionId:row.action_id,completedAt,notificationState:'pending',notificationWarnings:[],automaticRetryAllowed:false};
       await dbRun("UPDATE assistant_signature_requests SET status='completed',completed_at=?,receipt_json=? WHERE id=? AND status='processing'",[completedAt,stableJson(receipt),id]);
-      await audit(row,'signature_authorization_applied',{authorizedByUserId:owner.id,applicationActor:'system',recordId:outcome?.documentId || validated.action.recordId,artifactSHA256:row.artifact_sha256});
+      await audit(row,'signature_authorization_applied',{authorizedByUserId:owner.id,applicationActor:delegation?'assistant':'system',
+        authorizationSource:authorization.source,recordId:outcome?.documentId || validated.action.recordId,artifactSHA256:row.artifact_sha256});
     });
   } catch(error) {
     // Even a transport error after COMMIT must never overwrite a completed
@@ -302,5 +343,9 @@ export function mountSignatureAuthorizationRoutes(app,{requireAuth,requireOwner}
     res.setHeader('Content-Disposition','inline; filename="signature-review.pdf"');res.setHeader('X-Artifact-SHA256',row.artifact_sha256);res.type('application/pdf').send(bytes(row.artifact_bytes));
   }));
   app.post('/api/assistant/signature-requests/:id/confirm',...human,route(async(req,res)=>res.json({request:await confirmSignatureRequest(req.user.id,req.params.id,req.body,{ip:req.ip,get:req.get.bind(req),protocol:req.protocol,headers:req.headers})})));
+  app.post('/api/assistant/signature-requests/:id/instruction',requireAuth,route(async(req,res)=>{
+    if(!req.assistant)throw fail(403,'ASSISTANT_REQUESTER_REQUIRED','Only Muse may relay a signature instruction using its separate service access.');
+    res.json({request:await executeSignatureInstruction(req.assistant,req.params.id,req.body,{ip:req.ip,get:req.get.bind(req),protocol:req.protocol,headers:req.headers})});
+  }));
   app.post('/api/assistant/signature-requests/:id/decline',...human,route(async(req,res)=>res.json({request:await declineSignatureRequest(req.user.id,req.params.id,req.body)})));
 }

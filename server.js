@@ -1159,6 +1159,10 @@ app.use((req, res, next) => {
 });
 installAssistantGateway(app, { expectedOrigin: req => new URL(requestBaseUrl(req)).origin });
 mountBuildingStore(app);
+// The larger envelope is reserved for authenticated Muse file transfers. The
+// connector independently bounds decoded bytes, file count and exact metadata.
+app.use('/api/assistant/mcp', requireAuth, (req,res,next) => req.assistant ? next()
+  : res.status(403).json({error:'Use Muse Assistant’s separate credential for this connector.'}), express.json({ limit: '42mb' }));
 app.use(express.json({ limit: '4mb' }));
 app.use('/api', (_req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -3443,7 +3447,7 @@ const applyAssignedDocumentSignature = async req => withTransaction(async () => 
       });
       if (status === 'completed') {
         await addAudit({ userId: req.user.id, documentId: document.id, action: 'document_completed' });
-        if (document.template_kind === 'dispensation_v1' && !document.submitted_at) {
+        if (document.template_kind === 'dispensation_v1' && !document.submitted_at && !req.signatureAuthorizationSnapshot) {
           // This durable outbox write shares the signature transaction. No
           // external API runs here, and email availability cannot undo a signature.
           await dispensationMissiveDrafts.enqueue(document.id, {
@@ -3458,7 +3462,7 @@ const applyAssignedDocumentSignature = async req => withTransaction(async () => 
 const finishAssignedDocumentSignature = async (outcome,req) => {
     const { documentId, status, remaining, completedDocument, completeSigners } = outcome;
     const notificationWarnings = [];
-    if (status === 'completed') void missiveDraftWorker.wake();
+    if (status === 'completed' && !req.signatureAuthorizationSnapshot) void missiveDraftWorker.wake();
     let submission = null;
     if (status === 'completed') {
       notificationWarnings.push(...await sendCompletionNotice(completedDocument,completeSigners,asBuffer(completedDocument.signed_bytes)));
@@ -3571,7 +3575,7 @@ registerSignatureOperation('documents.sign',{
     const recipients=await dbAll('SELECT ds.id,ds.signer_name,u.email FROM document_signers ds LEFT JOIN users u ON u.id=ds.user_id WHERE ds.document_id=? ORDER BY ds.id',[document.id]);
     return {title:document.title,kind:'document',signingRole:signer.signer_role,
       statement:'I have reviewed this exact document and agree that my electronic signature represents my signature on it. I authorize the system to apply my approved saved signature in my assigned signing role and carry out the listed completion effects.',
-      effects:['Apply your saved signature in your assigned signing role.','Update the document status and, for an either-officer document, close any superseded pending assignment.','If this completes the document, send the existing record completion copies.','For a completed dispensation, prepare the owner-only unsent Missive draft and submission packet. Automatic District Deputy sending remains off.'],
+      effects:['Apply your saved signature in your assigned signing role.','Update the document status and, for an either-officer document, close any superseded pending assignment.','If this completes the document, send the existing record completion copies.','Keep a completed dispensation and its submission packet in the Dashboard for follow-through in Spark. This operation does not create an email draft or send to the District Deputy.'],
       delivery:{profile,completeSigners:recipients.map(item=>({...item,signer_name:item.id===signer.id?(profile?.name||owner.name):item.signer_name}))},
       state:{document:signatureBindingValue(document),signers:signatureBindingValue(signers),profile,recipients,automaticDeliveryEnabled:dispensationSubmissions.automaticDeliveryEnabled,owner:{id:owner.id,name:owner.name,email:owner.email,role:owner.role}},
       ...(renderArtifact?{artifact}:{})};

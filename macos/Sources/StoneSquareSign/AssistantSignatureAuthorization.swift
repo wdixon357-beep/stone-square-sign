@@ -3,11 +3,13 @@ import SwiftUI
 import PDFKit
 import CryptoKit
 
-// The assistant can request this flow, but only an authenticated owner session
-// can authorize it. The PDF and consent text are immutable request artifacts.
+// This view provides owner confirmation and reads receipts from either owner
+// confirmation or saved delegation. It never submits a delegated instruction.
 struct AssistantSignatureReceipt: Decodable, Equatable {
     struct Owner: Decodable, Equatable { let userId: Int; let name: String }
     struct Requester: Decodable, Equatable { let assistantId: String; let name: String }
+    struct Authorization: Decodable, Equatable { let source: String }
+    struct Executor: Decodable, Equatable { let type: String; let assistantId: String?; let userId: Int? }
     let authorizedBy: Owner?
     let requestedBy: Requester?
     let appliedBy: String?
@@ -17,6 +19,14 @@ struct AssistantSignatureReceipt: Decodable, Equatable {
     let notificationState: String?
     let notificationWarnings: [String]?
     let automaticRetryAllowed: Bool?
+    let authorization: Authorization?
+    let executedBy: Executor?
+    var delegated: Bool { authorization?.source == "owner_delegation" }
+    var executionSummary: String? {
+        if delegated { return executedBy?.type == "assistant" ? "Executed by Muse under your saved delegation" : "Authorized under your saved delegation. The executor is not recorded." }
+        if executedBy?.type == "assistant" { return "Executed by Muse. The authorization source is unverified." }
+        return nil
+    }
 }
 struct AssistantSignatureRequest: Decodable, Identifiable, Equatable {
     let id: String
@@ -179,7 +189,7 @@ private struct AssistantSignatureEnvelope: Decodable { let request: AssistantSig
             let result: AssistantSignatureEnvelope = try await model.request("/api/assistant/signature-requests/\(Self.route(reviewed.id))/confirm", method: "POST", body: body)
             guard current(stamp, model), result.request.id == reviewed.id else { return }
             replace(result.request)
-            message = result.request.status == "completed" ? "Your authorization was recorded and the system applied your signature. Review the receipt below." : "The request was submitted. Refresh its status to verify the outcome. It will not be submitted again."
+            message = result.request.status == "completed" ? "The saved receipt confirms that the signature was applied. Review its authorization source below." : "The request was submitted. Refresh its status to verify the outcome. It will not be submitted again."
         } catch {
             if current(stamp, model) {
                 message = submitted ? "The signature outcome is unverified. Do not repeat the signature. Refresh status to check the saved receipt. \(error.localizedDescription)" : error.localizedDescription
@@ -323,7 +333,11 @@ struct AssistantSignatureReceiptView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Saved receipt").font(.headline)
-            if let owner = receipt.authorizedBy { Text("Authorized by \(owner.name)") }
+            if let summary = receipt.executionSummary { Text(summary) }
+            if receipt.delegated {
+                if let owner = receipt.authorizedBy { Text("Delegation granted by \(owner.name)") }
+                Text("Your instruction was relayed by Muse. No separate Dashboard confirmation is recorded.").foregroundStyle(.secondary)
+            } else if receipt.executedBy?.type != "assistant", let owner = receipt.authorizedBy { Text("Authorized by \(owner.name)") }
             if receipt.appliedBy == "system" { Text("Signature applied by the system") }
             if let requester = receipt.requestedBy { Text("Requested by \(requester.name)") }
             if let date = receipt.completedAt { Text("Completed \(LodgeDateTime.display(date))") }

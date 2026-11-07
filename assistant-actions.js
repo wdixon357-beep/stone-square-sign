@@ -181,7 +181,8 @@ route('GET','/api/submission-profiles','owner.officers');
 route('PUT','/api/submission-profiles/:id','owner.access','submission_profiles','documents');
 route('POST','/api/documents/:id/sign','documents.sign','documents','documents');
 route('PUT','/api/documents/:id/approval','owner.record-approval','documents','documents');
-for (const p of ['rescind','offer-to-both','missive-draft/retry']) route('POST',`/api/documents/:id/${p}`,'owner.documents','documents','documents');
+// Muse uses Spark for email. Legacy provider draft endpoints are not delegated.
+for (const p of ['rescind','offer-to-both']) route('POST',`/api/documents/:id/${p}`,'owner.documents','documents','documents');
 route('GET','/api/proposals','owner.proposals-view');
 route('POST|PUT','/api/proposals/:id','proposals.create','dispensation_proposals','documents');
 route('POST','/api/proposals','proposals.create',null,'documents');
@@ -218,6 +219,7 @@ export function isAssistantControlRoute(method, path) {
   const pathname = canonicalAssistantPath(path).split('?')[0];
   return (method === 'GET' && ['/api/assistant/me','/api/assistant/requests','/api/assistant/signature-requests','/api/assistant/mcp'].includes(pathname))
     || (method === 'GET' && /^\/api\/assistant\/(?:requests|signature-requests)\/[A-Za-z0-9_-]+$/.test(pathname))
+    || (method === 'POST' && /^\/api\/assistant\/(?:requests|signature-requests)\/[A-Za-z0-9_-]+\/instruction$/.test(pathname))
     || (method === 'POST' && ['/api/assistant/requests','/api/assistant/signature-requests','/api/assistant/mcp'].includes(pathname));
 }
 

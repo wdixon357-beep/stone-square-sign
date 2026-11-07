@@ -23,6 +23,7 @@ if (process.platform !== 'darwin') {
   process.exit(0);
 }
 const assistant = { id: 'SYNTHETIC-ASSISTANT', name: 'Muse', enabled: true, expiresAt: '2026-11-07T00:00:00Z', permissions: ['minutes.read'], createdAt: null, updatedAt: null };
+const instructedAssistant = { ...assistant, commandExecution: true, signatureExecution: true, expiresAt: new Date(Date.now() + 350 * 86400000).toISOString() };
 const capabilities = [
   { id: 'minutes.read', label: 'Read minutes', group: 'Meetings', mode: 'standing', description: 'Read authorized records', effects: [] },
   { id: 'draft.change', label: 'Change draft', group: 'Meetings', mode: 'approval', description: 'One exact change', effects: ['Records a revision'] },
@@ -59,6 +60,13 @@ struct User { let id: Int; let role: String }
         precondition(workspace.loaded && workspace.assistant?.id == "SYNTHETIC-ASSISTANT")
         precondition(model.calls.count == 1 && model.calls[0].1 == "GET")
         precondition(workspace.issuedToken == nil)
+        precondition(!workspace.accessCommandExecution && !workspace.accessSignatureExecution, "Legacy settings do not enable instructed execution")
+        precondition(assistantStatusLabel("authorized") == "Authorized through Muse, awaiting execution")
+        let fixedNow = Date(timeIntervalSince1970: 0)
+        precondition(assistantRemainingAccessDays("1970-12-31T00:00:00.000Z", now: fixedNow) == 364)
+        precondition(assistantRemainingAccessDays("1970-12-31T00:00:00Z", now: fixedNow) == 364)
+        precondition(assistantRemainingAccessDays(nil, now: fixedNow) == 7)
+        precondition(assistantRemainingAccessDays("1970-01-01T00:00:00Z", now: fixedNow) == 7)
         precondition(workspace.capabilities.filter(\\.canGrant).count == 2)
         precondition(workspace.attestations[0].revision == .string("opaque-hash"))
         let regular = workspace.requests[0], personal = workspace.requests[1]
@@ -76,6 +84,21 @@ struct User { let id: Int; let role: String }
         let annual = try JSONSerialization.jsonObject(with: model.calls.last!.2!) as! [String: Any]
         precondition(annual["expiresInDays"] as! Int == 365 && workspace.accessDays == 365)
         precondition(annual["permissions"] as! [String] == ["minutes.read"])
+        workspace.accessCommandExecution = true; workspace.accessSignatureExecution = true
+        precondition(workspace.accessDirty, "Instruction settings participate in unsaved-change detection")
+        model.handler = { _, _, _ in Data(${raw({ assistant: instructedAssistant })}.utf8) }
+        await workspace.save(model, name: "Muse", permissions: ["minutes.read"], days: 350, enabled: true)
+        let instructed = try JSONSerialization.jsonObject(with: model.calls.last!.2!) as! [String: Any]
+        precondition(instructed["commandExecution"] as? Bool == true && instructed["signatureExecution"] as? Bool == true)
+        precondition(workspace.accessCommandExecution && workspace.accessSignatureExecution && !workspace.accessDirty)
+        model.handler = { _, _, _ in Data(${raw({ ...payload, assistant: instructedAssistant })}.utf8) }
+        await workspace.load(model)
+        precondition(workspace.accessDays == 350 && workspace.accessCommandExecution && workspace.accessSignatureExecution, "Refresh preserves remaining long-lived access and saved delegation")
+        let authorized = try JSONDecoder().decode(AssistantRequest.self, from: Data(${raw({...request,status:'authorized',authorization:{source:'owner_delegation',actorType:'assistant'}})}.utf8))
+        precondition(!workspace.canApprove(authorized) && authorized.authorization != nil)
+        model.handler = { _, _, _ in Data(${raw({request:{...request,status:'declined'}})}.utf8) }
+        await workspace.decide(authorized, decision: "decline", note: "Cancel this instruction", model: model)
+        precondition(workspace.requests[0].status == "declined", "The owner can cancel an instructed change before execution")
         model.handler = { _, _, _ in Data(${raw({ request: { ...request, status: 'approved' } })}.utf8) }
         await workspace.decide(regular, decision: "approve", note: "Exact synthetic review", model: model)
         let decision = try JSONSerialization.jsonObject(with: model.calls.last!.2!) as! [String: Any]
@@ -98,6 +121,7 @@ struct User { let id: Int; let role: String }
         let personalNavigation = await workspace.reviewPersonalRequest(personal, model: model)
         precondition(personalNavigation?.recordId == "SYNTHETIC" && model.calls.last!.0 == "/api/assistant/attestations", "Personal requests must resolve their current attestation before navigation")
         workspace.accessName = "Unsaved Muse"; workspace.accessPermissions = ["draft.change"]; workspace.accessDays = 12
+        workspace.accessCommandExecution = true; workspace.accessSignatureExecution = true
         precondition(workspace.accessDirty)
         let beforeDirtyToken = model.calls.count
         await workspace.createToken(model)
@@ -105,8 +129,10 @@ struct User { let id: Int; let role: String }
         model.handler = { _, _, _ in workspaceBytes }
         await workspace.load(model)
         precondition(workspace.accessName == "Unsaved Muse" && workspace.accessPermissions == ["draft.change"] && workspace.accessDays == 12 && workspace.accessDirty, "Refresh/navigation must preserve the access draft")
+        precondition(workspace.accessCommandExecution && workspace.accessSignatureExecution, "Refresh cannot replace unsaved instruction settings")
         await workspace.load(model, discardAccessDraft: true)
         precondition(!workspace.accessDirty && workspace.accessName == "Muse" && workspace.accessPermissions == ["minutes.read"], "Only an explicit discard replaces access edits")
+        precondition(!workspace.accessCommandExecution && !workspace.accessSignatureExecution, "Discard restores both saved instruction settings")
         model.handler = { _, _, _ in Data(${raw({ assistant, token: 'SYNTHETIC-ONE-TIME-TOKEN' })}.utf8) }
         await workspace.createToken(model)
         precondition(workspace.issuedToken?.value == "SYNTHETIC-ONE-TIME-TOKEN")

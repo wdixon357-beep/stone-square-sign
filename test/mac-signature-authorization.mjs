@@ -31,6 +31,7 @@ function pdf() {
 const bytes = pdf();
 const item = {id:'SYNTHETIC/REQUEST', actionId:'minutes.attest', recordId:'SYNTHETIC-MINUTES', title:'Synthetic reviewed minutes', kind:'minutes', status:'pending', createdAt:'2026-10-31T20:00:00Z', expiresAt:'2099-11-01T00:00:00.000Z', artifactSHA256:crypto.createHash('sha256').update(bytes).digest('hex'), fingerprint:'SYNTHETIC-FINGERPRINT', statement:'I reviewed this exact synthetic document and authorize application of my saved signature.', effects:['Applies the saved signature.','Files this exact synthetic document.'], signingRole:'Worshipful Master', ready:true, reason:null, authorizationUrl:'https://example.invalid/?signatureRequest=SYNTHETIC', receipt:null};
 const receipt = {authorizedBy:{userId:1,name:'Synthetic Owner'}, requestedBy:{assistantId:'SYNTHETIC-MUSE',name:'Muse'}, appliedBy:'system',recordId:item.recordId,actionId:item.actionId,completedAt:'2026-10-31T20:05:00Z',notificationState:'queued',notificationWarnings:[],automaticRetryAllowed:false};
+const delegatedReceipt = {...receipt,authorization:{source:'owner_delegation'},executedBy:{type:'assistant',assistantId:'SYNTHETIC-MUSE'}};
 const raw = x => `#"${JSON.stringify(x)}"#`;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'signature-native-test-'));
 const out = path.join(root, 'output/signature-authorization-build'); fs.mkdirSync(out,{recursive:true,mode:0o700});
@@ -57,6 +58,11 @@ enum SyntheticFailure: Error { case responseLost }
     @MainActor static func main() async throws {
         let original = Data(${raw(item)}.utf8), pdf = Data(base64Encoded:"${bytes.toString('base64')}")!
         let request = try JSONDecoder().decode(AssistantSignatureRequest.self,from:original)
+        let delegatedReceipt = try JSONDecoder().decode(AssistantSignatureReceipt.self, from: Data(${raw(delegatedReceipt)}.utf8))
+        precondition(delegatedReceipt.delegated && delegatedReceipt.executionSummary == "Executed by Muse under your saved delegation")
+        precondition(delegatedReceipt.executedBy?.assistantId == "SYNTHETIC-MUSE")
+        let legacyReceipt = try JSONDecoder().decode(AssistantSignatureReceipt.self, from: Data(${raw(receipt)}.utf8))
+        precondition(!legacyReceipt.delegated && legacyReceipt.executionSummary == nil, "Existing owner confirmation receipts keep their attribution")
         func payload(_ item:AssistantSignatureRequest) throws -> Data {
             // Fixtures always begin from the exact original server-shaped JSON.
             original

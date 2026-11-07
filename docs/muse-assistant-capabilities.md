@@ -1,6 +1,10 @@
 # Muse Assistant capability coverage
 
-Every existing named permission and owner-only workflow is represented. Personal and unavailable entries cannot be granted for delegate execution. Existing office and record rules still apply.
+Every existing named permission and owner workflow is represented. The table records base modes. With owner-saved `commandExecution`, all granted approval-mode actions can execute on a specific instruction without a second portal approval. With owner-saved `signatureExecution`, the five supported signature actions below can execute through the frozen-document engine. Other personal and unavailable actions retain their existing limits. Existing office and record rules still apply.
+
+Supported instructed signatures: `documents.sign`, `owner.dispensation-sign`, `owner.minutes-preparer`, `owner.minutes-master`, and `owner.treasury-attest`.
+
+The connection supports exact file uploads and protected document downloads. The legacy Missive draft retry is excluded; email follow-through uses Spark. Building, Candidate Tracker, Warden proposal decisions, Report Generator signing, security settings, signature-profile changes and approval assertions are not added by this release. Another officer's signature is never included.
 
 | Action | Work area | Mode | Boundary |
 | --- | --- | --- | --- |

@@ -33,7 +33,7 @@ const api = async (path, options = {}) => {
   if (path === '/api/assistant/workspace') return pendingWorkspace ? pendingWorkspace.promise : clone(data);
   if (path === '/api/assistant/attestations') return { attestations: clone(data.attestations) };
   if (path === '/api/assistant/access/token') return { assistant: data.assistant, token: 'synthetic-private-token' };
-  if (path === '/api/assistant/access' && options.method === 'PUT') { data.assistant = { ...data.assistant, ...JSON.parse(options.body) }; return { assistant: data.assistant }; }
+  if (path === '/api/assistant/access' && options.method === 'PUT') { const input = JSON.parse(options.body); data.assistant = { ...data.assistant, ...input, expiresAt: new Date(Date.now() + input.expiresInDays * 86400000).toISOString() }; return { assistant: data.assistant }; }
   if (path === '/api/assistant/access' && options.method === 'DELETE') { data.assistant = null; return { ok: true }; }
   if (path.endsWith('/decision')) { if (decisionError) throw new Error('Response interrupted'); const request = data.requests.find(item => path.includes(item.id)); request.status = JSON.parse(options.body).decision === 'approve' ? 'approved' : 'declined'; return { request: clone(request) }; }
   if (path.startsWith('/api/assistant/requests/')) { if (unknownReadback) throw new Error('Read unavailable'); return { request: { ...data.requests[0], status: 'approved' } }; }
@@ -43,6 +43,9 @@ const accessRoot = new Element('section'), attestationsRoot = new Element('secti
 const workspace = new AssistantWorkspace({ api, user: () => currentUser, context: () => `${currentUser?.id}:${epoch}`, accessRoot, attestationsRoot, confirm: () => true, clipboard: () => ({ writeText: async value => copied.push(value) }), openReview: async item => opened.push(item) });
 await workspace.show('access');
 assert.equal(calls.length, 1); assert.equal(calls[0].method, 'GET', 'Opening access only reads');
+const policyInput = name => accessRoot.querySelectorAll('input').find(input => input.name === name);
+assert.equal(policyInput('commandExecution').checked, false, 'Older saved settings default to separate approval');
+assert.equal(policyInput('signatureExecution').checked, false, 'Older saved settings never enable instructed signatures');
 assert.match(accessRoot.textContent, /My own action/); assert.match(accessRoot.textContent, /Grand View account work/);
 assert.equal(accessRoot.querySelectorAll('input').filter(input => ['minutes.master', 'building.approve', 'external.members'].includes(input.value)).length, 0, 'Personal and unavailable actions never become grant inputs');
 assert.equal(findButton(accessRoot, 'Approve this change') !== undefined, true);
@@ -55,18 +58,30 @@ workspace.leave(); assert.equal(workspace.token, ''); assert.equal(workspace.tok
 await workspace.show('access');
 const name = accessRoot.querySelectorAll('input').find(item => item.type === 'text'); name.value = 'Muse Lodge helper';
 const permissions = accessRoot.querySelectorAll('input').filter(item => item.type === 'checkbox' && item.value); permissions.find(item => item.value === 'minutes.prepare').checked = true;
+policyInput('commandExecution').checked = true; policyInput('signatureExecution').checked = true;
 await accessRoot.querySelectorAll('form')[0].emit('change'); assert.equal(workspace.dirty, true);
 await findButton(accessRoot, 'Create or replace token').emit('click'); assert.match(workspace.message.textContent, /Save or reload/);
 await accessRoot.querySelectorAll('form')[0].emit('submit'); await settle();
 const saved = calls.find(call => call.method === 'PUT'); assert.equal(saved.body.expiresInDays, 7); assert.ok(saved.body.permissions.includes('minutes.prepare')); assert.ok(!saved.body.permissions.includes('minutes.master'));
+assert.equal(saved.body.commandExecution, true); assert.equal(saved.body.signatureExecution, true);
+assert.equal(policyInput('commandExecution').checked, true); assert.equal(policyInput('signatureExecution').checked, true);
+assert.match(accessRoot.textContent, /Runs on your instruction when granted/);
 assert.equal(calls.filter(call => call.path.endsWith('/token')).length, 1, 'Saving permissions never issues a token');
 const annualAccess = { name: 'Muse Lodge helper', permissions: ['minutes.prepare'], expiresInDays: 365, enabled: true };
 await workspace.saveAccess(annualAccess);
 assert.equal(calls.filter(call => call.method === 'PUT').at(-1).body.expiresInDays, 365);
+assert.equal(accessRoot.querySelectorAll('select')[0].value, '365', 'Reloading annual access must not silently shorten it to seven days');
+assert.equal(policyInput('commandExecution').checked, true, 'Omitted policy fields preserve the saved value');
 const accessSaves = calls.filter(call => call.method === 'PUT').length;
 await workspace.saveAccess({ ...annualAccess, expiresInDays: 366 });
 assert.equal(calls.filter(call => call.method === 'PUT').length, accessSaves, 'More than 365 days is rejected before saving');
 assert.equal(calls.filter(call => call.path.endsWith('/token')).length, 1, 'Extending access preserves the existing credential');
+const savedRequestStatus = data.requests[0].status; data.requests[0].status = 'authorized'; data.requests[0].authorization = {source:'owner_delegation',actorType:'assistant',instruction:'Correct this event time.'}; await workspace.show('access');
+assert.match(accessRoot.textContent, /Authorized through Muse, awaiting execution/);
+assert.match(accessRoot.textContent, /owner_delegation/); assert.match(accessRoot.textContent, /Correct this event time\./);
+assert.equal(findButton(accessRoot, 'Approve this change'), undefined, 'An instruction authorization is not awaiting another human approval');
+await findButton(accessRoot, 'Decline').emit('click'); assert.equal(data.requests[0].status, 'declined', 'The owner can cancel an instructed action before execution');
+data.requests[0].status = savedRequestStatus; await workspace.show('access');
 await findButton(accessRoot, 'Approve this change').emit('click'); assert.match(accessRoot.textContent, /not yet recorded as executed/);
 assert.equal(calls.find(call => call.path.endsWith('/decision')).body.fingerprint, 'synthetic-fingerprint');
 

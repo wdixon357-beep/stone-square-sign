@@ -202,7 +202,13 @@ export class SignatureAuthorization {
   renderReceipt(receipt) {
     const section = node('section', undefined, 'signature-authorization-receipt'); section.append(node('h3', 'Recorded outcome'));
     if (receipt.requestedBy?.name) section.append(node('p', `Requested by ${receipt.requestedBy.name}.`));
-    if (receipt.authorizedBy?.name) section.append(node('p', `Authorized by ${receipt.authorizedBy.name}.`));
+    const delegated = receipt.authorization?.source === 'owner_delegation';
+    if (delegated) {
+      section.append(node('p', receipt.executedBy?.type === 'assistant' ? 'Executed by Muse under your saved delegation.' : 'Authorized under your saved delegation. The executor is not recorded.'));
+      if (receipt.authorizedBy?.name) section.append(node('p', `Delegation granted by ${receipt.authorizedBy.name}.`));
+      section.append(node('p', 'Your instruction was relayed by Muse. No separate Dashboard confirmation is recorded.', 'helper'));
+    } else if (receipt.executedBy?.type === 'assistant') section.append(node('p', 'Executed by Muse. The authorization source is unverified.'));
+    else if (receipt.authorizedBy?.name) section.append(node('p', `Authorized by ${receipt.authorizedBy.name}.`));
     if (receipt.appliedBy === 'system') section.append(node('p', `Applied by the system${receipt.completedAt ? ` on ${dateText(receipt.completedAt)}` : ''}.`));
     if (receipt.notificationState) section.append(node('p', `Notifications: ${receipt.notificationState}.`));
     for (const warning of receipt.notificationWarnings || []) section.append(node('p', warning, 'signature-authorization-reason'));

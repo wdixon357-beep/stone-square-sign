@@ -3,7 +3,7 @@ import { canonicalAssistantPath, isAssistantControlRoute, resolveAssistantAction
 import { withAuditActor } from './db.js';
 
 const prefix = 'ss22_muse_';
-const safeSigningMetadata = new Set(['signatureRequests','signatureTools','supportedSignatureActions','unsupportedSignatureActions']);
+const safeSigningMetadata = new Set(['signatureRequests','signatureTools','supportedSignatureActions','unsupportedSignatureActions','signatureExecution','signatureInstructionEndpoint']);
 const methodNames = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'all'];
 export function assistantResponse(value, depth = 0) {
   if (depth > 40) return null;

@@ -37,6 +37,7 @@ func assistantStatusLabel(_ status: String) -> String {
     case "awaiting_preparer": return "Awaiting the preparing officer"
     case "personal": return "Your own review required"
     case "completed_personally": return "Completed by you"
+    case "authorized": return "Authorized through Muse, awaiting execution"
     case "uncertain": return "Outcome needs verification"
     default: return status.replacingOccurrences(of: "_", with: " ").capitalized
     }
@@ -50,6 +51,17 @@ struct AssistantIdentity: Decodable, Identifiable {
     let permissions: [String]
     let createdAt: String?
     let updatedAt: String?
+    let commandExecution: Bool?
+    let signatureExecution: Bool?
+}
+func assistantRemainingAccessDays(_ expiresAt: String?, now: Date = Date()) -> Int {
+    guard let expiresAt else { return 7 }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    var expiry = formatter.date(from: expiresAt)
+    if expiry == nil { formatter.formatOptions = [.withInternetDateTime]; expiry = formatter.date(from: expiresAt) }
+    guard let expiry, expiry > now else { return 7 }
+    return min(365, max(1, Int(ceil(expiry.timeIntervalSince(now) / 86400))))
 }
 struct AssistantCapability: Decodable, Identifiable {
     let id: String
@@ -59,6 +71,9 @@ struct AssistantCapability: Decodable, Identifiable {
     let description: String
     let effects: [String]
     var canGrant: Bool { mode == "standing" || mode == "approval" }
+    var supportsSignatureInstruction: Bool {
+        ["documents.sign", "owner.minutes-preparer", "owner.minutes-master", "owner.treasury-attest", "owner.dispensation-sign"].contains(id)
+    }
     var modeLabel: String {
         switch mode {
         case "standing": return "Granted preparation and reading"
@@ -87,6 +102,7 @@ struct AssistantRequest: Decodable, Identifiable {
     let effects: [String]
     let navigation: AssistantNavigation?
     let receipt: AssistantJSON?
+    let authorization: AssistantJSON?
 }
 struct AssistantAttestation: Decodable, Identifiable {
     let id: String
@@ -137,13 +153,18 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
     @Published var accessPermissions: Set<String> = []
     @Published var accessDays = 7
     @Published var accessEnabled = true
+    @Published var accessCommandExecution = false
+    @Published var accessSignatureExecution = false
     private var savedAccessName = "Muse"
     private var savedAccessPermissions: Set<String> = []
     private var savedAccessDays = 7
     private var savedAccessEnabled = true
+    private var savedAccessCommandExecution = false
+    private var savedAccessSignatureExecution = false
     var accessDirty: Bool {
         accessName != savedAccessName || accessPermissions != savedAccessPermissions
         || accessDays != savedAccessDays || accessEnabled != savedAccessEnabled
+        || accessCommandExecution != savedAccessCommandExecution || accessSignatureExecution != savedAccessSignatureExecution
     }
     private weak var model: AppModel?
     private var context = ""
@@ -175,11 +196,13 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
         // still verified from its saved state when this workspace is reopened.
         operation &+= 1; busy = false; issuedToken = nil; selectedRequest = nil
     }
-    private func resetAccessForm(_ identity: AssistantIdentity?, days: Int = 7) {
+    private func resetAccessForm(_ identity: AssistantIdentity?, days: Int? = nil) {
         accessName = identity?.name ?? "Muse"; accessPermissions = Set(identity?.permissions ?? [])
-        accessDays = days; accessEnabled = identity?.enabled ?? true
+        accessDays = days ?? assistantRemainingAccessDays(identity?.expiresAt); accessEnabled = identity?.enabled ?? true
+        accessCommandExecution = identity?.commandExecution == true; accessSignatureExecution = identity?.signatureExecution == true
         savedAccessName = accessName; savedAccessPermissions = accessPermissions
         savedAccessDays = accessDays; savedAccessEnabled = accessEnabled
+        savedAccessCommandExecution = accessCommandExecution; savedAccessSignatureExecution = accessSignatureExecution
     }
     func load(_ model: AppModel, discardAccessDraft: Bool = false) async {
         guard let stamp = begin(model) else { return }
@@ -201,7 +224,7 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
         defer { finish(stamp, model) }
         do {
             let allowed = Set(capabilities.filter(\.canGrant).map(\.id))
-            let body = try JSONSerialization.data(withJSONObject: ["name": name, "permissions": Array(permissions.intersection(allowed)).sorted(), "expiresInDays": days, "enabled": enabled])
+            let body = try JSONSerialization.data(withJSONObject: ["name": name, "permissions": Array(permissions.intersection(allowed)).sorted(), "expiresInDays": days, "enabled": enabled, "commandExecution": accessCommandExecution, "signatureExecution": accessSignatureExecution])
             let response: AssistantAccessPayload = try await model.request("/api/assistant/access", method: "PUT", body: body)
             guard current(stamp, model) else { return }
             assistant = response.assistant; revision += 1; message = "Muse access saved. Create a token only when you are ready to connect it."
@@ -294,7 +317,7 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
         guard decision == "decline" || (decision == "approve" && canApprove(request)) else {
             message = "This action requires your review in its own workspace."; return
         }
-        guard ["pending", "personal"].contains(request.status), let stamp = begin(model) else { return }
+        guard ["pending", "personal", "authorized"].contains(request.status), let stamp = begin(model) else { return }
         defer { finish(stamp, model) }
         do {
             let body = try JSONSerialization.data(withJSONObject: ["decision": decision, "fingerprint": request.fingerprint, "note": note])
@@ -330,7 +353,7 @@ struct MuseAssistantView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    Text("Muse can prepare and read the work you grant. You review each proposed change that needs approval. After you review a document with Muse, one secure confirmation can authorize the system to apply your signature to that exact version.")
+                    Text("Choose whether Muse may carry out granted changes and supported signatures when you explicitly instruct it. Each action records Muse as the executor under your saved delegation. Other officers' authority and document checks still apply.")
                         .fixedSize(horizontal: false, vertical: true)
                     accessForm
                     if let assistant = workspace.assistant {
@@ -397,7 +420,14 @@ struct MuseAssistantView: View {
                     .accessibilityLabel("Access duration in days")
                 Stepper("Adjust access duration", value: $workspace.accessDays, in: 1...365).labelsHidden()
             }
-            Text("Saving renews access for this number of days. Personal actions cannot be granted.").font(.caption).foregroundStyle(.secondary)
+            Text("The duration starts with your remaining access time. Saving renews access for the displayed number of days.").font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Text("Act on my instructions").font(.headline)
+            Toggle("Carry out granted changes when I instruct Muse", isOn: $workspace.accessCommandExecution)
+            Text("Muse can execute an exact change under your saved delegation without another Dashboard approval. When this is off, each change still needs your approval here.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Toggle("Apply my saved signature when I instruct Muse to sign", isOn: $workspace.accessSignatureExecution)
+            Text("Covers dispensations assigned to you, official dispensation creation, minutes you prepared, your Master attestation, and treasury reports assigned to you. Each instruction is tied to the exact document. It cannot supply another officer's signature or missing review evidence.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("Muse relays your instruction. The record identifies that source; it does not claim a separate Dashboard confirmation. These settings take effect after you save. Building and other unsupported integrations remain in their existing workflows.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if workspace.accessDirty { Text("Access edits are not saved. Save or reload them before creating a token.").font(.callout).foregroundStyle(.secondary) }
             Button("Save access") { Task { await workspace.save(model, name: workspace.accessName, permissions: workspace.accessPermissions, days: workspace.accessDays, enabled: workspace.accessEnabled) } }
                 .buttonStyle(.borderedProminent).disabled(!workspace.loaded)
@@ -411,10 +441,10 @@ struct MuseAssistantView: View {
                     Text(group).font(.headline)
                     ForEach(workspace.capabilities.filter { $0.group == group }) { capability in
                         VStack(alignment: .leading, spacing: 5) {
-                            Toggle(capability.label, isOn: Binding(get: { workspace.accessPermissions.contains(capability.id) }, set: { if $0 { workspace.accessPermissions.insert(capability.id) } else { workspace.accessPermissions.remove(capability.id) } }))
+                            Toggle(capability.label, isOn: Binding(get: { workspace.accessPermissions.contains(capability.id) || (capability.supportsSignatureInstruction && workspace.assistant?.signatureExecution == true) }, set: { if $0 { workspace.accessPermissions.insert(capability.id) } else { workspace.accessPermissions.remove(capability.id) } }))
                                 .disabled(!capability.canGrant)
-                            Text(capability.modeLabel).font(.caption.weight(.semibold)).foregroundStyle(capability.mode == "personal" ? SignTheme.navy : .secondary)
-                            Text(capability.description).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Text(effectiveModeLabel(capability)).font(.caption.weight(.semibold)).foregroundStyle(capability.mode == "personal" ? SignTheme.navy : .secondary)
+                            Text(effectiveDescription(capability)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             AssistantEffects(effects: capability.effects)
                         }.padding(.vertical, 5)
                     }
@@ -422,6 +452,20 @@ struct MuseAssistantView: View {
                 Divider()
             }
         }.assistantCard()
+    }
+    private func effectiveModeLabel(_ capability: AssistantCapability) -> String {
+        if capability.mode == "approval" && workspace.assistant?.commandExecution == true { return "Runs on your instruction when granted" }
+        if capability.supportsSignatureInstruction && workspace.assistant?.signatureExecution == true { return "Signature on your instruction" }
+        return capability.modeLabel
+    }
+    private func effectiveDescription(_ capability: AssistantCapability) -> String {
+        if capability.supportsSignatureInstruction && workspace.assistant?.signatureExecution == true {
+            return "Muse may apply your saved signature to an eligible exact document when you instruct it. Your assigned role and all required review evidence must already be valid."
+        }
+        if capability.mode == "approval" && workspace.assistant?.commandExecution == true {
+            return "Muse may carry out this granted change after your explicit instruction. The exact proposed change and resulting receipt remain available here."
+        }
+        return capability.description
     }
 }
 
@@ -508,7 +552,7 @@ private struct AssistantRequestSheet: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Status: \(assistantStatusLabel(currentRequest.status))").font(.headline)
                     AssistantEffects(effects: currentRequest.effects)
-                    if workspace.isPersonal(currentRequest) { Text("Muse cannot perform this personal action. Open the record and complete your own review.").fontWeight(.semibold) }
+                    if workspace.isPersonal(currentRequest) { Text("This queue item opens your personal review. Supported signatures can also use a separate document-specific Muse request under your saved signature setting.").fontWeight(.semibold) }
                     Text("Expires \(LodgeDateTime.display(currentRequest.expiresAt))").font(.caption).foregroundStyle(.secondary)
                     DisclosureGroup("Exact proposed change", isExpanded: $showingExactChange) {
                         Text("\(currentRequest.method) \(currentRequest.path)").font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -516,8 +560,9 @@ private struct AssistantRequestSheet: View {
                         if let body = currentRequest.body { Text(body.formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     }
                     if let receipt = currentRequest.receipt { Text("Execution receipt").font(.headline); Text(receipt.formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                    if let authorization = currentRequest.authorization { Text("Authorization record").font(.headline); Text(authorization.formatted).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
                     if let decisionNote = currentRequest.decisionNote, !decisionNote.isEmpty { Text(decisionNote) }
-                    if ["pending", "personal"].contains(currentRequest.status) { TextField("Decision note (optional)", text: $note, axis: .vertical).textFieldStyle(.roundedBorder) }
+                    if ["pending", "personal", "authorized"].contains(currentRequest.status) { TextField("Decision note (optional)", text: $note, axis: .vertical).textFieldStyle(.roundedBorder) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             ViewThatFits(in: .horizontal) {
@@ -539,7 +584,7 @@ private struct AssistantRequestSheet: View {
                 } else { openReview(navigation) }
             }
         }
-        if ["pending", "personal"].contains(currentRequest.status) { Button("Decline", role: .destructive) { Task { await workspace.decide(currentRequest, decision: "decline", note: note, model: model) } } }
+        if ["pending", "personal", "authorized"].contains(currentRequest.status) { Button("Decline", role: .destructive) { Task { await workspace.decide(currentRequest, decision: "decline", note: note, model: model) } } }
     }
 }
 private struct AssistantTokenSheet: View {

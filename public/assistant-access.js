@@ -4,10 +4,16 @@ const MODE_LABELS = {
 };
 const STATUS_LABELS = {
   pending: 'Awaiting your decision', approved: 'Approved, awaiting execution',
+  authorized: 'Authorized through Muse, awaiting execution',
   executing: 'Execution in progress', completed: 'Completed', declined: 'Declined',
   stale: 'Changed, review again', expired: 'Expired', revoked: 'Access revoked',
   failed: 'Failed', unknown: 'Outcome unverified', uncertain: 'Outcome unverified',
   queued: 'Awaiting your review', personal: 'Requires your own action',
+};
+const INSTRUCTED_SIGNATURE_ACTIONS = new Set(['documents.sign', 'owner.minutes-preparer', 'owner.minutes-master', 'owner.treasury-attest', 'owner.dispensation-sign']);
+const remainingAccessDays = expiresAt => {
+  const remaining = Date.parse(expiresAt) - Date.now();
+  return Number.isFinite(remaining) && remaining > 0 ? Math.min(365, Math.max(1, Math.ceil(remaining / 86400000))) : 7;
 };
 const text = value => String(value ?? '');
 const dateText = value => {
@@ -32,7 +38,7 @@ const effectsList = effects => {
 };
 const statusText = status => STATUS_LABELS[status] || text(status || 'Unverified').replaceAll('_', ' ');
 
-/** An owner-only workspace. All signing remains in the existing human review flows. */
+/** Owner-only access settings and current requests. Opening this view never executes work. */
 export class AssistantWorkspace {
   constructor({ api, user, context, accessRoot, attestationsRoot, openReview, openSignatureRequest, confirm = message => window.confirm(message), clipboard = () => navigator.clipboard }) {
     Object.assign(this, { api, user, context, accessRoot, attestationsRoot, openReview, openSignatureRequest, confirm, clipboard });
@@ -93,9 +99,9 @@ export class AssistantWorkspace {
   }
   renderAccess(data) {
     const root = this.accessRoot; this.clearToken(); root.replaceChildren(); this.dirty = false;
-    this.heading(root, 'Muse Assistant', 'Choose what Muse can prepare, review requests, and authorize each exact signature yourself.');
+    this.heading(root, 'Muse Assistant', 'Choose what Muse may do when you instruct it, and review requests and receipts.');
     const boundary = node('div', undefined, 'assistant-boundary');
-    boundary.append(node('strong', 'You authorize each signature'), node('p', 'Muse can request a secure confirmation for a supported document. Your own authenticated action authorizes that exact version and applies your saved signature. Muse receives the receipt. Your existing officer and record safeguards still apply.'));
+    boundary.append(node('strong', 'Your instructions, with a record of each action'), node('p', 'You can let Muse carry out granted changes and supported signatures when you explicitly instruct it. Each action records Muse as the executor under your saved delegation. Other officers\' authority and document checks still apply.'));
     root.append(boundary);
     const assistant = data.assistant;
     const form = node('form', undefined, 'assistant-access-form');
@@ -103,13 +109,21 @@ export class AssistantWorkspace {
     const nameLabel = node('label', 'Assistant name'); const name = node('input'); name.type = 'text'; name.maxLength = 80; name.required = true; name.value = assistant?.name || 'Muse'; nameLabel.append(name);
     const expiryLabel = node('label', 'Access expires after'); const expiry = node('select');
     for (let day = 1; day <= 365; day++) { const option = node('option', `${day} ${day === 1 ? 'day' : 'days'}`); option.value = String(day); expiry.append(option); }
-    expiry.value = '7'; expiryLabel.append(expiry);
+    expiry.value = String(remainingAccessDays(assistant?.expiresAt)); expiryLabel.append(expiry);
     const enabledLabel = node('label', undefined, 'assistant-check'); const enabled = node('input'); enabled.type = 'checkbox'; enabled.checked = Boolean(assistant?.enabled); enabledLabel.append(enabled, node('span', 'Enable this assistant access'));
     settings.append(nameLabel, expiryLabel, enabledLabel);
     settings.append(node('p', assistant ? `Saved access: ${assistant.enabled ? 'enabled' : 'disabled'}. Expires ${dateText(assistant.expiresAt)}.` : 'No assistant access has been saved.', 'helper'));
-    settings.append(node('p', 'Saving starts a new expiration period. Token creation is a separate action. Neither step proves that Muse has connected.', 'helper'));
+    settings.append(node('p', 'The duration starts with your remaining access time. Saving renews access for the displayed number of days. It does not create a token or verify the connection.', 'helper'));
+    const instructionSettings = node('section', undefined, 'assistant-settings'); instructionSettings.append(node('h2', 'Act on my instructions'));
+    const commandLabel = node('label', undefined, 'assistant-check'); const commandExecution = node('input'); commandExecution.type = 'checkbox'; commandExecution.name = 'commandExecution'; commandExecution.checked = assistant?.commandExecution === true;
+    commandLabel.append(commandExecution, node('span', 'Carry out granted changes when I instruct Muse'));
+    instructionSettings.append(commandLabel, node('p', 'Muse can execute an exact change under your saved delegation without another Dashboard approval. When this is off, each change still needs your approval here.', 'helper'));
+    const signatureLabel = node('label', undefined, 'assistant-check'); const signatureExecution = node('input'); signatureExecution.type = 'checkbox'; signatureExecution.name = 'signatureExecution'; signatureExecution.checked = assistant?.signatureExecution === true;
+    signatureLabel.append(signatureExecution, node('span', 'Apply my saved signature when I instruct Muse to sign'));
+    instructionSettings.append(signatureLabel, node('p', 'Covers dispensations assigned to you, official dispensation creation, minutes you prepared, your Master attestation, and treasury reports assigned to you. Each instruction is tied to the exact document. It cannot supply another officer\'s signature or missing review evidence.', 'helper'));
+    instructionSettings.append(node('p', 'Muse relays your instruction. The record identifies that source; it does not claim a separate Dashboard confirmation. These settings take effect after you save. Building and other unsupported integrations remain in their existing workflows.', 'helper'));
     const catalog = node('section', undefined, 'assistant-catalog'); catalog.append(node('h2', 'Worshipful Master capabilities'));
-    catalog.append(node('p', 'Select standing work Muse may do and changes it may ask you to approve. Personal actions remain available to you in My Attestations.'));
+    catalog.append(node('p', 'Select the work Muse may access. Saved instruction settings control how granted changes and supported signatures proceed. You can still review items in My Attestations.'));
     const selected = new Set(assistant?.permissions || []), groups = new Map();
     for (const capability of data.capabilities || []) {
       const group = capability.group || 'Other capabilities';
@@ -121,24 +135,29 @@ export class AssistantWorkspace {
       details.append(node('summary', `${group} (${capabilities.length})`));
       for (const capability of capabilities) {
         const row = node('div', undefined, 'assistant-capability'); const label = node('label', undefined, 'assistant-check');
-        const copy = node('span'); copy.append(node('strong', capability.label || capability.id), node('span', MODE_LABELS[capability.mode] || 'Unavailable', `assistant-mode assistant-mode-${capability.mode}`));
+        const savedInstruction = capability.mode === 'approval' && assistant?.commandExecution === true;
+        const savedSignatureInstruction = INSTRUCTED_SIGNATURE_ACTIONS.has(capability.id) && assistant?.signatureExecution === true;
+        const modeLabel = savedInstruction ? 'Runs on your instruction when granted' : savedSignatureInstruction ? 'Signature on your instruction' : MODE_LABELS[capability.mode] || 'Unavailable';
+        const copy = node('span'); copy.append(node('strong', capability.label || capability.id), node('span', modeLabel, `assistant-mode assistant-mode-${capability.mode}`));
         if (['standing', 'approval'].includes(capability.mode)) {
           const input = node('input'); input.type = 'checkbox'; input.value = capability.id; input.checked = selected.has(capability.id); permissionInputs.push(input); label.append(input);
         } else label.classList.add('assistant-personal-capability');
         label.append(copy); row.append(label);
-        if (capability.description) row.append(node('p', capability.description, 'helper'));
+        if (savedSignatureInstruction) row.append(node('p', 'Muse may apply your saved signature to an eligible exact document when you instruct it. Your assigned role and all required review evidence must already be valid.', 'helper'));
+        else if (savedInstruction) row.append(node('p', 'Muse may carry out this granted change after your explicit instruction. The exact proposed change and resulting receipt remain available here.', 'helper'));
+        else if (capability.description) row.append(node('p', capability.description, 'helper'));
         if (capability.effects?.length) row.append(effectsList(capability.effects));
         details.append(row);
       }
       catalog.append(details);
     }
     const save = node('button', 'Save assistant access', 'primary'); save.type = 'submit';
-    form.append(settings, catalog, save);
+    form.append(settings, instructionSettings, catalog, save);
     form.addEventListener('input', () => { this.dirty = true; }); form.addEventListener('change', () => { this.dirty = true; });
     form.addEventListener('submit', event => {
       event.preventDefault();
       if (this.busy || this.ownerContext() === null || !name.value.trim() || !form.reportValidity()) return;
-      void this.saveAccess({ name: name.value.trim(), permissions: permissionInputs.filter(input => input.checked).map(input => input.value), expiresInDays: Number(expiry.value), enabled: enabled.checked });
+      void this.saveAccess({ name: name.value.trim(), permissions: permissionInputs.filter(input => input.checked).map(input => input.value), expiresInDays: Number(expiry.value), enabled: enabled.checked, commandExecution: commandExecution.checked, signatureExecution: signatureExecution.checked });
     });
     root.append(form);
     const connection = node('section', undefined, 'assistant-connection'); connection.append(node('h2', 'Connect Muse'));
@@ -150,7 +169,7 @@ export class AssistantWorkspace {
     this.tokenRegion = node('div', undefined, 'assistant-token-region'); connection.append(this.tokenRegion);
     const instructions = node('details'); instructions.append(node('summary', 'Connection instructions'));
     instructions.append(node('p', 'For a compatible remote MCP client, use https://stone-square-sign.onrender.com/api/assistant/mcp with Streamable HTTP and Bearer authentication. Confirm Muse supports this connection method before entering the token in its secure setup. The separate /api/assistant/me address is a REST identity check. A successful authenticated read from Muse verifies the connection.'));
-    instructions.append(node('p', 'Muse submits exact proposed changes for your approval. It must wait for its recorded approval and use a stable request key. An uncertain outcome needs verification before another attempt.'));
+    instructions.append(node('p', 'Muse uses the saved instruction settings and exact request details. Each change needs a stable request key and a recorded receipt. An uncertain outcome needs verification before another attempt.'));
     connection.append(instructions); root.append(connection);
     this.renderRequests(root, data.requests || [], data.capabilities || []);
     this.renderSignatureRequests(root);
@@ -218,7 +237,7 @@ export class AssistantWorkspace {
     finally { this.busy = false; if (this.current(context)) this.setBusy(false); }
   }
   renderRequests(root, requests, capabilities) {
-    const section = node('section', undefined, 'assistant-requests'); section.append(node('h2', 'Requests for your decision'));
+    const section = node('section', undefined, 'assistant-requests'); section.append(node('h2', 'Requests and receipts'));
     if (!requests.length) section.append(node('p', 'No assistant requests are recorded here.', 'helper'));
     const catalog = new Map(capabilities.map(capability => [capability.id, capability]));
     for (const request of requests) {
@@ -231,13 +250,15 @@ export class AssistantWorkspace {
       details.append(node('p', `${text(request.method)} ${text(request.path)}`, 'assistant-route'));
       details.append(node('pre', JSON.stringify(request.body ?? {}, null, 2), 'assistant-change')); article.append(details);
       if (request.decisionNote) article.append(node('p', `Decision note: ${request.decisionNote}`));
+      if (request.authorization) { const authorization = node('details'); authorization.append(node('summary', 'Authorization record'), node('pre', JSON.stringify(request.authorization, null, 2), 'assistant-change')); article.append(authorization); }
       if (request.receipt) { const receipt = node('details'); receipt.append(node('summary', 'Recorded outcome'), node('pre', JSON.stringify(request.receipt, null, 2), 'assistant-change')); article.append(receipt); }
       const message = notice(); const controls = node('div', undefined, 'row-buttons');
       if (personal) {
-        article.append(node('p', 'This requires your own review and tap. Approval cannot authorize Muse to sign or attest.', 'helper'));
+        article.append(node('p', 'This queue item opens your personal review. Supported signatures can also use a separate document-specific Muse request under your saved signature setting.', 'helper'));
         controls.append(button('Open my review', () => this.openPersonalRequest(request, message)));
-      } else if (capability?.mode === 'approval' && request.status === 'pending') {
-        controls.append(button('Approve this change', () => this.decide(request, 'approve', message, controls), 'primary'), button('Decline', () => this.decide(request, 'decline', message, controls)));
+      } else if (capability?.mode === 'approval' && ['pending', 'authorized'].includes(request.status)) {
+        if (request.status === 'pending') controls.append(button('Approve this change', () => this.decide(request, 'approve', message, controls), 'primary'));
+        controls.append(button('Decline', () => this.decide(request, 'decline', message, controls)));
       }
       article.append(controls, message); section.append(article);
     }
@@ -245,7 +266,7 @@ export class AssistantWorkspace {
   }
   async decide(request, decision, message, controls) {
     const context = this.ownerContext(), sequence = this.sequence;
-    if (context === null || this.busy || request.status !== 'pending' || !request.fingerprint || !this.data?.capabilities?.some(capability => capability.id === request.actionId && capability.mode === 'approval')) return;
+    if (context === null || this.busy || !(request.status === 'pending' || (request.status === 'authorized' && decision === 'decline')) || !request.fingerprint || !this.data?.capabilities?.some(capability => capability.id === request.actionId && capability.mode === 'approval')) return;
     const effects = (request.effects || []).map(effect => `• ${effect}`).join('\n');
     if (!this.confirm(decision === 'approve' ? `Approve this exact change: ${request.title || request.actionId}?\n${effects}\nThis approval is for the unchanged record and request only.` : `Decline ${request.title || request.actionId}?`)) return;
     this.busy = true; for (const control of controls.querySelectorAll('button')) control.disabled = true;

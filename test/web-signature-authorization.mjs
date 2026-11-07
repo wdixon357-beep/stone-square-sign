@@ -63,6 +63,13 @@ assert.deepEqual(normal.calls.find(call => call.method === 'POST').body, { finge
 assert.match(normal.root.textContent, /Authorized by Synthetic Owner/); assert.match(normal.root.textContent, /Applied by the system/);
 assert.doesNotMatch(normal.root.textContent, /MUST-NOT-RENDER/); assert.equal(findButton(normal.root, 'Authorize and apply signature'), undefined);
 normal.view.close(); assert.deepEqual(normal.revoked, ['blob:synthetic-preview']);
+const delegated = setup({status:'completed',ready:false,receipt:{authorizedBy:{name:'Synthetic Owner'},requestedBy:{name:'Muse'},appliedBy:'system',authorization:{source:'owner_delegation'},executedBy:{type:'assistant',assistantId:'synthetic-muse'}}});
+await delegated.view.open(fixture.id);
+assert.match(delegated.root.textContent, /Executed by Muse under your saved delegation/);
+assert.match(delegated.root.textContent, /Delegation granted by Synthetic Owner/);
+assert.match(delegated.root.textContent, /No separate Dashboard confirmation is recorded/);
+assert.doesNotMatch(delegated.root.textContent, /Authorized by Synthetic Owner/);
+assert.equal(delegated.calls.filter(call => call.method === 'POST').length, 0, 'Reading a delegated receipt cannot confirm another signature');
 
 // Slow reads replace the initial shell after it has focus. Keep focus inside the new shell.
 const focusing = setup(), focusRead = defer();
@@ -147,7 +154,7 @@ const accessRoot = new Element('section'), attestationsRoot = new Element('secti
 let listFailure = false;
 const workspace = new AssistantWorkspace({ api: async path => { listCalls.push(path); if (path === '/api/assistant/signature-requests') { if (listFailure) throw new Error('read failed'); return { requests: [clone(fixture)] }; } return path.endsWith('/attestations') ? { attestations: [] } : clone(assistantFixture); }, user: () => ({ id: 1, role: 'owner' }), context: () => '1:1', accessRoot, attestationsRoot, openSignatureRequest: id => opened.push(id), openReview() {}, confirm: () => true });
 await workspace.show('access'); assert.match(accessRoot.textContent, /Signature confirmations from Muse/);
-assert.match(accessRoot.textContent, /Your existing officer and record safeguards still apply/);
+assert.match(accessRoot.textContent, /Other officers' authority and document checks still apply/);
 findButton(accessRoot, 'Open signature confirmation').listeners.click[0](); assert.deepEqual(opened, [fixture.id]);
 await workspace.show('attestations'); assert.match(attestationsRoot.textContent, /Signature confirmations from Muse/);
 listFailure = true; await workspace.show('attestations'); assert.match(attestationsRoot.textContent, /Signature requests could not load/);
