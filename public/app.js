@@ -459,7 +459,13 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
   try {
   const method = String(init.method || 'GET').toUpperCase();
   const mayRetry = method === 'GET' || method === 'HEAD';
-  const passiveBuildingReminders = method === 'GET' && String(path).split('?')[0] === '/api/building/alerts';
+  const route = String(path).split('?')[0];
+  const passiveBuildingReminders = method === 'GET' && route === '/api/building/alerts';
+  // Automatic alerts and activity logging should never look like a failed save.
+  const quietBackground = (method === 'POST' && ['/api/activity/heartbeat', '/api/activity/interaction'].includes(route))
+    || (method === 'GET' && ['/api/minutes/review-alerts', '/api/minutes/completion-alerts',
+      '/api/correspondence/alerts', '/api/treasury/alerts'].includes(route));
+  const showGenericNotice = !passiveBuildingReminders && !quietBackground;
   const requestUserId = state.user?.id, requestAuthEpoch = state.authEpoch;
   const requestActor = incidentActor();
   const reminderKey = passiveBuildingReminders ? buildingReminderKey(requestUserId, requestAuthEpoch, method, path) : '';
@@ -487,14 +493,14 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
         } else if (incidentReference) {
           const recovered = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'temporary_connection', state: 'recovered', actor: requestActor });
           queueIncident(recovered); void flushQueuedIncidents();
-          showReliabilityNotice({ title: 'The dashboard is back online.', message: `You can continue. Incident ${incidentReference} recovered automatically.`, recovered: true, dismissAfter: 6000 });
+          if (showGenericNotice) showReliabilityNotice({ title: 'The dashboard is back online.', message: `You can continue. Incident ${incidentReference} recovered automatically.`, recovered: true, dismissAfter: 6000 });
         } else void flushQueuedIncidents();
         return payload;
       }
       const retryable = response.status >= 500 || response.status === 408 || response.status === 429 || payload?.retryable === true;
       incidentReference ||= payload?.incidentReference || newIncidentReference();
       if (mayRetry && retryable && attempt === 1) {
-        if (!passiveBuildingReminders) showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is retrying now. Incident ${incidentReference}.` });
+        if (showGenericNotice) showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is retrying now. Incident ${incidentReference}.` });
         await delay(Math.min(3000, Math.max(1000, Number(payload?.retryAfterSeconds || 2) * 1000)));
         continue;
       }
@@ -502,14 +508,14 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
         if (passiveBuildingReminders) incidentReference = showBuildingReminderFailure(reminderKey, incidentReference);
         const open = incidentPayload({ reference: incidentReference, path, method, status: response.status, category: 'service_response', state: 'open', actor: requestActor, ...(passiveBuildingReminders ? {area: 'building'} : {}) });
         queueIncident(open); void flushQueuedIncidents();
-        if (!passiveBuildingReminders) showReliabilityNotice({ title: 'This action could not be completed.', message: `Incident ${incidentReference} was recorded. The hosted monitor checks the service again within 30 minutes.` });
+        if (showGenericNotice) showReliabilityNotice({ title: 'This action could not be completed.', message: `Incident ${incidentReference} was recorded. The hosted monitor checks the service again within 30 minutes.` });
       }
       throw Object.assign(new Error(payload?.error || 'The request could not be completed.'), { status: response.status, incidentReference });
     } catch (error) {
       if (Number.isInteger(error?.status)) throw error;
       incidentReference ||= newIncidentReference();
       if (mayRetry && attempt === 1) {
-        if (!passiveBuildingReminders) showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is reconnecting now. Incident ${incidentReference}.` });
+        if (showGenericNotice) showReliabilityNotice({ title: 'Oops, something went wrong.', message: `The dashboard is reconnecting now. Incident ${incidentReference}.` });
         await delay(1800);
         continue;
       }
@@ -517,7 +523,7 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
         if (passiveBuildingReminders) incidentReference = showBuildingReminderFailure(reminderKey, incidentReference);
         const open = incidentPayload({ reference: incidentReference, path, method, status: 0, category: navigator.onLine ? 'network_error' : 'offline', state: 'open', actor: requestActor, ...(passiveBuildingReminders ? {area: 'building'} : {}) });
         queueIncident(open);
-        if (!passiveBuildingReminders) showReliabilityNotice({ title: navigator.onLine ? 'This action could not be completed.' : 'This device is offline.', message: `Incident ${incidentReference} is saved. The dashboard will report it when the connection returns; the hosted monitor checks again within 30 minutes.` });
+        if (showGenericNotice) showReliabilityNotice({ title: navigator.onLine ? 'This action could not be completed.' : 'This device is offline.', message: `Incident ${incidentReference} is saved. The dashboard will report it when the connection returns; the hosted monitor checks again within 30 minutes.` });
       }
       throw Object.assign(new Error(`The dashboard could not connect. Incident ${incidentReference}.`), { incidentReference });
     }
@@ -3156,10 +3162,17 @@ $('saveExitMinutes').addEventListener('click', async () => {
   const button = $('saveExitMinutes');
   button.disabled = true;
   try {
+    const item = currentMinutes();
     if (state.minutesEditorDirty) await saveMinutesCorrections();
     closeMinutesEditor({ confirmUnsaved: false });
-    await renderMinutes();
-    setMessage($('minutesMessage'), 'Your meeting minutes draft is saved. You can return to it from Active drafts and reviews.');
+    if (!await renderMinutes()) {
+      setMessage($('minutesMessage'), 'Your changes are saved. The minutes list could not refresh. Reload the list to reopen the record.', true);
+      return;
+    }
+    const needsPreparer = item?.status === 'draft' && item.createdByUserId === state.user?.id;
+    setMessage($('minutesMessage'), needsPreparer
+      ? 'Draft saved. To send it for review, reopen it under Active drafts and reviews, finish the required checks, and select Attest and send to Worshipful Master.'
+      : 'Your changes are saved. You can return to the minutes from Active drafts and reviews.');
   } catch (error) {
     setMessage($('minutesEditorMessage'), error.message, true);
   } finally {
@@ -3255,14 +3268,22 @@ $('submitMinutesReview').addEventListener('click', async () => {
     const draft = collectMinutesDraft();
     const detailIssues = minutesMeetingDetails.minutesMeetingDetailsIssues(Object.fromEntries(['meetingDate','meetingType','degree','openingTime','closingTime','presiding','quorum','nextMeeting'].map(key => [key, draft[key] ?? ''])));
     if (detailIssues.length) {
+      setMinutesView(false);
       setMessage($('minutesEditorMessage'), `Complete the meeting details before submitting. ${detailIssues.join(' ')}`, true);
       $('minutesMeetingDate').focus();
       return;
     }
     const attendanceIssues = minutesAttendanceIssues();
     if (attendanceIssues.length) {
+      setMinutesView(false);
       setMessage($('minutesEditorMessage'), `Complete the required attendance review before submitting. ${attendanceIssues.join(' ')}`, true);
       $('minutesAttendanceReview').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if (typeof draft.closingPrayerGiven !== 'boolean') {
+      setMinutesView(false);
+      setMessage($('minutesEditorMessage'), 'Confirm whether the Chaplain gave the closing prayer before sending these minutes.', true);
+      $('minutesClosingPrayerGiven').focus();
       return;
     }
     await saveMinutesCorrections();

@@ -108,6 +108,26 @@ t.reply(async()=>response(200,{alerts:[]}));await t.api(backgroundPath);await t.
 assert.equal(t.notices.at(-1),foregroundNotice,'A passive recovery cannot clear or replace an unrelated foreground error');
 assert.ok(t.delivered.some(incident=>incident.reference==='SS22-BUILDING4' && incident.state==='recovered'));
 
+// Dashboard alerts and activity may fail while the minutes editor is open.
+// Preserve diagnostic records without presenting a failed minutes action.
+for (const [path, method] of [
+  ['/api/activity/heartbeat', 'POST'], ['/api/activity/interaction', 'POST'],
+  ['/api/minutes/review-alerts', 'GET'], ['/api/minutes/completion-alerts', 'GET'],
+  ['/api/correspondence/alerts', 'GET'], ['/api/treasury/alerts', 'GET'],
+]) {
+  t = setup();
+  t.reply(async () => { throw new Error('connection interrupted'); });
+  await assert.rejects(t.api(path, { method }), /could not connect/);
+  assert.equal(t.notices.length, 0, path);
+  assert.equal(t.context.pending()[0].path, path);
+  assert.equal(t.calls.length, method === 'GET' ? 2 : 1);
+  t.reply(async () => response(503));
+  await assert.rejects(t.api(path, { method }), error => error.status === 503);
+  await t.settle();
+  assert.equal(t.notices.length, 0, path);
+  assert(t.delivered.some(incident => incident.path === path && incident.category === 'service_response'));
+}
+
 // Offline and transient retries keep incident reporting honest without a blank-success fallback.
 t = setup();t.context.navigator.onLine=false;t.reply(async()=>{throw Error('offline');});
 await assert.rejects(t.api(backgroundPath),/could not connect/);await t.settle();
