@@ -41,8 +41,8 @@ The connection supports exact file uploads and protected document downloads. The
 | owner.correspondence | Prepare Lodge correspondence | approval | Prepare or return exact drafts. Existing signer assignment and office rules remain. |
 | owner.correspondence-view | Review correspondence | standing | Read owner-visible letters and PDFs. |
 | owner.correspondence-sign | Sign correspondence | unavailable | Correspondence signing belongs to the assigned Secretary or Assistant Secretary, not the owner. |
-| owner.documents | Prepare dispensations | approval | Propose exact documents and owner workflow changes. |
-| owner.dispensation-sign | Create and sign a dispensation | personal | Review the completed official template and personally create it with your saved signature. |
+| owner.documents | Prepare dispensations | approval | Prepare ordinary uploads and existing assignment changes, including offer-to-both. Create new dispensations through owner.dispensation-sign. |
+| owner.dispensation-sign | Create and sign a dispensation | personal | Create the official template with the owner signature under current delegation. Both Secretaries are assigned; the first signer supplies his own saved name and address. |
 | owner.record-approval | Record an approval assertion | personal | You record and confirm the actual approval evidence yourself. |
 | owner.proposals-view | Review Warden proposals | standing | Read all submitted proposals. |
 | owner.proposals-decide | Decide Warden proposals | personal | Review the exact proposal yourself. Approval creates the document with your saved signature. |

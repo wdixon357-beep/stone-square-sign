@@ -44,10 +44,10 @@ try{
  muse=(await api('/api/assistant/access/token',{token:owner,method:'POST',body:{}})).data.token;
  const initial=value(await mcp('workspace',{}));assert.equal(initial.assistant.commandExecution,false);assert.equal(initial.assistant.signatureExecution,false);
  // More than the generic 4 MiB JSON limit proves the authenticated file envelope.
- const document=await PDFDocument.create();document.addPage().drawText('Synthetic dispensation. Worshipful Master and Secretary.');
+ const document=await PDFDocument.create();document.addPage().drawText('Synthetic Lodge document. Worshipful Master and Secretary.');
  const fileBytes=Buffer.concat([Buffer.from(await document.save()),Buffer.alloc(3_300_000,32)]);
- const file={fieldname:'document',originalname:'Résumé dispensation.pdf',mimetype:'APPLICATION/PDF',data:fileBytes.toString('base64')};
- const input={actionId:'owner.documents',method:'POST',path:'/api/documents',body:{title:'Synthetic dispensation\nSecond line'},requestKey:'file-instruction-001',files:[file]};
+ const file={fieldname:'document',originalname:'Résumé document.pdf',mimetype:'APPLICATION/PDF',data:fileBytes.toString('base64')};
+ const input={actionId:'owner.documents',method:'POST',path:'/api/documents',body:{title:'Synthetic document\nSecond line'},requestKey:'file-instruction-001',files:[file]};
  const pending=value(await mcp('request_upload',input)).request;
  const instruction={requestId:pending.id,fingerprint:pending.fingerprint,instruction:'Upload this exact synthetic PDF for this isolated test.',instructionReference:'synthetic-message-001'};
  assert.equal((await mcp('authorize_instruction',instruction)).isError,true,'Owner delegation defaults off.');

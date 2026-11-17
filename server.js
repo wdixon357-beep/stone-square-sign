@@ -2792,6 +2792,17 @@ app.post('/api/documents', requireAuth, requireOwner, upload.single('document'),
   try {
     if (!req.file) return res.status(400).json({ error: 'Choose a PDF to upload.' });
     const text = await extractTextFromPdf(req.file.buffer);
+    // A generic upload cannot safely replace preprinted officer information.
+    // Muse must use the official template, which waits for the actual Secretary.
+    const identifiesDispensation = [req.body?.title, req.file.originalname]
+      .some(value => /(?:^|[^a-z])dispensations?(?:$|[^a-z])/i.test(String(value || '').normalize('NFKC')))
+      || /\b(?:request\s+for\s+(?:a\s+)?dispensation|dispensation\s+request)\b/i.test(text.normalize('NFKC'));
+    if (req.assistant && identifiesDispensation) {
+      return res.status(409).json({
+        code: 'DISPENSATION_TEMPLATE_REQUIRED',
+        error: 'Create this dispensation through the official template using request_signature with actionId owner.dispensation-sign and POST /api/dispensations. Both Secretaries are assigned automatically; whoever signs first supplies his saved name and mailing address. A generic PDF upload cannot safely replace preprinted Secretary information. Use sign_instruction only when the owner has explicitly authorized that signature and signatureExecution is enabled; otherwise return the owner confirmation link. No document was created by this upload.',
+      });
+    }
     const detected = detectSignersFromText(text);
     const signerDefs = detected.length
       ? detected
@@ -2912,18 +2923,11 @@ app.post('/api/dispensations/preview', requireAuth, requireOwner, rateLimit({ ke
     const streetAddress = String(req.body?.streetAddress || '').trim().slice(0, 120);
     const cityState = String(req.body?.cityState || '').trim().slice(0, 120);
     const worshipfulMasterAddress = String(req.body?.worshipfulMasterAddress || '').trim().slice(0, 160);
-    /* The Worshipful Master chooses who it goes to. Most of the time that is both
-     * Secretaries, and then the first one to sign completes it. The old single-value
-     * signerRole is still accepted so nothing already pointing at it breaks. */
-    const requestedRoles = Array.isArray(req.body?.signerRoles) && req.body.signerRoles.length
-      ? req.body.signerRoles.map(String)
-      : [String(req.body?.signerRole || '')];
-    const signerRoles = [...new Set(requestedRoles)]
-      .filter((role) => ['secretary', 'assistant_secretary'].includes(role));
+    // Preview follows creation: both Secretaries are offered the document.
+    // Ignore legacy signerRole/signerRoles values from cached clients.
     const personalInfoConfirmed = req.body?.personalInfoConfirmed === true;
     if (!dateParts(requestDate) || !dateParts(eventDate) || !requestDetails || !eventTime || !locationName
-        || !streetAddress || !cityState || !worshipfulMasterAddress || (!req.assistant && !personalInfoConfirmed)
-        || signerRoles.length === 0) {
+        || !streetAddress || !cityState || !worshipfulMasterAddress || (!req.assistant && !personalInfoConfirmed)) {
       return res.status(400).json({ error: 'Complete the remaining Lodge questions before reviewing the PDF.' });
     }
     const savedSignature = req.assistant ? null : await dbGet('SELECT * FROM profile_signatures WHERE user_id = ?', [req.user.id]);

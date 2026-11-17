@@ -68,3 +68,12 @@ New signature requests share the existing 30-per-minute and 100-pending queue bo
 - Instruction text is required, limited to 2,000 characters, with an optional 300-character message reference. It is retained as `relayed_by_assistant` with an explicit false flag for independent human verification. It is not a new authenticated chat channel.
 - Both controls are owner-only and off by default. Changing policy invalidates earlier pending work. Revocation, token rotation, expiry, changed documents and uncertain outcomes keep their existing protections. The owner may decline an instruction-authorized request before execution.
 - Muse's allowlist excludes the legacy Missive retry action. Frozen signature operations retain the signed document and packet for Spark follow-through without creating a Missive draft. Ordinary signing outside this integration still has legacy email behavior and requires separate migration. This release does not add a Spark send tool.
+
+
+## Dispensation routing
+
+Create new dispensations through `request_signature` using `actionId: owner.dispensation-sign`, `method: POST`, `path: /api/dispensations`, the exact Lodge question fields and a unique request key. Preview with `/api/dispensations/preview` first when needed. Neither creation nor preview requires choosing a Secretary. Read the current signature delegation settings and follow the existing owner confirmation or instructed signing process. This operation creates both Secretary assignments in either-officer mode. The first Secretary to sign completes the requirement, using his own saved name and mailing address in the official PDF.
+
+Do not upload a new dispensation through generic `POST /api/documents`. That route detects roles from text and cannot safely replace preprinted officer details in an arbitrary PDF. Delegated uploads identified as dispensations by their title, filename or a request heading in extracted text are rejected before a document is created. This detection does not recognize every scanned or mislabeled file, so the workflow choice remains necessary.
+
+For an existing single-Secretary assignment, `owner.documents` supports `POST /api/documents/:id/offer-to-both` under the current change authorization. That operation opens signing access; it does not convert a generic upload into the official template or replace preprinted names. Inspect the current document and signer list first. If a matching official dispensation already exists, use that record and do not create another copy or rescind either record without the owner's instruction.
