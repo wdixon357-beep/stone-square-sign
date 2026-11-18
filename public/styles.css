@@ -234,6 +234,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-section-card { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: white; }
 .minutes-section-card input { margin-bottom: 9px; color: var(--navy); font-weight: 800; }
 .minutes-section-card textarea { min-height: 130px; resize: vertical; line-height: 1.5; }
+.minutes-source-prefill p { margin: 6px 0 0; }
+.minutes-saved-source { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; }
+.minutes-saved-source summary { color: var(--navy); font-weight: 750; cursor: pointer; padding-block: 5px; }
+.minutes-saved-source .helper { margin-block: 8px; }
+.minutes-saved-source pre { max-height: 42vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; line-height: 1.55; }
 .minutes-prep-checklist { padding: 14px; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 10px; background: #fffdf7; }
 .minutes-prep-checklist h3 { margin: 0 0 5px; }
 .minutes-prep-checklist p { margin: 0 0 10px; }

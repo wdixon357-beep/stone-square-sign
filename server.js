@@ -2045,6 +2045,32 @@ app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) 
   }
 });
 
+// Private evidence for an open working record. Keep the ownership rule from
+// canOpenWorkingMinutes in this query so the text is read only for its reviewer.
+app.get('/api/minutes/:id/source', requireAuth, requireMinutesView, requireMinutesAccess, async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    // The assistant allowlist also excludes this path; do not expose private
+    // source even if another assistant route is added in the future.
+    if (req.assistant) return res.status(403).json({ error: 'Open your own Dashboard session to view the saved source.' });
+    const row = await dbGet(
+      `SELECT source_name, transcript_text, draft_json::jsonb ->> 'sourceType' AS source_type
+       FROM meeting_minutes
+       WHERE id = ? AND status IN ('awaiting_preparer', 'organizing', 'draft', 'awaiting_master_attestation')
+         AND (?::boolean OR (status <> 'awaiting_preparer' AND COALESCE(preparer_user_id, created_by_user_id) = ?))`,
+      [req.params.id, req.user.role === 'owner', req.user.id],
+    );
+    if (!row?.transcript_text) return res.status(404).json({ error: 'Saved meeting source not found.' });
+    res.json({
+      sourceName: row.source_name,
+      sourceType: row.source_type === 'compiled_notes' ? 'compiled_notes' : 'transcript',
+      sourceText: row.transcript_text,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // The Worshipful Master can place a Plaud transcript or compiled notes into the
 // Secretary's Office queue without spending a generation call. Adrian or
 // McDuffie claims the source before organization so one officer owns the draft.

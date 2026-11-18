@@ -4,6 +4,7 @@ import {
   hasExplicitMinutesTime,
   minutesMeetingDetailsIssues,
   normalizeMinutesMeetingDetails,
+  suggestMinutesDetailsFromNotes,
 } from '../public/minutes-meeting-details.js';
 
 const fields = ['meetingDate', 'meetingType', 'degree', 'openingTime', 'closingTime', 'presiding', 'quorum', 'nextMeeting'];
@@ -123,6 +124,31 @@ check('Normalization is immutable, idempotent and never upgrades invalid facts i
   assert.equal(entered.meetingDate, 'October 15, 2026');
   const invalid = normalizeMinutesMeetingDetails({...complete, meetingDate:'2026-02-30', degree:'Unknown', quorum:'Maybe', closingTime:'945'});
   assert.equal(minutesMeetingDetailsIssues(invalid).length, 4);
+});
+
+check('Pasted labels suggest only clear, valid facts and ignore narrative, conflicts and unknowns', () => {
+  const notes = [
+    'Meeting date: Thursday, October 15, 2026',
+    'Meeting type: Special Communication',
+    'Degree: third degree',
+    'Opening time: 19:30',
+    'Opening time: 7:30 PM',
+    'Closing time: 9:45',
+    'Presiding officer: WM Example, unconfirmed',
+    'Quorum: No',
+    'Quorum: Yes',
+    'Quorum: No',
+    'Next meeting date: Tuesday, November 5, 2026',
+    'Officer attendance: all present',
+    'Closing prayer: Yes',
+    'PM Example said that he presided last year.',
+  ].join('\r\n');
+  assert.deepEqual(suggestMinutesDetailsFromNotes(notes), {
+    meetingDate:'2026-10-15', meetingType:'Special Communication', degree:'Third Degree', openingTime:'7:30 PM',
+  });
+  assert.deepEqual(suggestMinutesDetailsFromNotes('Quorum: no\nClosing time: 22:00\nNext meeting date: November 5, 2026'), {
+    quorum:'No', closingTime:'10:00 PM', nextMeeting:'2026-11-05',
+  });
 });
 
 console.log(`${checks} meeting-details contract cases passed with synthetic values and no network, database or live records.`);

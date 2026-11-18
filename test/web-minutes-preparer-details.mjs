@@ -25,7 +25,7 @@ function harness() {
   const calls=[],opened=[],remembered=[],cleared=[],shown=[],refreshes=[],storage=new Map();
   let response={minutes:{id:'synthetic-minutes'}},failure=null,refresh=true,wait=null,refreshWait=null;
   const state={user:{id:2},authEpoch:3,minutesSourceDirty:false};
-  const context={FormData,minutesDates,minutesMeetingDetails,state,$:id=>{assert.ok(elements[id],`Actual markup provides ${id}`);return elements[id];},
+  const context={FormData,minutesDates,minutesMeetingDetails,state,can: permission=>permission==='minutes.prepare',$:id=>{assert.ok(elements[id],`Actual markup provides ${id}`);return elements[id];},
     setMessage:(element,text,error=false)=>{element.textContent=text;element.error=error;},
     sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>{storage.set(key,value);remembered.push({key,values:JSON.parse(value)});},removeItem:key=>{storage.delete(key);cleared.push(key.replace(/^ss22-web-draft:[^:]+:/,''));}},
     show:element=>shown.push(element.id),hide:element=>shown.splice(shown.indexOf(element.id),1),
@@ -166,6 +166,24 @@ for(const oldFails of [false,true]) for(const finishOldFirst of [false,true]) {
 }
 assert.match(app,/meetingDetailsVersion: currentMinutes\(\)\.draft\.meetingDetailsVersion/,'Edited new records retain the explicit-details version marker');
 assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeetingDetails\(meetingDetails\)/,'A deliberate reorganization carries the currently edited details');
+{
+ const h=harness();
+ h.elements.minutesTranscriptText.value='Meeting date: October 15, 2026\nMeeting type: Special Communication\nOpening time: 7:30 PM\nQuorum: Yes';
+ h.elements.minutesIntakeOpeningTime.value='8:00 PM';
+ await h.elements.minutesPrefillDetails.emit('click');
+ const values=h.context.collect('minutesIntake');
+ assert.equal(values.openingTime,'8:00 PM','Pasted details never overwrite a value the officer already entered');
+ assert.equal(values.meetingType,'Special Communication');
+ assert.equal(values.meetingDate,'2026-10-15');
+ assert.equal(values.quorum,'Yes');
+ assert.equal(h.calls.length,0,'Prefill does not send the notes or generate anything');
+ assert.match(h.elements.minutesPrefillMessage.textContent,/Check the entries/);
+ h.elements.minutesTranscriptFile.files=[{name:'another-source.docx'}];
+ h.elements.minutesIntakeQuorum.value='';
+ await h.elements.minutesPrefillDetails.emit('click');
+ assert.equal(h.elements.minutesIntakeQuorum.value,'','The uploaded file takes precedence over the pasted notes');
+ assert.match(h.elements.minutesPrefillMessage.textContent,/A file is selected/);
+}
 const prepSource = app.slice(app.indexOf('const canAttestMinutesDraft'), app.indexOf('const refreshMinutesPrepChecklist'));
 const prepare = vm.runInNewContext(`${prepSource}\nminutesPreparationIssues`, { minutesMeetingDetails, minutesAttendanceIssues: () => [] });
 assert.equal(prepare({...details, openingTime: '', closingPrayerGiven: false}).details.length, 1);

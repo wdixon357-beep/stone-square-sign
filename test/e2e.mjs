@@ -471,9 +471,11 @@ try {
 
   const handoffForm = new FormData();
   handoffForm.append('sourceType', 'transcript');
-  handoffForm.append('transcriptText', 'WM Dixon-Saunders opened Stone Square Lodge No. 22 in due form. '
-    + 'The officers recorded attendance, sickness and distress, correspondence, committee reports, old business, new business, and the closing time. '
-    + 'This synthetic transcript verifies the private Secretary Office handoff and claim workflow.');
+  // Multipart text fields use CRLF on the wire. Verify the stored line endings.
+  const handoffText = 'WM Dixon-Saunders opened Stone Square Lodge No. 22 in due form.\r\n\r\n'
+    + 'The officers recorded attendance, sickness and distress, correspondence, committee reports, old business, new business, and the closing time.\r\n'
+    + 'This synthetic transcript verifies the private Secretary’s Office handoff and claim workflow.';
+  handoffForm.append('transcriptText', handoffText);
   const mailBeforeHandoff = deliveredMail.length;
   const handedOffMinutes = await api('POST', '/api/minutes/handoff', {
     token: wmToken, body: handoffForm, raw: true,
@@ -490,6 +492,22 @@ try {
     && handoffNotices.some(message => /adrianreese22@example\.org/i.test(message)),
   `${handoffNotices.length} handoff notices delivered`);
   const handoffId = handedOffMinutes.payload.minutes?.id;
+  const handoffSourceRoute = `/api/minutes/${handoffId}/source`;
+  const [ownerHandoffSource, secretaryUnclaimedSource, assistantUnclaimedSource, anonymousSource] = await Promise.all([
+    api('GET', handoffSourceRoute, { token: wmToken }),
+    api('GET', handoffSourceRoute, { token: secToken }),
+    api('GET', handoffSourceRoute, { token: asstToken }),
+    api('GET', handoffSourceRoute),
+  ]);
+  check('the owner reads exactly the retained handoff text, with private no-store caching',
+    ownerHandoffSource.status === 200
+      && ownerHandoffSource.headers.get('cache-control') === 'private, no-store'
+      && JSON.stringify(ownerHandoffSource.payload) === JSON.stringify({
+        sourceName: 'Pasted transcript', sourceType: 'transcript', sourceText: handoffText,
+      }));
+  check('the unclaimed source remains private to the owner and requires authentication',
+    secretaryUnclaimedSource.status === 404 && assistantUnclaimedSource.status === 404 && anonymousSource.status === 401
+      && [secretaryUnclaimedSource, assistantUnclaimedSource, anonymousSource].every(result => !('sourceText' in result.payload)));
   const [handoffForSecretary, handoffForAssistant, handoffForFinalReader] = await Promise.all([
     api('GET', '/api/minutes', { token: secToken }),
     api('GET', '/api/minutes', { token: asstToken }),
@@ -518,6 +536,29 @@ try {
   const winningToken = winningClaimIndex === 0 ? secToken : asstToken;
   const losingToken = losingClaimIndex === 0 ? secToken : asstToken;
   const claimedDraft = claims[winningClaimIndex].payload.minutes;
+  const [claimantSource, unrelatedSource, readerSource, ownerClaimedSource] = await Promise.all([
+    api('GET', handoffSourceRoute, { token: winningToken }),
+    api('GET', handoffSourceRoute, { token: losingToken }),
+    api('GET', handoffSourceRoute, { token: officerToken }),
+    api('GET', handoffSourceRoute, { token: wmToken }),
+  ]);
+  check('only the actual preparer and owner can read the claimed source',
+    claimantSource.status === 200 && claimantSource.payload.sourceText === handoffText
+      && ownerClaimedSource.status === 200 && ownerClaimedSource.payload.sourceText === handoffText
+      && unrelatedSource.status === 404 && readerSource.status === 403
+      && !('sourceText' in unrelatedSource.payload) && !('sourceText' in readerSource.payload));
+  const museAccess = await api('PUT', '/api/assistant/access', { token: wmToken, body: {
+    name: 'Source test assistant', permissions: ['minutes.view'], enabled: true, expiresInDays: 7,
+  } });
+  const museIssued = await api('POST', '/api/assistant/access/token', { token: wmToken, body: {} });
+  const [museList, museSource] = await Promise.all([
+    api('GET', '/api/minutes', { token: museIssued.payload.token }),
+    api('GET', handoffSourceRoute, { token: museIssued.payload.token }),
+  ]);
+  check('even a valid assistant credential with minutes.view cannot read the retained source',
+    museAccess.status === 200 && museIssued.status === 200 && museList.status === 200
+      && museSource.status === 403 && !('sourceText' in museSource.payload));
+  await api('DELETE', '/api/assistant/access', { token: wmToken });
   const winnerPreview = await api('POST', `/api/minutes/${handoffId}/preview`, { token: winningToken, body: { draft: claimedDraft.draft } });
   const loserPreview = await api('POST', `/api/minutes/${handoffId}/preview`, { token: losingToken, body: { draft: claimedDraft.draft } });
   check('only the claiming Secretary can open the unfinished draft', winnerPreview.status === 200 && loserPreview.status === 404);
@@ -528,12 +569,20 @@ try {
     JSON.stringify(handoffActions));
   const deleteClaimedHandoff = await api('DELETE', `/api/minutes/${handoffId}`, { token: wmToken });
   check('the Worshipful Master can remove a claimed unsigned handoff during testing', deleteClaimedHandoff.status === 200);
+  check('the deleted record no longer exposes retained source to the owner or its preparer',
+    (await api('GET', handoffSourceRoute, { token: wmToken })).status === 404
+      && (await api('GET', handoffSourceRoute, { token: winningToken })).status === 404);
 
   const shortHandoffForm = new FormData();
   shortHandoffForm.append('sourceType', 'compiled_notes');
   shortHandoffForm.append('transcriptText', 'Too short to generate reliable minutes.');
   const shortHandoff = await api('POST', '/api/minutes/handoff', { token: wmToken, body: shortHandoffForm, raw: true });
   const shortHandoffId = shortHandoff.payload.minutes?.id;
+  const compiledNotesSource = await api('GET', `/api/minutes/${shortHandoffId}/source`, { token: wmToken });
+  check('compiled notes retain their source label, type, and exact text',
+    compiledNotesSource.status === 200 && compiledNotesSource.payload.sourceType === 'compiled_notes'
+      && compiledNotesSource.payload.sourceName === 'Pasted meeting notes'
+      && compiledNotesSource.payload.sourceText === 'Too short to generate reliable minutes.');
   const failedClaim = await api('POST', `/api/minutes/${shortHandoffId}/claim`, { token: secToken, body:{meetingDetails:enteredMinutesDetails} });
   const afterFailedClaim = await api('GET', '/api/minutes', { token: asstToken });
   const releasedSource = afterFailedClaim.payload.minutes?.find(item => item.id === shortHandoffId);
@@ -773,6 +822,9 @@ try {
     officerEvents.includes('event: minutes_records_changed') && officerEvents.includes('"reason":"published"'));
   const minutesForOfficerAfterSigning = await api('GET', '/api/minutes', { token: officerToken });
   const signedPdfForOfficer = await api('GET', `/api/minutes/${minutesId}/pdf`, { token: officerToken });
+  check('publication leaves the signed PDF available while excluding the original from the working-source reader',
+    (await api('GET', `/api/minutes/${minutesId}/source`, { token: wmToken })).status === 404
+      && (await api('GET', `/api/minutes/${minutesId}/source`, { token: asstToken })).status === 404);
   const publishedRecord = minutesForOfficerAfterSigning.payload.minutes.find(item => item.id === minutesId);
   check('the signed PDF appears for a final records officer without another upload or distribution step',
     minutesForOfficerAfterSigning.status === 200 && publishedRecord?.status === 'ready_for_distribution'

@@ -348,6 +348,18 @@
               <div class="panel-title"><div><p class="eyebrow">NEW DRAFT</p><h2>Add your meeting source</h2></div><span class="file-badge">TXT DOCX PDF</span></div>
               <p class="helper">Use compiled meeting notes or a corrected Plaud transcript. The Worshipful Master can send the source to Adrian Reese and William McDuffie without creating the draft. Either Secretary may then claim it, and the other cannot duplicate the work.</p>
               <p id="minutesGenerationStatus" class="helper generation-status" role="status"></p>
+              <p class="helper">Include the roll call or sign-in list, any officers covering a station, and whether the Chaplain gave the closing prayer. If the notes omit them, keep the draft open for follow-up.</p>
+              <label for="minutesSourceType">Source format</label><select id="minutesSourceType"><option value="auto">Detect automatically</option><option value="compiled_notes">Compiled meeting notes</option><option value="transcript">Meeting transcript</option></select>
+              <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose meeting notes or a transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
+              <input id="minutesTranscriptFile" class="visually-hidden" type="file" accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+              <p id="minutesSelectedFile" class="selected-file">No file selected</p>
+              <label for="minutesTranscriptText">Or paste your meeting notes or transcript</label>
+              <textarea id="minutesTranscriptText" rows="8" placeholder="Paste compiled notes or a corrected transcript here"></textarea>
+              <div class="minutes-source-prefill">
+                <button id="minutesPrefillDetails" class="secondary small" type="button">Fill blank details from pasted notes</button>
+                <p class="helper">Use one labeled detail per line, such as “Meeting date: November 5, 2026” or “Opening time: 7:30 PM.” Review the filled fields before creating the draft.</p>
+                <p id="minutesPrefillMessage" class="message" role="status"></p>
+              </div>
               <section class="minutes-intake-details" aria-labelledby="minutesIntakeTitle">
                 <h3 id="minutesIntakeTitle">Enter the meeting details</h3>
                 <p>Complete all eight details before creating the draft. Your entries carry into the draft and preview.<span class="owner-only"> You can still hand off source material without filling them in.</span></p>
@@ -363,12 +375,6 @@
                 <div><label for="minutesIntakeNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesIntakeNextMeeting" type="text" placeholder="Choose or enter the next meeting date" autocomplete="off" /><input id="minutesIntakeNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
               </div>
               </section>
-              <label for="minutesSourceType">Source format</label><select id="minutesSourceType"><option value="auto">Detect automatically</option><option value="compiled_notes">Compiled meeting notes</option><option value="transcript">Meeting transcript</option></select>
-              <label class="drop-zone" for="minutesTranscriptFile"><strong>Choose meeting notes or a transcript</strong><span>TXT, DOCX, or PDF, up to 12 MB</span></label>
-              <input id="minutesTranscriptFile" class="visually-hidden" type="file" accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
-              <p id="minutesSelectedFile" class="selected-file">No file selected</p>
-              <label for="minutesTranscriptText">Or paste your meeting notes or transcript</label>
-              <textarea id="minutesTranscriptText" rows="8" placeholder="Paste compiled notes or a corrected transcript here"></textarea>
               <div class="builder-actions"><p id="minutesMessage" class="message" role="status"></p><div class="button-row"><button id="handoffMinutes" class="secondary owner-only" type="button">Send to Adrian and McDuffie</button><button id="generateMinutes" class="primary" type="button">Create draft minutes</button></div></div>
             </section>
 
@@ -593,6 +599,12 @@
             </ul>
             <button id="minutesPrepGoToAttest" class="secondary small hidden" type="button">Go to attestation</button>
           </section>
+          <details id="minutesSavedSource" class="minutes-saved-source hidden">
+            <summary>Check the saved notes or transcript</summary>
+            <p class="helper">The Dashboard keeps this text separately from the draft. Line numbers match the source references in the review notes.</p>
+            <p id="minutesSavedSourceStatus" class="message" role="status"></p>
+            <pre id="minutesSavedSourceText" class="hidden" tabindex="0" aria-label="Numbered meeting source text"></pre>
+          </details>
             <section id="minutesMasterChanges" class="minutes-master-changes hidden"></section>
             <div id="minutesReviewWarnings" class="minutes-review-warning hidden"></div>
           <form id="minutesEditorForm" class="minutes-editor-form">

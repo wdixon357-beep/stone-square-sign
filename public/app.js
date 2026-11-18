@@ -777,7 +777,8 @@ const refreshSessionPermissions = async () => {
     buildingCalendarWorkspace?.refreshPermissions();
     if (can('documents.status')) void renderDocuments();
     if (!can('documents.sign')) hide($('signModal'));
-    if (!can('minutes.prepare')) {
+    if (!can('minutes.prepare') || !can('minutes.view')) {
+      clearMinutesSavedSource();
       hide($('minutesEditorModal'));
       hide($('minutesClaimModal'));
     }
@@ -793,6 +794,7 @@ const refreshSessionPermissions = async () => {
       if (typeof assistantWorkspace !== 'undefined') assistantWorkspace?.dispose();
       signatureAuthorization?.dispose();
       clearMemberAccessInvite();
+      clearMinutesSavedSource();
       hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
       setMessage(authMessage, 'Your session is no longer authorized. Sign in again to continue.', true);
     }
@@ -2437,11 +2439,51 @@ const updateMinutesEditorControls = (item) => {
   updateMinutesAttendancePresentation(item);
 };
 
+const canReadMinutesSavedSource = item => Boolean(item?.sourceName) && can('minutes.view') && can('minutes.prepare')
+  && ['draft', 'awaiting_master_attestation'].includes(item.status)
+  && (state.user.role === 'owner' || (item.preparerUserId ?? item.createdByUserId) === state.user.id);
+
+let minutesSavedSourceRequest = null;
+const clearMinutesSavedSource = () => {
+  minutesSavedSourceRequest = null;
+  $('minutesSavedSource').open = false;
+  hide($('minutesSavedSource'));
+  $('minutesSavedSourceText').textContent = '';
+  hide($('minutesSavedSourceText'));
+  setMessage($('minutesSavedSourceStatus'), '');
+};
+
+$('minutesSavedSource').addEventListener('toggle', async () => {
+  const panel = $('minutesSavedSource');
+  const item = currentMinutes();
+  if (!panel.open || minutesSavedSourceRequest || !canReadMinutesSavedSource(item)) return;
+  const request = { id: item.id, userId: state.user.id, epoch: state.authEpoch };
+  minutesSavedSourceRequest = request;
+  const isCurrent = () => minutesSavedSourceRequest === request && state.editingMinutesId === request.id
+    && state.user?.id === request.userId && state.authEpoch === request.epoch && canReadMinutesSavedSource(currentMinutes());
+  setMessage($('minutesSavedSourceStatus'), 'Loading the saved source…');
+  try {
+    const { sourceName, sourceText } = await apiFetch(`/api/minutes/${encodeURIComponent(item.id)}/source`, { cache: 'no-store' });
+    if (!isCurrent()) return;
+    if (typeof sourceText !== 'string' || !sourceText.trim()) throw new Error('Saved meeting source not found.');
+    // Generation trims exterior whitespace before numbering the same text.
+    $('minutesSavedSourceText').textContent = sourceText.trim().split('\n').map((line, index) => `${index + 1}  ${line}`).join('\n');
+    show($('minutesSavedSourceText'));
+    setMessage($('minutesSavedSourceStatus'), sourceName || 'Saved meeting source');
+  } catch (error) {
+    if (!isCurrent()) return;
+    minutesSavedSourceRequest = null;
+    setMessage($('minutesSavedSourceStatus'), `${error.message} Close and reopen this section to try again.`, true);
+  }
+});
+
 const openMinutesEditor = (id) => {
   if (!can('minutes.prepare')) return;
   setMinutesView(false);
   const item = state.minutes.find((entry) => entry.id === id);
   if (!item) return;
+  clearMinutesSavedSource();
+  if (canReadMinutesSavedSource(item)) show($('minutesSavedSource'));
   state.editingMinutesId = id;
   state.editingMinutesUpdatedAt = item.updatedAt;
   state.minutesOfficerAttendanceEdited = false;
@@ -2538,6 +2580,7 @@ const minutesAction = async (path, body, message) => {
     });
     const finalMessage = [message, ...(result.notificationWarnings || [])].join(' ');
     if (path === 'master-attest') {
+      clearMinutesSavedSource();
       hide($('minutesEditorModal'));
       clearTimeout(minutesPreviewTimer); ++minutesPreviewRevision; state.editingMinutesId = null;
       state.minutesEditorDirty = false;
@@ -3016,7 +3059,7 @@ let minutesSourceBusy = false;
 let minutesClaimTarget = null;
 let minutesClaimOperation = null;
 let minutesClaimBusy = false;
-const minutesSourceControls = () => ['minutesTranscriptFile', 'minutesTranscriptText', 'minutesSourceType',
+const minutesSourceControls = () => ['minutesTranscriptFile', 'minutesTranscriptText', 'minutesSourceType', 'minutesPrefillDetails',
   ...minutesMeetingDetailFieldIds('minutesIntake'), 'minutesIntakeMeetingDateCalendar', 'minutesIntakeNextMeetingCalendar'].map(id => $(id));
 const minutesClaimControls = () => [...$('minutesClaimForm').querySelectorAll('input, select, button'), $('closeMinutesClaim')];
 const resetMinutesPreparationContext = () => {
@@ -3045,6 +3088,7 @@ const resetMinutesPreparationContext = () => {
   $('minutesTranscriptFile').value = '';
   $('minutesSelectedFile').textContent = 'No file selected';
   $('minutesSourceType').value = 'auto';
+  setMessage($('minutesPrefillMessage'), '');
   state.minutesSourceDirty = false;
   clearMinutesMeetingDetails('minutesIntake');
   clearMinutesMeetingDetails('minutesClaim');
@@ -3089,6 +3133,7 @@ const submitMinutesSource = async ({ handoff = false } = {}) => {
     $('minutesTranscriptFile').value = '';
     $('minutesSelectedFile').textContent = 'No file selected';
     $('minutesTranscriptText').value = '';
+    setMessage($('minutesPrefillMessage'), '');
     clearMinutesMeetingDetails('minutesIntake');
     state.minutesSourceDirty = false;
     clearSessionDraft('minutes-source');
@@ -3185,12 +3230,41 @@ $('minutesClaimForm').addEventListener('submit', async event => {
   }
 });
 
+$('minutesPrefillDetails').addEventListener('click', () => {
+  if (!can('minutes.prepare') || minutesSourceBusy) return;
+  const message = $('minutesPrefillMessage');
+  if ($('minutesTranscriptFile').files[0]) {
+    setMessage(message, 'A file is selected as the source. Enter its meeting details below.', true);
+    return;
+  }
+  const suggestions = minutesMeetingDetails.suggestMinutesDetailsFromNotes($('minutesTranscriptText').value);
+  let filled = 0;
+  for (const [key, value] of Object.entries(suggestions)) {
+    const field = $(`minutesIntake${key[0].toUpperCase()}${key.slice(1)}`);
+    if (field.value.trim()) continue;
+    if (key === 'meetingType' && value.toLowerCase() !== 'stated communication') {
+      field.value = 'other';
+      $('minutesIntakeMeetingTypeOther').value = value;
+    } else field.value = key === 'meetingType' ? 'Stated Communication' : value;
+    filled += 1;
+  }
+  if (!filled) {
+    setMessage(message, 'No blank fields could be filled from clear labels in the pasted notes. Enter or check the details below.');
+    return;
+  }
+  reflectMinutesMeetingDetails('minutesIntake');
+  state.minutesSourceDirty = true;
+  writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS);
+  setMessage(message, `Filled ${filled === 1 ? 'one blank detail' : `${filled} blank details`}. Check the entries below before creating the draft.`);
+});
+
 $('handoffMinutes').addEventListener('click', () => submitMinutesSource({ handoff: true }));
 $('generateMinutes').addEventListener('click', () => submitMinutesSource());
 
 const closeMinutesEditor = ({ confirmUnsaved = true } = {}) => {
   if (confirmUnsaved && state.minutesEditorDirty
       && !window.confirm('Exit and discard only your latest unsaved corrections? The uploaded transcript and last saved draft will remain available.')) return false;
+  clearMinutesSavedSource();
   hide($('minutesEditorModal'));
   clearTimeout(minutesPreviewTimer); ++minutesPreviewRevision; state.editingMinutesId = null;
   state.minutesEditorDirty = false;
@@ -3836,6 +3910,7 @@ $('resetSubmit').addEventListener('click', async () => {
 });
 
 $('logoutBtn').addEventListener('click', async () => {
+  clearMinutesSavedSource();
   legacyReportBridge.clear();
   assistantWorkspace?.dispose();
   signatureAuthorization?.dispose();
