@@ -50,6 +50,12 @@ try{
  assert.equal(workflow(initial,'owner.proposals-feedback').operations[0].access,'owner_approval');
  assert.equal(workflow(initial,'documents.sign').operations[0].access,'owner_signature_confirmation');
  assert.equal(workflow(initial,'candidates.edit').operations[0].access,'unavailable');
+ const reportBytes=Buffer.from('Synthetic Lodge report\r\nSecond line.');
+ const report={fieldname:'report',originalname:'minutes-é.txt',mimetype:'text/plain',data:reportBytes.toString('base64')};
+ const imported=value(await mcp('import_report_source',{file:report}));
+ assert.equal(imported.filename,report.originalname);
+ assert.equal(imported.source,'Synthetic Lodge report\nSecond line.');
+ assert.equal(imported.sha256,crypto.createHash('sha256').update(reportBytes).digest('hex'));
  const tracker=value(await mcp('request_action',{actionId:'candidates.view',method:'POST',path:'/api/tracker/handoff',body:{},requestKey:'candidate-native-review'})).request;
  assert.equal(tracker.nativeReviewUrl,`stonesquaresign://muse/review/${tracker.id}`);
  assert.equal(tracker.navigation.section,'candidateTracker');
@@ -117,7 +123,7 @@ try{
  const feedbackAudit=(await api('/api/admin/activity',{token:owner})).data.events.find(item=>item.action==='proposal_changes_requested');
  assert.equal(feedbackAudit.actorType,'assistant');
  assert.equal(feedbackAudit.assistantRequestId,staged.id);
- console.log('PASS: real isolated MCP upload above 4 MiB, owner-only opt-in, stale-policy denial, exact bytes, protected download, truthful actor receipt and duplicate prevention.');
+ console.log('PASS: real isolated MCP report import and upload above 4 MiB, owner-only opt-in, stale-policy denial, exact bytes, protected download, truthful actor receipt and duplicate prevention.');
 }finally{
  const exited=once(server,'exit');server.kill();await exited;await rm(work,{recursive:true,force:true});
 }

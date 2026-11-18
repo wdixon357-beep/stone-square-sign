@@ -1,5 +1,9 @@
 import Foundation
 
+// The isolated APIClient harness does not include the SwiftUI Muse workspace.
+struct AssistantBuildingDecisionReview {}
+struct AssistantBuildingSubmissionReview {}
+
 final class SessionFixture: URLProtocol {
     static var status = 503
     static var offline = false

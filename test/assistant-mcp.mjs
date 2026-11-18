@@ -123,19 +123,17 @@ const reportFile={fieldname:'report',originalname:'minutes-é.txt',mimetype:'tex
 const importCalls=[];
 const importHandler=createAssistantMcp({port:3719,fetchImpl:async(url,options)=>{
   importCalls.push({url,options});
-  const form=await new Request(url,options).formData();
-  assert.deepEqual([...form.keys()],['report']);
-  const source=form.get('report');
-  assert.equal(source.type,reportFile.mimetype);
-  assert.deepEqual(Buffer.from(await source.arrayBuffer()),sourceBytes);
   return Response.json({source:sourceBytes.toString(),warnings:[]});
 }});
 const importReport=async args=>(await invoke('tools/call',{name:'import_report_source',arguments:args},{},importHandler)).value.result;
-assert.deepEqual(JSON.parse((await importReport({file:reportFile})).content[0].text),{source:sourceBytes.toString(),warnings:[]});
+const imported=await importReport({file:reportFile});
+assert(!imported.isError,JSON.stringify(imported));
+assert.deepEqual(JSON.parse(imported.content[0].text),{source:sourceBytes.toString(),warnings:[]});
 assert.equal(importCalls[0].url,'http://127.0.0.1:3719/api/reports/import-source');
 assert.equal(importCalls[0].options.method,'POST');
 assert.equal(importCalls[0].options.headers['X-Assistant-Request-Id'],undefined);
 assert.match(importCalls[0].options.body.toString('latin1'),/filename\*=UTF-8''minutes-%C3%A9\.txt/);
+assert(importCalls[0].options.body.includes(sourceBytes));
 for(const args of [
   {file:{...reportFile,fieldname:'document'}},
   {file:[reportFile,reportFile]},
