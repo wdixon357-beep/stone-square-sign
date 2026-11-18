@@ -185,7 +185,7 @@ struct BuildingRequestsView: View {
                             LabeledContent("Status", value: request.statusLabel)
                             LabeledContent("Date", value: LodgeCalendarDates.displayDate(request.date))
                             if request.statusOnly != true {
-                            LabeledContent("Time", value: [LodgeCalendarDates.displayTime(request.start), LodgeCalendarDates.displayTime(request.end)].filter { !$0.isEmpty }.joined(separator: " to "))
+                            LabeledContent("Time (Eastern)", value: [LodgeCalendarDates.displayTime(request.start), LodgeCalendarDates.displayTime(request.end)].filter { !$0.isEmpty }.joined(separator: " to "))
                             LabeledContent("Requested spaces", value: request.spaces.joined(separator: ", "))
                             if request.spaces == ["Front yard"] { LabeledContent("Restroom access", value: request.bathroomAccess == true ? "Yes" : "No") }
                             LabeledContent("Contact", value: [request.contactName, request.contact].filter { !$0.isEmpty }.joined(separator: " · "))
@@ -210,7 +210,7 @@ struct BuildingRequestsView: View {
                         if let person = request.decidedBy, !person.isEmpty { LabeledContent("Decision recorded by", value: person) }
                         if let attestedBy = request.attestedBy { LabeledContent("Attested by", value: "\(attestedBy.name), \(attestedBy.title)") }
                         if let filedAt = request.filedCompletedAt {
-                            LabeledContent("Filed as completed", value: filedAt)
+                            LabeledContent("Filed as completed", value: LodgeDateTime.display(filedAt))
                             if let filedBy = request.filedCompletedBy { LabeledContent("Filed by", value: filedBy) }
                         }
                         if request.status == "pending", workspace.canDecide, model.user?.can("building.decide") == true {
@@ -219,6 +219,7 @@ struct BuildingRequestsView: View {
                                 if note.count > 3000 { Text("Keep the note within 3,000 characters.").font(.caption) }
                                 if request.ownerOnly == true {
                                     DatePicker("Authorization date", selection: $authorizationDate, displayedComponents: .date)
+                                        .environment(\.timeZone, LodgeDateTime.timeZone)
                                     TextField("Minutes or resolution reference", text: $authorizationRecord)
                                     TextField("Approved fee", text: $approvedFee)
                                     Picker("Insurance", selection: $insuranceDecision) { Text("Choose").tag(""); Text("Required").tag("required"); Text("Waived").tag("waived") }
@@ -347,20 +348,13 @@ private struct BuildingAgreementRecordView: View {
                             if let ink = signature.ink { Image(nsImage: ink).resizable().scaledToFit().frame(maxWidth: 340, maxHeight: 100).accessibilityLabel("Saved handwritten signature of \(signature.name)") }
                             Text(signature.name).bold()
                             if !signature.title.isEmpty { Text(signature.title) }
-                            Text(Self.timestamp(signature.at)).font(.callout).foregroundStyle(.secondary)
+                            Text(LodgeDateTime.display(signature.at)).font(.callout).foregroundStyle(.secondary)
                         }.padding(.vertical, 8)
                     }
                     if agreement.status != "fully_executed" { Text("This agreement is still awaiting completion. Only signatures already saved are shown.").font(.callout).foregroundStyle(.secondary) }
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
             }
         }.frame(minWidth: 480, idealWidth: 720, minHeight: 480, idealHeight: 680)
-    }
-    private static func timestamp(_ value: String) -> String {
-        let parser = ISO8601DateFormatter(); parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fallback = ISO8601DateFormatter()
-        guard let date = parser.date(from: value) ?? fallback.date(from: value) else { return value }
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US"); formatter.timeZone = TimeZone(identifier: "America/New_York"); formatter.dateStyle = .long; formatter.timeStyle = .short
-        return formatter.string(from: date) + " Eastern Time"
     }
 }
 
@@ -373,7 +367,7 @@ struct LodgeCalendarEvent: Codable, Identifiable {
     let source: String; let editable: Bool; let sourceUrl: String?
     var revision: String? = nil
     func includes(day: String) -> Bool { startDate <= day && (endDate.isEmpty ? startDate : endDate) >= day }
-    var timeLabel: String { allDay ? "All day" : [startTime, endTime].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " to ") }
+    var timeLabel: String { allDay ? "All day" : [startTime, endTime].map(LodgeDateTime.displayClock).filter { !$0.isEmpty }.joined(separator: " to ") }
 }
 struct LodgeCalendarResponse: Decodable { let events: [LodgeCalendarEvent]; let warnings: [String]; let timezone: String }
 struct LodgeEventDraft: Encodable, Equatable {
@@ -388,15 +382,27 @@ struct LodgeEventDraft: Encodable, Equatable {
         status = event.status; source = event.source; sourceUrl = event.sourceUrl ?? ""
     }
     var valid: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= 200 && location.count <= 500 && description.count <= 10000 && sourceUrl.count <= 2000
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= 200 && location.count <= 500 && description.count <= 10000 && sourceUrl.count <= 2000
             && ["lodge", "jurisdiction", "community"].contains(category) && ["scheduled", "tentative", "cancelled"].contains(status)
-            && LodgeCalendarDates.valid(startDate) && LodgeCalendarDates.valid(endDate) && endDate >= startDate
-            && (allDay || (endTime.isEmpty || !startTime.isEmpty) && (startDate != endDate || startTime.isEmpty || endTime.isEmpty || endTime > startTime))
-            && (allDay || [startTime, endTime].allSatisfy { $0.isEmpty || $0.range(of: #"^([01][0-9]|2[0-3]):[0-5][0-9]$"#, options: .regularExpression) != nil })
+            && LodgeCalendarDates.valid(startDate) && LodgeCalendarDates.valid(endDate) && endDate >= startDate else { return false }
+        if allDay { return true }
+        guard let start = calendarTime(startTime), let end = calendarTime(endTime), end.isEmpty || !start.isEmpty else { return false }
+        return startDate != endDate || end.isEmpty || end > start
+    }
+
+    private func calendarTime(_ value: String) -> String? {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : LodgeDateTime.canonicalClock(value)
+    }
+
+    var normalized: Self {
+        var result = self
+        result.startTime = allDay ? "" : calendarTime(startTime) ?? ""
+        result.endTime = allDay ? "" : calendarTime(endTime) ?? ""
+        return result
     }
 }
 enum LodgeCalendarDates {
-    static var calendar: Calendar { var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "America/New_York")!; return calendar }
+    static var calendar: Calendar { var calendar = Calendar(identifier: .gregorian); calendar.timeZone = LodgeDateTime.timeZone; return calendar }
     static func key(_ date: Date) -> String { let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = calendar.timeZone; formatter.dateFormat = "yyyy-MM-dd"; return formatter.string(from: date) }
     static func valid(_ value: String) -> Bool { let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = calendar.timeZone; formatter.dateFormat = "yyyy-MM-dd"; formatter.isLenient = false; guard value.count == 10, let date = formatter.date(from: value) else { return false }; return key(date) == value }
     static func range(_ date: Date) -> (String, String) { let interval = calendar.dateInterval(of: .month, for: date)!; return (key(interval.start), key(calendar.date(byAdding: .day, value: -1, to: interval.end)!)) }
@@ -406,14 +412,7 @@ enum LodgeCalendarDates {
         let output = DateFormatter(); output.locale = Locale(identifier: "en_US"); output.timeZone = calendar.timeZone; output.dateFormat = "MMM d, yyyy"
         return output.string(from: date)
     }
-    static func displayTime(_ value: String?) -> String {
-        guard let value, !value.isEmpty else { return "" }
-        if value == "24:00" { return "12:00 AM (next day)" }
-        let input = DateFormatter(); input.locale = Locale(identifier: "en_US_POSIX"); input.timeZone = calendar.timeZone; input.dateFormat = "HH:mm"; input.isLenient = false
-        guard let date = input.date(from: value) else { return value }
-        let output = DateFormatter(); output.locale = Locale(identifier: "en_US"); output.timeZone = calendar.timeZone; output.dateFormat = "h:mm a"
-        return output.string(from: date)
-    }
+    static func displayTime(_ value: String?) -> String { LodgeDateTime.displayClock(value) }
 }
 private struct CalendarMutationResponse: Decodable { let ok: Bool? }
 
@@ -441,9 +440,7 @@ private struct CalendarMutationResponse: Decodable { let ok: Bool? }
         guard !busy, draft.valid, model.user?.can("calendar.manage") == true, event == nil || event?.editable == true else { return false }
         busy = true; defer { busy = false }
         do {
-            var body = draft
-            if body.allDay { body.startTime = ""; body.endTime = "" }
-            let _: CalendarMutationResponse = try await model.request(event.map { "/api/lodge-calendar/\(routeID($0.id))" } ?? "/api/lodge-calendar", method: event == nil ? "POST" : "PUT", body: JSONEncoder().encode(body))
+            let _: CalendarMutationResponse = try await model.request(event.map { "/api/lodge-calendar/\(routeID($0.id))" } ?? "/api/lodge-calendar", method: event == nil ? "POST" : "PUT", body: JSONEncoder().encode(draft.normalized))
             let refreshed = await load(date: date, using: model)
             message = refreshed ? "Event saved." : "Event saved. Refresh the calendar to see the latest events."
             return true
@@ -502,7 +499,7 @@ struct LodgeCalendarView: View {
                 List(visible, selection: $selectedID) { event in
                     VStack(alignment: .leading, spacing: 5) {
                         Text(event.title).font(.headline)
-                        Text([LodgeCalendarDates.displayDate(event.startDate), event.allDay ? "All day" : [LodgeCalendarDates.displayTime(event.startTime), LodgeCalendarDates.displayTime(event.endTime)].filter { !$0.isEmpty }.joined(separator: " to ")].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                        Text([LodgeCalendarDates.displayDate(event.startDate), event.timeLabel].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                         Text(event.category.capitalized).font(.caption2).foregroundStyle(.secondary)
                     }.padding(.vertical, 6).tag(event.id)
                 }
@@ -581,8 +578,8 @@ private struct LodgeCalendarEditor: View {
                 Text("For one-day events, use the same start and end date.").font(.caption).foregroundStyle(.secondary)
                 Toggle("All day", isOn: $draft.allDay).toggleStyle(.checkbox)
                 if !draft.allDay {
-                    TextField("Start time (HH:MM, optional)", text: $draft.startTime)
-                    TextField("End time (HH:MM, optional)", text: $draft.endTime)
+                    LodgeClockField(title: "Start time (optional)", value: $draft.startTime)
+                    LodgeClockField(title: "End time (optional)", value: $draft.endTime)
                 }
                 TextField("Location", text: $draft.location)
                 Picker("Category", selection: $draft.category) { ForEach(["lodge", "jurisdiction", "community"], id: \.self) { Text($0.capitalized).tag($0) } }
@@ -611,30 +608,27 @@ private struct LodgeCalendarEditor: View {
     }
 }
 
-struct BuildingBooking: Codable, Equatable, Identifiable {
+struct BuildingBooking: Encodable, Equatable, Identifiable {
     var id = UUID()
     var date = LodgeCalendarDates.key(Date())
     var start = "09:00"
     var end = "10:00"
     var dateSelection: Date {
-        get { Self.formatter("yyyy-MM-dd").date(from: date) ?? Date() }
+        get { LodgeDateTime.formatter("yyyy-MM-dd").date(from: date) ?? Date() }
         set { date = LodgeCalendarDates.key(newValue) }
     }
-    var startSelection: Date {
-        get { Self.formatter("yyyy-MM-dd HH:mm").date(from: "2000-01-01 " + start)! }
-        set { start = Self.formatter("HH:mm").string(from: newValue) }
-    }
-    var endSelection: Date {
-        get { Self.formatter("yyyy-MM-dd HH:mm").date(from: "2000-01-01 " + end)! }
-        set { end = Self.formatter("HH:mm").string(from: newValue) }
-    }
-    private static func formatter(_ format: String) -> DateFormatter {
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = LodgeCalendarDates.calendar.timeZone; formatter.dateFormat = format
-        return formatter
+    var canonicalTimes: (start: String, end: String)? {
+        guard let start = LodgeDateTime.canonicalClock(start), let end = LodgeDateTime.canonicalClock(end), end > start else { return nil }
+        return (start, end)
     }
     enum CodingKeys: String, CodingKey { case date, start, end }
-    var valid: Bool { LodgeCalendarDates.valid(date) && Self.validTime(start) && Self.validTime(end) && end > start }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(date, forKey: .date)
+        try values.encode(LodgeDateTime.canonicalClock(start) ?? start, forKey: .start)
+        try values.encode(LodgeDateTime.canonicalClock(end) ?? end, forKey: .end)
+    }
+    var valid: Bool { LodgeCalendarDates.valid(date) && canonicalTimes != nil }
     static func validTime(_ value: String) -> Bool { value.range(of: #"^([01][0-9]|2[0-3]):[0-5][0-9]$"#, options: .regularExpression) != nil }
 }
 struct NewBuildingRequestDraft: Encodable, Equatable {
@@ -647,7 +641,7 @@ struct NewBuildingRequestDraft: Encodable, Equatable {
     var submissionId = UUID().uuidString
     enum CodingKeys: String, CodingKey { case bookings, spaces, bathroomAccess, phone, details = "purpose", submissionId }
     var validationMessage: String? {
-        guard (1...12).contains(bookings.count), bookings.allSatisfy(\.valid) else { return "Enter 1 to 12 dates with valid start and end times. Use HH:MM in Eastern Time." }
+        guard (1...12).contains(bookings.count), bookings.allSatisfy(\.valid) else { return "Enter 1 to 12 dates with a start and end time in Eastern Time, such as 7:30 PM." }
         guard Set(bookings.map { $0.date }).count == bookings.count else { return "List each date only once." }
         guard bookings.allSatisfy({ $0.date >= LodgeCalendarDates.key(Date()) }) else { return "Choose today or an upcoming date." }
         guard phone.count <= 40, details.count <= 1000 else { return "Use no more than 40 characters for the phone number and 1,000 for event details." }
@@ -670,8 +664,8 @@ struct BuildingBusyEntry: Decodable, Identifiable {
     func overlaps(_ booking: BuildingBooking) -> Bool {
         guard active, date == booking.date else { return false }
         if allDay == true { return true }
-        guard knownTimes, let start, let end else { return false }
-        return start < booking.end && end > booking.start
+        guard knownTimes, let start, let end, let times = booking.canonicalTimes else { return false }
+        return start < times.end && end > times.start
     }
 }
 struct BuildingAvailabilityResponse: Decodable { let busy: [BuildingBusyEntry]; let warning: String? }
@@ -782,17 +776,17 @@ private struct NewBuildingRequestView: View {
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text("Start time").font(.caption).foregroundStyle(.secondary)
-                                    DatePicker("Start time", selection: $booking.startSelection, displayedComponents: .hourAndMinute).labelsHidden().datePickerStyle(.compact)
+                                    LodgeClockField(title: "Start time", value: $booking.start).textFieldStyle(.roundedBorder)
                                 }
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text("End time").font(.caption).foregroundStyle(.secondary)
-                                    DatePicker("End time", selection: $booking.endSelection, displayedComponents: .hourAndMinute).labelsHidden().datePickerStyle(.compact)
+                                    LodgeClockField(title: "End time", value: $booking.end).textFieldStyle(.roundedBorder)
                                 }
                                 Button { workspace.draft.bookings.removeAll { $0.id == booking.id } } label: { Image(systemName: "minus.circle") }.disabled(workspace.draft.bookings.count == 1).accessibilityLabel("Remove requested date")
                             }
                         }
                         Button("Add date") { workspace.draft.bookings.append(BuildingBooking()) }.disabled(workspace.draft.bookings.count >= 12)
-                        Text("Include setup and cleanup time. All dates and times are Eastern Time.").font(.caption).foregroundStyle(.secondary)
+                        Text("Include setup and cleanup time. Enter times in Eastern Time with AM or PM.").font(.caption).foregroundStyle(.secondary)
                     }
                     Section("Spaces") {
                         ForEach(NewBuildingRequestDraft.availableSpaces, id: \.self) { space in

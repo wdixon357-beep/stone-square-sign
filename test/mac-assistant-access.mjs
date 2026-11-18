@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process';
 
 const source = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/AssistantAccess.swift', import.meta.url), 'utf8');
 const viewSource = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/Views.swift', import.meta.url), 'utf8');
+const models = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/Models.swift', import.meta.url), 'utf8');
+const dateFormatting = models.slice(models.indexOf('enum LodgeDateTime'), models.indexOf('struct User:'));
 assert.match(source, /mode == "standing" \|\| mode == "approval"/);
 assert.match(source, /assistant\?\.enabled == true && request\.status == "pending" && \(request\.mode \?\? capabilities\.first\(where: \{ \$0\.id == request\.actionId \}\)\?\.mode\) == "approval"/);
 const reviewNavigation = viewSource.slice(viewSource.indexOf('private func openAssistantReview'), viewSource.indexOf('private var standardHeader'));
@@ -39,6 +41,7 @@ try {
   const swiftFile = path.join(scratch, 'assistant-tests.swift');
   const binary = path.join(scratch, 'assistant-tests');
   fs.writeFileSync(swiftFile, `${source.slice(0, source.indexOf('// MARK: - Native views'))}
+${dateFormatting}
 struct User { let id: Int; let role: String }
 @MainActor final class AppModel {
     var user: User? = User(id: 1, role: "owner")

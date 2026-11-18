@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import * as easternTime from '../public/eastern-time.js';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
@@ -54,7 +55,7 @@ assert.equal(dirtyContext.hasUnsavedWorkspaceForTest('correspondence'), true);
 assert.match(app, /beforeunload[\s\S]*hasUnsavedWorkspace\(state\.activeSection\)/);
 
 const dateSource = app.slice(app.indexOf('const formatDate ='), app.indexOf('/* An event date'));
-const dateContext = { Intl, Date, Number };
+const dateContext = { easternTime };
 vm.createContext(dateContext);
 vm.runInContext(`${dateSource}\nthis.formatDateForTest = formatDate;`, dateContext);
 assert.equal(dateContext.formatDateForTest(null), 'Date unavailable');

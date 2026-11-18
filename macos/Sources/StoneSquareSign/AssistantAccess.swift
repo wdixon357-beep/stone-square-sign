@@ -27,7 +27,27 @@ indirect enum AssistantJSON: Codable, Equatable {
     }
     var formatted: String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return (try? String(decoding: encoder.encode(self), as: UTF8.self)) ?? "Unavailable"
+        return (try? String(decoding: encoder.encode(displayValue()), as: UTF8.self)) ?? "Unavailable"
+    }
+
+    private func displayValue(key: String? = nil) -> AssistantJSON {
+        switch self {
+        case .object(let values):
+            return .object(Dictionary(uniqueKeysWithValues: values.map { ($0.key, $0.value.displayValue(key: $0.key)) }))
+        case .array(let values):
+            return .array(values.map { $0.displayValue(key: key) })
+        case .string(let value):
+            if value.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$"#, options: .regularExpression) != nil {
+                let time = LodgeDateTime.display(value, format: "EEE, MMM d, yyyy h:mm:ss.SSS a z", fallback: "Timestamp unavailable")
+                return .string(time)
+            }
+            let clockKeys = ["start", "end", "time", "starttime", "endtime", "eventtime", "openingtime", "closingtime", "scheduledtime"]
+            if let key, clockKeys.contains(key.lowercased().replacingOccurrences(of: "_", with: "")) {
+                return .string(LodgeDateTime.displayFreeFormClock(value))
+            }
+            return self
+        default: return self
+        }
     }
 }
 

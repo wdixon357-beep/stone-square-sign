@@ -154,6 +154,21 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         print("PASS: native finalized treasury ledger reads the signed submission instead of a working draft")
         precondition(LodgeDateTime.display("2026-06-15T21:01:00.000Z") == "Monday, June 15, 2026 at 5:01 PM EDT")
         precondition(LodgeDateTime.display("2026-12-15T21:01:00Z") == "Tuesday, December 15, 2026 at 4:01 PM EST")
+        precondition(LodgeDateTime.display("2026-11-02T02:30:00+01:00") == "Sunday, November 1, 2026 at 8:30 PM EST")
+        precondition(LodgeDateTime.display("invalid timestamp at 20:30") == "Not recorded")
+        let auditTimestamp = "2026-06-15T21:01:59.123Z"
+        let auditFields = AssistantJSON.object([
+            "receipt": .array([.object(["updatedAt": .string(auditTimestamp), "event_time": .string("18:30-20:30")])]),
+            "scheduledTime": .string("7:00 to 10:00 PM"),
+            "start": .string("7:00"),
+            "source": .string("The note gives 18:30 as the start.")
+        ])
+        precondition(auditFields.formatted.contains("5:01:59.123 PM EDT"))
+        precondition(auditFields.formatted.contains("6:30 PM to 8:30 PM"))
+        precondition(auditFields.formatted.contains("7:00 to 10:00 PM") && auditFields.formatted.contains("\"7:00\""))
+        precondition(auditFields.formatted.contains("The note gives 18:30 as the start."))
+        let unchangedAudit = try JSONEncoder().encode(auditFields)
+        precondition(String(decoding: unchangedAudit, as: UTF8.self).contains(auditTimestamp))
         print("PASS: native queue timestamps use readable Eastern dates and times")
         let alertConfig = URLSessionConfiguration.ephemeral
         alertConfig.protocolClasses = [GenerationFixture.self]
@@ -212,7 +227,10 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         let originalDeliveryIntent = model.deliveryIntent
         precondition(originalDeliveryIntent.flatMap(UUID.init(uuidString:)) != nil)
         model.configure(secureReportApp)
-        model.schema = ["officers": [["name": "QA Officer", "office": "Secretary"]], "types": ["officer": ["name": "Officer Report", "fields": [["id": "summary", "label": "Summary", "req": true]]]]]
+        model.schema = ["officers": [["name": "QA Officer", "office": "Secretary"]], "types": ["officer": ["name": "Officer Report", "fields": [["id": "summary", "label": "Summary", "req": true], ["id": "time", "label": "Start time", "kind": "time"]]]]]
+        model.fields["time"] = "7:30 PM"
+        precondition((model.payload()["fields"] as? [String: String])?["time"] == "19:30")
+        model.fields.removeValue(forKey: "time")
         await model.prepare(send: false)
         precondition(model.pdf == nil && model.error?.contains("Summary is required") == true)
         print("PASS: missing required content prevents preview")
@@ -760,6 +778,16 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         precondition(LodgeCalendarDates.displayDate("2026-09-19") == "Sep 19, 2026")
         precondition(LodgeCalendarDates.displayTime("19:30") == "7:30 PM")
         precondition(LodgeCalendarDates.displayTime(nil).isEmpty)
+        precondition(LodgeDateTime.displayClock("19:30–21:30") == "7:30 PM to 9:30 PM")
+        precondition(LodgeDateTime.displayClock("00:00 to 12:00") == "12:00 AM to 12:00 PM")
+        precondition(LodgeDateTime.displayClock("24:00") == "12:00 AM (next day)")
+        precondition(LodgeDateTime.displayClock("19:30:00") == "7:30 PM")
+        precondition(LodgeDateTime.displayClock("9:30") == "9:30 AM" && LodgeDateTime.canonicalClock("9:30") == nil)
+        precondition(LodgeDateTime.displayFreeFormClock("7:00 to 10:00 PM") == "7:00 to 10:00 PM")
+        precondition(LodgeDateTime.displayFreeFormClock("7:00") == "7:00" && LodgeDateTime.displayClock("7:00") == "7:00 AM")
+        precondition(LodgeDateTime.displayFreeFormClock("19:30 to 21:30") == "7:30 PM to 9:30 PM")
+        precondition(LodgeDateTime.canonicalClock("9:45 p.m.") == "21:45")
+        precondition(LodgeDateTime.canonicalClock("13:00 PM") == nil)
         print("PASS: calendar, building request and treasury list dates use consistent readable Eastern formatting")
         var proposalDraft = DispensationProposalDraft()
         precondition(!proposalDraft.isReady)
@@ -824,6 +852,14 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         precondition(LodgeCalendarDates.range(selectedDate) == ("2026-11-01", "2026-11-30"))
         precondition(!LodgeCalendarDates.valid("2026-02-30") && calendar.warnings.count == 1)
         let eventDraft = LodgeEventDraft(event)
+        var timedEvent = eventDraft
+        timedEvent.allDay = false
+        timedEvent.endDate = timedEvent.startDate
+        timedEvent.startTime = "11:30 AM"
+        timedEvent.endTime = "1:00 PM"
+        precondition(timedEvent.valid && timedEvent.normalized.startTime == "11:30" && timedEvent.normalized.endTime == "13:00")
+        timedEvent.endTime = "9:30 AM"
+        precondition(!timedEvent.valid)
         precondition(eventDraft.valid && eventDraft.status == "tentative" && eventDraft.revision == "3")
         let beforeViewOnlySave = GenerationFixture.requests.count
         let deniedCalendarSave = await calendar.save(eventDraft, event: event, date: selectedDate, using: reportApp)
@@ -850,15 +886,15 @@ struct MinutesSingleEnvelope: Encodable { let minutes: MinutesRecord; let notifi
         precondition(pickerBooking.start == "09:00" && pickerBooking.end == "10:00")
         pickerBooking.dateSelection = ISO8601DateFormatter().date(from: "2026-11-02T01:00:00Z")!
         precondition(pickerBooking.date == "2026-11-01")
-        pickerBooking.startSelection = ISO8601DateFormatter().date(from: "2000-01-01T14:30:00Z")!
-        precondition(pickerBooking.start == "09:30")
-        pickerBooking.endSelection = ISO8601DateFormatter().date(from: "2000-01-01T15:30:00Z")!
-        precondition(pickerBooking.end == "10:30" && pickerBooking.valid)
+        pickerBooking.start = "9:30 AM"
+        pickerBooking.end = "1:30 PM"
+        let encodedBooking = try JSONSerialization.jsonObject(with: JSONEncoder().encode(pickerBooking)) as? [String: String]
+        precondition(pickerBooking.valid && encodedBooking == ["date": "2026-11-01", "start": "09:30", "end": "13:30"])
         let newRequest = NewBuildingRequestWorkspace()
         let bookingToday = LodgeCalendarDates.calendar.startOfDay(for: Date())
         let bookingDay = LodgeCalendarDates.key(LodgeCalendarDates.calendar.date(byAdding: .day, value: 14, to: bookingToday)!)
         let pastBookingDay = LodgeCalendarDates.key(LodgeCalendarDates.calendar.date(byAdding: .day, value: -1, to: bookingToday)!)
-        newRequest.draft.bookings = [BuildingBooking(date: bookingDay, start: "13:00", end: "15:00")]
+        newRequest.draft.bookings = [BuildingBooking(date: bookingDay, start: "1:00 PM", end: "3:00 PM")]
         newRequest.draft.spaces = ["Lodge building", "Back yard"]
         newRequest.draft.phone = ""; newRequest.draft.details = "Synthetic Lodge event"
         precondition(newRequest.draft.validationMessage == nil && !newRequest.canSubmit)

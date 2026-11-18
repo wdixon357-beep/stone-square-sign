@@ -53,6 +53,9 @@ for(const prefix of ['minutesIntake','minutesClaim']) {
  assert.match(h.elements.minutesMessage.textContent,/Complete the meeting details/);
  h.fill('minutesIntake');h.elements.minutesIntakeClosingTime.value='945';await h.context.submit();assert.equal(h.calls.length,0,'An ambiguous clock never starts generation');
  assert.equal(h.elements.minutesIntakeOpeningTime.value,'7:30 PM');assert.equal(h.elements.minutesIntakeClosingTime.value,'945');
+ h.elements.minutesIntakeClosingTime.value='9:45';await h.context.submit();assert.equal(h.calls.length,0,'One-digit unqualified clocks remain ambiguous');
+ h.elements.minutesIntakeClosingTime.value='21:45';await h.elements.minutesIntakeClosingTime.emit('change');
+ assert.equal(h.elements.minutesIntakeClosingTime.value,'9:45 PM','An explicit legacy clock displays in AM/PM');
  h.elements.minutesIntakeClosingTime.value='9:45 PM';h.setFailure('Synthetic unavailable');await h.context.submit();assert.equal(h.calls.length,1);
  const sent=JSON.parse(h.calls[0].options.body.get('meetingDetails'));assert.deepEqual(sent,details);assert.equal(h.calls[0].options.body.get('transcriptText'),'Retained synthetic source');
  for(const [key,suffix]of Object.entries(suffixes)) assert.equal(h.elements[`minutesIntake${suffix}`].value,details[key],'A failed request retains each entered detail');

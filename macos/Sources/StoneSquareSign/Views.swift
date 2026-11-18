@@ -3,6 +3,32 @@ import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
 
+struct LodgeClockField: View {
+    let title: String
+    let preserveAmbiguous: Bool
+    @Binding var value: String
+    @FocusState private var focused: Bool
+    @State private var entry: String?
+
+    init(title: String, value: Binding<String>, preserveAmbiguous: Bool = false) {
+        self.title = title
+        self.preserveAmbiguous = preserveAmbiguous
+        _value = value
+    }
+
+    var body: some View {
+        TextField(title, text: Binding(get: {
+            if focused && entry == value { return value }
+            return preserveAmbiguous ? LodgeDateTime.displayFreeFormClock(value) : LodgeDateTime.displayClock(value)
+        }, set: { edited in
+            entry = edited
+            value = edited
+        }), prompt: Text("7:30 PM"))
+        .focused($focused)
+        .onChange(of: focused) { _, _ in entry = nil }
+    }
+}
+
 enum SignTheme {
     static let navy = Color(nsColor: .labelColor)
     static let blue = Color.accentColor
@@ -1829,33 +1855,10 @@ struct DispensationBuilderView: View {
     @Binding private var previewDocument: PDFDocument?
     @Binding private var step: Int
 
-    private static let dayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.dateFormat = "h:mm a"
-        return formatter
-    }()
-
-    private static let pastedTimeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
-
-    private static let displayDayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.dateFormat = "MMMM d, yyyy"
-        return formatter
-    }()
+    private static let dayFormatter = LodgeDateTime.formatter("yyyy-MM-dd")
+    private static let timeFormatter = LodgeDateTime.formatter("h:mm a")
+    private static let pastedTimeFormatter = LodgeDateTime.formatter("HH:mm")
+    private static let displayDayFormatter = LodgeDateTime.formatter("EEEE, MMMM d, yyyy")
 
     var body: some View {
         ScrollView {
@@ -1924,7 +1927,7 @@ struct DispensationBuilderView: View {
                         VStack(spacing: 0) {
                             ReviewField(label: "Title", value: title)
                             ReviewField(label: "Request", value: requestDetails)
-                            ReviewField(label: "Event", value: "\(Self.displayDayFormatter.string(from: eventDate)) at \(Self.timeFormatter.string(from: eventTime))")
+                            ReviewField(label: "Event", value: "\(Self.displayDayFormatter.string(from: eventDate)) at \(Self.timeFormatter.string(from: eventTime)) ET")
                             ReviewField(label: "Location", value: "\(locationName)\n\(streetAddress)\n\(cityState)")
                             ReviewField(label: "Send to", value: Self.signerLabel(for: signerChoice))
                             ReviewField(label: "Your address", value: worshipfulMasterAddress)
@@ -2096,9 +2099,7 @@ struct LandingDashboardView: View {
     }
 
     private var easternGreeting: String {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .current
-        let hour = calendar.component(.hour, from: Date())
+        let hour = LodgeCalendarDates.calendar.component(.hour, from: Date())
         if hour < 12 { return "Good Morning" }
         if hour < 17 { return "Good Afternoon" }
         return "Good Evening"
@@ -2560,14 +2561,7 @@ struct DispensationPasteReviewView: View {
     }
 
     private var humanEventTime: String {
-        let input = DateFormatter()
-        input.locale = Locale(identifier: "en_US_POSIX")
-        input.dateFormat = "HH:mm"
-        guard let date = input.date(from: result.fields.eventTime) else { return result.fields.eventTime }
-        let output = DateFormatter()
-        output.locale = Locale(identifier: "en_US")
-        output.dateFormat = "h:mm a"
-        return output.string(from: date)
+        LodgeDateTime.displayClock(result.fields.eventTime)
     }
 
     var body: some View {
@@ -3662,12 +3656,7 @@ struct MySettingsView: View {
     }
 
     private func displayDate(_ raw: String?) -> String {
-        guard let raw, !raw.isEmpty else { return "unavailable" }
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = parser.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
-        guard let date else { return "unavailable" }
-        return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
+        LodgeDateTime.display(raw, format: "MMM d, yyyy 'at' h:mm a z", fallback: "unavailable")
     }
 
     private func expirationDescription(_ raw: String?) -> String {
@@ -4203,10 +4192,7 @@ struct DuesView: View {
             let valid = format == .pdf ? data.starts(with: Data("%PDF-".utf8)) : data.starts(with: [0x50, 0x4b])
             guard valid else { throw ClientError.invalidResponse }
 
-            let stamp = DateFormatter()
-            stamp.locale = Locale(identifier: "en_US_POSIX")
-            stamp.timeZone = TimeZone(identifier: "America/New_York")
-            stamp.dateFormat = "yyyy-MM-dd_HH-mm-ssZ"
+            let stamp = LodgeDateTime.formatter("yyyy-MM-dd_h-mm-ss-a-z")
             let filename = "Stone-Square-Dues-Snapshot-\(stamp.string(from: Date())).\(format.rawValue)"
             let panel = NSSavePanel()
             panel.allowedContentTypes = [format.contentType]
@@ -4662,7 +4648,7 @@ struct ProposalReviewView: View {
                             Text("Proposed by \(proposal.proposerName)")
                                 .font(.subheadline).foregroundStyle(.secondary)
                             if let date = proposal.eventDate, !date.isEmpty {
-                                Text("Event date: \(LodgeCalendarDates.displayDate(date))\(proposal.eventTime.map { $0.isEmpty ? "" : ", \(LodgeCalendarDates.displayTime($0))" } ?? "")")
+                                Text("Event date: \(LodgeCalendarDates.displayDate(date))\(proposal.eventTime.map { $0.isEmpty ? "" : ", \(LodgeDateTime.displayFreeFormClock($0))" } ?? "")")
                                     .font(.subheadline)
                             }
                             if let place = proposal.locationName, !place.isEmpty {
@@ -4684,7 +4670,7 @@ struct ProposalReviewView: View {
                                     TextField("What it is", text: editBinding(proposal, "title", proposal.title))
                                     TextField("What is being asked", text: editBinding(proposal, "requestDetails", proposal.requestDetails), axis: .vertical).lineLimit(3...8)
                                     TextField("Event date, YYYY-MM-DD", text: editBinding(proposal, "eventDate", proposal.eventDate))
-                                    TextField("Time", text: editBinding(proposal, "eventTime", proposal.eventTime))
+                                    LodgeClockField(title: "Event time (Eastern)", value: editBinding(proposal, "eventTime", proposal.eventTime), preserveAmbiguous: true)
                                     TextField("Location", text: editBinding(proposal, "locationName", proposal.locationName))
                                     TextField("Street", text: editBinding(proposal, "streetAddress", proposal.streetAddress))
                                     TextField("City, state, and ZIP", text: editBinding(proposal, "cityState", proposal.cityState))

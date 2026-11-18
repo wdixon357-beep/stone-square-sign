@@ -23,7 +23,7 @@ struct MyDispensationProposalsView: View {
                         Text("Describe the activity and permission requested. Enter its date, time and venue below.").font(.caption).foregroundStyle(.secondary)
                         TextEditor(text: $draft.requestDetails).frame(minHeight: 110).accessibilityLabel("Requested activity")
                         TextField("Event date (YYYY-MM-DD, required)", text: $draft.eventDate)
-                        TextField("Event time", text: $draft.eventTime)
+                        LodgeClockField(title: "Event time (Eastern)", value: $draft.eventTime, preserveAmbiguous: true)
                         TextField("Venue name", text: $draft.locationName)
                         TextField("Street address", text: $draft.streetAddress)
                         TextField("City and state", text: $draft.cityState)
@@ -49,7 +49,9 @@ struct MyDispensationProposalsView: View {
                                 Spacer()
                                 Text(proposal.verdict).font(.subheadline.weight(.medium))
                             }
-                            if let date = proposal.eventDate, !date.isEmpty { Text("Event date: \(LodgeCalendarDates.displayDate(date))") }
+                            if let date = proposal.eventDate, !date.isEmpty {
+                                Text([LodgeCalendarDates.displayDate(date), LodgeDateTime.displayFreeFormClock(proposal.eventTime)].filter { !$0.isEmpty }.joined(separator: " · "))
+                            }
                             if let details = proposal.requestDetails, !details.isEmpty { Text(details).textSelection(.enabled) }
                             if let note = proposal.wmNote, !note.isEmpty {
                                 Text("Worshipful Master's response: \(note)").font(.callout)

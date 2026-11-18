@@ -108,8 +108,8 @@ const hasExplicitClockTime = hasExplicitMinutesTime;
 
 export function closingReviewIssues(draft) {
   if (Number(draft.closingFormatVersion) >= 3) return [
-    !hasExplicitClockTime(draft.openingTime) && 'Enter the opening time with AM/PM or in 24-hour HH:mm format.',
-    !hasExplicitClockTime(draft.closingTime) && 'Enter the closing time with AM/PM or in 24-hour HH:mm format.',
+    !hasExplicitClockTime(draft.openingTime) && 'Enter the opening time in Eastern Time with AM or PM.',
+    !hasExplicitClockTime(draft.closingTime) && 'Enter the closing time in Eastern Time with AM or PM.',
     typeof draft.closingPrayerGiven !== 'boolean' && 'Confirm whether the Chaplain gave the closing prayer.',
   ].filter(Boolean);
   return [

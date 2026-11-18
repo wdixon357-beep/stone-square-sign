@@ -1,8 +1,5 @@
+import { formatEasternTimestamp } from './eastern-time.js';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
-const timestamp = value => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value || '') : date.toLocaleString('en-US', { timeZone: 'America/New_York', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) + ' Eastern Time';
-};
 const image = signature => /^data:image\/png;base64,[A-Za-z0-9+/=]{1,500000}$/.test(signature?.image || '') ? signature.image : '';
 
 export function buildingAgreementMarkup(record) {
@@ -15,7 +12,7 @@ export function buildingAgreementMarkup(record) {
     <p><strong>${escape(record.organization)}</strong></p><p>Reference: ${escape(record.requestId)} · ${escape(record.eventDate)}</p>
     <p class="helper">${escape(record.explanation)}</p>
     <h3>Original accepted terms</h3><div style="white-space:pre-wrap">${escape(record.originalText)}</div>
-    ${authorization}<section><h3>Captured signatures</h3>${(record.signatures || []).map(signature => `<div style="margin:20px 0"><h4>${escape(signature.label)}</h4>${image(signature) ? `<img src="${image(signature)}" alt="Saved handwritten signature of ${escape(signature.name)}" style="display:block;max-width:100%;width:340px;max-height:100px;object-fit:contain;object-position:left center">` : '<p>Saved signature image unavailable.</p>'}<p><strong>${escape(signature.name)}</strong>${signature.title ? `<br>${escape(signature.title)}` : ''}<br>${escape(timestamp(signature.at))}</p></div>`).join('')}</section>
+    ${authorization}<section><h3>Captured signatures</h3>${(record.signatures || []).map(signature => `<div style="margin:20px 0"><h4>${escape(signature.label)}</h4>${image(signature) ? `<img src="${image(signature)}" alt="Saved handwritten signature of ${escape(signature.name)}" style="display:block;max-width:100%;width:340px;max-height:100px;object-fit:contain;object-position:left center">` : '<p>Saved signature image unavailable.</p>'}<p><strong>${escape(signature.name)}</strong>${signature.title ? `<br>${escape(signature.title)}` : ''}<br>${escape(formatEasternTimestamp(signature.at))}</p></div>`).join('')}</section>
     ${record.status !== 'fully_executed' ? '<p class="helper">This agreement is still awaiting completion. Only signatures already saved are shown.</p>' : ''}
   </div>`;
 }

@@ -1,3 +1,4 @@
+import { formatEasternDate } from './eastern-time.js';
 const $ = id => document.getElementById(id);
 const message = (value, error = false) => {
   const node = $('correspondenceMessage');
@@ -123,7 +124,7 @@ export class CorrespondenceWorkspace {
       button.type = 'button'; button.className = 'correspondence-list-item';
       const title = document.createElement('strong'); title.textContent = draft.subject;
       const meta = document.createElement('small');
-      meta.textContent = `${draft.recipientLodge} · ${draft.preparedByName} · ${new Date(draft.updatedAt).toLocaleDateString('en-US')}`;
+      meta.textContent = `${draft.recipientLodge} · ${draft.preparedByName} · ${formatEasternDate(draft.updatedAt)}`;
       const status = document.createElement('small');
       status.textContent = draft.status === 'signed' ? `Signed by ${draft.signedByName}, ready to email` : draft.status === 'awaiting_secretary' ? draft.signingMode === 'either' ? 'Waiting for William McDuffie or Adrian Reese to sign' : `Waiting for ${draft.assignedToName || 'the assigned officer'} to sign` : 'Draft';
       button.append(title, meta, status);

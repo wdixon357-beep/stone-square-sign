@@ -27,8 +27,8 @@ assert.equal(clean,`- ${sicknessPrayer}`, 'New unknown closing details do not be
 assert.equal(JSON.stringify(fixture),snapshot,'Versioned presentation never mutates the working draft or source');
 assert.equal(fixture.closingTime,null);
 assert.equal(fixture.closingPrayerGiven,null);
-const openingTimeIssue='Enter the opening time with AM/PM or in 24-hour HH:mm format.';
-const closingTimeIssue='Enter the closing time with AM/PM or in 24-hour HH:mm format.';
+const openingTimeIssue='Enter the opening time in Eastern Time with AM or PM.';
+const closingTimeIssue='Enter the closing time in Eastern Time with AM or PM.';
 assert.deepEqual(closingReviewIssues(fixture),[closingTimeIssue,'Confirm whether the Chaplain gave the closing prayer.'],'Structured unknowns still require the preparer form');
 assert.deepEqual(closingReviewIssues({...fixture,closingTime:'9:00 PM',closingPrayerGiven:true}),[]);
 const completeTimes={...fixture,openingTime:'7:30 PM',closingTime:'9:45 PM',closingPrayerGiven:true};

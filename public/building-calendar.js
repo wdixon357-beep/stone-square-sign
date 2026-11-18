@@ -1,3 +1,4 @@
+import { easternClockForStorage, easternDateKey, formatEasternClock, formatEasternDate, formatEasternTimestamp } from './eastern-time.js';
 import { attachBuildingAgreement } from './building-agreement.js';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
 export const monthBounds = date => {
@@ -5,19 +6,14 @@ export const monthBounds = date => {
   return {from:`${year}-${pad(month+1)}-01`,to:`${year}-${pad(month+1)}-${pad(new Date(year,month+1,0).getDate())}`};
 };
 export const eventOccurs = (event, date) => event.startDate <= date && (event.endDate || event.startDate) >= date;
-export const formatCalendarTime = value => {
-  const text = String(value || '').trim();
-  if (text === '24:00') return '12:00 AM (next day)';
-  const twentyFour = text.match(/^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/);
-  if (twentyFour) {
-    const hour = Number(twentyFour[1]);
-    return `${hour % 12 || 12}:${twentyFour[2]} ${hour >= 12 ? 'PM' : 'AM'}`;
-  }
-  const twelveHour = text.match(/^(1[0-2]|0?[1-9]):([0-5]\d)\s*(AM|PM)$/i);
-  if (twelveHour) return `${Number(twelveHour[1])}:${twelveHour[2]} ${twelveHour[3].toUpperCase()}`;
-  return text;
-};
-export const eventTime = event => event.allDay ? 'All day' : event.startTime ? `${formatCalendarTime(event.startTime)}${event.endTime ? ' to '+formatCalendarTime(event.endTime) : ''}` : 'Time not provided';
+export { formatEasternClock as formatCalendarTime };
+function bookingTime(start, end, fallback = 'Time not provided') {
+  const first = formatEasternClock(start);
+  const last = formatEasternClock(end);
+  if (!first) return last ? `Ends at ${last}` : fallback;
+  return last ? `${first} to ${last}` : first;
+}
+export const eventTime = event => event.allDay ? 'All day' : bookingTime(event.startTime, event.endTime);
 export const BUILDING_SPACES = ['Lodge building','Back yard','Front yard'];
 export const frontYardOnly = spaces => Array.isArray(spaces) && spaces.length === 1 && spaces[0] === 'Front yard';
 export const canAttestBuildingAgreement = (request, user) => Boolean(request && ['secretary', 'assistant_secretary'].includes(user?.role) && (Array.isArray(request.attestationRoles) ? request.attestationRoles : ['secretary']).includes(user.role));
@@ -32,13 +28,13 @@ export function validateBuildingRequest(request){
   for(const booking of request.bookings){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(booking.date)||Number.isNaN(Date.parse(booking.date+'T12:00:00Z'))||new Date(booking.date+'T12:00:00Z').toISOString().slice(0,10)!==booking.date)return 'Enter a valid date for every booking.';
     if(seen.has(booking.date))return 'Use one booking row per date.';seen.add(booking.date);
-    if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(booking.start)||!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(booking.end)||booking.end<=booking.start)return 'Each date needs a start and later end time. Times are Eastern.';
+    if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(booking.start)||!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(booking.end)||booking.end<=booking.start)return 'Enter a start and later end time for each date using Eastern Time with AM or PM.';
   }
   return '';
 }
 export const buildingOverlaps=(bookings,busy)=>bookings.flatMap(booking=>busy.filter(block=>block.date===booking.date&&block.status!=='denied'&&(block.allDay||(block.start&&block.end&&booking.start<block.end&&booking.end>block.start))).map(block=>({...block,requestedDate:booking.date})));
 export class BuildingCalendarWorkspace {
-  constructor({api,user}) {this.api=api;this.user=user;this.month=new Date();this.calendarMode='month';this.buildingSequence=0;this.calendarSequence=0;this.buildingRoot=document.getElementById('buildingSection');this.calendarRoot=document.getElementById('calendarSection');this.bind();}
+  constructor({api,user}) {this.api=api;this.user=user;this.month=new Date(easternDateKey()+'T12:00:00');this.calendarMode='month';this.buildingSequence=0;this.calendarSequence=0;this.buildingRoot=document.getElementById('buildingSection');this.calendarRoot=document.getElementById('calendarSection');this.bind();}
   can(key){return this.user()?.role==='owner'||Boolean(this.user()?.permissions?.includes(key));}
   bind(){
     this.calendarRoot.addEventListener('input', event=>{if(event.target.closest('#calendarEventForm'))this.calendarDirty=true;});
@@ -59,11 +55,11 @@ export class BuildingCalendarWorkspace {
   }
   saveRequestDraft(form){
     const key=this.requestDraftKey();if(!key)return;
-    try{if(!this.hasUnsavedRequest())sessionStorage.removeItem(key);else{const draft=this.collectRequest(form);delete draft.submissionId;sessionStorage.setItem(key,JSON.stringify(draft));}}catch{}
+    try{if(!this.hasUnsavedRequest())sessionStorage.removeItem(key);else{const draft=this.collectRequest(form,{rawTimes:true});delete draft.submissionId;draft.clockInput='am-pm';sessionStorage.setItem(key,JSON.stringify(draft));}}catch{}
   }
   restoreRequestDraft(form){
     const key=this.requestDraftKey();if(!key)return;
-    try{const draft=JSON.parse(sessionStorage.getItem(key)||'null');if(!draft||!Array.isArray(draft.bookings))return;draft.bookings=draft.bookings.slice(0,12);const rows=form.querySelector('#buildingBookingRows');while(rows.children.length>1)rows.lastElementChild.remove();for(let index=1;index<draft.bookings.length;index++)this.addBookingRow();[...rows.children].forEach((row,index)=>{const booking=draft.bookings[index]||{};row.querySelectorAll('[data-booking]').forEach(input=>{input.value=String(booking[input.dataset.booking]||'');});});form.querySelectorAll('[name="space"]').forEach(input=>{input.checked=Array.isArray(draft.spaces)&&BUILDING_SPACES.includes(input.value)&&draft.spaces.includes(input.value);});this.syncBathroomQuestion(form);const bathroom=form.querySelector(`[name="bathroomAccess"][value="${draft.bathroomAccess===true?'yes':'no'}"]`);if(frontYardOnly(draft.spaces)&&bathroom)bathroom.checked=true;form.querySelector('[name="purpose"]').value=String(draft.purpose||'').slice(0,1000);form.querySelector('[name="phone"]').value=String(draft.phone||'').slice(0,40);form.querySelector('#buildingRequestMessage').textContent='An unfinished building request from this tab has been restored.';}catch{}
+    try{const draft=JSON.parse(sessionStorage.getItem(key)||'null');if(!draft||!Array.isArray(draft.bookings))return;draft.bookings=draft.bookings.slice(0,12);const rows=form.querySelector('#buildingBookingRows');while(rows.children.length>1)rows.lastElementChild.remove();for(let index=1;index<draft.bookings.length;index++)this.addBookingRow();[...rows.children].forEach((row,index)=>{const booking=draft.bookings[index]||{};row.querySelectorAll('[data-booking]').forEach(input=>{const value=String(booking[input.dataset.booking]||'');input.value=input.dataset.booking==='date'||draft.clockInput==='am-pm'?value:formatEasternClock(value)||value;});});form.querySelectorAll('[name="space"]').forEach(input=>{input.checked=Array.isArray(draft.spaces)&&BUILDING_SPACES.includes(input.value)&&draft.spaces.includes(input.value);});this.syncBathroomQuestion(form);const bathroom=form.querySelector(`[name="bathroomAccess"][value="${draft.bathroomAccess===true?'yes':'no'}"]`);if(frontYardOnly(draft.spaces)&&bathroom)bathroom.checked=true;form.querySelector('[name="purpose"]').value=String(draft.purpose||'').slice(0,1000);form.querySelector('[name="phone"]').value=String(draft.phone||'').slice(0,40);form.querySelector('#buildingRequestMessage').textContent='An unfinished building request from this tab has been restored.';}catch{}
   }
   async building(){
     if(!this.can('building.view')&&!this.can('building.request'))return;
@@ -73,16 +69,19 @@ export class BuildingCalendarWorkspace {
     if(this.can('building.request')&&!this.requestFormOpen){const button=document.createElement('button');button.className='primary';button.type='button';button.dataset.building='request-new';button.textContent='New Building Request';this.buildingRoot.querySelector('#buildingRequestComposer').append(button);}
     if(!this.can('building.view')){this.buildingRoot.querySelector('.building-requests').replaceChildren();if(!this.requestFormOpen)this.newRequest();return;}
     try{const result=await this.api('/api/building/requests');if(sequence!==this.buildingSequence)return;this.requests=result.requests;this.mayDecide=result.canDecide;
-      this.buildingRoot.querySelector('.building-requests').innerHTML=this.requests.length?this.requests.map(request=>`<article class="panel building-request"><div class="content-head"><div><h2>${escape(request.organization)}</h2><p>${escape(request.date)} · ${escape(request.start||'Time not provided')}${request.end?' to '+escape(request.end):''}</p></div><span class="status">${escape(request.agreementStatus==='awaiting_secretary_attestation'?buildingAttestationStatus(request):request.agreementStatus==='fully_executed'?'Agreement complete':request.status)}</span></div><p>${escape(request.spaces?.join(', '))}</p>${frontYardOnly(request.spaces)?`<p><strong>Restroom access:</strong> ${request.bathroomAccess?'Yes':'No'}</p>`:''}<p>${escape(request.description)}</p><p>${escape(request.contactName)}${request.contact?' · '+escape(request.contact):''}</p>${request.coordinator?`<p>Request coordinator: ${escape(request.coordinator.name)} · ${escape(request.coordinator.email)}</p>`:''}${request.agreementText?`<details><summary>Original accepted terms</summary><p class="helper">These are the terms originally accepted. Open the recorded agreement below for final authorization and captured signatures.</p><div class="building-agreement-text">${escape(request.agreementText)}</div></details>`:''}<p>Reference: ${escape(request.id)}</p>${request.note?`<p>Decision note: ${escape(request.note)}</p>`:''}${request.decidedBy?`<p>Recorded by ${escape(request.decidedBy)}${request.decidedAt?' · '+escape(request.decidedAt):''}</p>`:''}${request.attestedBy?`<p>Attested by ${escape(request.attestedBy.name)}${request.attestedBy.title?', '+escape(request.attestedBy.title):''}</p>`:''}${request.status!=='pending'?`<p>${request.requesterNotified?'Requester notification recorded.':'Requester notification will be sent after all required signatures are recorded.'}</p>`:''}${request.agreementStatus==='awaiting_secretary_attestation'&&canAttestBuildingAgreement(request,this.user())?`<div data-building-attestation><p class="helper">Review the approved agreement before applying your own saved ${escape(buildingSignerTitle(this.user()))} signature.</p><button class="primary" data-building="attest" data-id="${escape(request.id)}">Attest agreement</button></div>`:this.can('building.decide')&&result.canDecide&&request.status==='pending'?`<div data-building-controls><label for="building-note-${escape(request.id)}">Note to the requester</label><textarea id="building-note-${escape(request.id)}" maxlength="2000">${escape(request.note||'')}</textarea>${request.ownerOnly?`<fieldset><legend>Lodge authorization and final conditions</legend><label>Authorization date<input id="building-auth-date-${escape(request.id)}" type="date"></label><label>Minutes or resolution reference<input id="building-auth-record-${escape(request.id)}" maxlength="500"></label><label>Approved fee<input id="building-auth-fee-${escape(request.id)}" maxlength="100" placeholder="Example: $25 per approved session"></label><label>Insurance decision<select id="building-auth-insurance-${escape(request.id)}"><option value="">Choose</option><option value="required">Required</option><option value="waived">Waived</option></select></label><p>No security deposit is required.</p><label>Conditions<textarea id="building-auth-conditions-${escape(request.id)}" maxlength="2000"></textarea></label></fieldset><p class="helper">Worshipful Master signature: approval applies your saved signature. The officer designated in this agreement must attest before the organization receives payment access.</p>`:'<p class="helper">The portal sends the decision notification to the requester and officers.</p>'}<div class="row-buttons"><button class="primary" data-building="approved" data-id="${escape(request.id)}">Approve</button><button class="secondary" data-building="denied" data-id="${escape(request.id)}">Decline</button></div></div>`:''}</article>`).join(''):'<p>No building requests.</p>';
+      this.buildingRoot.querySelector('.building-requests').innerHTML=this.requests.length?this.requests.map(request=>`<article class="panel building-request"><div class="content-head"><div><h2>${escape(request.organization)}</h2><p>${escape(request.date)} · ${escape(bookingTime(request.start,request.end))}</p></div><span class="status">${escape(request.agreementStatus==='awaiting_secretary_attestation'?buildingAttestationStatus(request):request.agreementStatus==='fully_executed'?'Agreement complete':request.status)}</span></div><p>${escape(request.spaces?.join(', '))}</p>${frontYardOnly(request.spaces)?`<p><strong>Restroom access:</strong> ${request.bathroomAccess?'Yes':'No'}</p>`:''}<p>${escape(request.description)}</p><p>${escape(request.contactName)}${request.contact?' · '+escape(request.contact):''}</p>${request.coordinator?`<p>Request coordinator: ${escape(request.coordinator.name)} · ${escape(request.coordinator.email)}</p>`:''}${request.agreementText?`<details><summary>Original accepted terms</summary><p class="helper">These are the terms originally accepted. Open the recorded agreement below for final authorization and captured signatures.</p><div class="building-agreement-text">${escape(request.agreementText)}</div></details>`:''}<p>Reference: ${escape(request.id)}</p>${request.note?`<p>Decision note: ${escape(request.note)}</p>`:''}${request.decidedBy?`<p>Recorded by ${escape(request.decidedBy)}${request.decidedAt?' · '+escape(formatEasternTimestamp(request.decidedAt)):''}</p>`:''}${request.attestedBy?`<p>Attested by ${escape(request.attestedBy.name)}${request.attestedBy.title?', '+escape(request.attestedBy.title):''}</p>`:''}${request.status!=='pending'?`<p>${request.requesterNotified?'Requester notification recorded.':request.agreementStatus==='awaiting_secretary_attestation'?'Requester notification follows the required attestation.':'Requester notification has not been confirmed.'}</p>`:''}${request.agreementStatus==='awaiting_secretary_attestation'&&canAttestBuildingAgreement(request,this.user())?`<div data-building-attestation><p class="helper">Review the approved agreement before applying your own saved ${escape(buildingSignerTitle(this.user()))} signature.</p><button class="primary" data-building="attest" data-id="${escape(request.id)}">Attest agreement</button></div>`:this.can('building.decide')&&result.canDecide&&request.status==='pending'&&(!request.ownerOnly||this.user()?.role==='owner')?`<div data-building-controls><label for="building-note-${escape(request.id)}">Note to the requester</label><textarea id="building-note-${escape(request.id)}" maxlength="2000">${escape(request.note||'')}</textarea>${request.ownerOnly?`<fieldset><legend>Lodge authorization and final conditions</legend><label>Authorization date<input id="building-auth-date-${escape(request.id)}" type="date"></label><label>Minutes or resolution reference<input id="building-auth-record-${escape(request.id)}" maxlength="500"></label><label>Approved fee<input id="building-auth-fee-${escape(request.id)}" maxlength="100" placeholder="Example: $25 per approved session"></label><label>Insurance decision<select id="building-auth-insurance-${escape(request.id)}"><option value="">Choose</option><option value="required">Required</option><option value="waived">Waived</option></select></label><p>No security deposit is required.</p><label>Conditions<textarea id="building-auth-conditions-${escape(request.id)}" maxlength="2000"></textarea></label></fieldset><p class="helper">Worshipful Master signature: approval applies your saved signature. The officer designated in this agreement must attest before the organization receives payment access.</p>`:'<p class="helper">The portal sends the decision notification to the requester and officers.</p>'}<div class="row-buttons"><button class="primary" data-building="approved" data-id="${escape(request.id)}">Approve</button><button class="secondary" data-building="denied" data-id="${escape(request.id)}">Decline</button></div></div>`:''}</article>`).join(''):'<p>No building requests.</p>';
       [...this.buildingRoot.querySelectorAll('.building-request')].forEach((card,index)=>{
         const request=this.requests[index];card.dataset.requestId=request.id;card.tabIndex=-1;
         if(request.statusOnly){
           card.innerHTML=`<div class="content-head"><div><h2>${escape(request.organization)}</h2><p>${escape(request.date)}</p></div><span class="status">Awaiting Secretary attestation</span></div><p>This signed version names Secretary McDuffie as the attesting officer. You can follow its status here. The organization would need to accept a revised agreement before the Assistant Secretary could sign.</p><p>Reference: ${escape(request.id)}</p>`;
         }else if(request.filedCompletedAt){
           card.querySelector('.status').textContent='Filed as completed';
-          const filed=document.createElement('p');filed.textContent=`Filed by ${request.filedCompletedBy||'the Worshipful Master'} on ${new Date(request.filedCompletedAt).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}.`;card.append(filed);
+          const filed=document.createElement('p');filed.textContent=`Filed by ${request.filedCompletedBy||'the Worshipful Master'} on ${formatEasternDate(request.filedCompletedAt)}.`;card.append(filed);
         }else if(this.user()?.role==='owner'&&request.status==='approved'&&request.agreementStatus==='fully_executed'&&request.attestedBy?.at){
           const action=document.createElement('div');action.className='row-buttons';action.innerHTML=`<button class="primary" data-building="file-completed" data-id="${escape(request.id)}">File as completed</button>`;card.append(action);
+        }
+        if(!request.statusOnly){
+          const status=document.createElement('p');status.className='building-decision-message';status.dataset.buildingDecisionMessage='';status.setAttribute('role','status');card.append(status);
         }
         attachBuildingAgreement(card,request,{api:this.api,isCurrent:()=>sequence===this.buildingSequence&&this.user()?.id===userId});
       });
@@ -101,9 +100,9 @@ export class BuildingCalendarWorkspace {
   syncBathroomQuestion(form){const spaces=[...form.querySelectorAll('[name="space"]:checked')].map(input=>input.value),onlyFront=frontYardOnly(spaces),section=form.querySelector('#buildingBathroomAccess');if(!section)return;section.hidden=!onlyFront;const choices=[...section.querySelectorAll('[name="bathroomAccess"]')];choices.forEach(choice=>{choice.required=onlyFront;if(!onlyFront)choice.checked=false;});}
   addBookingRow(){
     const rows=this.buildingRoot.querySelector('#buildingBookingRows');if(rows.children.length>=12)return;
-    const row=document.createElement('div');row.className='building-booking-row';row.innerHTML='<label>Date<input type="date" data-booking="date" required></label><label>Start (Eastern)<input type="time" data-booking="start" required></label><label>End (Eastern)<input type="time" data-booking="end" required></label><button type="button" class="secondary" data-building="request-remove" aria-label="Remove this date">Remove</button>';rows.append(row);this.availabilityKey=null;
+    const row=document.createElement('div');row.className='building-booking-row';row.innerHTML='<label>Date<input type="date" data-booking="date" required></label><label>Start (Eastern)<input type="text" data-booking="start" placeholder="7:30 PM" required></label><label>End (Eastern)<input type="text" data-booking="end" placeholder="9:00 PM" required></label><button type="button" class="secondary" data-building="request-remove" aria-label="Remove this date">Remove</button>';rows.append(row);this.availabilityKey=null;
   }
-  collectRequest(form){const spaces=[...form.querySelectorAll('[name="space"]:checked')].map(input=>input.value),bathroom=form.querySelector('[name="bathroomAccess"]:checked');return{bookings:[...form.querySelectorAll('.building-booking-row')].map(row=>Object.fromEntries([...row.querySelectorAll('[data-booking]')].map(input=>[input.dataset.booking,input.value]))),spaces,bathroomAccess:frontYardOnly(spaces)?(bathroom?.value==='yes'?true:bathroom?.value==='no'?false:null):null,phone:form.querySelector('[name="phone"]').value.trim(),purpose:form.querySelector('[name="purpose"]').value.trim(),submissionId:this.requestSubmissionId};}
+  collectRequest(form,{rawTimes=false}={}){const spaces=[...form.querySelectorAll('[name="space"]:checked')].map(input=>input.value),bathroom=form.querySelector('[name="bathroomAccess"]:checked');return{bookings:[...form.querySelectorAll('.building-booking-row')].map(row=>Object.fromEntries([...row.querySelectorAll('[data-booking]')].map(input=>[input.dataset.booking,rawTimes||input.dataset.booking==='date'?input.value:easternClockForStorage(input.value)]))),spaces,bathroomAccess:frontYardOnly(spaces)?(bathroom?.value==='yes'?true:bathroom?.value==='no'?false:null):null,phone:form.querySelector('[name="phone"]').value.trim(),purpose:form.querySelector('[name="purpose"]').value.trim(),submissionId:this.requestSubmissionId};}
   async requestAction(button){
     if(this.requestBusy||!this.can('building.request'))return;
     if(this.pendingRequestPayload){this.buildingRoot.querySelector('#buildingRequestMessage').textContent='The previous submission has not been confirmed. Retry the original request before making changes.';return;}
@@ -127,7 +126,7 @@ export class BuildingCalendarWorkspace {
     if(JSON.stringify(this.collectRequest(form).bookings)!==key){message.textContent='The requested dates changed. Review availability again.';return false;}
     this.availabilityKey=key;this.availabilityWarning=warning;this.requestConflicts=buildingOverlaps(payload.bookings,busy);
     availability.replaceChildren();
-    for(const booking of payload.bookings){const blocks=busy.filter(block=>block.date===booking.date&&block.status!=='denied');const item=document.createElement('p');item.textContent=booking.date+': '+(blocks.length?blocks.map(block=>`${block.label||'Building use'} (${block.status==='pending'?'pending hold':'booked'}, ${block.allDay?'all day':(block.start||'time not provided')+(block.end?' to '+block.end:'')})`).join('; '):'No entries returned for this date.');availability.append(item);}
+    for(const booking of payload.bookings){const blocks=busy.filter(block=>block.date===booking.date&&block.status!=='denied');const item=document.createElement('p');item.textContent=booking.date+': '+(blocks.length?blocks.map(block=>`${block.label||'Building use'} (${block.status==='pending'?'pending hold':'booked'}, ${block.allDay?'all day':bookingTime(block.start,block.end,'time not provided')})`).join('; '):'No entries returned for this date.');availability.append(item);}
     if(warning){const item=document.createElement('p');item.className='calendar-warnings';item.textContent=warning;availability.append(item);}
     message.textContent=this.requestConflicts.length?'A requested time overlaps a booking or pending hold. Choose another date or time and review availability again.':'Availability reviewed. Submission is a request, not approval.';
     return this.requestConflicts.length===0;
@@ -159,9 +158,39 @@ export class BuildingCalendarWorkspace {
     }
     finally{this.requestBusy=false;controls.forEach(({element,disabled})=>{if(element.isConnected)element.disabled=element.matches?.('input,textarea')?Boolean(this.pendingRequestPayload):disabled;});}
   }
+  confirmDecision(button, request, decision) {
+    const approved = decision === 'approved';
+    const action = approved ? 'Approve' : 'Decline';
+    const dialog = document.createElement('dialog');
+    dialog.className = 'building-decision-dialog';
+    dialog.setAttribute('aria-labelledby', 'buildingDecisionTitle');
+    dialog.setAttribute('aria-describedby', 'buildingDecisionDetails buildingDecisionEffect');
+    dialog.innerHTML = `<form method="dialog"><h2 id="buildingDecisionTitle">${action} building request?</h2><p id="buildingDecisionDetails"></p><p id="buildingDecisionEffect"></p><div class="row-buttons"><button type="submit" class="secondary" value="cancel" autofocus>Cancel</button><button type="submit" class="primary" value="confirm">${action} request</button></div></form>`;
+    dialog.querySelector('#buildingDecisionDetails').textContent = `${request.organization} · ${request.date} · ${bookingTime(request.start, request.end)}`;
+    dialog.querySelector('#buildingDecisionEffect').textContent = approved && request.ownerOnly
+      ? 'Approval applies your saved Worshipful Master signature. The designated officer must attest before the requester is notified.'
+      : 'The portal will attempt to notify the requester and officers when the decision is saved.';
+    return new Promise(resolve => {
+      dialog.addEventListener('close', () => {
+        const confirmed = dialog.returnValue === 'confirm';
+        dialog.remove();
+        if (button.isConnected) button.focus();
+        resolve(confirmed);
+      }, { once: true });
+      this.buildingRoot.append(dialog);
+      try { dialog.showModal(); } catch (error) { dialog.remove(); throw error; }
+    });
+  }
+  decisionMessage(id, text) {
+    const card = [...this.buildingRoot.querySelectorAll('.building-request')].find(element => element.dataset.requestId === id);
+    const inline = card?.querySelector('[data-building-decision-message]');
+    if (inline) inline.textContent = text;
+    else this.message(this.buildingRoot, text);
+  }
   async decision(button){
     if(button.dataset.building==='refresh')return this.building();
-    const request=this.requests?.find(item=>item.id===button.dataset.id);if(!request)return;
+    const request=this.requests?.find(item=>item.id===button.dataset.id);
+    if(!request){this.message(this.buildingRoot,'This request is no longer in the queue. Refresh Building Requests to see its current status.');return;}
     const decision=button.dataset.building;
     if(decision==='file-completed'){
       if(this.buildingBusy||this.user()?.role!=='owner'||request.status!=='approved'||request.agreementStatus!=='fully_executed'||!request.attestedBy?.at||request.filedCompletedAt)return;
@@ -176,17 +205,63 @@ export class BuildingCalendarWorkspace {
       if(!window.confirm(`Attest the approved Building Use Agreement for ${request.organization} with your own saved ${buildingSignerTitle(this.user())} signature?`))return;
       this.buildingBusy=true;button.disabled=true;try{const result=await this.api(`/api/building/requests/${encodeURIComponent(request.id)}/attest`,{method:'POST',body:JSON.stringify({revision:request.revision})});await this.building();this.message(this.buildingRoot,[result.request?.requesterNotified?'Attestation recorded. The organization was notified and payment access is available.':"Attestation recorded. The organization's notification has not been confirmed.",...(result.notificationWarnings||[])].join(' '));window.dispatchEvent(new Event('buildingWorkflowChanged'));}catch(error){this.message(this.buildingRoot,error.message||'The attestation could not be recorded.');}finally{this.buildingBusy=false;if(button.isConnected)button.disabled=false;}return;
     }
-    if(this.buildingBusy||!this.can('building.decide')||!this.mayDecide)return;
-    if(!['approved','denied'].includes(decision))return;
-    const note=document.getElementById('building-note-'+request.id).value;
-    if(decision==='denied'&&!note.trim()){this.message(this.buildingRoot,'Enter the explanation the organization will receive before declining.');return;}
+    if(this.buildingBusy||this.confirmingDecision||!['approved','denied'].includes(decision))return;
+    const message = text => this.decisionMessage(request.id, text);
+    if(!this.can('building.decide')||!this.mayDecide){
+      message('Your account cannot decide this building request.');return;
+    }
+    if(request.status!=='pending'||(request.ownerOnly&&this.user()?.role!=='owner')){
+      message('This request is unavailable for decision. Refresh the queue to review its current status.');return;
+    }
+    const noteField = document.getElementById('building-note-'+request.id);
+    const note = noteField?.value || '';
+    if(decision==='denied'&&!note.trim()){
+      message('Enter the explanation the organization will receive before declining.');
+      noteField?.focus();return;
+    }
     let authorization;
-    if(decision==='approved'&&request.ownerOnly){authorization={date:document.getElementById('building-auth-date-'+request.id)?.value||'',record:document.getElementById('building-auth-record-'+request.id)?.value||'',fee:document.getElementById('building-auth-fee-'+request.id)?.value||'',insurance:document.getElementById('building-auth-insurance-'+request.id)?.value||'',conditions:document.getElementById('building-auth-conditions-'+request.id)?.value||''};if(!authorization.date||!authorization.record.trim()||!authorization.fee.trim()||!authorization.insurance){this.message(this.buildingRoot,'Complete the Lodge authorization, final fee, and insurance decision before approval.');return;}}
-    if(!window.confirm(`${decision==='approved'?'Approve':'Decline'} ${request.organization} for ${request.date}? The existing building portal will send decision notifications to the requester and officers.`))return;
-    this.buildingBusy=true;button.disabled=true;
-    try{const result=await this.api(`/api/building/requests/${encodeURIComponent(request.id)}/decision`,{method:'POST',body:JSON.stringify({decision,note,revision:request.revision,authorization})});await this.building();this.message(this.buildingRoot,[decision==='approved'&&request.ownerOnly?'Approval and Worshipful Master signature recorded. The designated officer must still attest.':'Decision recorded. Check the request card for notification status.',...(result.notificationWarnings||[])].join(' '));window.dispatchEvent(new Event('buildingWorkflowChanged'));}
-    catch(error){if(error.status===409){await this.building();this.message(this.buildingRoot,'This request changed before your decision was saved. Review its latest status and decide again.');}else this.message(this.buildingRoot,error.message||'The decision could not be recorded.');}
-    finally{this.buildingBusy=false;if(button.isConnected)button.disabled=false;}
+    if(decision==='approved'&&request.ownerOnly){
+      const fields = Object.fromEntries(['date','record','fee','insurance','conditions'].map(field =>
+        [field,document.getElementById(`building-auth-${field}-${request.id}`)]));
+      authorization = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key,field?.value.trim() || '']));
+      const missing = ['date','record','fee','insurance'].find(field => !authorization[field]);
+      if(missing){
+        message('Complete the Lodge authorization, final fee, and insurance decision before approval.');
+        fields[missing]?.focus();return;
+      }
+    }
+    message('');
+    this.confirmingDecision = true;
+    const userId = this.user()?.id;
+    try {
+      if(!await this.confirmDecision(button,request,decision))return;
+    } catch {
+      message('The decision confirmation could not open. Refresh Building Requests and try again.');return;
+    } finally { this.confirmingDecision = false; }
+    const current = this.requests?.find(item => item.id === request.id);
+    if(this.user()?.id!==userId||!this.can('building.decide')||!this.mayDecide||
+      current?.revision!==request.revision||current?.status!=='pending'){
+      message('The account or request changed. Review its current status before deciding.');return;
+    }
+    this.buildingBusy=true;button.disabled=true;message('Recording your decision…');
+    try {
+      const result = await this.api(`/api/building/requests/${encodeURIComponent(request.id)}/decision`, {
+        method:'POST', body:JSON.stringify({decision,note,revision:request.revision,authorization}),
+      });
+      await this.building();
+      if(result.request?.id!==request.id||result.request.status!==decision){
+        message('The saved decision could not be confirmed. Review the updated request before trying again.');return;
+      }
+      const outcome = decision==='approved'&&request.ownerOnly
+        ? 'Approval and Worshipful Master signature recorded. The designated officer must still attest.'
+        : result.request.requesterNotified ? 'Decision recorded. Requester notification is recorded.'
+        : 'Decision recorded. Requester notification has not been confirmed.';
+      message([outcome,...(result.notificationWarnings||[])].join(' '));
+      window.dispatchEvent(new Event('buildingWorkflowChanged'));
+    } catch(error) {
+      if(error.status===409)await this.building();
+      message(error.message||'The decision could not be confirmed. Refresh the queue before trying again.');
+    } finally {this.buildingBusy=false;if(button.isConnected)button.disabled=false;}
   }
   async calendar(){
     if(!this.can('calendar.view')||this.calendarDirty)return;
@@ -226,14 +301,21 @@ export class BuildingCalendarWorkspace {
   }
   editEvent(event={}){
     this.calendarDirty=false;this.editingEvent=event;
+    const clock=(key,label)=>`<label>${label}<input name="${key}" type="text" placeholder="7:30 PM" value="${escape(formatEasternClock(event[key]))}"></label>`;
     const field=(key,label,type='text',required=false)=>`<label>${label}<input name="${key}" type="${type}" value="${escape(event[key]||'')}" ${required?'required':''}></label>`;
-    this.calendarRoot.querySelector('#calendarEventDetails').innerHTML=`<form id="calendarEventForm" class="panel calendar-details"><h2>${event.id?'Edit event':'Add event'}</h2>${field('title','Event title','text',true)}<div class="calendar-form-grid">${field('startDate','Start date','date',true)}${field('endDate','End date (inclusive)','date')}${field('startTime','Start time','time')}${field('endTime','End time','time')}</div><label class="calendar-checkbox"><input name="allDay" type="checkbox" ${event.allDay?'checked':''}> All day</label><p class="helper">Leave times blank when they are not known.</p>${field('location','Location')}<label>Category<select name="category">${['lodge','jurisdiction','community'].map(category=>`<option value="${category}" ${(event.category||'lodge')===category?'selected':''}>${category}</option>`).join('')}</select></label><label>Status<select name="status">${['scheduled','tentative','cancelled'].map(status=>`<option value="${status}" ${(event.status||'scheduled')===status?'selected':''}>${status}</option>`).join('')}</select></label><label>Description<textarea name="description" maxlength="6000">${escape(event.description)}</textarea></label><div class="row-buttons"><button class="primary" type="submit">Save event</button><button class="secondary" type="button" data-calendar="cancel">Cancel</button></div><p data-editor-message role="status"></p></form>`;
+    this.calendarRoot.querySelector('#calendarEventDetails').innerHTML=`<form id="calendarEventForm" class="panel calendar-details"><h2>${event.id?'Edit event':'Add event'}</h2>${field('title','Event title','text',true)}<div class="calendar-form-grid">${field('startDate','Start date','date',true)}${field('endDate','End date (inclusive)','date')}${clock('startTime','Start time (Eastern)')}${clock('endTime','End time (Eastern)')}</div><label class="calendar-checkbox"><input name="allDay" type="checkbox" ${event.allDay?'checked':''}> All day</label><p class="helper">Leave times blank when they are not known.</p>${field('location','Location')}<label>Category<select name="category">${['lodge','jurisdiction','community'].map(category=>`<option value="${category}" ${(event.category||'lodge')===category?'selected':''}>${category}</option>`).join('')}</select></label><label>Status<select name="status">${['scheduled','tentative','cancelled'].map(status=>`<option value="${status}" ${(event.status||'scheduled')===status?'selected':''}>${status}</option>`).join('')}</select></label><label>Description<textarea name="description" maxlength="6000">${escape(event.description)}</textarea></label><div class="row-buttons"><button class="primary" type="submit">Save event</button><button class="secondary" type="button" data-calendar="cancel">Cancel</button></div><p data-editor-message role="status"></p></form>`;
     this.calendarRoot.querySelector('#calendarEventForm')?.scrollIntoView?.({block:'start'});
   }
   async saveEvent(form){
     if(this.calendarBusy||!this.can('calendar.manage'))return;
     const data=new FormData(form),event={status:this.editingEvent?.status||'scheduled',source:this.editingEvent?.source||'Lodge calendar',sourceUrl:this.editingEvent?.sourceUrl||'',...Object.fromEntries(data)};event.allDay=data.has('allDay');if(!event.endDate)event.endDate=event.startDate;if(event.allDay){event.startTime='';event.endTime='';}
     const message=form.querySelector('[data-editor-message]');
+    for(const field of ['startTime','endTime']){
+      if(!event[field]?.trim()){event[field]='';continue;}
+      const value=easternClockForStorage(event[field]);
+      if(!value){message.textContent='Enter event times in Eastern Time with AM or PM.';return;}
+      event[field]=value;
+    }
     if(event.endDate<event.startDate){message.textContent='The end date cannot precede the start date.';return;}
     if(!window.confirm(`${this.editingEvent?.id?'Save changes to':'Add'} ${event.title} on the Lodge Calendar?`))return;
     if(this.editingEvent?.revision!==undefined)event.revision=this.editingEvent.revision;

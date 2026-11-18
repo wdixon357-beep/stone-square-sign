@@ -1,18 +1,66 @@
 import Foundation
 
 enum LodgeDateTime {
-    static func display(_ value: String?) -> String {
-        guard let value, !value.isEmpty else { return "Not recorded" }
+    static let timeZone = TimeZone(identifier: "America/New_York")!
+    static let locale = Locale(identifier: "en_US_POSIX")
+
+    static func formatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    static func display(_ value: String?, format: String = "EEEE, MMMM d, yyyy 'at' h:mm a z", fallback: String = "Not recorded") -> String {
+        guard let value, !value.isEmpty else { return fallback }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let standard = ISO8601DateFormatter()
-        standard.formatOptions = [.withInternetDateTime]
-        guard let date = fractional.date(from: value) ?? standard.date(from: value) else { return value }
-        let output = DateFormatter()
-        output.locale = Locale(identifier: "en_US")
-        output.timeZone = TimeZone(identifier: "America/New_York")
-        output.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a z"
-        return output.string(from: date)
+        guard let date = fractional.date(from: value) ?? standard.date(from: value) else { return fallback }
+        return formatter(format).string(from: date)
+    }
+
+    static func canonicalClock(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.range(of: #"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"#, options: .regularExpression) != nil { return value }
+        let uppercase = value.uppercased()
+        guard uppercase.range(of: #"^(?:0?[1-9]|1[0-2])(?::[0-5][0-9])?\s*(?:A\.?M\.?|P\.?M\.?)$"#, options: .regularExpression) != nil else { return nil }
+        let clock = uppercase.replacingOccurrences(of: ".", with: "")
+        let time = clock.dropLast(2).trimmingCharacters(in: .whitespaces).split(separator: ":")
+        guard let hour = time.first.flatMap({ Int($0) }) else { return nil }
+        let hour24 = hour % 12 + (clock.hasSuffix("PM") ? 12 : 0)
+        return String(format: "%02d:%@", hour24, time.count == 2 ? String(time[1]) : "00")
+    }
+
+    static func displayClock(_ value: String?) -> String {
+        displayClock(value, preserveAmbiguous: false)
+    }
+
+    static func displayFreeFormClock(_ value: String?) -> String {
+        displayClock(value, preserveAmbiguous: true)
+    }
+
+    private static func displayClock(_ value: String?, preserveAmbiguous: Bool) -> String {
+        guard let value, !value.isEmpty else { return "" }
+        if let clock = displaySingleClock(value, preserveAmbiguous: preserveAmbiguous) { return clock }
+        if let separator = value.range(of: #"\s*(?:\bto\b|[-–—])\s*"#, options: [.regularExpression, .caseInsensitive]),
+           let start = displaySingleClock(String(value[..<separator.lowerBound]), preserveAmbiguous: preserveAmbiguous),
+           let end = displaySingleClock(String(value[separator.upperBound...]), preserveAmbiguous: preserveAmbiguous) {
+            return "\(start) to \(end)"
+        }
+        return value
+    }
+
+    private static func displaySingleClock(_ value: String, preserveAmbiguous: Bool) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "24:00" || trimmed == "24:00:00" { return "12:00 AM (next day)" }
+        let stored = trimmed.range(of: #"^(?:[01]?[0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?$"#, options: .regularExpression) != nil
+        let time = stored ? trimmed.split(separator: ":").prefix(2).joined(separator: ":") : trimmed
+        let minutes = stored && time.count == 4 ? "0" + time : time
+        guard let clock = canonicalClock(minutes), let hour = Int(clock.prefix(2)) else { return nil }
+        if preserveAmbiguous && stored && (1...12).contains(hour) { return nil }
+        return "\(hour % 12 == 0 ? 12 : hour % 12):\(clock.suffix(2)) \(hour < 12 ? "AM" : "PM")"
     }
 }
 

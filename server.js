@@ -1,3 +1,4 @@
+import { formatEasternClockRange } from './public/eastern-time.js';
 import { currentMinutesEditorialDraft } from './minutes-editorial.js';
 import { mountBuildingCalendar, initializeBuildingCalendar } from './building-calendar.js';
 import { initBuildingStoreSchema } from './building-store.js';
@@ -28,7 +29,7 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
-import {MINUTES_MEETING_DETAILS_FIELDS, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails} from './public/minutes-meeting-details.js';
+import {MINUTES_MEETING_DETAILS_FIELDS, formatMinutesClock, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails} from './public/minutes-meeting-details.js';
 import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
 import { attendanceReviewIssues, attendanceRecordIssues, closingReviewIssues } from './minutes-format.js';
@@ -712,14 +713,6 @@ const normalizePastedTime = (value) => {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 };
 
-const displayClockTime = (value) => {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
-  if (!match) return String(value || '');
-  const hour = Number(match[1]);
-  if (hour > 23) return String(value || '');
-  return `${hour % 12 || 12}:${match[2]} ${hour >= 12 ? 'PM' : 'AM'}`;
-};
-
 const easternDateValue = (offsetDays = 0) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -960,7 +953,7 @@ const createDispensationPdf = async ({ fields, ownerName, ownerSignature }) => {
       [requestFieldNames[1], requestLines[1]],
       ['Date_2', dateLabel(eventDate, false)],
       ['20', eventDate.year.slice(-2)],
-      ['Time', displayClockTime(fields.eventTime)],
+      ['Time', formatEasternClockRange(fields.eventTime)],
       ['Name of Location', fields.locationName],
       ['Street and Number', fields.streetAddress],
       ['City and State', fields.cityState],
@@ -2506,7 +2499,11 @@ const minutesArtifactContext = async (row, draft, captured = {}) => {
     ? await dbGet('SELECT signature_bytes FROM profile_signatures WHERE user_id = ?', [row.master_attested_by_user_id])
     : null;
   return {
-    draft,
+    draft: row.status === 'draft' ? {
+      ...draft,
+      openingTime: formatMinutesClock(draft.openingTime) || null,
+      closingTime: formatMinutesClock(draft.closingTime) || null,
+    } : draft,
     status: row.status,
     approvedByLodgeOn: row.approved_by_lodge_on,
     preparedBy: row.created_by_name,

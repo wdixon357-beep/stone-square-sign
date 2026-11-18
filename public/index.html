@@ -358,7 +358,7 @@
                 <div><label for="minutesIntakeQuorum">Quorum</label><select id="minutesIntakeQuorum"><option value="">Choose Yes or No</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
                 <div><label for="minutesIntakeOpeningTime">Opening time</label><input id="minutesIntakeOpeningTime" type="text" placeholder="7:30 PM" aria-describedby="minutesIntakeTimeHelp" /></div>
                 <div><label for="minutesIntakeClosingTime">Closing time</label><input id="minutesIntakeClosingTime" type="text" placeholder="9:45 PM" aria-describedby="minutesIntakeTimeHelp" /></div>
-                <p id="minutesIntakeTimeHelp" class="muted minutes-time-help">Enter the actual times with AM or PM, or use 24-hour times such as 19:30. Do not enter an event's scheduled time.</p>
+                <p id="minutesIntakeTimeHelp" class="muted minutes-time-help">Enter the actual opening and closing times in Eastern Time with AM or PM.</p>
                 <div><label for="minutesIntakePresiding">Presiding officer</label><input id="minutesIntakePresiding" type="text" placeholder="Enter the officer who presided" maxlength="160" /></div>
                 <div><label for="minutesIntakeNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesIntakeNextMeeting" type="text" placeholder="Choose or enter the next meeting date" autocomplete="off" /><input id="minutesIntakeNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
               </div>
@@ -508,7 +508,7 @@
                 <div><label>Send to</label><p class="muted" id="dispSignerRole" data-fixed="both">Both Secretaries. Whoever signs it first completes it.</p></div>
                 <div class="field-wide parsed-covered"><label for="dispRequestDetails">What is the Lodge requesting?</label><textarea id="dispRequestDetails" rows="3" placeholder="Describe the requested dispensation" required></textarea></div>
                 <div class="parsed-covered"><label for="dispEventDate">Event date</label><input id="dispEventDate" type="date" required /></div>
-                <div class="parsed-covered"><label for="dispEventTime">Event time</label><input id="dispEventTime" type="time" required /></div>
+                <div class="parsed-covered"><label for="dispEventTime">Event time (Eastern)</label><input id="dispEventTime" type="text" placeholder="7:30 PM" required /></div>
                 <div class="field-wide location-lookup parsed-covered"><label for="dispLocationName">Location name</label><input id="dispLocationName" type="text" placeholder="Stone Square Lodge No. 22" required /><button id="findLocationAddress" class="secondary" type="button">Find address</button></div>
                 <div class="parsed-covered"><label for="dispStreet">Street and number</label><input id="dispStreet" type="text" placeholder="208 East Lake Street" required /></div>
                 <div class="parsed-covered"><label for="dispCityState">City, state, and ZIP</label><input id="dispCityState" type="text" placeholder="Middletown, DE 19709" required /></div>
@@ -530,7 +530,7 @@
               <div class="two">
                 <div><label for="propEventDate">Date of the event <span class="req">*</span></label>
                   <input id="propEventDate" type="date" required /></div>
-                <div><label for="propEventTime">Time <span class="req">*</span></label>
+                <div><label for="propEventTime">Time (Eastern) <span class="req">*</span></label>
                   <input id="propEventTime" type="text" required placeholder="6:00 PM to 9:00 PM" /></div>
               </div>
               <label for="propLocation">Venue name <span class="req">*</span></label>
@@ -609,7 +609,7 @@
               </div>
               <div><label for="minutesOpeningTime">Opening time</label><input id="minutesOpeningTime" type="text" placeholder="7:30 PM" aria-describedby="minutesTimeHelp" /></div>
               <div><label for="minutesClosingTime">Closing time</label><input id="minutesClosingTime" type="text" placeholder="9:45 PM" aria-describedby="minutesTimeHelp" /></div>
-              <p id="minutesTimeHelp" class="muted minutes-time-help">Enter the actual opening and closing times, including AM or PM, before submission. Explicit 24-hour times such as 19:30 are also accepted.</p>
+              <p id="minutesTimeHelp" class="muted minutes-time-help">Enter the actual opening and closing times in Eastern Time with AM or PM.</p>
               <div><label for="minutesPresiding">Presiding</label><input id="minutesPresiding" type="text" /></div>
               <div>
                 <label for="minutesQuorum">Quorum</label>
@@ -711,7 +711,7 @@
                 <div><label for="minutesClaimQuorum">Quorum</label><select id="minutesClaimQuorum"><option value="">Choose Yes or No</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
                 <div><label for="minutesClaimOpeningTime">Opening time</label><input id="minutesClaimOpeningTime" type="text" placeholder="7:30 PM" aria-describedby="minutesClaimTimeHelp" /></div>
                 <div><label for="minutesClaimClosingTime">Closing time</label><input id="minutesClaimClosingTime" type="text" placeholder="9:45 PM" aria-describedby="minutesClaimTimeHelp" /></div>
-                <p id="minutesClaimTimeHelp" class="muted minutes-time-help">Enter the actual times with AM or PM, or use 24-hour times such as 19:30. Do not enter an event's scheduled time.</p>
+                <p id="minutesClaimTimeHelp" class="muted minutes-time-help">Enter the actual opening and closing times in Eastern Time with AM or PM.</p>
                 <div><label for="minutesClaimPresiding">Presiding officer</label><input id="minutesClaimPresiding" type="text" placeholder="Enter the officer who presided" maxlength="160" /></div>
                 <div><label for="minutesClaimNextMeeting">Next meeting date</label><div class="minutes-date-control"><input id="minutesClaimNextMeeting" type="text" placeholder="Choose or enter the next meeting date" autocomplete="off" /><input id="minutesClaimNextMeetingCalendar" type="date" aria-label="Choose next meeting date" title="Choose next meeting date" /></div></div>
               </div>

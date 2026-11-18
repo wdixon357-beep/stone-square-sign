@@ -1,3 +1,4 @@
+import { formatEasternTimestamp } from './eastern-time.js';
 const endpoint = '/api/assistant/signature-requests';
 const labels = {
   pending: 'Awaiting your authorization', processing: 'Application in progress',
@@ -6,10 +7,7 @@ const labels = {
 };
 export const signatureRequestStatus = status => labels[status] || 'Outcome unverified';
 export const validSignatureRequestId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
-const dateText = value => {
-  const date = new Date(value);
-  return value && Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Not recorded';
-};
+const dateText = formatEasternTimestamp;
 const node = (tag, value, className) => {
   const element = document.createElement(tag);
   if (value !== undefined) element.textContent = String(value ?? '');

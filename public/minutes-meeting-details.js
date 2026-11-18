@@ -1,3 +1,4 @@
+import { formatEasternClock } from './eastern-time.js';
 import {minutesDateParts} from './minutes-dates.js';
 
 export const MINUTES_MEETING_DETAILS_FIELDS = ['meetingDate', 'meetingType', 'degree', 'openingTime', 'closingTime', 'presiding', 'quorum', 'nextMeeting'];
@@ -10,6 +11,8 @@ const exactDate = value => {
 export const hasExplicitMinutesTime = value => /^(?:0?[1-9]|1[0-2])(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)$/i.test(clean(value))
   || /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean(value));
 
+export const formatMinutesClock = value => hasExplicitMinutesTime(value) ? formatEasternClock(value) : clean(value);
+
 // These are the preparing officer's explicitly entered meeting facts. They are
 // not transcript citations and never establish attendance, motions or approval.
 export function minutesMeetingDetailsIssues(value = {}) {
@@ -18,8 +21,8 @@ export function minutesMeetingDetailsIssues(value = {}) {
     !exactDate(details.meetingDate) && 'Enter the meeting date, including the year.',
     (!clean(details.meetingType) || clean(details.meetingType).length > 100) && 'Select the meeting type or enter its name.',
     !degrees.includes(clean(details.degree)) && 'Select the degree.',
-    !hasExplicitMinutesTime(details.openingTime) && 'Enter the opening time with AM/PM or in 24-hour HH:mm format.',
-    !hasExplicitMinutesTime(details.closingTime) && 'Enter the closing time with AM/PM or in 24-hour HH:mm format.',
+    !hasExplicitMinutesTime(details.openingTime) && 'Enter the opening time in Eastern Time with AM or PM.',
+    !hasExplicitMinutesTime(details.closingTime) && 'Enter the closing time in Eastern Time with AM or PM.',
     (!clean(details.presiding) || clean(details.presiding).length > 160) && 'Enter the presiding officer.',
     !['Yes', 'No'].includes(clean(details.quorum)) && 'Select Yes or No for quorum.',
     !exactDate(details.nextMeeting) && 'Enter the next meeting date, including the year.',

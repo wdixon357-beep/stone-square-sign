@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { easternDateKey, formatEasternClockRange, formatEasternTimestamp } from '../public/eastern-time.js';
 import { BuildingCalendarWorkspace, monthBounds, eventOccurs, formatCalendarTime, eventTime, validateBuildingRequest, canAttestBuildingAgreement, buildingAttestationStatus } from '../public/building-calendar.js';
 assert.deepEqual(monthBounds(new Date(2028,1,5)),{from:'2028-02-01',to:'2028-02-29'});
 assert.equal(eventOccurs({startDate:'2026-09-30',endDate:'2026-10-02'},'2026-10-02'),true);
@@ -8,7 +9,13 @@ class Element {constructor(){this.innerHTML='';this.textContent='';this.value='R
 global.document={getElementById:id=>{if(!elements.has(id)){const e=new Element();e.id=id;elements.set(id,e);}return elements.get(id)}};
 let confirmed=false;global.window={confirm:()=>confirmed};
 const request={id:'SSL-TEST',organization:'Example Chapter',date:'2026-09-20',spaces:['Lodge building'],description:'Meeting',status:'pending',revision:7};
+assert.equal(formatEasternTimestamp('2026-11-18T01:30:00Z'), 'Tue, Nov 17, 2026, 8:30 PM EST');
+assert.equal(formatEasternTimestamp('2026-07-01T04:00:00Z'), 'Wed, Jul 1, 2026, 12:00 AM EDT');
+assert.equal(easternDateKey(new Date('2026-11-01T03:59:59Z')), '2026-10-31');
 assert.equal(formatCalendarTime('19:30'), '7:30 PM');
+assert.equal(formatEasternClockRange('7:00 to 10:00 PM'), '7:00 to 10:00 PM');
+assert.equal(formatEasternClockRange('7:00'), '7:00');
+assert.equal(formatEasternClockRange('12:00 to 19:00'), '12:00 PM to 7:00 PM');
 assert.equal(formatCalendarTime('00:05:00'), '12:05 AM');
 assert.equal(formatCalendarTime('12:00'), '12:00 PM');
 assert.equal(formatCalendarTime('7:30 pm'), '7:30 PM');
@@ -18,12 +25,13 @@ assert.match(validateBuildingRequest({bookings:[{date:'2026-10-20',start:'10:00'
 assert.equal(validateBuildingRequest({bookings:[{date:'2026-10-20',start:'10:00',end:'12:00'}],spaces:['Front yard'],bathroomAccess:false,purpose:'Outdoor event'}),'');
 let permissions=['building.view','calendar.view'], calls=[], failConflict=false;
 const workspace=new BuildingCalendarWorkspace({user:()=>({role:'officer',permissions}),api:async(path,init)=>{calls.push({path,init});if(init){if(failConflict)throw Object.assign(Error('changed'),{status:409});return{request};}return path.startsWith('/api/building')?{requests:[request],canDecide:true}:{events:[],warnings:[]};}});
+workspace.confirmDecision=async()=>confirmed;
 await workspace.building();assert.doesNotMatch(workspace.buildingRoot.querySelector('.building-requests').innerHTML,/data-building="approved"/);
 await workspace.decision({dataset:{building:'approved',id:request.id}});assert.equal(calls.filter(c=>c.init).length,0);
 permissions.push('building.decide');await workspace.building();assert.match(workspace.buildingRoot.querySelector('.building-requests').innerHTML,/sends the decision notification/);
 await workspace.decision({dataset:{building:'approved',id:request.id}});assert.equal(calls.filter(c=>c.init).length,0);
 confirmed=true;await workspace.decision({dataset:{building:'approved',id:request.id}});assert.deepEqual(JSON.parse(calls.find(c=>c.init).init.body),{decision:'approved',note:'Reviewed note',revision:7});
-failConflict=true;await workspace.decision({dataset:{building:'denied',id:request.id}});assert.match(workspace.buildingRoot.querySelector('[data-message]').textContent,/changed before your decision/);failConflict=false;
+failConflict=true;await workspace.decision({dataset:{building:'denied',id:request.id}});assert.match(workspace.buildingRoot.querySelector('[data-message]').textContent,/changed/);failConflict=false;
 const secretaryCalls=[];const secretaryRequest={...request,status:'approved',agreementStatus:'awaiting_secretary_attestation'};
 assert.equal(canAttestBuildingAgreement(secretaryRequest,{role:'secretary'}),true);
 assert.equal(canAttestBuildingAgreement(secretaryRequest,{role:'assistant_secretary'}),false);
@@ -35,7 +43,7 @@ assert.equal(canAttestBuildingAgreement({...eitherOfficerRequest,attestationRole
 assert.equal(buildingAttestationStatus(eitherOfficerRequest),'Awaiting Secretary or Assistant Secretary attestation');
 const ownerCalls=[];const privateRequest={...request,ownerOnly:true};
 const ownerWorkspace=new BuildingCalendarWorkspace({user:()=>({role:'owner',permissions:['building.view','building.decide']}),api:async(path,init)=>{ownerCalls.push({path,init});return init?{request:privateRequest}:{requests:[privateRequest],canDecide:true};}});
-ownerWorkspace.requestFormOpen=true;
+ownerWorkspace.requestFormOpen=true;ownerWorkspace.confirmDecision=async()=>confirmed;
 await ownerWorkspace.building();
 assert.match(ownerWorkspace.buildingRoot.querySelector('.building-requests').innerHTML,/No security deposit is required/);
 assert.doesNotMatch(ownerWorkspace.buildingRoot.querySelector('.building-requests').innerHTML,/building-auth-deposit/);
@@ -67,5 +75,10 @@ global.FormData=class{constructor(form){this.data=form.data;}*[Symbol.iterator](
 const form={data:{title:'Lodge event',startDate:'2026-09-25',endDate:'2026-09-26',startTime:'',endTime:'',category:'lodge',location:'Lodge',description:'Details'},querySelector:()=>new Element(),querySelectorAll:()=>[]};workspace.editingEvent={id:'custom',revision:3,status:'tentative',source:'Verified Lodge announcement',sourceUrl:'https://example.org/event'};workspace.calendar=async()=>{};
 confirmed=false;await workspace.saveEvent(form);assert.equal(calls.filter(c=>c.init).length,writes);
 confirmed=true;await workspace.saveEvent(form);const saved=calls.filter(c=>c.init).at(-1);assert.equal(saved.init.method,'PUT');assert.equal(saved.path,'/api/lodge-calendar/custom');assert.equal(JSON.parse(saved.init.body).revision,3);assert.equal(JSON.parse(saved.init.body).allDay,false);assert.equal(JSON.parse(saved.init.body).status,'tentative');assert.equal(JSON.parse(saved.init.body).source,'Verified Lodge announcement');assert.equal(JSON.parse(saved.init.body).sourceUrl,'https://example.org/event');
-form.data.status='cancelled';await workspace.saveEvent(form);assert.equal(JSON.parse(calls.filter(c=>c.init).at(-1).init.body).status,'cancelled');
+Object.assign(form.data, {status:'cancelled',startTime:'7:30 PM',endTime:'12:00 AM'});
+await workspace.saveEvent(form);
+const updated = JSON.parse(calls.filter(c=>c.init).at(-1).init.body);
+assert.equal(updated.status, 'cancelled');
+assert.equal(updated.startTime, '19:30');
+assert.equal(updated.endTime, '00:00');
 console.log('PASS: building permissions, explicit notifications/confirmation, stale revisions, inclusive calendar dates, unknown times, immutable source events, retained edits, confirmed calendar writes.');

@@ -1240,8 +1240,11 @@ struct MeetingMinutesView: View {
                     Text("Needs review").tag("")
                     ForEach(["First Degree", "Second Degree", "Third Degree", "Round Table"], id: \.self) { Text($0).tag($0) }
                 }
-                HStack { TextField("Opening time", text: text(\.openingTime)); TextField("Closing time", text: text(\.closingTime)) }
-                Text("Enter both actual times, including AM or PM, before submission. Explicit 24-hour times such as 19:30 are also accepted.").font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    LodgeClockField(title: "Opening time", value: text(\.openingTime))
+                    LodgeClockField(title: "Closing time", value: text(\.closingTime))
+                }
+                Text("Enter both actual times in Eastern Time with AM or PM.").font(.caption).foregroundStyle(.secondary)
                 TextField("Presiding officer", text: text(\.presiding))
                 Picker("Quorum", selection: text(\.quorum)) { Text("Needs review").tag(""); Text("Yes").tag("Yes"); Text("No").tag("No") }
                 MinutesDateField(title: "Next meeting date", value: text(\.nextMeeting), preservingDetails: true)
@@ -1321,10 +1324,10 @@ private struct MinutesMeetingDetailsFields: View {
                 ForEach(["First Degree", "Second Degree", "Third Degree", "Round Table"], id: \.self) { Text($0).tag($0) }
             }
             HStack {
-                TextField("Opening time", text: $details.openingTime)
-                TextField("Closing time", text: $details.closingTime)
+                LodgeClockField(title: "Opening time", value: $details.openingTime)
+                LodgeClockField(title: "Closing time", value: $details.closingTime)
             }
-            Text("Use actual times with AM or PM, such as 7:30 PM. Explicit 24-hour times such as 19:30 are also accepted.")
+            Text("Enter the actual times in Eastern Time, such as 7:30 PM.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             TextField("Presiding officer", text: $details.presiding)
             Picker("Quorum", selection: $details.quorum) {

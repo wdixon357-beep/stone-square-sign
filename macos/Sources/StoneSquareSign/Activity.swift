@@ -8,8 +8,7 @@ struct OfficerSession: Decodable, Identifiable {var id:Int;var userId:Int;var ac
 struct AppIncident: Decodable, Identifiable {var id:Int;var reference:String;var userId:Int?;var actor:String;var client:String;var area:String;var path:String;var method:String;var status:Int?;var state:String;var category:String;var firstSeenAt:String;var lastSeenAt:String;var recoveredAt:String?}
 struct ActivityPayload: Decodable {var users:[ActivityPerson];var events:[OfficerEvent];var eventNext:Int?;var sessions:[OfficerSession];var sessionNext:Int?;var incidents:[AppIncident];var measuredFrom:String?}
 private func activityDate(_ value:String?) -> String {
- guard let value else{return "Not recorded"};let parser=ISO8601DateFormatter();parser.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
- guard let date=parser.date(from:value) else{return value};let formatter=DateFormatter();formatter.timeZone=TimeZone(identifier:"America/New_York");formatter.dateFormat="EEE, MMM d, yyyy h:mm a z";return formatter.string(from:date)
+ LodgeDateTime.display(value, format: "EEE, MMM d, yyyy h:mm a z")
 }
 private func activeDuration(_ seconds:Int)->String {
  let safe = max(0, seconds)

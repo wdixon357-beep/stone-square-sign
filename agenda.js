@@ -1,3 +1,4 @@
+import { formatEasternClockRange } from './public/eastern-time.js';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import crypto from 'node:crypto';
@@ -182,7 +183,7 @@ export async function buildAgendaPdf(input) {
   };
   const drawSection = section => {
     sectionNumber += 1;
-    const title = `${sectionNumber}. ${section.heading}${section.scheduledTime ? `  ${section.scheduledTime}` : ''}`;
+    const title = `${sectionNumber}. ${section.heading}${section.scheduledTime ? `  ${formatEasternClockRange(section.scheduledTime)}` : ''}`;
     ensure(34);
     drawParagraph(title, { font: bold, size: 9.8, after: 5 });
     const paragraphs = safe(section.body).split('\n').map(line => line.trim()).filter(Boolean);
@@ -203,7 +204,7 @@ export async function buildAgendaPdf(input) {
   drawParagraph(meetingDate, { size: 9.3, after: 13 });
   drawParagraph(draft.addressee, { size: 9.3, after: 12 });
   centered(`AGENDA, ${draft.meetingType.toUpperCase()}`, y, bold, 11.5, INK, bodyLeft, bodyWidth); y -= 17;
-  centered(`${meetingDate}  ·  ${draft.startTime}  ·  ${draft.dress}`, y, regular, 9.1, INK, bodyLeft, bodyWidth); y -= 17;
+  centered(`${meetingDate}  ·  ${formatEasternClockRange(draft.startTime)}  ·  ${draft.dress}`, y, regular, 9.1, INK, bodyLeft, bodyWidth); y -= 17;
   if (draft.subtitle) { for (const line of wrap(draft.subtitle, italic, 8.3, bodyWidth)) { centered(line, y, italic, 8.3, INK, bodyLeft, bodyWidth); y -= 11; } y -= 4; }
   for (const section of draft.sections) drawSection(section);
   return Buffer.from(await pdf.save());

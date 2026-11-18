@@ -129,7 +129,11 @@ final class ReportBrowserModel: ObservableObject {
         email = user.email
     }
     func payload() -> [String: Any] {
-        var body: [String: Any] = ["phone": phone, "type": type, "fields": fields, "reviewed": reviewed, "clientId": clientId]
+        var submittedFields = fields
+        for field in reportFields where field.kind == "time" {
+            if let value = fields[field.id], let time = LodgeDateTime.canonicalClock(value) { submittedFields[field.id] = time }
+        }
+        var body: [String: Any] = ["phone": phone, "type": type, "fields": submittedFields, "reviewed": reviewed, "clientId": clientId]
         if let deliveryIntent { body["deliveryIntent"] = deliveryIntent }
         return body
     }
@@ -598,12 +602,15 @@ struct ReportGeneratorView: View {
                     Label(warning, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
                 }
                 ForEach(result.fields.keys.sorted(), id: \.self) { field in
+                    let definition = browser.reportFields.first { $0.id == field || $0.id + "Other" == field }
+                    let suggested = result.fields[field] ?? ""
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(browser.reportFields.first { $0.id == field || $0.id + "Other" == field }?.label ?? field).font(.headline)
+                        Text(definition?.label ?? field).font(.headline)
                         if let existing = browser.fields[field], !existing.isEmpty {
-                            Text("Current: \(existing)").font(.callout).foregroundStyle(.secondary)
+                            let displayed = definition?.kind == "time" ? LodgeDateTime.displayClock(existing) : existing
+                            Text("Current: \(displayed)").font(.callout).foregroundStyle(.secondary)
                         }
-                        Text(result.fields[field] ?? "").textSelection(.enabled)
+                        Text(definition?.kind == "time" ? LodgeDateTime.displayClock(suggested) : suggested).textSelection(.enabled)
                         ForEach(Array(result.evidence.filter { $0.field == field }.enumerated()), id: \.offset) { _, evidence in
                             Text("Source: \(evidence.quote)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                         }
@@ -672,8 +679,10 @@ struct ReportGeneratorView: View {
                 TextField("Something else", text: fieldBinding(field.id + "Other"))
             } else if ["long", "list", "budget"].contains(field.kind) {
                 TextEditor(text: fieldBinding(field.id)).font(.body).scrollContentBackground(.hidden).frame(minHeight: 140).padding(8).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7)).overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.secondary.opacity(0.2))).accessibilityLabel(field.label)
+            } else if field.kind == "time" {
+                LodgeClockField(title: "\(field.label) (Eastern)", value: fieldBinding(field.id))
             } else {
-                TextField(field.kind == "date" ? "YYYY-MM-DD" : field.kind == "time" ? "HH:MM" : field.kind == "money" ? "$0.00" : field.label, text: fieldBinding(field.id))
+                TextField(field.kind == "date" ? "YYYY-MM-DD" : field.kind == "money" ? "$0.00" : field.label, text: fieldBinding(field.id))
             }
             if !field.hint.isEmpty { Text(field.hint).font(.caption).foregroundStyle(.secondary) }
         }

@@ -1,3 +1,4 @@
+import { formatEasternTimestamp } from './eastern-time.js';
 /* The owner-only packet is used by the website and the native Mac app.
  * A saved Missive draft is not a sent message. Historical delivery evidence
  * remains separate from draft preparation. */
@@ -110,10 +111,8 @@ export async function renderDispensationSubmission(container, { document: record
       draftPanel.append(summary);
     }
     if (draft.state === 'drafted' && draft.createdAt) {
-      const created = new Date(draft.createdAt);
-      if (Number.isFinite(created.getTime())) {
-        draftPanel.append(element('p', `Draft saved: ${created.toLocaleString()}`));
-      }
+      const created = formatEasternTimestamp(draft.createdAt, '');
+      if (created) draftPanel.append(element('p', `Draft saved: ${created}`));
     }
     const missiveURL = safeMissiveDraftURL(draft);
     const draftActions = element('div', null, 'delivery-report-form');

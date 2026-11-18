@@ -1,3 +1,4 @@
+import { formatEasternClockRange, formatEasternTimestamp } from './eastern-time.js';
 const MODE_LABELS = {
   standing: 'Standing permission', approval: 'Ask me first',
   personal: 'My own action', unavailable: 'Unavailable',
@@ -16,10 +17,16 @@ const remainingAccessDays = expiresAt => {
   return Number.isFinite(remaining) && remaining > 0 ? Math.min(365, Math.max(1, Math.ceil(remaining / 86400000))) : 7;
 };
 const text = value => String(value ?? '');
-const dateText = value => {
-  const date = new Date(value);
-  return value && Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Not recorded';
-};
+const dateText = formatEasternTimestamp;
+const clockFields = new Set(['openingTime', 'closingTime', 'eventTime', 'startTime', 'endTime', 'scheduledTime', 'start', 'end']);
+const displayRequestDetails = value => JSON.stringify(value, (key, entry) => {
+  if (typeof entry !== 'string') return entry;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/i.test(entry)) {
+    return formatEasternTimestamp(entry, entry);
+  }
+  return clockFields.has(key) ? formatEasternClockRange(entry) : entry;
+}, 2);
+
 const node = (tag, content, className) => {
   const element = document.createElement(tag);
   if (content !== undefined) element.textContent = text(content);
@@ -248,10 +255,10 @@ export class AssistantWorkspace {
       if (request.effects?.length) { article.append(node('strong', 'What this action changes'), effectsList(request.effects)); }
       const details = node('details'); details.append(node('summary', 'Exact proposed change'));
       details.append(node('p', `${text(request.method)} ${text(request.path)}`, 'assistant-route'));
-      details.append(node('pre', JSON.stringify(request.body ?? {}, null, 2), 'assistant-change')); article.append(details);
+      details.append(node('pre', displayRequestDetails(request.body ?? {}), 'assistant-change')); article.append(details);
       if (request.decisionNote) article.append(node('p', `Decision note: ${request.decisionNote}`));
-      if (request.authorization) { const authorization = node('details'); authorization.append(node('summary', 'Authorization record'), node('pre', JSON.stringify(request.authorization, null, 2), 'assistant-change')); article.append(authorization); }
-      if (request.receipt) { const receipt = node('details'); receipt.append(node('summary', 'Recorded outcome'), node('pre', JSON.stringify(request.receipt, null, 2), 'assistant-change')); article.append(receipt); }
+      if (request.authorization) { const authorization = node('details'); authorization.append(node('summary', 'Authorization record'), node('pre', displayRequestDetails(request.authorization), 'assistant-change')); article.append(authorization); }
+      if (request.receipt) { const receipt = node('details'); receipt.append(node('summary', 'Recorded outcome'), node('pre', displayRequestDetails(request.receipt), 'assistant-change')); article.append(receipt); }
       const message = notice(); const controls = node('div', undefined, 'row-buttons');
       if (personal) {
         article.append(node('p', 'This queue item opens your personal review. Supported signatures can also use a separate document-specific Muse request under your saved signature setting.', 'helper'));

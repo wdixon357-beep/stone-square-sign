@@ -6,6 +6,8 @@ const CLIENT_BUILD_VERSION = (() => {
   }
 })();
 
+let easternTime;
+const easternTimeReady = import(`/eastern-time.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`).then(module => { easternTime = module; });
 let minutesDates;
 const minutesDatesReady = import(`/minutes-dates.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`).then(module => { minutesDates = module; });
 let minutesAttendance;
@@ -154,8 +156,8 @@ const collectMinutesMeetingDetails = prefix => ({
   meetingType: $(`${prefix}MeetingType`).value === 'other'
     ? $(`${prefix}MeetingTypeOther`).value.trim() : $(`${prefix}MeetingType`).value,
   degree: $(`${prefix}Degree`).value,
-  openingTime: $(`${prefix}OpeningTime`).value.trim(),
-  closingTime: $(`${prefix}ClosingTime`).value.trim(),
+  openingTime: minutesMeetingDetails.formatMinutesClock($(`${prefix}OpeningTime`).value),
+  closingTime: minutesMeetingDetails.formatMinutesClock($(`${prefix}ClosingTime`).value),
   presiding: $(`${prefix}Presiding`).value.trim(),
   quorum: $(`${prefix}Quorum`).value,
   nextMeeting: minutesDates.minutesDateValue($(`${prefix}NextMeeting`).value),
@@ -181,6 +183,10 @@ const clearMinutesMeetingDetails = prefix => {
 
 const reflectMinutesMeetingDetails = prefix => {
   $(`${prefix}MeetingTypeOther`).classList.toggle('hidden', $(`${prefix}MeetingType`).value !== 'other');
+  for (const suffix of ['OpeningTime','ClosingTime']) {
+    const control = $(`${prefix}${suffix}`);
+    control.value = minutesMeetingDetails.formatMinutesClock(control.value);
+  }
   for (const suffix of ['MeetingDate','NextMeeting']) {
     const control = $(`${prefix}${suffix}`);
     control.value = minutesDates.formatMinutesDate(control.value);
@@ -196,7 +202,10 @@ const bindMinutesMeetingDetails = (prefix, draftName) => {
   };
   for (const id of minutesMeetingDetailFieldIds(prefix)) {
     $(id).addEventListener('input', remember);
-    $(id).addEventListener('change', remember);
+    $(id).addEventListener('change', () => {
+      if (id.endsWith('OpeningTime') || id.endsWith('ClosingTime')) $(id).value = minutesMeetingDetails.formatMinutesClock($(id).value);
+      remember();
+    });
   }
   $(`${prefix}MeetingType`).addEventListener('change', () => {
     const other = $(`${prefix}MeetingType`).value === 'other';
@@ -219,10 +228,13 @@ const bindMinutesMeetingDetails = (prefix, draftName) => {
 
 const restoreWebDrafts = () => {
   if (restoreSessionDraft('proposal', PROPOSAL_DRAFT_FIELDS)) {
+    $('propEventTime').value = easternTime.formatEasternClockRange($('propEventTime').value);
     state.proposalDirty = true;
     setMessage($('proposalMessage'), 'An unfinished proposal from this tab has been restored.');
   }
   if (restoreSessionDraft('dispensation', DISPENSATION_DRAFT_FIELDS)) {
+    const time = $('dispEventTime');
+    time.value = easternTime.formatEasternClock(time.value) || time.value;
     state.dispensationDirty = true;
     setMessage($('builderMessage'), 'An unfinished dispensation from this tab has been restored.');
   }
@@ -580,14 +592,7 @@ const roleLabel = (role) => ({
 }[role] || 'Signer');
 
 const initials = (name) => name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
-const formatDate = (date) => {
-  if (!date) return 'Date unavailable';
-  const value = new Date(date);
-  if (Number.isNaN(value.getTime())) return 'Date unavailable';
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-  }).format(value);
-};
+const formatDate = value => easternTime.formatEasternTimestamp(value, 'Date unavailable');
 
 /* An event date is a calendar day, not an instant. Parsing "2026-10-10" with new Date()
  * reads it as UTC midnight and shows the day before to anyone east of Greenwich, so build
@@ -604,20 +609,6 @@ const monthDayYearLabel = (value) => {
   if (!y || !m || !d) return value || 'Date needs review';
   return new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     .format(new Date(y, m - 1, d));
-};
-
-const formatClockTime = (value) => {
-  const [hour, minute] = String(value || '').split(':').map(Number);
-  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return value || '';
-  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' })
-    .format(new Date(2000, 0, 1, hour, minute));
-};
-
-const formatDateTime = value => {
-  const date = new Date(value);
-  return Number.isFinite(date.valueOf()) ? new Intl.DateTimeFormat('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-  }).format(date) : String(value || 'Date not recorded');
 };
 
 const easternGreeting = () => {
@@ -823,10 +814,10 @@ const fillFormFromParsedDispensation = () => {
   const fields = state.parsedDispensation?.fields;
   if (!fields) return;
   $('dispTitle').value = fields.title;
-  $('dispRequestDate').value = fields.requestDate || builderTodayValue;
+  $('dispRequestDate').value = fields.requestDate || easternTime.easternDateKey();
   $('dispRequestDetails').value = fields.requestDetails;
   $('dispEventDate').value = fields.eventDate;
-  $('dispEventTime').value = fields.eventTime;
+  $('dispEventTime').value = easternTime.formatEasternClock(fields.eventTime);
   $('dispLocationName').value = fields.locationName;
   $('dispStreet').value = fields.streetAddress;
   $('dispCityState').value = fields.cityState;
@@ -1067,7 +1058,7 @@ const renderReceivedReports = async () => {
     } else state.receivedReports.forEach(report => {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'received-report-row';
       const heading = document.createElement('strong'); heading.textContent = report.title;
-      const details = document.createElement('span'); details.textContent = `${report.preparedBy} · ${report.office} · ${formatDateTime(report.submittedAt)}`;
+      const details = document.createElement('span'); details.textContent = `${report.preparedBy} · ${report.office} · ${formatDate(report.submittedAt)}`;
       const type = document.createElement('small'); type.textContent = `${report.type.charAt(0).toUpperCase()}${report.type.slice(1)} report`;
       button.append(heading, details, type); button.addEventListener('click', () => void openReceivedReport(report)); list.append(button);
     });
@@ -1310,8 +1301,7 @@ const refreshHomeCalendar = async () => {
   const list = $('homeUpcomingEvents');
   if (!state.user || !can('calendar.view')) { list.replaceChildren(); return; }
   const userId = state.user.id;
-  const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
-  const easternDate = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+  const easternDate = easternTime.easternDateKey();
   const until = new Date(`${easternDate}T12:00:00Z`);
   until.setUTCDate(until.getUTCDate() + 60);
   const endDate = until.toISOString().slice(0, 10);
@@ -1332,7 +1322,8 @@ const refreshHomeCalendar = async () => {
       title.textContent = event.title;
       const details = document.createElement('small');
       const day = new Date(`${event.startDate}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-      details.textContent = [day, event.startTime ? formatClockTime(event.startTime) : '', event.location || '', event.status !== 'scheduled' ? event.status : ''].filter(Boolean).join(' · ');
+      const clock = easternTime.formatEasternClock(event.startTime);
+      details.textContent = [day, clock ? `${clock} ET` : '', event.location || '', event.status !== 'scheduled' ? event.status : ''].filter(Boolean).join(' · ');
       button.append(title, details);
       button.addEventListener('click', () => showWorkspaceSection('calendar'));
       list.append(button);
@@ -1653,8 +1644,8 @@ const collectMinutesDraft = () => ({
     ? $('minutesMeetingTypeOther').value.trim()
     : $('minutesMeetingType').value,
   degree: $('minutesDegree').value.trim() || null,
-  openingTime: $('minutesOpeningTime').value.trim() || null,
-  closingTime: $('minutesClosingTime').value.trim() || null,
+  openingTime: minutesMeetingDetails.formatMinutesClock($('minutesOpeningTime').value) || null,
+  closingTime: minutesMeetingDetails.formatMinutesClock($('minutesClosingTime').value) || null,
   prayerRequested: currentMinutes()?.draft.prayerRequested ?? null,
   closingPrayerGiven: $('minutesClosingPrayerGiven').value === '' ? null : $('minutesClosingPrayerGiven').value === 'true',
   presiding: $('minutesPresiding').value.trim() || null,
@@ -2415,8 +2406,8 @@ const openMinutesEditor = (id) => {
     'Third Degree of Masonry': 'Third Degree',
   };
   $('minutesDegree').value = legacyDegrees[draft.degree] || draft.degree || '';
-  $('minutesOpeningTime').value = draft.openingTime || '';
-  $('minutesClosingTime').value = draft.closingTime || '';
+  $('minutesOpeningTime').value = minutesMeetingDetails.formatMinutesClock(draft.openingTime);
+  $('minutesClosingTime').value = minutesMeetingDetails.formatMinutesClock(draft.closingTime);
   $('minutesClosingPrayerGiven').value = typeof draft.closingPrayerGiven === 'boolean' ? String(draft.closingPrayerGiven) : '';
   $('minutesPresiding').value = draft.presiding || '';
   $('minutesQuorum').value = /^(yes|quorum present|established)$/i.test(draft.quorum || '') ? 'Yes'
@@ -2644,11 +2635,11 @@ const proposalFields = () => ({
   title: $('propTitle').value.trim(),
   requestDetails: $('propDetails').value.trim(),
   eventDate: $('propEventDate').value,
-  eventTime: $('propEventTime').value.trim(),
+  eventTime: easternTime.formatEasternClockRange($('propEventTime').value),
   locationName: $('propLocation').value.trim(),
   streetAddress: $('propStreet').value.trim(),
   cityState: $('propCityState').value.trim(),
-  requestDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
+  requestDate: easternTime.easternDateKey(),
   proposerNote: $('propNote').value.trim(),
 });
 
@@ -2691,7 +2682,7 @@ const renderProposals = async () => {
     );
     card.append(head);
     card.append(Object.assign(document.createElement('p'), { className: 'muted', textContent: `Proposed by ${p.proposerName}` }));
-    if (p.eventDate) card.append(Object.assign(document.createElement('p'), { textContent: `${eventDayLabel(p.eventDate)}${p.eventTime ? `, ${p.eventTime}` : ''}` }));
+    if (p.eventDate) card.append(Object.assign(document.createElement('p'), { textContent: `${eventDayLabel(p.eventDate)}${p.eventTime ? `, ${easternTime.formatEasternClockRange(p.eventTime)}` : ''}` }));
     if (p.requestDetails) card.append(Object.assign(document.createElement('p'), { textContent: p.requestDetails }));
     if (p.proposerNote) card.append(Object.assign(document.createElement('p'), { className: 'muted', textContent: `His note: ${p.proposerNote}` }));
     if (p.wmNote) card.append(Object.assign(document.createElement('p'), { className: 'muted', textContent: `From the Master: ${p.wmNote}` }));
@@ -2722,13 +2713,13 @@ const renderProposals = async () => {
         edit('What it is', 'title', p.title),
         edit('What is being asked', 'requestDetails', p.requestDetails),
         edit('Date of the event', 'eventDate', p.eventDate, 'date'),
-        edit('Time', 'eventTime', p.eventTime),
+        edit('Time (Eastern)', 'eventTime', easternTime.formatEasternClockRange(p.eventTime)),
         edit('Where', 'locationName', p.locationName),
         edit('Street', 'streetAddress', p.streetAddress),
         edit('City and state', 'cityState', p.cityState),
       );
       const editedFields = () => Object.fromEntries(
-        [...editor.querySelectorAll('[data-key]')].map((el) => [el.dataset.key, el.value.trim()]),
+        [...editor.querySelectorAll('[data-key]')].map((el) => [el.dataset.key, el.dataset.key === 'eventTime' ? easternTime.formatEasternClockRange(el.value) : el.value.trim()]),
       );
       const look = Object.assign(document.createElement('button'),
         { type: 'button', className: 'secondary', textContent: 'See it as it stands' });
@@ -2777,7 +2768,7 @@ const renderProposals = async () => {
         $('propTitle').value = p.title || '';
         $('propDetails').value = p.requestDetails || '';
         $('propEventDate').value = p.eventDate || '';
-        $('propEventTime').value = p.eventTime || '';
+        $('propEventTime').value = easternTime.formatEasternClockRange(p.eventTime);
         $('propLocation').value = p.locationName || '';
         $('propStreet').value = p.streetAddress || '';
         $('propCityState').value = p.cityState || '';
@@ -3229,6 +3220,9 @@ for (const id of ['minutesMeetingDate', 'minutesNextMeeting']) {
     $(id).value = minutesDates.formatMinutesDate(id === 'minutesMeetingDate' ? dateValue : minutesDates.replaceMinutesDate($(id).value, dateValue));
   });
 }
+for (const id of ['minutesOpeningTime', 'minutesClosingTime']) {
+  $(id).addEventListener('change', () => { $(id).value = minutesMeetingDetails.formatMinutesClock($(id).value); });
+}
 $('minutesEditorForm').addEventListener('input', () => { state.minutesEditorDirty = true; scheduleMinutesPreview(); });
 $('minutesEditorForm').addEventListener('change', () => { state.minutesEditorDirty = true; scheduleMinutesPreview(); });
 $('reorganizeMinutes').addEventListener('click', async () => {
@@ -3477,7 +3471,7 @@ const renderDocuments = async () => {
           note.textContent = doc.submission_message;
           if (['awaiting_report', 'failed', 'uncertain'].includes(doc.submission_state)) note.classList.add('queue-submission-warn');
         } else if (doc.submitted_at) {
-          note.textContent = `Email submission recorded ${new Date(doc.submitted_at).toLocaleString()}. Receipt is not confirmed.`;
+          note.textContent = `Email submission recorded ${formatDate(doc.submitted_at)}. Receipt is not confirmed.`;
         } else {
           note.textContent = doc.submitted_error
             ? `NOT sent to the District Deputy. ${doc.submitted_error}`
@@ -3815,9 +3809,6 @@ $('uploadShortcut').addEventListener('click', () => {
   $('uploadPanel').scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
 
-const builderToday = new Date();
-const builderTodayValue = [builderToday.getFullYear(), String(builderToday.getMonth() + 1).padStart(2, '0'), String(builderToday.getDate()).padStart(2, '0')].join('-');
-$('dispRequestDate').value = builderTodayValue;
 ['dispMasterAddress'].forEach((id) => {
   $(id).addEventListener('input', () => { $('confirmSubmissionProfiles').checked = false; });
 });
@@ -3847,10 +3838,8 @@ $('reviewPastedDetails').addEventListener('click', async () => {
       if (key === 'signerRole') {
         displayValue = result.fields[key] === 'assistant_secretary'
           ? SIGNER_CHOICES.assistant_secretary.label : SIGNER_CHOICES.both.label;
-      } else if (key === 'eventTime' && /^\d{1,2}:\d{2}$/.test(result.fields[key] || '')) {
-        const [hourText, minute] = result.fields[key].split(':');
-        const hour = Number(hourText);
-        displayValue = `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
+      } else if (key === 'eventTime') {
+        displayValue = easternTime.formatEasternClock(result.fields[key]) || 'Not found';
       } else if ((key === 'requestDate' || key === 'eventDate') && /^\d{4}-\d{2}-\d{2}$/.test(result.fields[key] || '')) {
         displayValue = new Intl.DateTimeFormat('en-US', { dateStyle: 'long', timeZone: 'UTC' })
           .format(new Date(`${result.fields[key]}T12:00:00Z`));
@@ -3911,7 +3900,7 @@ const dispensationPayload = () => ({
   signerRoles: signerChoice().roles,
   requestDetails: $('dispRequestDetails').value.trim(),
   eventDate: $('dispEventDate').value,
-  eventTime: $('dispEventTime').value,
+  eventTime: easternTime.easternClockForStorage($('dispEventTime').value),
   locationName: $('dispLocationName').value.trim(),
   streetAddress: $('dispStreet').value.trim(),
   cityState: $('dispCityState').value.trim(),
@@ -3922,6 +3911,11 @@ const dispensationPayload = () => ({
 $('dispensationForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const message = $('builderMessage');
+  if (!dispensationPayload().eventTime) {
+    $('dispEventTime').closest('.parsed-covered')?.classList.remove('hidden');
+    $('dispEventTime').focus();
+    return setMessage(message, 'Enter the event time in Eastern Time with AM or PM.', true);
+  }
   try {
     setMessage(message, 'Creating your PDF preview...');
     const blob = await apiFetch('/api/dispensations/preview', { method: 'POST', body: JSON.stringify(dispensationPayload()) });
@@ -3931,7 +3925,7 @@ $('dispensationForm').addEventListener('submit', async (event) => {
     const payload = dispensationPayload();
     const rows = [
       ['Title', payload.title], ['Request', payload.requestDetails],
-      ['Event', `${payload.eventDate} at ${formatClockTime(payload.eventTime)}`],
+      ['Event', `${payload.eventDate} at ${easternTime.formatEasternClock(payload.eventTime)} ET`],
       ['Location', `${payload.locationName}, ${payload.streetAddress}, ${payload.cityState}`],
       ['Send to', signerChoice().label],
       ['Worshipful Master address', payload.worshipfulMasterAddress],
@@ -3963,7 +3957,7 @@ $('sendDispensation').addEventListener('click', async () => {
     $('dispensationForm').reset();
     state.dispensationDirty = false;
     clearSessionDraft('dispensation');
-    $('dispRequestDate').value = builderTodayValue;
+    $('dispRequestDate').value = easternTime.easternDateKey();
     applySubmissionProfiles();
     document.querySelectorAll('.parsed-covered').forEach((element) => element.classList.remove('hidden'));
     hide($('remainingQuestionsIntro'));
@@ -4359,7 +4353,8 @@ $('dispensationForm').addEventListener('invalid', (event) => {
 }, true);
 
 const initialize = async () => {
-  try { await Promise.all([minutesDatesReady, minutesAttendanceReady, minutesMeetingDetailsReady]); } catch { setMessage(authMessage, 'The minutes controls could not load. Reload this page to reconnect.', true); return; }
+  try { await Promise.all([easternTimeReady, minutesDatesReady, minutesAttendanceReady, minutesMeetingDetailsReady]); } catch { setMessage(authMessage, 'The dashboard controls could not load. Reload this page to reconnect.', true); return; }
+  $('dispRequestDate').value = easternTime.easternDateKey();
   const inviteEmail = new URLSearchParams(window.location.search).get('email');
   if (inviteEmail) $('registerEmail').value = inviteEmail;
   try {
@@ -4446,10 +4441,10 @@ const exportDuesLedger = async format => {
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setMessage(exportMessage, `Timestamped current ledger snapshot downloaded: ${filename}. Refreshing the screen…`);
+    setMessage(exportMessage, 'Timestamped current ledger snapshot downloaded. Refreshing the screen…');
     await renderDues(true);
     if (state.authEpoch === authEpoch && state.user?.id === userId) {
-      setMessage(exportMessage, `Timestamped current ledger snapshot downloaded: ${filename}`);
+      setMessage(exportMessage, 'Timestamped current ledger snapshot downloaded.');
     }
   } catch (error) {
     if (state.authEpoch === authEpoch && state.user?.id === userId) setMessage(exportMessage, error.message, true);

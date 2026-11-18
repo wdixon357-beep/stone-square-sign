@@ -52,11 +52,8 @@ private struct AgendaDeletePayload: Encodable { let revision: Int }
     private var generation = 0
 
     private func savedLabel(_ value: String) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = parser.date(from: value) ?? ISO8601DateFormatter().date(from: value)
-        guard let date else { return "Draft saved" }
-        return "Last saved \(date.formatted(date: .abbreviated, time: .shortened))"
+        let date = LodgeDateTime.display(value, format: "MMM d, yyyy 'at' h:mm a z", fallback: "")
+        return date.isEmpty ? "Draft saved" : "Last saved \(date)"
     }
 
     func configure(_ model: AppModel) { transport.configure(model) }
@@ -156,14 +153,14 @@ struct AgendaCreatorView: View {
                 Section("Meeting details") {
                     TextField("Meeting date, YYYY-MM-DD", text: binding(\.meetingDate))
                     Picker("Meeting type", selection: binding(\.meetingType)) { Text("Stated Communication").tag("Stated Communication"); Text("Special Communication").tag("Special Communication") }
-                    HStack { TextField("Start time", text: binding(\.startTime)); TextField("Dress", text: binding(\.dress)) }
+                    HStack { LodgeClockField(title: "Start time (Eastern)", value: binding(\.startTime), preserveAmbiguous: true); TextField("Dress", text: binding(\.dress)) }
                     TextField("Optional note below the title", text: binding(\.subtitle), axis: .vertical).lineLimit(2...4)
                 }
                 Section("Order of business") {
                     ForEach(workspace.draft?.sections.indices ?? 0..<0, id: \.self) { index in
                         VStack(alignment: .leading, spacing: 8) {
                             HStack { Text("Section \(index + 1)").font(.headline); Spacer(); Button("Up") { workspace.move(index, by: -1) }.disabled(index == 0); Button("Down") { workspace.move(index, by: 1) }.disabled(index == (workspace.draft?.sections.count ?? 1) - 1); Button("Remove", role: .destructive) { workspace.removeSection(index) } }
-                            HStack { TextField("Heading", text: section(index, \.heading)); TextField("Target time", text: section(index, \.scheduledTime)).frame(width: 110) }
+                            HStack { TextField("Heading", text: section(index, \.heading)); LodgeClockField(title: "Target time (Eastern)", value: section(index, \.scheduledTime), preserveAmbiguous: true).frame(width: 110) }
                             TextEditor(text: section(index, \.body)).frame(minHeight: 85).padding(5).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                         }.padding(.vertical, 8)
                     }
