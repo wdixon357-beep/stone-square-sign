@@ -3,7 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { dbAll, dbGet, dbRun, withTransaction, withAuditActor } from './db.js';
 import { currentAssistant, requireHumanOwner } from './assistant-access.js';
 import { validateAssistantInstruction } from './assistant-instructions.js';
-import { canonicalAssistantPath, resolveAssistantAction, stableJson, digest, assistantError } from './assistant-actions.js';
+import { canonicalAssistantPath, resolveAssistantAction, stableJson, digest, assistantError, nativeAssistantReviewUrl } from './assistant-actions.js';
 import { assertApprovedSignature } from './signature-policy.js';
 
 const now = () => new Date().toISOString();
@@ -90,6 +90,7 @@ export function serializeSignatureRequest(row) {
     effects:parse(row.effects_json,[]),signingRole:row.signing_role,ready:status==='pending',
     reason:status==='expired'?'This confirmation expired. Ask Muse to prepare a new request.':row.reason || null,
     authorizationUrl:`${approvalOrigin()}/?signatureRequest=${encodeURIComponent(row.id)}`,
+    nativeReviewUrl:status==='pending' ? nativeAssistantReviewUrl('signature',row.id) : null,
     ...(row.receipt_json?{receipt:parse(row.receipt_json)}:{}) };
 }
 async function findRequest(id, ownerId, assistantId = null, lock = false) {

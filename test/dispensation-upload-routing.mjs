@@ -146,6 +146,17 @@ try {
       signerRoles: ['secretary'] } });
   assert.equal(official.status, 201, JSON.stringify(official.data));
   const officialId = official.data.document.id;
+  const supporting = new FormData();
+  supporting.set('report',new Blob([ordinaryBytes],{type:'application/pdf'}),'Supporting report.pdf');
+  assert.equal((await api(`/api/documents/${officialId}/supporting-report`,{token:owner,method:'PUT',form:supporting})).status,200);
+  const packet = value(await mcp('read',{path:`/api/documents/${officialId}/submission-packet`})).packet;
+  assert.equal(packet.documentId,officialId);
+  assert.equal(packet.report.filename,'Supporting report.pdf');
+  assert.equal(packet.emailFollowThrough,'spark');
+  for (const field of ['recipient','draft','missiveDraft','message']) assert.equal(Object.hasOwn(packet,field),false);
+  const supportPdf=await mcp('read_file',{path:`/api/documents/${officialId}/supporting-report`});
+  assert.equal(supportPdf.isError,undefined);
+  assert.deepEqual(Buffer.from(supportPdf.content[0].resource.blob,'base64'),ordinaryBytes);
   const beforeSigning = (await api(`/api/documents/${officialId}`, { token: owner })).data.document;
   assert.equal(beforeSigning.template_kind, 'dispensation_v1');
   assert.equal(beforeSigning.signing_mode, 'any');

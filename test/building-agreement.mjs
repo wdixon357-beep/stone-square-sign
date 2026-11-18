@@ -67,7 +67,8 @@ assert.match(sheetGuards, /\.onChange\(of: model\.user\?\.can\("building\.view"\
   'Revoking building.view for the same account clears the existing private sheet.');
 assert.match(sheetGuards, /\.onChange\(of: model\.user\?\.id\).*recordedAgreement = nil/);
 assert.match(sheetGuards, /\.onChange\(of: model\.user\?\.role\).*recordedAgreement = nil/);
-assert.match(sheetGuards, /\.onChange\(of: selectedID\).*recordedAgreement = nil/);
+assert.match(sheetGuards, /\.onChange\(of: selectedID\)\s*\{ _, id in\s*recordedAgreement = nil/,
+  'Selecting a different request clears the private agreement sheet.');
 const openAgreement = native.slice(native.indexOf('private func openAgreement('), native.indexOf('private struct BuildingAgreementRecordView:'));
 assert.match(openAgreement, /model\.user\?\.id == userID, model\.user\?\.can\("building\.view"\) == true/);
 assert.match(openAgreement, /selectedID == request\.id, selected\?\.revision == request\.revision/);

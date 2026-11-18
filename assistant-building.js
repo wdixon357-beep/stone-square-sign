@@ -3,7 +3,12 @@ import { BUILDING_STORE_MAX_VALUE_BYTES } from './building-store.js';
 import { assistantError, digest } from './assistant-actions.js';
 
 const string = (value, length = 500) => typeof value === 'string' ? value.slice(0,length) : '';
-const safeTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value.slice(0,40) : null;
+const safeTime = value => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value))) return null;
+  const day = value.slice(0, 10), utcDay = new Date(`${day}T00:00:00Z`);
+  return Number.isFinite(utcDay.getTime()) && utcDay.toISOString().slice(0, 10) === day ? value : null;
+};
+const recordedFlag = value => typeof value === 'boolean' ? value : null;
 const status = value => ['pending','approved','denied','cancelled'].includes(value) ? value : 'unknown';
 const hasTable = async table => Boolean((await dbGet('SELECT to_regclass(?) AS present',[`public.${table}`]))?.present);
 
@@ -35,32 +40,58 @@ export async function readAssistantBuildingArchive() {
   return {records,revision:row.revision,sha256:row.actual_sha256,byteLength:Number(row.value_bytes)};
 }
 
+function projectBuildingRequest(record, filing) {
+    const agreement=record.agreement && typeof record.agreement==='object' ? record.agreement : {};
+    const revision=digest(JSON.stringify(record));
+    const agreementStatus=['awaiting_secretary_attestation','fully_executed'].includes(agreement.reviewStatus)
+      ? agreement.reviewStatus : ['awaiting_secretary_attestation','fully_executed'].includes(record.agreementStatus)
+        ? record.agreementStatus : string(agreement.reviewStatus,80)||'pending';
+    const notices = [
+      ['requesterReceipt', record.receiptSent],
+      ['worshipfulMasterSubmission', record.wmNotified, record.wmNotifiedAt],
+      ['wardenSubmission', record.wardenNotified, record.wardenNotifiedAt],
+      ['requesterDecision', record.requesterNotified, record.requesterNotifiedAt],
+    ];
+    // An explicit allowlist prevents newly added portal fields from silently
+    // returning status secrets, private links, payment URLs or handwriting.
+    return {id:record.id,organization:string(record.org||record.organization,500),
+      contactName:string(record.name||record.contactName,250),contact:string(record.contact,250),phone:string(record.phone,50),
+      date:string(record.date,40),start:string(record.start,12),end:string(record.end,12),
+      spaces:Array.isArray(record.spaces)?record.spaces.filter(item=>typeof item==='string').slice(0,10).map(item=>item.slice(0,100)):[],
+      description:string(record.purpose||record.description,3000),status:status(record.status),note:string(record.note,3000),
+      createdAt:safeTime(record.createdAt),decidedAt:safeTime(record.decidedAt),decidedBy:string(record.decidedBy,250),revision,
+      agreementStatus,requesterNotified:recordedFlag(record.requesterNotified),
+      notices:Object.fromEntries(notices.map(([name,sent,at])=>[name,{sent:recordedFlag(sent),sentAt:sent===true?safeTime(at):null}])),
+      decisionAudience:record.decisionAudience==='owner'?'owner':null,
+      bathroomAccess:recordedFlag(record.bathroomAccess),
+      attestedBy:agreement.secretaryAttestation?.attestedAt ? {name:string(agreement.secretaryAttestation.name,250),
+        title:string(agreement.secretaryAttestation.title,100),at:safeTime(agreement.secretaryAttestation.attestedAt)} : null,
+      filedCompletedAt:filing?.filed_revision===revision?safeTime(filing.filed_at):null,
+      canDecide:false,canAttest:false,canFile:false,personalReviewRequired:true};
+}
+
 export async function assistantBuildingProjection() {
   const archive = await readAssistantBuildingArchive();
   const filed = await hasTable('building_workflow_records')
     ? await dbAll('SELECT request_id,filed_revision,filed_at FROM building_workflow_records WHERE filed_revision IS NOT NULL') : [];
   const filingById = new Map(filed.map(row=>[row.request_id,row]));
-  const requests = archive.records.map(record=>{
-    const agreement=record.agreement && typeof record.agreement==='object' ? record.agreement : {};
-    const revision=digest(JSON.stringify(record)), filing=filingById.get(record.id);
-    const agreementStatus=['awaiting_secretary_attestation','fully_executed'].includes(agreement.reviewStatus)
-      ? agreement.reviewStatus : ['awaiting_secretary_attestation','fully_executed'].includes(record.agreementStatus)
-        ? record.agreementStatus : string(agreement.reviewStatus,80)||'pending';
-    // An explicit allowlist prevents newly added portal fields from silently
-    // returning status secrets, private links, payment URLs or handwriting.
-    return {id:record.id,organization:string(record.org||record.organization,500),
-      contactName:string(record.name||record.contactName,250),contact:string(record.contact,250),phone:string(record.phone,50),
-      date:string(record.date,10),start:string(record.start,5),end:string(record.end,5),
-      spaces:Array.isArray(record.spaces)?record.spaces.filter(item=>typeof item==='string').slice(0,10).map(item=>item.slice(0,100)):[],
-      description:string(record.purpose||record.description,3000),status:status(record.status),note:string(record.note,3000),
-      decidedAt:safeTime(record.decidedAt),decidedBy:string(record.decidedBy,250),revision,
-      agreementStatus,requesterNotified:record.requesterNotified===true,
-      attestedBy:agreement.secretaryAttestation?.attestedAt ? {name:string(agreement.secretaryAttestation.name,250),
-        title:string(agreement.secretaryAttestation.title,100),at:safeTime(agreement.secretaryAttestation.attestedAt)} : null,
-      filedCompletedAt:filing?.filed_revision===revision?safeTime(filing.filed_at):null,
-      canDecide:false,canAttest:false,canFile:false,personalReviewRequired:true};
-  });
+  const requests = archive.records.map(record=>projectBuildingRequest(record,filingById.get(record.id)));
   return {requests,canDecide:false,readOnly:true,source:'verified_local_postgres',archiveRevision:archive.revision};
+}
+
+export async function assistantBuildingReviewSource(id) {
+  const archive = await readAssistantBuildingArchive();
+  const record = archive.records.find(item => item.id === id);
+  if (!record) throw assistantError(404, 'Building request not found.');
+  const filing = await hasTable('building_workflow_records')
+    ? await dbGet('SELECT filed_revision,filed_at FROM building_workflow_records WHERE request_id=?',[id]) : null;
+  // The public calendar intentionally omits reservation IDs. Compare and exclude
+  // the reviewed request using this same verified snapshot, where identity is known.
+  const reservations = archive.records.filter(item=>item.date===record.date && item.status!=='denied').map(item=>({
+    id:item.id, start:string(item.start,12), end:string(item.end,12),
+    label:string(item.org||'Reserved',500), status:status(item.status), allDay:false, source:'reservation',
+  }));
+  return {request:projectBuildingRequest(record,filing),reservations,archiveRevision:archive.revision};
 }
 
 export async function assistantBuildingAlerts() {

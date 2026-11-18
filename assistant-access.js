@@ -3,7 +3,8 @@ import { validateAssistantInstruction } from './assistant-instructions.js';
 import { dbAll, dbGet, dbRun, withTransaction, isUniqueViolation, isDatabaseTransactionActive } from './db.js';
 import { ASSISTANT_CAPABILITIES, assistantCapability, assistantError, digest, stableJson,
   canonicalAssistantPath, resolveAssistantAction, isAssistantControlRoute, assistantRecordState,
-  assertNoAssistantAttestation } from './assistant-actions.js';
+  assertNoAssistantAttestation, assertProposalFeedback, describeAssistantWorkflows,
+  nativeAssistantReviewUrl, supportedAssistantSignatures } from './assistant-actions.js';
 export { ASSISTANT_CAPABILITIES, resolveAssistantAction, isAssistantControlRoute } from './assistant-actions.js';
 
 const TOKEN_PREFIX = 'ss22_muse_';
@@ -180,6 +181,7 @@ const recordFingerprint = async (action,row) => digest(stableJson(await assistan
 const requestFingerprint = (row, action, payload, record) => digest(stableJson({ assistantId:row.id,ownerId:row.owner_user_id,
   policyVersion:row.policy_version,actionId:action.id,method:action.method,path:action.path,payload,record }));
 async function checkBodyClaims(action,body,ownerId) {
+  if (action.id==='owner.proposals-feedback') assertProposalFeedback(body);
   const kind=action.recordTable==='meeting_minutes'?'minutes':action.recordTable==='treasury_reports'?'treasury':null;
   const record=kind ? await assistantRecordState(action,ownerId) : null;
   const existingDraft=parse(record?.draft_json);
@@ -200,9 +202,11 @@ async function checkBodyClaims(action,body,ownerId) {
 }
 export function serializeAssistantRequest(row) {
   const action = assistantCapability(row.action_id);
+  const reviewIsCurrent = ['pending','personal'].includes(row.status) && Date.parse(row.expires_at) > Date.now();
   return { id:row.id,actionId:row.action_id,title:row.title,method:row.method,path:row.path,body:parse(row.body_json,{}),
     files:parse(row.files_json,[]),status:row.status,fingerprint:row.fingerprint,createdAt:row.created_at,expiresAt:row.expires_at,
     decidedAt:row.decided_at,decisionNote:row.decision_note,effects:action?.effects || [],
+    nativeReviewUrl:reviewIsCurrent ? nativeAssistantReviewUrl('review',row.id) : null,
     navigation:parse(row.navigation_json),receipt:parse(row.receipt_json),authorization:parse(row.authorization_json),mode:action?.mode || 'unavailable' };
 }
 
@@ -482,14 +486,19 @@ export async function listAssistantAttestations(ownerId) {
     }
   }
   const service = await serviceByOwner(ownerId);
+  const discovered = items.slice();
+  const matchedKinds = { 'owner.minutes-master':'minutes_master', 'owner.minutes-preparer':'minutes_preparer',
+    'owner.treasury-attest':'treasury_preparer', 'documents.sign':'document_signature',
+    'building.decide':'building_decision', 'owner.building-file':'building_file' };
   if (service) for (const request of await dbAll("SELECT * FROM assistant_requests WHERE assistant_id=? AND status='personal' AND expires_at>? ORDER BY created_at DESC LIMIT 150",[service.id,now()])) {
     const action = resolveAssistantAction(request.method,request.path), navigation = parse(request.navigation_json);
-    // Link a discovered record once; preserve the request for its exact receipt.
-    const existing = items.find(item => item.recordId === action.recordId && item.section === navigation?.section);
-    if (existing) { existing.requestId = request.id; continue; }
+    // Each exact request remains independently addressable, even for a shared target.
+    const existing = action.recordId && discovered.find(item => item.recordId === action.recordId && item.kind === matchedKinds[action.id]);
+    if (existing && !existing.requestId) { existing.requestId = request.id; continue; }
     add({id:`request:${request.id}`,kind:'personal_request',recordId:action.recordId,title:request.title,status:'personal',
       section:navigation?.section||'profile',revision:request.record_fingerprint,requestId:request.id,
-      attestationText:action.description,effects:action.effects});
+      attestationText:action.description,effects:action.effects,
+      ...(existing ? { ready:existing.ready, reason:existing.reason } : {})});
   }
   return items;
 }
@@ -497,13 +506,24 @@ export async function listAssistantAttestations(ownerId) {
 const personalBody = value => value && typeof value==='object' && !Array.isArray(value)
   ? Object.fromEntries(Object.entries(value).filter(([key])=>!['personalInfoConfirmed','consent','signatureData','signature','acknowledgeAvailabilityWarning'].includes(key)).map(([key,item])=>[key,personalBody(item)]))
   : Array.isArray(value)?value.map(personalBody):value;
+function reviewBodyFor(action, value) {
+  const body = personalBody(value);
+  if (action.id === 'building.decide' && ['approved','denied'].includes(body?.decision)) {
+    if (body.note === undefined) body.note = '';
+    if (body.authorization === null) delete body.authorization;
+    if (body.authorization && typeof body.authorization === 'object' && !Array.isArray(body.authorization)
+      && body.authorization.conditions === undefined) body.authorization.conditions = '';
+  }
+  return body;
+}
 export async function captureHumanAssistantReview(req) {
   if (req.assistant || req.user?.role!=='owner' || !['POST','PUT'].includes(req.method)) return null;
   let action;try {action=resolveAssistantAction(req.method,req.originalUrl||req.url||req.path);} catch {return null;}
   if (action.mode!=='personal') return null;
   const state=await assistantRecordState(action,req.user.id,{checkEligibility:false});
   return {actionId:action.id,path:action.path,fingerprint:digest(stableJson(state)),at:now(),
-    body:boundedJson(personalBody(req.body??{}))};
+    ...(action.recordTable==='building' ? { buildingState:state } : {}),
+    body:boundedJson(reviewBodyFor(action,req.body??{}))};
 }
 export async function observeHumanAssistantCompletion(req, { statusCode, response } = {}) {
   if (req.assistant || req.user?.role !== 'owner' || !Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) return;
@@ -516,7 +536,7 @@ export async function observeHumanAssistantCompletion(req, { statusCode, respons
   if (!service) return;
   const requests = await dbAll("SELECT * FROM assistant_requests WHERE assistant_id=? AND action_id=? AND path=? AND status='personal'",[service.id,action.id,action.path]);
   const matching=requests.filter(request=>{
-    const proposed=personalBody(parse(request.body_json,{}));
+    const proposed=reviewBodyFor(action,parse(request.body_json,{}));
     return (!Object.keys(proposed||{}).length || stableJson(proposed)===reviewed.body)
       && (!action.recordTable || request.record_fingerprint===reviewed.fingerprint);
   });
@@ -548,14 +568,28 @@ export async function observeHumanAssistantCompletion(req, { statusCode, respons
         actorType:'human',ownerUserId:req.user.id,observedAt:now(),refs,reason:'The returned references have not been independently matched to the original local archive submission.',automaticRetryAllowed:false}),request.id]);
       continue;
     }
-    const current = await assistantRecordState(action,service.owner_user_id,{checkEligibility:false}).then(state=>digest(stableJson(state))).catch(()=>null);
+    const currentState = await assistantRecordState(action,service.owner_user_id,{checkEligibility:false}).catch(()=>null);
+    const current = currentState ? digest(stableJson(currentState)) : null;
     // Successful personal POST/PUT plus an actual stored transition is a receipt.
     // Viewing a signature image or an unchanged record never completes a request.
     if (!current || current === request.record_fingerprint || req.method === 'GET') continue;
+    let evidence = {};
+    if (action.id === 'building.decide') {
+      const chosen = parse(reviewed.body);
+      if (reviewed.buildingState?.status !== 'pending' || chosen?.revision !== reviewed.buildingState.revision
+        || !['approved','denied'].includes(chosen?.decision) || currentState.status !== chosen.decision
+        || currentState.decisionActor !== 'wm') continue;
+      evidence = { recordId:action.recordId, recordStatus:currentState.status, requesterNotified:currentState.decisionNotified };
+    } else if (action.id === 'owner.building-file') {
+      const filing = currentState.filing;
+      if (currentState.revision !== reviewed.buildingState?.revision || filing?.filed_revision !== currentState.revision
+        || Number(filing.filed_by_user_id) !== Number(req.user.id) || !filing.filed_at) continue;
+      evidence = { recordId:action.recordId, filedCompletedAt:filing.filed_at };
+    }
     const receipt = {actorType:'human',ownerUserId:req.user.id,status:'completed_personally',observedAt:now(),statusCode,
-      actionId:action.id,recordFingerprint:current,automaticRetryAllowed:false};
-    await dbRun("UPDATE assistant_requests SET status='completed_personally',receipt_json=? WHERE id=? AND status='personal'",[stableJson(receipt),request.id]);
-    await activity(service,'human','personal_action_completed',request.id,{actionId:action.id});
+      actionId:action.id,recordFingerprint:current,automaticRetryAllowed:false,...evidence};
+    const saved = await dbRun("UPDATE assistant_requests SET status='completed_personally',receipt_json=? WHERE id=? AND status='personal'",[stableJson(receipt),request.id]);
+    if (saved.changes) await activity(service,'human','personal_action_completed',request.id,{actionId:action.id});
   }
 }
 
@@ -587,7 +621,15 @@ export function mountAssistantRoutes(app,{requireAuth,requireOwner}) {
   app.get('/api/assistant/me',requireAuth,route(async(req,res)=>{
     if (!req.assistant) throw assistantError(403,'Use a Muse Assistant service credential for this endpoint.');
     const row = await currentAssistant(req.assistant);
-    res.json({assistant:safeService(row),capabilities:ASSISTANT_CAPABILITIES.filter(action=>hasGrant(row,action)||action.mode==='personal'),
+    const assistant = safeService(row);
+    res.json({assistant,capabilities:ASSISTANT_CAPABILITIES.filter(action=>hasGrant(row,action)||action.mode==='personal'),
+      workflows:describeAssistantWorkflows(assistant),
+      externalWorkflows:[
+        { name:'Candidate Tracker', access:'separate_identity_required', detail:'The Tracker needs to accept a scoped assistant identity. Use the authenticated Dashboard client for personal access.' },
+        { name:'Grand View', access:'external_sign_in', detail:'Grand View manages its own access. The Dashboard does not have a direct Muse connection for it.' },
+        { name:'Report Generator completion', access:'owner_native_review', detail:'Muse can import and organize report material. Final report preview and delivery use the separate Report Generator with personal access.' },
+        { name:'Email', access:'spark', detail:'Use Spark for email review, drafting and explicitly authorized sending. Lodge action receipts and evidence of email delivery are separate.' },
+      ],
       instructions:{requests:'/api/assistant/requests',mcp:'/api/assistant/mcp',approvalHeader:'X-Assistant-Request-Id',idempotencyHeader:'Idempotency-Key',
         commandExecution:Boolean(row.command_execution),signatureExecution:Boolean(row.signature_execution),
         commandInstructions:row.command_execution
@@ -595,10 +637,10 @@ export function mountAssistantRoutes(app,{requireAuth,requireOwner}) {
           : 'Granted changes require the owner approval queue. Only the owner can enable execution of instructions through Muse.',
         instructionEndpoint:'/api/assistant/requests/:id/instruction',commandTools:['request_action','authorize_instruction','execute','requests'],
         personalActions:row.signature_execution
-          ? 'Catalog personal modes describe the base workflow. Direct business signing routes remain blocked, but supportedSignatureActions can execute through sign_instruction under this saved signature delegation without a separate portal tap. First use request_signature to freeze the exact document, then relay the specific instruction to sign. Never invent a personal review or sign for another officer; signature_status provides the receipt. Other personal actions use the existing owner workflow.'
-          : 'Direct signing remains blocked. For supported signing actions, request_signature prepares a frozen document confirmation. The authenticated owner authorizes and the system applies the signature; signature_status reads the receipt. Other personal actions use the existing owner workflow.',
+          ? 'Supported signatures can use sign_instruction under saved delegation. First use request_signature to freeze the exact document, then relay the specific instruction. For other personal actions, prepare an exact request and show nativeReviewUrl to open authenticated owner review in the Mac app. Read the authoritative receipt after any action.'
+          : 'Use request_signature to prepare an exact supported signature for owner confirmation. For other personal actions, prepare an exact request. The nativeReviewUrl opens review in the signed-in Mac app. Opening a link never authorizes an action. Read the authoritative receipt after completion.',
         signatureRequests:'/api/assistant/signature-requests',signatureInstructionEndpoint:'/api/assistant/signature-requests/:id/instruction',
-        signatureTools:['request_signature','sign_instruction','signature_status'],supportedSignatureActions:['documents.sign','owner.minutes-preparer','owner.minutes-master','owner.treasury-attest','owner.dispensation-sign'],unsupportedSignatureActions:['owner.proposals-decide','building.decide','owner.report-signature'],automaticRetryAllowed:false}});
+        signatureTools:['request_signature','sign_instruction','signature_status'],supportedSignatureActions:supportedAssistantSignatures,unsupportedSignatureActions:['owner.proposals-decide','building.decide','owner.report-signature'],automaticRetryAllowed:false}});
   }));
   app.get('/api/assistant/requests',requireAuth,route(async(req,res)=>{
     if (req.assistant) { const row = await currentAssistant(req.assistant); return res.json({requests:await listRequests(row.owner_user_id,row.id)}); }

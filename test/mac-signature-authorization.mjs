@@ -9,6 +9,7 @@ const root = path.resolve(new URL('..', import.meta.url).pathname);
 const source = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/AssistantSignatureAuthorization.swift'), 'utf8');
 const access = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/AssistantAccess.swift'), 'utf8');
 const api = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/APIClient.swift'), 'utf8');
+const link = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/MuseReviewLink.swift'), 'utf8');
 assert.equal((access.match(/AssistantSignatureQueue\(\)/g) || []).length, 2);
 assert.match(source, /Authorize and apply signature/);
 assert.match(source, /SHA256\.hash\(data: bytes\)/);
@@ -38,6 +39,7 @@ const out = path.join(root, 'output/signature-authorization-build'); fs.mkdirSyn
 try {
   const swift = path.join(scratch, 'tests.swift'), binary = path.join(scratch, 'tests');
   fs.writeFileSync(swift, `${source.slice(0,source.indexOf('// MARK: - Native signature views'))}
+${link}
 struct User { let id:Int; let role:String }
 enum SyntheticFailure: Error { case responseLost }
 @MainActor final class AppModel {
@@ -88,6 +90,17 @@ enum SyntheticFailure: Error { case responseLost }
         precondition(model.calls.allSatisfy { $0.1 == "GET" }, "Load and open must never sign")
         precondition(model.calls.last!.0 == "/api/assistant/signature-requests/SYNTHETIC%2FREQUEST")
         precondition(model.previewCalls == [request.id])
+        let linkedModel = AppModel(), linkedWorkspace = AssistantSignatureWorkspace()
+        linkedModel.handler = { _, method, body in
+            precondition(method == "GET" && body == nil)
+            return try response(["id":"LINKED-DOC"])
+        }
+        linkedModel.previewHandler = { _ in pdf }
+        await linkedWorkspace.inspectLinked(requestID:"LINKED-DOC",model:linkedModel)
+        precondition(linkedModel.calls.map { $0.0 } == ["/api/assistant/signature-requests/LINKED-DOC"])
+        precondition(linkedWorkspace.previewVerified && linkedWorkspace.canConfirm() && linkedModel.previewCalls == ["LINKED-DOC"])
+        await linkedWorkspace.inspectLinked(requestID:"OUTSIDE/ROUTE",model:linkedModel)
+        precondition(linkedModel.calls.count == 1, "Invalid link identifiers must never reach transport")
         precondition(!request.isActionable(at:Date(timeIntervalSince1970:4102444800)), "Expiry is enforced locally")
         let missingEffects=try JSONDecoder().decode(AssistantSignatureRequest.self,from:JSONSerialization.data(withJSONObject:(try JSONSerialization.jsonObject(with:response(["effects":[]])) as! [String:Any])["request"]!))
         precondition(!missingEffects.isActionable(), "The owner must see the action effects before authorization")

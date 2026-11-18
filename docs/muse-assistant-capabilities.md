@@ -1,10 +1,10 @@
 # Muse Assistant capability coverage
 
-Every existing named permission and owner workflow is represented. The table records base modes. With owner-saved `commandExecution`, all granted approval-mode actions can execute on a specific instruction without a second portal approval. With owner-saved `signatureExecution`, the five supported signature actions below can execute through the frozen-document engine. Other personal and unavailable actions retain their existing limits. Existing office and record rules still apply.
+The table records base modes. Use `workspace` for the current connection's actual operations and access. With owner-saved `commandExecution`, granted approval-mode actions can execute on a specific instruction under the existing office and record rules. With owner-saved `signatureExecution`, the five supported signature actions below can execute through the exact-document engine. Other personal actions open review in the signed-in Mac app when supported.
 
 Supported instructed signatures: `documents.sign`, `owner.dispensation-sign`, `owner.minutes-preparer`, `owner.minutes-master`, and `owner.treasury-attest`.
 
-The connection supports exact file uploads and protected document downloads. The legacy Missive draft retry is excluded; email follow-through uses Spark. Building, Candidate Tracker, Warden proposal decisions, Report Generator signing, security settings, signature-profile changes and approval assertions are not added by this release. Another officer's signature is never included.
+The connection supports exact file uploads, protected document downloads, standing PDF previews and existing report import. Building review includes submission timestamps and overlap evidence. Warden feedback supports an exact return or decline. Email follow-through uses Spark. Building decisions, Warden approval, Report Generator signing and account or signature changes remain personal. Direct Candidate Tracker and Grand View operations require their own service access. The owner only signs within the authority of his office.
 
 | Action | Work area | Mode | Boundary |
 | --- | --- | --- | --- |
@@ -24,8 +24,9 @@ The connection supports exact file uploads and protected document downloads. The
 | dues.manage | Record dues activity | approval | Propose exact adjustments or reversals; existing evidence rules remain. |
 | suggestions.create | Prepare confidential suggestions | approval | Propose an exact confidential submission. |
 | documents.status | View dispensations | standing | Read assigned or owner-visible documents, statuses and retained PDFs. |
+| owner.dispensation-packet | Review dispensation delivery records | standing | Read owner-only delivery status and supporting PDFs. Spark handles email follow-through. |
 | documents.sign | Sign assigned dispensations | personal | Open the complete document for your own signature. |
-| candidates.view | View Candidate Tracker | unavailable | The tracker requires an owner assertion which cannot be handed to an assistant credential. |
+| candidates.view | View Candidate Tracker | personal | Open the Tracker in the signed-in Mac app. Direct access requires a separate Tracker identity. |
 | candidates.edit | Edit Candidate Tracker | unavailable | External tracker changes are not exposed through this service identity. |
 | proposals.create | Submit personal dispensation proposals | unavailable | Proposal preparation is assigned to Wardens. Owner review is listed separately. |
 | signature.manage | Manage your signature | personal | Signature images and signature changes require your own action. |
@@ -45,6 +46,7 @@ The connection supports exact file uploads and protected document downloads. The
 | owner.dispensation-sign | Create and sign a dispensation | personal | Create the official template with the owner signature under current delegation. Both Secretaries are assigned; the first signer supplies his own saved name and address. |
 | owner.record-approval | Record an approval assertion | personal | You record and confirm the actual approval evidence yourself. |
 | owner.proposals-view | Review Warden proposals | standing | Read all submitted proposals. |
+| owner.proposals-feedback | Return or decline Warden proposals | approval | Record exact authorized feedback for a pending proposal. Approval uses the separate personal workflow. |
 | owner.proposals-decide | Decide Warden proposals | personal | Review the exact proposal yourself. Approval creates the document with your saved signature. |
 | owner.minutes-preparer | Attest as actual minutes preparer | personal | Only your own draft can reach your preparer attestation. |
 | owner.minutes-master | Attest as Worshipful Master | personal | Open submitted minutes, review current corrections and tap to attest. |

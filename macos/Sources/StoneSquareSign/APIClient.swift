@@ -639,6 +639,8 @@ final class AccountSessionsWorkspace: ObservableObject {
 final class AppModel: ObservableObject {
     @Published var buildingAlerts: [BuildingAlert] = []
     @Published var requestedBuildingRequestID: String?
+    @Published var requestedBuildingDecisionReview: AssistantBuildingDecisionReview?
+    @Published var requestedBuildingSubmissionReview: AssistantBuildingSubmissionReview?
     @Published var minutesReviewAlerts: [MinutesReviewAlert] = []
     @Published var minutesRecordsRevision = 0
     @Published var correspondenceRecordsRevision = 0
@@ -1664,6 +1666,8 @@ final class AppModel: ObservableObject {
         treasuryAlerts = []
         buildingAlerts = []
         requestedBuildingRequestID = nil
+        requestedBuildingDecisionReview = nil
+        requestedBuildingSubmissionReview = nil
         documents = []
         officers = []
         pendingInvitations = []

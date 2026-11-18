@@ -21,7 +21,8 @@ globalThis.fetch=(url,options)=>{if(new URL(url).origin!==${JSON.stringify(base)
 nodemailer.createTransport=()=>{throw new Error('External email disabled in isolated test.')};`);
 const server=spawn(process.execPath,['--import',loader,'server.js'],{cwd:new URL('..',import.meta.url),
  env:{PATH:process.env.PATH,NODE_ENV:'test',PORT:String(port),DATABASE_URL:'',PGLITE_DIR:'',OWNER_EMAIL:'muse-files@example.invalid',APP_BASE_URL:base,
- SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:'',OPENAI_API_KEY:'',MISSIVE_API_TOKEN:'',ZEFFY_API_KEY:'',TRACKER_SSO_SHARED_SECRET:'',LODGE_ACCESS_CODE:''},stdio:['ignore','pipe','pipe']});
+ SMTP_HOST:'',SMTP_USER:'',SMTP_PASS:'',OPENAI_API_KEY:'',MISSIVE_API_TOKEN:'',ZEFFY_API_KEY:'',TRACKER_SSO_SHARED_SECRET:'',LODGE_ACCESS_CODE:'',
+ WARDEN_EMAILS:'synthetic-warden@example.invalid'},stdio:['ignore','pipe','pipe']});
 let logs='';server.stdout.on('data',value=>logs+=value);server.stderr.on('data',value=>logs+=value);
 async function api(path,{method='GET',token,body}={}){
  const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body!==undefined?{'Content-Type':'application/json'}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
@@ -43,6 +44,17 @@ try{
  assert.equal((await api('/api/assistant/access',{token:owner,method:'PUT',body:{name:'Synthetic Muse',permissions,expiresInDays:365,enabled:true}})).status,200);
  muse=(await api('/api/assistant/access/token',{token:owner,method:'POST',body:{}})).data.token;
  const initial=value(await mcp('workspace',{}));assert.equal(initial.assistant.commandExecution,false);assert.equal(initial.assistant.signatureExecution,false);
+ const workflow=(workspace,id)=>workspace.workflows.find(item=>item.id===id);
+ assert.equal(workflow(initial,'building.view').operations.find(item=>item.path.endsWith('/:id/review')).access,'direct');
+ assert.equal(workflow(initial,'building.decide').operations[0].access,'owner_native_review');
+ assert.equal(workflow(initial,'owner.proposals-feedback').operations[0].access,'owner_approval');
+ assert.equal(workflow(initial,'documents.sign').operations[0].access,'owner_signature_confirmation');
+ assert.equal(workflow(initial,'candidates.edit').operations[0].access,'unavailable');
+ const tracker=value(await mcp('request_action',{actionId:'candidates.view',method:'POST',path:'/api/tracker/handoff',body:{},requestKey:'candidate-native-review'})).request;
+ assert.equal(tracker.nativeReviewUrl,`stonesquaresign://muse/review/${tracker.id}`);
+ assert.equal(tracker.navigation.section,'candidateTracker');
+ assert.equal((await mcp('execute',{requestId:tracker.id})).isError,true);
+ assert.equal((await api('/api/tracker/handoff',{token:muse,method:'POST',body:{}})).status,403);
  // More than the generic 4 MiB JSON limit proves the authenticated file envelope.
  const document=await PDFDocument.create();document.addPage().drawText('Synthetic Lodge document. Worshipful Master and Secretary.');
  const fileBytes=Buffer.concat([Buffer.from(await document.save()),Buffer.alloc(3_300_000,32)]);
@@ -56,6 +68,8 @@ try{
  const saved=await api('/api/assistant/access',{token:owner,method:'PUT',body:{name:'Synthetic Muse',permissions,expiresInDays:365,enabled:true,commandExecution:true,signatureExecution:true}});
  assert.equal(saved.status,200,JSON.stringify(saved));
  const effective=value(await mcp('workspace',{}));assert.equal(effective.assistant.commandExecution,true);assert.equal(effective.assistant.signatureExecution,true);
+ assert.equal(workflow(effective,'owner.proposals-feedback').operations[0].access,'exact_instruction');
+ assert.equal(workflow(effective,'documents.sign').operations[0].access,'exact_signature_instruction');
  assert.equal((await mcp('authorize_instruction',instruction)).isError,true,'Policy change invalidates old requests.');
  const current=value(await mcp('request_upload',{...input,requestKey:'file-instruction-002'})).request;
  const authorized=value(await mcp('authorize_instruction',{...instruction,requestId:current.id,fingerprint:current.fingerprint})).request;
@@ -76,6 +90,33 @@ try{
  assert.equal((await mcp('execute',{requestId:current.id,files:[file]})).isError,true,'Repeat upload never duplicates the document.');
  const activity=await api('/api/admin/activity',{token:owner});
  const event=activity.data.events.find(item=>item.action==='document_uploaded');assert.equal(event.actorType,'assistant');assert.equal(event.assistantRequestId,current.id);
+ const warden={email:'synthetic-warden@example.invalid',name:'Synthetic Warden'};
+ const invitation=await api('/api/officers/invite',{token:owner,method:'POST',body:{...warden,role:'warden',sendEmail:false}});
+ assert.equal(invitation.status,201);
+ const joined=await api('/api/auth/register',{method:'POST',body:{...warden,password:'Isolated Warden passphrase',invitationToken:new URL(invitation.data.inviteUrl).searchParams.get('invite')}});
+ assert.equal(joined.status,201);
+ const submitted=await api('/api/proposals',{token:joined.data.token,method:'POST',body:{
+   requestDate:'2026-11-17',eventDate:'2026-12-21',title:'Synthetic proposal',requestDetails:'Review this synthetic proposal.',
+ }});
+ assert.equal(submitted.status,201);
+ const proposalId=submitted.data.proposal.id;
+ const path=`/api/proposals/${proposalId}/feedback`;
+ const feedback={actionId:'owner.proposals-feedback',method:'POST',path,body:{decision:'changes',wmNote:'Please confirm the location.'},requestKey:'warden-feedback-one'};
+ assert.equal((await mcp('request_action',{...feedback,body:{decision:'approve'}})).isError,true);
+ assert.equal((await api(path,{token:joined.data.token,method:'POST',body:feedback.body})).status,403);
+ assert.equal((await api(path,{token:muse,method:'POST',body:feedback.body})).status,428);
+ const staged=value(await mcp('request_action',feedback)).request;
+ assert.equal(staged.nativeReviewUrl,`stonesquaresign://muse/review/${staged.id}`);
+ value(await mcp('authorize_instruction',{requestId:staged.id,fingerprint:staged.fingerprint,instruction:'Return this synthetic proposal with the exact note.'}));
+ const returnedProposal=value(await mcp('execute',{requestId:staged.id}));
+ assert.deepEqual(returnedProposal,{id:proposalId,ok:true,status:'changes_requested',emailFollowThrough:'spark',requesterNotified:false});
+ const currentProposal=(await api('/api/proposals',{token:owner})).data.proposals.find(item=>item.id===proposalId);
+ assert.equal(currentProposal.wmNote,'Please confirm the location.');
+ assert.equal(currentProposal.resultingDocumentId,null);
+ assert.equal((await mcp('execute',{requestId:staged.id})).isError,true);
+ const feedbackAudit=(await api('/api/admin/activity',{token:owner})).data.events.find(item=>item.action==='proposal_changes_requested');
+ assert.equal(feedbackAudit.actorType,'assistant');
+ assert.equal(feedbackAudit.assistantRequestId,staged.id);
  console.log('PASS: real isolated MCP upload above 4 MiB, owner-only opt-in, stale-policy denial, exact bytes, protected download, truthful actor receipt and duplicate prevention.');
 }finally{
  const exited=once(server,'exit');server.kill();await exited;await rm(work,{recursive:true,force:true});

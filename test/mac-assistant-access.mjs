@@ -6,6 +6,11 @@ import { spawnSync } from 'node:child_process';
 
 const source = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/AssistantAccess.swift', import.meta.url), 'utf8');
 const viewSource = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/Views.swift', import.meta.url), 'utf8');
+const linkSource = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/MuseReviewLink.swift', import.meta.url), 'utf8');
+const infoPlist = fs.readFileSync(new URL('../macos/Resources/Info.plist', import.meta.url), 'utf8');
+const buildingSource = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/BuildingCalendar.swift', import.meta.url), 'utf8');
+const calendarDates = buildingSource.slice(buildingSource.indexOf('enum LodgeCalendarDates'), buildingSource.indexOf('private struct CalendarMutationResponse'));
+const submissionSource = buildingSource.slice(buildingSource.indexOf('struct BuildingBooking:'), buildingSource.indexOf('private struct NewBuildingRequestView:'));
 const models = fs.readFileSync(new URL('../macos/Sources/StoneSquareSign/Models.swift', import.meta.url), 'utf8');
 const dateFormatting = models.slice(models.indexOf('enum LodgeDateTime'), models.indexOf('struct User:'));
 assert.match(source, /mode == "standing" \|\| mode == "approval"/);
@@ -20,6 +25,13 @@ assert.match(reviewNavigation, /!minutesWorkspace\.dirty/);
 assert.match(reviewNavigation, /!treasuryWorkspace\.dirty/);
 assert.match(reviewNavigation, /!correspondenceWorkspace\.hasChanges/);
 assert.match(reviewNavigation, /model\.assistantAccountContext == context/);
+assert.match(infoPlist, /<key>CFBundleURLSchemes<\/key>\s*<array>\s*<string>stonesquaresign<\/string>/);
+assert.match(viewSource, /\.onOpenURL[\s\S]*MuseReviewLink\(url: url\)/);
+assert.match(reviewNavigation, /record\.status == "pending", record\.revision\.wireText == decision\.revision/);
+assert.match(buildingSource, /selectedID == confirmation\.request\.id, model\.assistantAccountContext == confirmation\.accountContext/);
+assert.match(buildingSource, /selected\?\.revision == confirmation\.request\.revision, selected\?\.status == "pending"/);
+assert.match(reviewNavigation, /case "candidateTracker":[\s\S]*can\("candidates\.view"\)/);
+assert.match(reviewNavigation, /case "mySettings":[\s\S]*can\("settings\.manage"\)/);
 if (process.platform !== 'darwin') {
   console.log('PASS: native assistant boundaries; compiled state checks require macOS.');
   process.exit(0);
@@ -35,14 +47,24 @@ const capabilities = [
 const request = { id: 'REQ/ONE', actionId: 'draft.change', title: 'Synthetic change', method: 'PUT', path: '/api/minutes/SYNTHETIC', body: { revision: 4 }, status: 'pending', fingerprint: 'SYNTHETIC-FINGERPRINT', effects: ['Records a revision'], navigation: { section: 'minutes', recordId: 'SYNTHETIC' }, receipt: null };
 const personal = { ...request, id: 'PERSONAL', actionId: 'minutes.attest', mode: 'personal', status: 'personal' };
 const payload = { assistant, capabilities, requests: [request, personal], attestations: [{ id: 'ATTEST', kind: 'minutes', recordId: 'SYNTHETIC', title: 'Synthetic minutes', status: 'awaiting_master_attestation', section: 'minutes', actionLabel: 'Review and attest', attestationText: 'Synthetic exact statement', effects: ['Signs and files'], revision: 'opaque-hash', requestId: personal.id, ready: true }], activity: [] };
+const building = { ...personal, id: 'BUILDING-REVIEW', actionId: 'building.decide', method: 'POST', path: '/api/building/requests/SSL-TEST/decision', expiresAt:'2099-01-01T00:00:00Z', body: {decision:'denied', note:'Synthetic reason', revision:'request-revision'}, navigation: {section:'building',recordId:'SSL-TEST'} };
+const buildingItem = { ...payload.attestations[0], id:'ATT-BUILDING', kind:'building_decision', section:'building', recordId:'SSL-TEST', revision: 'request-revision', requestId:building.id };
+const submissionBody = {submissionId:'11111111-1111-4111-8111-111111111111',bookings:[{date:'2099-06-15',start:'19:00',end:'20:00'}],spaces:['Front yard'],bathroomAccess:false,phone:'',purpose:'Synthetic outdoor meeting'};
+const submission = {...building,id:'BUILDING-NEW',actionId:'building.request',path:'/api/building/requests',body:submissionBody,navigation:{section:'building',recordId:null}};
+const submissionItem = {...buildingItem,id:'ATT-BUILDING-NEW',recordId:null,requestId:submission.id};
+const linkedPayload = { ...payload, requests: [], attestations: [buildingItem, submissionItem] };
 const raw = x => `#"${JSON.stringify(x)}"#`;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-assistant-native-'));
 try {
   const swiftFile = path.join(scratch, 'assistant-tests.swift');
   const binary = path.join(scratch, 'assistant-tests');
   fs.writeFileSync(swiftFile, `${source.slice(0, source.indexOf('// MARK: - Native views'))}
+${linkSource}
 ${dateFormatting}
-struct User { let id: Int; let role: String }
+${calendarDates}
+${submissionSource}
+enum ClientError: Error { case invalidResponse, rejected(String), conflict(String) }
+struct User { let id: Int; let role: String; func can(_ capability: String) -> Bool { role == "owner" && capability == "building.request" } }
 @MainActor final class AppModel {
     var user: User? = User(id: 1, role: "owner")
     var assistantAccountContext = "synthetic-account-one"
@@ -123,6 +145,72 @@ struct User { let id: Int; let role: String }
         model.handler = { path, _, _ in path.hasPrefix("/api/assistant/requests/") ? Data(${raw({request:personal})}.utf8) : Data(${raw({attestations:payload.attestations})}.utf8) }
         let personalNavigation = await workspace.reviewPersonalRequest(personal, model: model)
         precondition(personalNavigation?.recordId == "SYNTHETIC" && model.calls.last!.0 == "/api/assistant/attestations", "Personal requests must resolve their current attestation before navigation")
+        precondition(MuseReviewLink(url: URL(string:"stonesquaresign://muse/review/BUILDING-REVIEW")!)?.requestID == "BUILDING-REVIEW")
+        precondition(MuseReviewLink(url: URL(string:"stonesquaresign://muse/signature/DOC_1")!)?.kind == .signature)
+        for bad in ["https://muse/review/A", "stonesquaresign://other/review/A", "stonesquaresign://user@muse/review/A",
+                    "stonesquaresign://%FF@muse/review/A", "stonesquaresign://muse:/review/A", "stonesquaresign://muse:77/review/A",
+                    "stonesquaresign://muse/review/A?token=x", "stonesquaresign://muse/review/A?%FF", "stonesquaresign://muse/review/A#", "stonesquaresign://muse/review/A#%FF",
+                    "stonesquaresign://muse/review/%41", "stonesquaresign://muse/review/A%2FB", "stonesquaresign://muse/review/A/B",
+                    "stonesquaresign://muse/review/", "stonesquaresign://muse/confirm/A", "stonesquaresign://muse/review/" + String(repeating:"A",count:129)] {
+            precondition(MuseReviewLink(url: URL(string:bad)!) == nil, "Unexpected review link was accepted")
+        }
+        let linked = AssistantWorkspace()
+        model.handler = { path, method, data in
+            precondition(method == "GET" && data == nil)
+            if path == "/api/assistant/workspace" { return Data(${raw(linkedPayload)}.utf8) }
+            if path == "/api/assistant/attestations" { return Data(${raw({attestations: [buildingItem, submissionItem]})}.utf8) }
+            if path == "/api/assistant/requests/BUILDING-NEW" { return Data(${raw({request:submission})}.utf8) }
+            precondition(path == "/api/assistant/requests/BUILDING-REVIEW")
+            return Data(${raw({request:building})}.utf8)
+        }
+        let beforeLinked = model.calls.count
+        await linked.inspectLinked(requestID: "BUILDING-REVIEW", model: model)
+        precondition(linked.selectedRequest?.id == "BUILDING-REVIEW", "A link opens the exact request even outside the queue list")
+        precondition(model.calls.suffix(from: beforeLinked).map { $0.0 } == ["/api/assistant/workspace", "/api/assistant/requests/BUILDING-REVIEW"])
+        let buildingNavigation = await linked.reviewPersonalRequest(linked.selectedRequest!, model: model)
+        precondition(buildingNavigation?.recordId == "SSL-TEST" && buildingNavigation?.buildingDecision?.revision == "request-revision")
+        precondition(buildingNavigation?.buildingDecision?.decision == "denied" && buildingNavigation?.buildingDecision?.note == "Synthetic reason")
+        precondition(model.calls.suffix(from: beforeLinked).allSatisfy { $0.1 == "GET" }, "Opening or reviewing a building proposal cannot decide it")
+        let wrongApproval = AssistantBuildingDecisionReview(recordID:"SSL-TEST", body:.object(["decision":.string("approved")]))
+        precondition(wrongApproval == nil, "An exact building review requires a revision")
+        let wrongDecline = AssistantBuildingDecisionReview(recordID:"SSL-TEST", body:.object(["decision":.string("denied"), "revision":.number(2)]))
+        precondition(wrongDecline == nil, "An exact decline preserves the required note")
+        await linked.inspectLinked(requestID: "BUILDING-NEW", model: model)
+        let submissionNavigation = await linked.reviewPersonalRequest(linked.selectedRequest!, model: model)
+        let proposed = submissionNavigation!.buildingSubmission!
+        let newRequest = NewBuildingRequestWorkspace()
+        precondition(newRequest.prepareLinkedDraft(proposed) && !newRequest.canSubmit && !newRequest.warningAcknowledged)
+        precondition(!newRequest.prepareLinkedDraft(proposed), "Opening another link must preserve the pending local draft")
+        let wireDraft = try JSONDecoder().decode(AssistantJSON.self, from: JSONEncoder().encode(newRequest.draft))
+        let existingProposal = try JSONDecoder().decode(AssistantJSON.self, from: Data(${raw(submissionBody)}.utf8))
+        precondition(wireDraft == existingProposal, "Prefilling should preserve every proposed submission field exactly")
+        precondition(model.calls.suffix(from: beforeLinked).allSatisfy { $0.1 == "GET" }, "Opening a new building request cannot check availability or submit")
+        let unauthorizedConsent = try JSONDecoder().decode(AssistantJSON.self, from: Data(${raw({...submissionBody,acknowledgeAvailabilityWarning:true})}.utf8))
+        precondition(AssistantBuildingSubmissionReview(requestID: "BUILDING-NEW", body: unauthorizedConsent) == nil)
+        let needsRestroom = try JSONDecoder().decode(AssistantJSON.self, from: Data(${raw({...submissionBody,bathroomAccess:null})}.utf8))
+        precondition(AssistantBuildingSubmissionReview(requestID: "BUILDING-NEW", body: needsRestroom) == nil)
+        let beforeAvailability = model.calls.count
+        model.handler = { path, method, data in
+            if path.hasPrefix("/api/building/availability?") {
+                precondition(method == "GET" && data == nil)
+                return Data(${raw({busy:[],warning:'Synthetic calendar warning'})}.utf8)
+            }
+            precondition(path == "/api/building/requests" && method == "POST")
+            let body = try JSONDecoder().decode(AssistantJSON.self, from: data!)
+            guard case .object(let values) = body else { preconditionFailure("Missing reviewed submission fields") }
+            precondition(values["acknowledgeAvailabilityWarning"] == .bool(true))
+            precondition(values["purpose"] == .string("Edited meeting details"))
+            precondition(values["submissionId"] != .string(proposed.submissionID), "An edited draft needs its own submission identity")
+            return Data(${raw({ok:true,refs:['SYNTHETIC-BUILDING'],wmNotified:false})}.utf8)
+        }
+        await newRequest.checkAvailability(using: model)
+        precondition(newRequest.availabilityCurrent && !newRequest.canSubmit && !newRequest.warningAcknowledged)
+        let withheld = await newRequest.submit(using: model)
+        precondition(!withheld && model.calls.count == beforeAvailability + 1)
+        newRequest.warningAcknowledged = true
+        newRequest.draft.details = "Edited meeting details"
+        let submitted = await newRequest.submit(using: model)
+        precondition(submitted && newRequest.receipt?.wmNotified == false)
         workspace.accessName = "Unsaved Muse"; workspace.accessPermissions = ["draft.change"]; workspace.accessDays = 12
         workspace.accessCommandExecution = true; workspace.accessSignatureExecution = true
         precondition(workspace.accessDirty)
@@ -166,7 +254,9 @@ struct User { let id: Int; let role: String }
         let count = model.calls.count
         model.user = User(id: 2, role: "secretary"); model.assistantAccountContext = "synthetic-non-owner"
         await workspace.load(model); await workspace.createToken(model)
+        await linked.inspectLinked(requestID: "BUILDING-REVIEW", model: model)
         precondition(model.calls.count == count && workspace.issuedToken == nil)
+        precondition(linked.selectedRequest == nil, "The next account must not see the linked request")
         print("PASS: native assistant decoding, grants, current-queue review, preserved access edits, saved-policy token lifecycle, exact approval, personal-action denial and late-result isolation")
     }
 }

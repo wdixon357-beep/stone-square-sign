@@ -184,6 +184,7 @@ struct AdaptiveControlBar<Wide: View, Compact: View>: View {
 
 struct RootView: View {
     @EnvironmentObject var model: AppModel
+    @State private var museReview: MuseReviewLink?
     @State private var showRequiredSignature = false
     @State private var showPendingSignatureNotice = false
     @State private var pendingSignatureCount = 0
@@ -192,7 +193,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if model.user != nil { WorkspaceView() }
+            if model.user != nil { WorkspaceView(museReview: $museReview) }
             else if model.hasSavedSession {
                 VStack(spacing: 16) {
                     if let error = model.sessionConnectionError {
@@ -224,9 +225,22 @@ struct RootView: View {
         .task {
             await model.restoreSession()
         }
-        .onChange(of: model.user) { _, user in
+        .onOpenURL { url in
+            guard museReview == nil, let link = MuseReviewLink(url: url) else { return }
+            guard model.user == nil || model.user?.role == "owner" else {
+                model.message = "Sign in as Worshipful Master to open this Muse review."
+                model.isError = true
+                return
+            }
+            museReview = link
+        }
+        .onChange(of: model.user) { old, user in
+            if (old != nil && old?.id != user?.id) || (user != nil && user?.role != "owner") { museReview = nil }
             showRequiredSignature = user?.hasSignature == false && user?.canSign == true && user?.isSignatureProfileLocked != true
             checkPendingSignatureNotice()
+        }
+        .onChange(of: museReview) { _, pending in
+            if pending == nil { checkPendingSignatureNotice() }
         }
         .onChange(of: model.documents.filter { $0.needsSignature && !$0.isTerminal }.count) { _, _ in
             checkPendingSignatureNotice()
@@ -264,7 +278,7 @@ struct RootView: View {
     }
 
     private func checkPendingSignatureNotice() {
-        guard let user = model.user,
+        guard museReview == nil, let user = model.user,
               (user.role == "owner" || user.can("documents.sign")),
               (user.hasSignature || !user.canSign),
               pendingNoticeUserId != user.id else { return }
@@ -482,6 +496,7 @@ struct AuthenticationView: View {
 
 struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
+    @Binding var museReview: MuseReviewLink?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selection: AppSection? = .home
     @State private var toolSearch = ""
@@ -634,6 +649,11 @@ struct WorkspaceView: View {
         .alert("Review could not be opened", isPresented: Binding(get: { !assistantNavigationError.isEmpty }, set: { if !$0 { assistantNavigationError = "" } })) {
             Button("OK") { assistantNavigationError = "" }
         } message: { Text(assistantNavigationError) }
+        .sheet(item: $museReview) { link in
+            if model.user?.role == "owner" {
+                MuseLinkedReviewSheet(link: link, openReview: openAssistantReview).environmentObject(model)
+            }
+        }
     }
 
     private func openAssistantReview(_ navigation: AssistantNavigation) {
@@ -642,6 +662,7 @@ struct WorkspaceView: View {
         assistantNavigationEpoch += 1
         let navigationEpoch = assistantNavigationEpoch
         Task {
+            guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
             do {
                 switch navigation.section {
                 case "minutes":
@@ -684,11 +705,30 @@ struct WorkspaceView: View {
                     guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
                     guard response.documents.contains(where: { $0.id == id }) else { throw ClientError.rejected("That document is no longer available. Refresh My Attestations.") }
                     model.documents = response.documents; model.requestedDocumentReviewID = id; selection = .documents
-                case "building": model.requestedBuildingRequestID = navigation.recordId; selection = .building
+                case "building":
+                    if let decision = navigation.buildingDecision {
+                        let queue: BuildingRequestsResponse = try await model.request("/api/building/requests")
+                        guard model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch else { return }
+                        guard queue.canDecide,
+                              let record = queue.requests.first(where: { $0.id == decision.recordID }),
+                              record.status == "pending", record.revision.wireText == decision.revision else {
+                            throw ClientError.rejected("The building request changed or is no longer pending. Open Building Requests to review its current status.")
+                        }
+                    }
+                    model.requestedBuildingDecisionReview = navigation.buildingDecision
+                    model.requestedBuildingRequestID = navigation.recordId
+                    model.requestedBuildingSubmissionReview = navigation.buildingSubmission
+                    selection = .building
                 case "createDispensation": selection = .createDispensation
                 case "proposalReview": model.requestedProposalReviewID = navigation.recordId; selection = .proposalReview
                 case "reportGenerator": selection = .reportGenerator
                 case "profile": selection = .profile
+                case "candidateTracker":
+                    guard model.user?.can("candidates.view") == true else { throw ClientError.rejected("Candidate Tracker is unavailable for this account.") }
+                    selection = .candidateTracker
+                case "mySettings":
+                    guard model.user?.can("settings.manage") == true else { throw ClientError.rejected("Device settings are unavailable for this account.") }
+                    selection = .mySettings
                 default: throw ClientError.rejected("This action has no supported review destination. Refresh My Attestations and open the record directly.")
                 }
             } catch { if model.assistantAccountContext == context && assistantNavigationEpoch == navigationEpoch { assistantNavigationError = error.localizedDescription } }

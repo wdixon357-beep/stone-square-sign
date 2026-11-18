@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createAssistantMcp } from '../assistant-mcp.js';
+import { REPORT_SOURCE_MAX_BYTES } from '../report-source.js';
 
 const calls=[];
 let proposal={id:'proposal-123',status:'approved',method:'PATCH',path:'/api/admin/suggestions/1',body:{status:'Reviewed'}};
@@ -8,15 +9,15 @@ const handler=createAssistantMcp({port:3719,fetchImpl:async(url,options)=>{
   calls.push({url,options});
   return new Response(JSON.stringify(url.includes('/requests/')?{request:proposal}:{ok:true}),{headers:{'Content-Type':'application/json'}});
 }});
-const invoke=async(method,params={},extra={})=>{
+const invoke=async(method,params={},extra={},handlerOverride=handler)=>{
   let value,status=200;
   const res={status(code){status=code;return this},json(body){value=body;return this},end(){return this}};
-  await handler({assistant:{id:'separate-assistant'},assistantRawToken:'synthetic-secret',body:{jsonrpc:'2.0',id:1,method,params},...extra},res);
+  await handlerOverride({assistant:{id:'separate-assistant'},assistantRawToken:'synthetic-secret',body:{jsonrpc:'2.0',id:1,method,params},...extra},res);
   return {value,status};
 };
 assert.equal((await invoke('initialize',{protocolVersion:'2025-03-26'})).value.result.protocolVersion,'2025-03-26');
 const names=(await invoke('tools/list')).value.result.tools.map(tool=>tool.name);
-assert.deepEqual(names,['workspace','read','read_file','request_action','request_upload','authorize_instruction','requests','execute','request_signature','signature_status','sign_instruction']);
+assert.deepEqual(names,['workspace','read','read_file','import_report_source','request_action','request_upload','authorize_instruction','requests','execute','request_signature','signature_status','sign_instruction']);
 assert(!names.some(name=>/^(?:sign|attest|apply_signature|execute_signature)$/.test(name)));
 for(const path of ['https://untrusted.invalid/api/minutes','//untrusted.invalid/api/minutes','/api/../admin','/api/%6dinutes','/api/profile/signature','/api/reports/handoff','/api/unknown']){
  const result=await invoke('tools/call',{name:'read',arguments:{path}});
@@ -84,13 +85,64 @@ for(const bad of [{...file,data:'%%%='},{...file,originalname:'../private.pdf'},
 assert.equal((await invoke('tools/call',{name:'request_upload',arguments:{...upload,body:{title:42}}})).value.result.isError,true);
 proposal={...proposal,status:'pending'};
 assert.equal((await invoke('tools/call',{name:'execute',arguments:{requestId:'proposal-123',files:[file]}})).value.result.isError,true);
-// Complete signed documents are readable; isolated signature and private routes stay blocked.
-let fileResult;
-const fileHandler=createAssistantMcp({port:3719,fetchImpl:async()=>new Response(fileBytes,{headers:{'Content-Type':'application/pdf'}})});
-await fileHandler({assistant:{id:'synthetic'},assistantRawToken:'synthetic',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'read_file',arguments:{path:'/api/documents/example/file'}}}},{json(value){fileResult=value;return this},status(){return this}});
-assert.equal(fileResult.result.content[0].type,'resource',JSON.stringify(fileResult));
-assert.equal(fileResult.result.content[0].resource.blob,fileBytes.toString('base64'));
-assert.equal((await invoke('tools/call',{name:'read_file',arguments:{path:'/api/profile/signature'}})).value.result.isError,true);
+// The file tool preserves exact bytes and uses only standing downloads or PDF previews.
+let responseType='application/pdf';
+const fileCalls=[];
+const fileHandler=createAssistantMcp({port:3719,fetchImpl:async(url,options)=>{
+  fileCalls.push({url,options});
+  return new Response(fileBytes,{headers:{'Content-Type':responseType}});
+}});
+const readFile=async args=>(await invoke('tools/call',{name:'read_file',arguments:args},{},fileHandler)).value.result;
+const fileResult=await readFile({path:'/api/documents/example/file'});
+assert.equal(fileResult.content[0].type,'resource');
+assert.equal(fileResult.content[0].resource.blob,fileBytes.toString('base64'));
+const previewBody={draft:{meetingType:'Stated Communication'}};
+const previewResult=await readFile({path:'/api/minutes/example/preview',method:'POST',body:previewBody});
+assert.equal(previewResult.content[0].resource.blob,fileBytes.toString('base64'));
+assert.equal(fileCalls.at(-1).url,'http://127.0.0.1:3719/api/minutes/example/preview');
+assert.equal(fileCalls.at(-1).options.method,'POST');
+assert.deepEqual(JSON.parse(fileCalls.at(-1).options.body),previewBody);
+assert.equal(fileCalls.at(-1).options.headers['Idempotency-Key'],undefined);
+const beforeFileDenials=fileCalls.length;
+for(const args of [
+  {path:'/api/profile/signature'},
+  {path:'/api/documents/example/sign',method:'POST',body:{}},
+  {path:'/api/minutes/example',method:'DELETE'},
+  {path:'/api/reports/import-source',method:'POST'},
+  {path:'/api/dispensations/parse',method:'POST',body:{}},
+  {path:'/api/documents/example/file',body:{}},
+  {path:'/api/minutes/example/preview',method:'POST',body:[]},
+]) assert.equal((await readFile(args)).isError,true,args.path);
+assert.equal(fileCalls.length,beforeFileDenials);
+responseType='image/png';
+assert.equal((await readFile({path:'/api/minutes/example/preview',method:'POST',body:previewBody})).isError,true,'A successful HTTP response is insufficient for protected signature images.');
+
+// One fixed standing import uses the existing report multipart field and never sends an execution receipt.
+const sourceBytes=Buffer.from('Synthetic Lodge report\nSecond line.');
+const reportFile={fieldname:'report',originalname:'minutes-é.txt',mimetype:'text/plain',data:sourceBytes.toString('base64')};
+const importCalls=[];
+const importHandler=createAssistantMcp({port:3719,fetchImpl:async(url,options)=>{
+  importCalls.push({url,options});
+  const form=await new Request(url,options).formData();
+  assert.deepEqual([...form.keys()],['report']);
+  const source=form.get('report');
+  assert.equal(source.type,reportFile.mimetype);
+  assert.deepEqual(Buffer.from(await source.arrayBuffer()),sourceBytes);
+  return Response.json({source:sourceBytes.toString(),warnings:[]});
+}});
+const importReport=async args=>(await invoke('tools/call',{name:'import_report_source',arguments:args},{},importHandler)).value.result;
+assert.deepEqual(JSON.parse((await importReport({file:reportFile})).content[0].text),{source:sourceBytes.toString(),warnings:[]});
+assert.equal(importCalls[0].url,'http://127.0.0.1:3719/api/reports/import-source');
+assert.equal(importCalls[0].options.method,'POST');
+assert.equal(importCalls[0].options.headers['X-Assistant-Request-Id'],undefined);
+assert.match(importCalls[0].options.body.toString('latin1'),/filename\*=UTF-8''minutes-%C3%A9\.txt/);
+for(const args of [
+  {file:{...reportFile,fieldname:'document'}},
+  {file:[reportFile,reportFile]},
+  {file:reportFile,path:'/api/documents'},
+  {file:{...reportFile,data:Buffer.alloc(REPORT_SOURCE_MAX_BYTES+1).toString('base64')}},
+]) assert.equal((await importReport(args)).isError,true);
+assert.equal(importCalls.length,1,'Wrong fields, routes, file counts and sizes never reach the import service.');
 proposal={id:'proposal-123',status:'authorized',method:'POST',path:'/api/documents/example/missive-draft/retry',body:{}};
 assert.equal((await invoke('tools/call',{name:'execute',arguments:{requestId:'proposal-123'}})).value.result.isError,true,'Alternate email provider draft action is not delegated.');
-console.log('PASS: fixed-loopback MCP, exact file bytes and hashes, delegated instruction forwarding, protected document resources, credential isolation and replay checks.');
+console.log('PASS: fixed-loopback MCP, exact file bytes and hashes, protected downloads and previews, bounded report import, instruction forwarding, credential isolation and replay checks.');

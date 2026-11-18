@@ -4,10 +4,97 @@ import { hasPermission, resolvePermissions } from './access-control.js';
 import { createBuildingAlertCache } from './building-alert-cache.js';
 import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
 import { mountBuildingAgreementRoutes } from './building-agreements.js';
-import { assistantBuildingProjection, assistantBuildingAlerts } from './assistant-building.js';
+import { assistantBuildingProjection, assistantBuildingAlerts, assistantBuildingReviewSource } from './assistant-building.js';
+import { formatEasternClock } from './public/eastern-time.js';
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode});
 const DATE=/^\d{4}-\d{2}-\d{2}$/;const TIME=/^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const LODGE_ADDRESS='208 East Lake Street, Middletown, DE 19709';
+const LODGE_STREET_PATTERN='208 (?:east|e) lake (?:street|st)';
+const LODGE_NAME_PATTERN='stone square lodge(?: (?:no |#)?22)?';
+const LODGE_LOCATION=new RegExp(`^(?:${LODGE_NAME_PATTERN}(?: (?:at )?${LODGE_STREET_PATTERN})?|${LODGE_STREET_PATTERN})(?: middletown(?: (?:de|delaware)(?: 19709)?)?)?$`);
+const POSSIBLE_LODGE_LOCATION=/\b(?:stone square lodge|208 (?:(?:east|e|west|w) )?lake)\b/;
+const FULL_STREET_ADDRESS=/^\d+ [a-z0-9 .'’-]+ (?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|boulevard|blvd|court|ct|way) [a-z ]+ [a-z]{2} \d{5}(?:-\d{4})?$/;
 export function validDate(value){return typeof value==='string'&&DATE.test(value)&&!Number.isNaN(Date.parse(value+'T12:00:00Z'))&&new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;}
+
+function lodgeEventLocation(value) {
+ const location=typeof value==='string'?value.toLowerCase().replace(/[.,]/g,' ').replace(/\s+/g,' ').trim():'';
+ if(LODGE_LOCATION.test(location))return 'onsite';
+ if(POSSIBLE_LODGE_LOCATION.test(location))return 'unknown';
+ if(/^(?:off[ -]?site|virtual|online|zoom)$/.test(location))return 'offsite';
+ return FULL_STREET_ADDRESS.test(location)?'offsite':'unknown';
+}
+
+async function manualLodgeCalendar(date, canRead) {
+ if(!canRead)return {blocks:[],limitations:['The manually entered Lodge Calendar could not be checked because Muse does not have Lodge Calendar access.']};
+ let rows;
+ try{rows=await dbAll('SELECT id,event_json FROM lodge_calendar_events WHERE deleted_at IS NULL ORDER BY id');}
+ catch{return {blocks:[],limitations:['The manually entered Lodge Calendar could not be loaded.']};}
+ const blocks=[],limitations=new Set();
+ for(const row of rows){
+  let event;
+  try{event=JSON.parse(row.event_json);}catch{}
+  if(event?.status==='cancelled')continue;
+  const location=lodgeEventLocation(event?.location);
+  if(location==='offsite')continue;
+  if(!validDate(event?.startDate)||!validDate(event?.endDate)||event.endDate<event.startDate){
+   limitations.add('The dates of one or more manually entered Lodge Calendar events could not be verified.');
+   continue;
+  }
+  if(date<event.startDate||date>event.endDate)continue;
+  if(location!=='onsite'){
+   limitations.add('One or more manually entered Lodge Calendar events on that date have an unverified location.');
+   continue;
+  }
+  const allDay=event.allDay===true||(event.startDate<date&&date<event.endDate);
+  const start=date===event.startDate?event.startTime:'00:00';
+  const end=date===event.endDate?event.endTime:'24:00';
+  if(!allDay&&date>event.startDate&&end==='00:00')continue;
+  const status=['scheduled','tentative'].includes(event.status)?event.status:'unknown';
+  blocks.push({block:{label:event.title,status,allDay,start,end},reference:row.id,source:'lodge_calendar'});
+ }
+ return {blocks,limitations:[...limitations]};
+}
+
+function reviewAvailability(request, reservations, calendar, manual) {
+ const limitations=[];
+ const overlaps=[];
+ if(typeof calendar.warning==='string'&&calendar.warning.trim())limitations.push(calendar.warning.trim().slice(0,500));
+ if(!validDate(request.date)||!TIME.test(request.start)||!TIME.test(request.end)||request.end<=request.start){
+  limitations.push('The requested date or time could not be verified.');
+  return {status:'incomplete',overlaps,limitations};
+ }
+ if(calendar.feedConnected!==true&&!limitations.length)limitations.push('The connected calendar feed could not be verified.');
+ limitations.push(...manual.limitations);
+ const dayBlocks=calendar.busy.filter(block=>block?.date===request.date);
+ const reservationIds=new Set(reservations.map(block=>block.id));
+ const isReservation=block=>block.source==='reservation'||reservationIds.has(block.ref);
+ const asClock=value=>typeof value==='string'?value:'';
+ const asLabel=value=>typeof value==='string'&&value?value.slice(0,500):'Reserved';
+ const asStatus=value=>['approved','pending','denied','cancelled','scheduled','tentative'].includes(value)?value:'unknown';
+ const reservationKey=block=>JSON.stringify([asClock(block.start),asClock(block.end),asLabel(block.label),asStatus(block.status)]);
+ const publicReservations=dayBlocks.filter(isReservation).map(reservationKey).sort();
+ const storedReservations=reservations.map(reservationKey).sort();
+ if(JSON.stringify(publicReservations)!==JSON.stringify(storedReservations)){
+  limitations.push('The published building calendar and saved reservations differ. Recheck the schedule before deciding.');
+ }
+ const otherBlocks=[...reservations.filter(block=>block.id!==request.id).map(block=>({block,reference:block.id,source:'reservation'})),
+  ...dayBlocks.filter(block=>!isReservation(block)).map(block=>({block,reference:null,source:'building_calendar'})),...manual.blocks];
+ let hasUnverifiedBlock=false;
+ const seen=new Set();
+ for(const {block,reference,source} of otherBlocks){
+  const status=asStatus(block.status), start=asClock(block.start), end=asClock(block.end), allDay=block.allDay===true;
+  if(status==='denied'||status==='cancelled')continue;
+  if(status==='unknown'||(!allDay&&(!TIME.test(start)||!(TIME.test(end)||end==='24:00')||end<=start))){hasUnverifiedBlock=true;continue;}
+  if(!allDay&&(start>=request.end||end<=request.start))continue;
+  const hold={reference,label:asLabel(block.label),status,source,
+   start:allDay?null:formatEasternClock(start),end:allDay?null:formatEasternClock(end),allDay};
+  const key=JSON.stringify(hold);
+  if(!seen.has(key)){seen.add(key);overlaps.push(hold);}
+ }
+ if(hasUnverifiedBlock)limitations.push('One or more same-day calendar entries have an uncertain time or status.');
+ return {status:overlaps.length?'overlap':limitations.length?'incomplete':'no_recorded_overlap',overlaps,limitations};
+}
+
 export function calendarEvent(input){
  const s=(key,max=500)=>String(input?.[key]??'').trim().slice(0,max);
  const title=s('title',200),startDate=s('startDate'),endDate=s('endDate')||startDate,startTime=s('startTime'),endTime=s('endTime');
@@ -59,7 +146,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
  };
  const availability=async(from,to)=>{
   if(!validDate(from)||!validDate(to)||to<from||(Date.parse(to)-Date.parse(from))/86400000>370)throw fail(400,'Choose a calendar range of no more than one year.');
-  try{const response=await fetcher(PORTAL+'/api/calendar?from='+from+'&to='+to,{redirect:'error',signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error();const data=await response.json();if(!Array.isArray(data.busy))throw Error();return {busy:data.busy,warning:data.warning||null};}
+  try{const response=await fetcher(PORTAL+'/api/calendar?from='+from+'&to='+to,{redirect:'error',signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error();const data=await response.json();if(!Array.isArray(data.busy))throw Error();return {busy:data.busy,warning:data.warning||null,feedConnected:typeof data.gcalConnected==='boolean'?data.gcalConnected:null};}
   catch{return {busy:[],warning:'Building availability could not be fully checked. Your request will need a conflict review before approval.'};}
  };
  const syncRequests=async(requests,observedAt=observationStamp())=>{
@@ -108,7 +195,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   return addFiling(visible);
  };
  mountBuildingAgreementRoutes(app,{requireAuth,visibleRequest:async(req,id)=>{const {payload}=await loadRequests(req);return payload.requests.find(request=>request.id===id);}});
- app.get('/api/building/availability',requireAuth,permit('building.request'),async(req,res,next)=>{try{res.setHeader('Cache-Control','no-store');res.json(await availability(String(req.query.from||''),String(req.query.to||'')));}catch(e){next(e)}});
+ app.get('/api/building/availability',requireAuth,permit('building.request'),async(req,res,next)=>{try{res.setHeader('Cache-Control','no-store');const {busy,warning}=await availability(String(req.query.from||''),String(req.query.to||''));res.json({busy,warning});}catch(e){next(e)}});
  app.post('/api/building/requests',requireAuth,permit('building.request'),async(req,res,next)=>{try{
   const body=buildingSubmission(req.body,req.user);
   // An existing reference wins over a new availability check on a retry, because
@@ -125,8 +212,23 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   await audit(req,'building_request_submitted',{refs:result.refs,dates:body.bookings.map(b=>b.date)});
   res.status(201).json(result);
  }catch(e){next(e)}});
- app.get('/api/building/requests',requireAuth,permit('building.view'),async(req,res,next)=>{try{if(req.assistant)return res.json(await assistantBuildingProjection());const requests=await listRequests(req);res.setHeader('Cache-Control','private, no-store');res.json({requests,canDecide:hasPermission(req.user,'building.decide')&&(req.user.role==='owner'||req.user.role==='warden')});}catch(e){next(e)}});
+ app.get('/api/building/requests',requireAuth,permit('building.view'),async(req,res,next)=>{try{res.setHeader('Cache-Control','private, no-store');if(req.assistant)return res.json(await assistantBuildingProjection());const requests=await listRequests(req);res.json({requests,canDecide:hasPermission(req.user,'building.decide')&&(req.user.role==='owner'||req.user.role==='warden')});}catch(e){next(e)}});
+ app.get('/api/building/requests/:id/review',requireAuth,permit('building.view'),async(req,res,next)=>{try{
+  res.setHeader('Cache-Control','private, no-store');
+  if(!req.assistant||req.user.role!=='owner')throw fail(403,'This review requires the Worshipful Master’s Muse Assistant connection.');
+  if(!/^[A-Za-z0-9_-]{1,100}$/.test(req.params.id))throw fail(404,'Building request not found.');
+  const {request,reservations,archiveRevision}=await assistantBuildingReviewSource(req.params.id);
+  const [calendar,manual]=validDate(request.date)?await Promise.all([
+   availability(request.date,request.date),manualLodgeCalendar(request.date,req.assistant.permissions.includes('calendar.view')),
+  ]):[{busy:[],warning:null},{blocks:[],limitations:[]}];
+  const dateTime={date:validDate(request.date)?request.date:null,start:TIME.test(request.start)?formatEasternClock(request.start):null,
+   end:TIME.test(request.end)?formatEasternClock(request.end):null,timezone:'America/New_York'};
+  const review=reviewAvailability(request,reservations,calendar,manual);
+  res.json({request,dateTime,availability:review,
+   readOnly:true,canDecide:false,source:'verified_local_postgres',archiveRevision});
+ }catch(e){next(e)}});
  app.get('/api/building/alerts',requireAuth,permit('building.view'),async(req,res,next)=>{try{
+  res.setHeader('Cache-Control','private, no-store');
   if(req.assistant)return res.json(await assistantBuildingAlerts());
   // Refresh the authenticated portal view first. The small local record also lets
   // Adrian see a pending McDuffie-only agreement without granting signing rights.
@@ -143,7 +245,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
     return [{id:row.request_id,requestId:row.request_id,kind:'ready_to_file',title:`Building agreement ready to file: ${row.organization}, ${row.event_date}`,message:'The Secretary attestation is complete. Review the agreement and file it as completed.'}];
    return [];
   });
-  res.setHeader('Cache-Control','private, no-store');res.json({alerts});
+  res.json({alerts});
  }catch(e){next(e)}});
  app.post('/api/building/requests/:id/decision',requireAuth,permit('building.decide'),async(req,res,next)=>{try{
   if(req.user.role!=='owner'&&req.user.role!=='warden')throw fail(403,'Building decisions are assigned to the Worshipful Master and Xavier White.');
@@ -209,7 +311,7 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   const warnings=[];let building=[];
   try{const r=await fetcher(PORTAL+'/api/calendar?from='+from+'&to='+to,{redirect:'error',signal:AbortSignal.timeout(12000)});if(!r.ok)throw Error();const data=await r.json();if(!Array.isArray(data.busy))throw Error();
    if(data.warning)warnings.push(data.warning);
-   building=data.busy.filter(b=>validDate(b.date)&&b.date>=from&&b.date<=to).map(b=>({id:'building:'+String(b.ref||crypto.createHash('sha256').update(JSON.stringify([b.date,b.start,b.end,b.label])).digest('hex').slice(0,20)),title:String(b.label||'Building reservation'),startDate:b.date,endDate:b.date,startTime:b.start||'',endTime:b.end||'',allDay:Boolean(b.allDay),location:'208 East Lake Street, Middletown, DE 19709',description:b.status==='pending'?'Building request pending approval.':'Building calendar entry.',category:'building',status:b.status==='pending'?'pending':b.status==='denied'?'cancelled':'scheduled',source:'Building calendar',sourceUrl:'',editable:false}));
+   building=data.busy.filter(b=>validDate(b.date)&&b.date>=from&&b.date<=to).map(b=>({id:'building:'+String(b.ref||crypto.createHash('sha256').update(JSON.stringify([b.date,b.start,b.end,b.label])).digest('hex').slice(0,20)),title:String(b.label||'Building reservation'),startDate:b.date,endDate:b.date,startTime:b.start||'',endTime:b.end||'',allDay:Boolean(b.allDay),location:LODGE_ADDRESS,description:b.status==='pending'?'Building request pending approval.':'Building calendar entry.',category:'building',status:b.status==='pending'?'pending':b.status==='denied'?'cancelled':'scheduled',source:'Building calendar',sourceUrl:'',editable:false}));
   }catch{warnings.push('The building calendar is temporarily unavailable. Lodge events are still shown; this is not confirmation that the building is free.');}
   // Enrich stated-meeting dates from the Lodge template without showing the
   // same standing building entry again. Keep all other organizations and holds.

@@ -23,8 +23,9 @@ export const ASSISTANT_CAPABILITIES = Object.freeze([
   capability('dues.manage','Record dues activity','Dues','approval','Propose exact adjustments or reversals; existing evidence rules remain.'),
   capability('suggestions.create','Prepare confidential suggestions','Members','approval','Propose an exact confidential submission.'),
   capability('documents.status','View dispensations','Dispensations','standing','Read assigned or owner-visible documents, statuses and retained PDFs.'),
+  capability('owner.dispensation-packet','Review dispensation delivery records','Dispensations','standing','Read the owner-only packet status and supporting PDF. Sending remains a separate Spark workflow.'),
   capability('documents.sign','Sign assigned dispensations','Dispensations','personal','Open the complete document for your own signature.', ['Applies your saved signature; existing completion and notice rules apply.']),
-  capability('candidates.view','View Candidate Tracker','Candidates','unavailable','The tracker requires an owner assertion which cannot be handed to an assistant credential.'),
+  capability('candidates.view','View Candidate Tracker','Candidates','personal','Open Candidate Tracker with your signed-in Dashboard client. Tracker data requires a separate identity for direct Muse access.'),
   capability('candidates.edit','Edit Candidate Tracker','Candidates','unavailable','External tracker changes are not exposed through this service identity.'),
   capability('proposals.create','Submit personal dispensation proposals','Dispensations','unavailable','Proposal preparation is assigned to Wardens. Owner review is listed separately.'),
   capability('signature.manage','Manage your signature','Personal','personal','Signature images and signature changes require your own action.'),
@@ -44,6 +45,7 @@ export const ASSISTANT_CAPABILITIES = Object.freeze([
   capability('owner.dispensation-sign','Create and sign a dispensation','Dispensations','personal','Create an official dispensation using request_signature with POST /api/dispensations. Both Secretaries are assigned automatically; the first signer completes it using his own saved name and mailing address. Follow the current signature delegation settings.', ['Applies your saved signature, creates the document and sends Secretary notices.']),
   capability('owner.record-approval','Record an approval assertion','Dispensations','personal','You record and confirm the actual approval evidence yourself.'),
   capability('owner.proposals-view','Review Warden proposals','Dispensations','standing','Read all submitted proposals.'),
+  capability('owner.proposals-feedback','Return or decline Warden proposals','Dispensations','approval','Send one specific Warden proposal back for changes or decline it under exact authorization.', ['Records your decision. Email follow-through uses Spark.']),
   capability('owner.proposals-decide','Decide Warden proposals','Dispensations','personal','Review the exact proposal yourself. Approval creates the document with your saved signature.', ['Approval applies your saved signature, creates a document and notifies officers.']),
   capability('owner.minutes-preparer','Attest as actual minutes preparer','Minutes','personal','Only your own draft can reach your preparer attestation.', ['Confirms preparer facts and applies your signature.']),
   capability('owner.minutes-master','Attest as Worshipful Master','Minutes','personal','Open submitted minutes, review current corrections and tap to attest.', ['Applies your signature, files the signed PDF and publishes internal availability.']),
@@ -90,7 +92,7 @@ const routes = [];
 function route(methods, path, id, table = null, section = null, mode = null) {
   const keys = [];
   const pattern = path.split('/').map(part => part.startsWith(':') ? (keys.push(part.slice(1)), '([A-Za-z0-9_-]+)') : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('/');
-  for (const method of methods.split('|')) routes.push({ method, re: new RegExp(`^${pattern}$`), keys, id, table, section, mode });
+  for (const method of methods.split('|')) routes.push({ method, template: path, re: new RegExp(`^${pattern}$`), keys, id, table, section, mode });
 }
 route('GET','/api/auth/me','owner.profile');
 route('GET','/api/officers','owner.officers');
@@ -114,6 +116,7 @@ route('POST','/api/dues/adjustments','dues.manage');
 route('POST','/api/dues/adjustments/:id/reverse','dues.manage','dues_adjustments');
 route('GET','/api/building/availability','building.view');
 route('GET','/api/building/requests','building.view');
+route('GET','/api/building/requests/:id/review','building.view',null,'building');
 route('GET','/api/building/alerts','building.view',null,'building');
 route('POST','/api/building/requests','building.request',null,'building');
 route('POST','/api/building/requests/:id/decision','building.decide','building','building');
@@ -173,6 +176,7 @@ route('GET','/api/correspondence/:id/pdf','owner.correspondence-view','correspon
 route('GET','/api/documents','documents.status');
 route('GET','/api/approvals','documents.status');
 for (const suffix of ['','/file','/original','/endorsed','/audit']) route('GET',`/api/documents/:id${suffix}`,'documents.status','documents','documents');
+for (const suffix of ['/submission-packet','/supporting-report']) route('GET',`/api/documents/:id${suffix}`,'owner.dispensation-packet','documents','documents');
 route('POST','/api/documents','owner.documents',null,'documents');
 route('POST','/api/dispensations','owner.dispensation-sign',null,'createDispensation');
 for (const p of ['parse','preview']) route('POST',`/api/dispensations/${p}`,'owner.documents',null,'documents','standing');
@@ -184,10 +188,11 @@ route('PUT','/api/documents/:id/approval','owner.record-approval','documents','d
 // Muse uses Spark for email. Legacy provider draft endpoints are not delegated.
 for (const p of ['rescind','offer-to-both']) route('POST',`/api/documents/:id/${p}`,'owner.documents','documents','documents');
 route('GET','/api/proposals','owner.proposals-view');
-route('POST|PUT','/api/proposals/:id','proposals.create','dispensation_proposals','documents');
+route('PUT','/api/proposals/:id','proposals.create','dispensation_proposals','documents');
 route('POST','/api/proposals','proposals.create',null,'documents');
 route('POST','/api/proposals/:id/preview','owner.proposals-view','dispensation_proposals','documents','standing');
 route('POST','/api/proposals/:id/decision','owner.proposals-decide','dispensation_proposals','proposalReview');
+route('POST','/api/proposals/:id/feedback','owner.proposals-feedback','dispensation_proposals','proposalReview');
 route('POST','/api/reports/organize','reports.create',null,'reportGenerator');
 route('POST','/api/reports/import-source','reports.create',null,'reportGenerator','standing');
 route('GET','/api/generation/status','reports.create',null,'reportGenerator','standing');
@@ -195,10 +200,50 @@ route('GET','/api/officer-reports','owner.received-reports');
 route('GET','/api/officer-reports/:id/pdf','owner.received-reports','officer_reports','reports');
 for (const p of ['/api/reports/handoff','/api/reports/signature','/api/officer-reports','/api/officer-reports/deliver']) route('POST',p,'owner.report-signature',null,'reportGenerator');
 route('GET|PUT','/api/profile/signature','signature.manage',null,'profile');
-route('POST','/api/tracker/handoff','candidates.view');
+route('POST','/api/tracker/handoff','candidates.view',null,'candidateTracker');
 route('POST','/api/tracker/permissions','candidates.edit');
-for (const p of ['/api/auth/sessions','/api/auth/logout','/api/auth/sessions/revoke-others']) route('GET|POST|DELETE',p,'settings.manage');
-route('DELETE','/api/auth/sessions/:id','settings.manage');
+route('GET','/api/auth/sessions','settings.manage',null,'mySettings');
+for (const p of ['/api/auth/logout','/api/auth/sessions/revoke-others']) route('POST',p,'settings.manage',null,'mySettings');
+route('DELETE','/api/auth/sessions/:id','settings.manage',null,'mySettings');
+
+export const supportedAssistantSignatures = Object.freeze([
+  'documents.sign','owner.minutes-preparer','owner.minutes-master','owner.treasury-attest','owner.dispensation-sign',
+]);
+
+export function nativeAssistantReviewUrl(kind, id) {
+  if (!['review','signature'].includes(kind) || typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;
+  return `stonesquaresign://muse/${kind}/${id}`;
+}
+
+export function assertProposalFeedback(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+      || !['decline','changes'].includes(body.decision)
+      || Object.keys(body).some(key => !['decision','wmNote'].includes(key))
+      || (body.wmNote !== undefined && (typeof body.wmNote !== 'string' || body.wmNote.length > 2000))) {
+    throw assistantError(400, 'Return or decline the proposal with an optional note. Approval uses the owner signing workflow.');
+  }
+}
+
+export function describeAssistantWorkflows({ permissions = [], enabled = false, commandExecution = false, signatureExecution = false } = {}) {
+  const granted = new Set(permissions);
+  return ASSISTANT_CAPABILITIES.map(action => ({
+    ...action,
+    granted: enabled && granted.has(action.id),
+    operations: routes.filter(route => route.id === action.id).map(route => {
+      const mode = route.mode || action.mode;
+      const signatureOperation = mode === 'personal' && supportedAssistantSignatures.includes(action.id);
+      const access = !enabled ? 'connection_required'
+        : mode === 'unavailable' ? 'unavailable'
+        : mode === 'personal' ? (signatureOperation
+          ? signatureExecution ? 'exact_signature_instruction' : 'owner_signature_confirmation'
+          : 'owner_native_review')
+        : !granted.has(action.id) ? 'grant_required'
+        : mode === 'standing' ? 'direct'
+        : commandExecution ? 'exact_instruction' : 'owner_approval';
+      return { method:route.method, path:route.template, mode, access, section:route.section };
+    }),
+  }));
+}
 
 export function resolveAssistantAction(method, path) {
   const exactPath = canonicalAssistantPath(path), pathname = exactPath.split('?')[0];
@@ -261,7 +306,11 @@ export async function assistantRecordState(action, ownerId, { checkEligibility =
     const archive=await readAssistantBuildingArchive();
     const record = archive.records.find(item => String(item.id) === action.recordId);
     if (!record) throw assistantError(404, 'The requested record was not found.');
-    return { revision: archive.revision, digest: digest(stableJson(record)) };
+    const state = { revision:digest(JSON.stringify(record)), status:record.status || null,
+      decisionActor:record.decidedByRole || null, decisionNotified:typeof record.requesterNotified === 'boolean' ? record.requesterNotified : null };
+    if (action.id === 'owner.building-file') state.filing = await tableExists('building_workflow_records') ?
+      await dbGet('SELECT filed_revision,filed_at,filed_by_user_id FROM building_workflow_records WHERE request_id=?',[record.id]) || null : null;
+    return state;
   }
   const columns = stateColumns[action.recordTable];
   if (!columns || !await tableExists(action.recordTable)) throw assistantError(503, 'This record source is unavailable.');

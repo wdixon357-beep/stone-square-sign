@@ -91,11 +91,11 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     return document;
   }
 
-  async function packet(id, user) {
+  async function packet(id, user, { forAssistant = false } = {}) {
     const document = await documentFor(id, user);
     // The secretary's completion response deliberately contains no owner email
     // overview, supporting report, or Missive receipt.
-    const missiveDraft = user && missiveDraftStatus ? await missiveDraftStatus(id, user) : null;
+    const missiveDraft = user && !forAssistant && missiveDraftStatus ? await missiveDraftStatus(id, user) : null;
     const correction = await dbGet(`SELECT corrected_at, before_pdf_sha256, after_pdf_sha256
       FROM owner_signature_revisions WHERE document_id = ? ORDER BY corrected_at DESC, id DESC LIMIT 1`, [id]);
     const row = await dbGet(`SELECT report_filename, report_sha256, source_label, report_added_at,
@@ -114,6 +114,14 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       : stale ? 'uncertain'
       : !row?.report_sha256 ? 'awaiting_report' : row.delivery_state || 'ready';
     const state = !automaticDeliveryEnabled && !['sent', 'sending', 'uncertain'].includes(recordedState) ? 'disabled' : recordedState;
+    if (forAssistant) return {
+      documentId:id, documentStatus:document.status, state, emailFollowThrough:'spark',
+      report:row?.report_sha256 ? { filename:row.report_filename, sha256:row.report_sha256, addedAt:row.report_added_at } : null,
+      delivery:{ sentAt:row?.sent_at || document.submitted_at || null, attemptedAt:row?.attempted_at || null,
+        confirmedAt:row?.delivery_confirmed_at || null, confirmationOutcome:row?.delivery_confirmation_outcome || null },
+      correction:correction ? { correctedAt:correction.corrected_at, previousPdfSha256:correction.before_pdf_sha256,
+        correctedPdfSha256:correction.after_pdf_sha256, previousDeliveryAppliesToPreviousPdf:true } : null,
+    };
     const messages = {
       awaiting_signature: 'The signed dispensation and corresponding report will be emailed to the District Deputy after either secretary signs.',
       awaiting_report: 'The secretary has signed. Add the corresponding report PDF to email both documents to the District Deputy.',
@@ -336,7 +344,10 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
     const owner = [requireAuth, requireOwner];
     const context = req => ({ actorUserId: req.user.id, ip: req.ip, userAgent: req.get('user-agent') || '' });
     const route = fn => async (req, res, next) => { try { await fn(req, res); } catch (cause) { next(cause); } };
-    app.get('/api/documents/:id/submission-packet', ...owner, route(async (req, res) => res.json({ packet: await packet(req.params.id, req.user) })));
+    app.get('/api/documents/:id/submission-packet', ...owner, route(async (req, res) => {
+      const result = await packet(req.params.id, req.user, { forAssistant:Boolean(req.assistant) });
+      res.set('Cache-Control','private, no-store').json({ packet:result });
+    }));
     app.put('/api/documents/:id/supporting-report', ...owner,
       rateLimit({ key: 'dispensation-report-upload', maximum: 20, windowMs: 60 * 60 * 1000 }), upload.single('report'), route(async (req, res) => {
       await documentFor(req.params.id, req.user);
@@ -354,7 +365,7 @@ export function createDispensationSubmissions({ sendEmail, addAudit, recipient, 
       if (!row?.report_bytes) throw error(404, 'No corresponding report PDF is attached.');
       const asciiName = row.report_filename.replace(/[^\x20-\x7e]/g, '_');
       const encodedName = encodeURIComponent(row.report_filename).replace(/['()*]/g, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`);
-      res.set('Content-Type', 'application/pdf').set('Content-Disposition',
+      res.set('Cache-Control','private, no-store').set('Content-Type', 'application/pdf').set('Content-Disposition',
         `inline; filename="${asciiName}"; filename*=UTF-8''${encodedName}`).send(buffer(row.report_bytes));
     }));
     app.get('/api/documents/:id/submission-draft', ...owner, route(async (req, res) => {

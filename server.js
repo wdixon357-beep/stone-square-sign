@@ -48,6 +48,7 @@ import { mountMemberFeatures } from './member-features.js';
 import { initSignaturePolicySchema, signatureProfilePolicyForUser, assertApprovedSignature } from './signature-policy.js';
 import { initMinutesSignatureRevisionSchema, createMinutesSignatureRevisions } from './minutes-signature-revisions.js';
 import { initAssistantSchema, mountAssistantRoutes, assertAssistantRecordUnchanged } from './assistant-access.js';
+import { assertProposalFeedback } from './assistant-actions.js';
 import { installAssistantGateway } from './assistant-gateway.js';
 import { mountAssistantMcp } from './assistant-mcp.js';
 import { initSignatureAuthorizationSchema, mountSignatureAuthorizationRoutes, registerSignatureOperation, signatureBindingValue } from './signature-authorizations.js';
@@ -3251,19 +3252,23 @@ app.post('/api/proposals/:id/preview', requireAuth, requireOwnerOrWarden, rateLi
   } catch (error) { next(error); }
 });
 
-app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, res, next) => {
+const decideProposal = ({ feedbackOnly = false } = {}) => async (req, res, next) => {
   try {
     const decision = String(req.body?.decision || '');
     if (!['approve', 'decline', 'changes'].includes(decision)) {
       return res.status(400).json({ error: 'Choose approve, decline, or request changes.' });
     }
+    if (feedbackOnly) assertProposalFeedback(req.body);
     const wmNote = String(req.body?.wmNote || '').trim().slice(0, 2000);
+    const feedbackAction = decision === 'decline' ? 'proposal_declined' : 'proposal_changes_requested';
 
     /* Claimed inside a transaction with FOR UPDATE so a double-clicked Approve cannot
      * create two dispensations and email both Secretaries twice. */
     const claimed = await withTransaction(async () => {
       const row = await dbGet('SELECT * FROM dispensation_proposals WHERE id = ? FOR UPDATE', [req.params.id]);
       if (!row) throw httpError(404, 'Proposal not found.');
+      await assertAssistantRecordUnchanged(req);
+      if (feedbackOnly && row.status !== 'pending') throw httpError(409, 'This proposal is no longer pending. Review its current status before returning or declining it.');
       /* 'approving' means a previous attempt died between claiming the row and creating the
        * document. Nothing was created, or the id would have been stamped, so let it be retried
        * rather than leaving it stuck forever. */
@@ -3275,8 +3280,18 @@ app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, r
         : decision === 'decline' ? 'declined' : 'changes_requested';
       await dbRun('UPDATE dispensation_proposals SET status = ?, wm_note = ?, updated_at = ? WHERE id = ?',
         [nextStatus, wmNote, nowIso(), req.params.id]);
+      if (feedbackOnly) await dbRun(
+        'INSERT INTO audit_events (user_id,action,ip_address,user_agent,details_json,created_at) VALUES (?,?,?,?,?,?)',
+        [req.user.id,feedbackAction,req.ip,String(req.get('user-agent') || '').slice(0,500),JSON.stringify({proposalId:req.params.id}),nowIso()],
+      );
       return row;
     });
+
+    if (feedbackOnly) {
+      broadcast('proposals_changed', { reason:feedbackAction, proposalId:req.params.id });
+      return res.json({ id:req.params.id, ok:true, status:decision === 'decline' ? 'declined' : 'changes_requested',
+        emailFollowThrough:'spark', requesterNotified:false });
+    }
 
     const proposer = await dbGet('SELECT email, name FROM users WHERE id = ?', [claimed.proposer_user_id]);
     const notify = async (subject, text) => {
@@ -3294,16 +3309,15 @@ app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, r
     };
 
     if (decision !== 'approve') {
-      const action = decision === 'decline' ? 'proposal_declined' : 'proposal_changes_requested';
-      await addAudit({ userId: req.user.id, action, ip: req.ip,
-        userAgent: req.get('user-agent') || '', details: { proposalId: req.params.id } });
+      await addAudit({ userId:req.user.id, action:feedbackAction, ip:req.ip,
+        userAgent:req.get('user-agent') || '', details:{proposalId:req.params.id} });
       const notificationWarnings = await notify(
         decision === 'decline' ? 'Your dispensation proposal was not approved' : 'The Worshipful Master sent your proposal back',
         `${proposer?.name || 'Brother'},\n\n${decision === 'decline'
           ? 'The Worshipful Master has not approved the dispensation you proposed.'
           : 'The Worshipful Master has asked for changes to the dispensation you proposed. Sign in and update it.'}\n\n${wmNote ? `His note:\n${wmNote}\n\n` : ''}${requestBaseUrl(req)}`,
       );
-      broadcast('proposals_changed', { reason: action, proposalId: req.params.id });
+      broadcast('proposals_changed', { reason: feedbackAction, proposalId: req.params.id });
       return res.json({ ok: true, status: decision === 'decline' ? 'declined' : 'changes_requested', notificationWarnings });
     }
 
@@ -3361,7 +3375,9 @@ app.post('/api/proposals/:id/decision', requireAuth, requireOwner, async (req, r
       throw error;
     }
   } catch (error) { next(error); }
-});
+};
+app.post('/api/proposals/:id/decision', requireAuth, requireOwner, decideProposal());
+app.post('/api/proposals/:id/feedback', requireAuth, requireOwner, decideProposal({ feedbackOnly:true }));
 
 const applyAssignedDocumentSignature = async req => withTransaction(async () => {
       const signatureBytes = await lockSavedSignature(req.user);

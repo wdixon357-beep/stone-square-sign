@@ -175,6 +175,42 @@ try {
     await fails(()=>assistantBuildingProjection(),503);
     await db.dbRun('UPDATE building_store_entries SET value_sha256=? WHERE key=?',[actions.digest(raw),'resv:all']);
   });
+  await test('exact Building reviews remain addressable and need a verified owner decision',async()=>{
+    const archive = await db.dbGet('SELECT value_text FROM building_store_entries WHERE key=?',['resv:all']);
+    const records = JSON.parse(archive.value_text);
+    const decisionPath = '/api/building/requests/SSL-TEST/decision';
+    const revision = actions.digest(JSON.stringify(records[0]));
+    const approved = await request(decisionPath,{decision:'approved',revision,authorization:null},'building-approved','building.decide','POST');
+    const declined = await request(decisionPath,{decision:'denied',revision},'building-declined','building.decide','POST');
+    const first = await request('/api/building/requests',{},'building-first-new','building.request','POST');
+    const second = await request('/api/building/requests',{},'building-second-new','building.request','POST');
+    const queue = await access.listAssistantAttestations(ownerId);
+    for (const proposed of [approved,declined,first,second]) {
+      assert.equal(queue.filter(item=>item.requestId===proposed.id).length,1);
+      assert.equal(proposed.nativeReviewUrl,`stonesquaresign://muse/review/${proposed.id}`);
+    }
+
+    const replaceArchive = async () => {
+      const raw = JSON.stringify(records);
+      await db.dbRun('UPDATE building_store_entries SET value_text=?,value_sha256=?,revision=revision+1 WHERE key=?',[raw,actions.digest(raw),'resv:all']);
+    };
+    const readRequest = id => db.dbGet('SELECT status,receipt_json FROM assistant_requests WHERE id=?',[id]);
+    const human = {user:{id:ownerId,role:'owner'},method:'POST',originalUrl:decisionPath,body:{decision:'approved',revision,note:''}};
+    human.assistantPersonalReview = await access.captureHumanAssistantReview(human);
+    records[1].org = 'An unrelated changed booking';
+    await replaceArchive();
+    await access.observeHumanAssistantCompletion(human,{statusCode:200});
+    assert.equal((await readRequest(approved.id)).status,'personal');
+
+    Object.assign(records[0],{status:'approved',decidedByRole:'wm',requesterNotified:false});
+    await replaceArchive();
+    await access.observeHumanAssistantCompletion(human,{statusCode:200});
+    const saved = await readRequest(approved.id);
+    assert.equal(saved.status,'completed_personally');
+    assert.equal(JSON.parse(saved.receipt_json).recordId,'SSL-TEST');
+    assert.equal(JSON.parse(saved.receipt_json).requesterNotified,false);
+    assert.equal((await readRequest(declined.id)).status,'personal');
+  });
   await test('audit context reaches direct inserts with literal SQL and isolates human work',async()=>{
     await db.withAuditActor({assistantId:assistant.id,assistantName:'Synthetic Muse',ownerUserId:ownerId,requestId:proposal.id},async()=>{
       await db.dbRun("INSERT INTO audit_events (user_id,action,details_json,created_at) VALUES (?,'literal_action',?,?)",[ownerId,'{}',time]);

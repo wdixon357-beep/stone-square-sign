@@ -9,6 +9,7 @@ const root=path.resolve(new URL('..',import.meta.url).pathname);
 if(process.platform!=='darwin'){console.log('Native offscreen rendering requires macOS.');process.exit(0);}
 const source=fs.readFileSync(path.join(root,'macos/Sources/StoneSquareSign/AssistantSignatureAuthorization.swift'),'utf8');
 const access=fs.readFileSync(path.join(root,'macos/Sources/StoneSquareSign/AssistantAccess.swift'),'utf8');
+const linkSource=fs.readFileSync(path.join(root,'macos/Sources/StoneSquareSign/MuseReviewLink.swift'),'utf8');
 const shared=fs.readFileSync(path.join(root,'macos/Sources/StoneSquareSign/Views.swift'),'utf8');
 const theme=shared.slice(shared.indexOf('enum SignTheme'),shared.indexOf('private enum GrandViewPortal'));
 const header=shared.slice(shared.indexOf('struct NativeWorkspaceHeader'),shared.indexOf('struct AdaptiveWorkspaceSplit'));
@@ -24,18 +25,19 @@ const pending={id:'SYNTHETIC-SIGNATURE',actionId:'minutes.attest',recordId:'SYNT
 const completed={...pending,status:'completed',ready:false,receipt:{authorizedBy:{userId:987654,name:'Synthetic Owner'},requestedBy:{assistantId:'SYNTHETIC-MUSE',name:'Muse'},appliedBy:'system',recordId:pending.recordId,actionId:pending.actionId,completedAt:'2026-10-31T20:05:00Z',notificationState:'queued',notificationWarnings:[],automaticRetryAllowed:false}};
 const uncertain={...pending,status:'uncertain',ready:false,reason:'The signature outcome needs verification. Do not create or submit a duplicate request.'};
 const raw=x=>`#"${JSON.stringify(x)}"#`;
-const out=path.join(root,'output/signature-authorization-build/native-render');fs.mkdirSync(out,{recursive:true,mode:0o700});fs.chmodSync(out,0o700);
+const out=process.env.STONE_SQUARE_NATIVE_RENDER_OUTPUT || path.join(root,'output/signature-authorization-build/native-render');fs.mkdirSync(out,{recursive:true,mode:0o700});fs.chmodSync(out,0o700);
 const scratch=fs.mkdtempSync(path.join(os.tmpdir(),'signature-native-render-'));
 try{
  const bundle=path.join(scratch,'SignatureRender.app'),contents=path.join(bundle,'Contents'),bin=path.join(contents,'MacOS');fs.mkdirSync(bin,{recursive:true});
  fs.writeFileSync(path.join(contents,'Info.plist'),`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.stonesquare.synthetic.signature.${Date.now()}</string><key>CFBundleExecutable</key><string>SignatureRender</string><key>LSUIElement</key><true/></dict></plist>`);
  const swift=path.join(scratch,'render.swift'),binary=path.join(bin,'SignatureRender');
- fs.writeFileSync(swift,`${access}\n${source}\n${theme}\n${header}\n${date}
+ fs.writeFileSync(swift,`${access}\n${source}\n${linkSource}\n${theme}\n${header}\n${date}
 struct CorrespondenceRecord:Decodable {}
 struct User { let id:Int; let role:String }
 @MainActor final class AppModel:ObservableObject {
  var user:User?=User(id:987654,role:"owner")
  let assistantAccountContext="OFFSCREEN-SYNTHETIC-SIGNATURE"
+ private(set) var exactPreviewReads=0
  var current=Data(${raw(pending)}.utf8)
  func request<T:Decodable>(_ path:String,method:String="GET",body:Data?=nil)async throws->T{
   precondition(method=="GET", "A render fixture cannot submit any mutation")
@@ -47,6 +49,7 @@ struct User { let id:Int; let role:String }
   return try JSONDecoder().decode(T.self,from:bytes)
  }
  func signatureAuthorizationPreview(requestID:String)async throws->Data{
+  exactPreviewReads += 1
   precondition(requestID=="SYNTHETIC-SIGNATURE");return Data(base64Encoded:"${pdf.toString('base64')}")!
  }
 }
@@ -64,21 +67,24 @@ struct User { let id:Int; let role:String }
   func scroll(_ view:NSView)->NSScrollView?{
    if let value=view as? NSScrollView{return value};for child in view.subviews{if let value=scroll(child){return value}};return nil
   }
-  func preparePDF(_ view:NSView){
+  func preparePDF(_ view:NSView)->Bool{
    if let pdf=view as? PDFView{
     precondition(pdf.document?.pageCount==1 && pdf.document?.page(at:0)?.string?.contains("SYNTHETIC REVIEW DOCUMENT")==true,"The actual PDFKit view must contain the exact synthetic artifact")
     pdf.layoutDocumentView();pdf.scaleFactor=pdf.scaleFactorForSizeToFit;pdf.needsDisplay=true;pdf.displayIfNeeded();pdf.documentView?.displayIfNeeded()
+    return true
    }
-   for child in view.subviews{preparePDF(child)}
+   return view.subviews.contains(where:preparePDF)
   }
-  func capture<V:View>(_ root:V,name:String,width:CGFloat,height:CGFloat,fraction:CGFloat=0)async throws{
+  func capture<V:View>(_ root:V,name:String,width:CGFloat,height:CGFloat,fraction:CGFloat=0,expectsPDF:Bool=false)async throws{
    let hosting=NSHostingView(rootView:root.environmentObject(model).environment(\\.colorScheme,.light).frame(width:width,height:height).background(Color.white))
    hosting.sizingOptions=[];hosting.appearance=NSAppearance(named:.aqua)
    let window=NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.resizable],backing:.buffered,defer:false)
    window.appearance=NSAppearance(named:.aqua);window.isReleasedWhenClosed=false;window.contentView=hosting
    window.setContentSize(NSSize(width:width,height:height));hosting.frame=NSRect(x:0,y:0,width:width,height:height)
    hosting.layoutSubtreeIfNeeded();try await Task.sleep(for:.milliseconds(200));hosting.layoutSubtreeIfNeeded()
-   preparePDF(hosting);try await Task.sleep(for:.milliseconds(150));hosting.displayIfNeeded()
+   let hasPDF=preparePDF(hosting)
+   precondition(!expectsPDF || hasPDF,"The linked signature review must mount its exact PDFKit view")
+   try await Task.sleep(for:.milliseconds(150));hosting.displayIfNeeded()
    if fraction>0,let target=scroll(hosting),let doc=target.documentView{
     target.contentView.scroll(to:NSPoint(x:0,y:max(0,doc.bounds.height-target.contentView.bounds.height)*fraction));target.reflectScrolledClipView(target.contentView)
     hosting.layoutSubtreeIfNeeded();try await Task.sleep(for:.milliseconds(80))
@@ -99,7 +105,11 @@ struct User { let id:Int; let role:String }
   let access=AssistantWorkspace();await access.load(model)
   model.current=Data(${raw(pending)}.utf8)
   try await capture(MyAttestationsView(workspace:access,openReview:{_ in}),name:"owner-queue",width:760,height:880)
-  print("PASS: six offscreen synthetic signature confirmation, PDF, receipt, uncertain and queue fixtures; no network, visible window, installed app, preference or Keychain access")
+  let readsBeforeLink=model.exactPreviewReads
+  let link=MuseReviewLink(url:URL(string:"stonesquaresign://muse/signature/SYNTHETIC-SIGNATURE")!)!
+  try await capture(MuseLinkedReviewSheet(link:link,openReview:{_ in preconditionFailure("A signature link opens only its own review")}),name:"linked-signature",width:720,height:820,expectsPDF:true)
+  precondition(model.exactPreviewReads==readsBeforeLink+1,"The linked signature must read and verify its own preview")
+  print("PASS: seven offscreen synthetic signature confirmation, PDF, receipt, uncertain and queue fixtures; no network, visible window, installed app, preference or Keychain access")
  }
 }
 `);

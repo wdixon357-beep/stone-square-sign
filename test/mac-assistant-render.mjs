@@ -8,6 +8,7 @@ const root = path.resolve(new URL('..', import.meta.url).pathname);
 if (process.platform !== 'darwin') { console.log('Native offscreen rendering requires macOS.'); process.exit(0); }
 const source = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/AssistantAccess.swift'), 'utf8');
 const signatureSource = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/AssistantSignatureAuthorization.swift'), 'utf8');
+const linkSource = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/MuseReviewLink.swift'), 'utf8');
 const sharedViews = fs.readFileSync(path.join(root, 'macos/Sources/StoneSquareSign/Views.swift'), 'utf8');
 const theme = sharedViews.slice(sharedViews.indexOf('enum SignTheme'), sharedViews.indexOf('private enum GrandViewPortal'));
 const header = sharedViews.slice(sharedViews.indexOf('struct NativeWorkspaceHeader'), sharedViews.indexOf('struct AdaptiveWorkspaceSplit'));
@@ -21,7 +22,7 @@ const capabilities = [
   { id: 'treasury.view', label: 'Review treasurer reports', group: 'Treasury', mode: 'standing', description: 'Read authorized financial reports and their current review state.', effects: [] },
   { id: 'candidates.view', label: 'Candidate Tracker', group: 'Other offices', mode: 'unavailable', description: 'This external connection is not exposed to Muse credentials.', effects: [] }
 ];
-const request = { id:'SYNTHETIC-REQUEST', actionId:'minutes.prepare', title:'Review proposed minutes correction', method:'PUT', path:'/api/minutes/SYNTHETIC', body:{revision:4,change:'Synthetic review only'}, status:'pending', fingerprint:'SYNTHETIC-FINGERPRINT', createdAt:'2026-10-31T15:00:00Z', expiresAt:'2026-10-31T16:00:00Z', effects:['Records a correction while retaining the submitted snapshot.','Does not sign, attest, distribute or confirm attendance.'], navigation:{section:'minutes',recordId:'SYNTHETIC-MINUTES'}, receipt:null };
+const request = { id:'SYNTHETIC-REQUEST', actionId:'minutes.prepare', title:'Review proposed minutes correction', method:'PUT', path:'/api/minutes/SYNTHETIC', body:{revision:4,change:'Synthetic review only'}, status:'pending', fingerprint:'SYNTHETIC-FINGERPRINT', createdAt:'2026-10-31T15:00:00Z', expiresAt:'2099-10-31T16:00:00Z', effects:['Records a correction while retaining the submitted snapshot.','Does not sign, attest, distribute or confirm attendance.'], navigation:{section:'minutes',recordId:'SYNTHETIC-MINUTES'}, receipt:null };
 const attestation = { id:'SYNTHETIC-ATTESTATION', kind:'minutes', recordId:'SYNTHETIC-MINUTES', title:'October meeting minutes (synthetic)', status:'awaiting_master_attestation', section:'minutes', actionLabel:'Review and attest as Worshipful Master', attestationText:'I reviewed the current meeting minutes and the corrections shown against the preparing officer’s submitted record. I attest to this current record as Worshipful Master.', effects:['Applies your saved Worshipful Master signature.','Files the signed minutes and makes the completed record available to authorized officers.','Distribution to the Craft remains a separate action.'], revision:'SYNTHETIC-REVISION-4', requestId:null, ready:true, reason:'The preparing officer’s original attestation and attendance review remain attached to this record.' };
 const payload = {assistant:{id:'SYNTHETIC-MUSE',name:'Muse',enabled:true,expiresAt:'2026-11-07T15:00:00Z',permissions:['minutes.view','minutes.prepare','treasury.view'],createdAt:null,updatedAt:null},capabilities,requests:[request],attestations:[attestation,{...attestation,id:'SYNTHETIC-BUILDING',kind:'building',recordId:'SYNTHETIC-BUILDING',title:'Community room request (synthetic)',section:'building',actionLabel:'Review Building Request',status:'pending',reason:'Approval applies your saved signature. Review the agreement first.'}],activity:[]};
 const raw=x=>`#"${JSON.stringify(x)}"#`;
@@ -31,13 +32,19 @@ try {
   const bundle=path.join(scratch,'MuseAssistantRender.app'), contents=path.join(bundle,'Contents'), macos=path.join(contents,'MacOS'); fs.mkdirSync(macos,{recursive:true});
   fs.writeFileSync(path.join(contents,'Info.plist'),`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.stonesquare.synthetic.muse.${Date.now()}</string><key>CFBundleExecutable</key><string>MuseAssistantRender</string><key>LSUIElement</key><true/></dict></plist>`);
   const swiftFile=path.join(scratch,'render.swift'), binary=path.join(macos,'MuseAssistantRender');
-  fs.writeFileSync(swiftFile,`${source}\n${signatureSource}\n${theme}\n${header}\n${date}
+  fs.writeFileSync(swiftFile,`${source}\n${signatureSource}\n${linkSource}\n${theme}\n${header}\n${date}
 struct CorrespondenceRecord: Decodable {}
 struct User { let id: Int; let role: String }
 @MainActor final class AppModel: ObservableObject {
     let user: User? = User(id: 987654, role: "owner")
     let assistantAccountContext = "OFFSCREEN-SYNTHETIC-ONLY"
+    private(set) var linkedRequestRead = false
     func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws -> T {
+        precondition(method == "GET" && body == nil, "Render fixture cannot mutate")
+        if path == "/api/assistant/requests/SYNTHETIC-REQUEST" {
+            linkedRequestRead = true
+            return try JSONDecoder().decode(T.self, from: Data(${raw({request})}.utf8))
+        }
         if path == "/api/assistant/signature-requests" && method == "GET" {
             return try JSONDecoder().decode(T.self, from: Data("{\\"requests\\":[]}".utf8))
         }
@@ -90,7 +97,10 @@ struct User { let id: Int; let role: String }
         try await capture(AssistantAttestationReview(item:item,close:{},openReview:{_ in}),name:"personal-review",width:660,height:560)
         workspace.selectedRequest=workspace.requests[0]
         try await capture(AssistantRequestSheet(request:workspace.requests[0],workspace:workspace,openReview:{_ in}),name:"change-review",width:690,height:600)
-        print("PASS: eight offscreen synthetic native images; no visible window, installed app, app preference, Keychain or network access")
+        let link = MuseReviewLink(url: URL(string: "stonesquaresign://muse/review/SYNTHETIC-REQUEST")!)!
+        try await capture(MuseLinkedReviewSheet(link: link, openReview: { _ in preconditionFailure("Opening the link cannot invoke review") }),name:"linked-review",width:690,height:600)
+        precondition(model.linkedRequestRead, "Linked review must fetch its request in the current account")
+        print("PASS: nine offscreen synthetic native images; no visible window, installed app, app preference, Keychain or network access")
     }
 }
 `);

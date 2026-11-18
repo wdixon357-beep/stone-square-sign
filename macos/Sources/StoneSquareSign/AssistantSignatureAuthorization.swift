@@ -128,15 +128,22 @@ private struct AssistantSignatureEnvelope: Decodable { let request: AssistantSig
     func inspect(_ item: AssistantSignatureRequest, model: AppModel) async {
         configure(model)
         guard requests.contains(where: { $0.id == item.id }) else { return }
+        await inspectRequest(item.id, model: model)
+    }
+    func inspectLinked(requestID: String, model: AppModel) async {
+        guard MuseReviewLink.isRequestID(requestID) else { return }
+        await inspectRequest(requestID, model: model)
+    }
+    private func inspectRequest(_ requestID: String, model: AppModel) async {
         guard let stamp = begin(model) else { return }
         defer { finish(stamp, model) }
         selected = nil; preview = nil; previewVerified = false
         do {
-            let result: AssistantSignatureEnvelope = try await model.request("/api/assistant/signature-requests/\(Self.route(item.id))")
-            guard current(stamp, model), result.request.id == item.id else { return }
+            let result: AssistantSignatureEnvelope = try await model.request("/api/assistant/signature-requests/\(Self.route(requestID))")
+            guard current(stamp, model), result.request.id == requestID else { return }
             replace(result.request)
             guard result.request.isActionable() else { return }
-            let bytes = try await model.signatureAuthorizationPreview(requestID: item.id)
+            let bytes = try await model.signatureAuthorizationPreview(requestID: requestID)
             guard current(stamp, model), selected?.matchesReview(result.request) == true else { return }
             let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
             guard digest == result.request.artifactSHA256.lowercased(),
@@ -258,11 +265,12 @@ struct AssistantSignatureQueue: View {
 struct AssistantSignatureConfirmation: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var workspace: AssistantSignatureWorkspace
+    var close: (() -> Void)? = nil
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Signature authorization").font(.title2.weight(.semibold))
-                Spacer(); Button("Close") { workspace.close() }
+                Spacer(); Button("Close") { workspace.close(); close?() }
             }.padding(20)
             Divider()
             if let request = workspace.selected {

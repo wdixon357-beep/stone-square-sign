@@ -103,7 +103,106 @@ struct AssistantCapability: Decodable, Identifiable {
         }
     }
 }
-struct AssistantNavigation: Decodable { let section: String; let recordId: String? }
+struct AssistantNavigation: Decodable {
+    let section: String
+    let recordId: String?
+    var buildingDecision: AssistantBuildingDecisionReview? = nil
+    var buildingSubmission: AssistantBuildingSubmissionReview? = nil
+    private enum CodingKeys: String, CodingKey { case section, recordId }
+}
+
+struct AssistantBuildingSubmissionReview: Equatable {
+    struct Slot: Equatable {
+        let date: String
+        let start: String
+        let end: String
+    }
+
+    let requestID: String
+    let submissionID: String
+    let bookings: [Slot]
+    let spaces: [String]
+    let bathroomAccess: Bool?
+    let phone: String
+    let details: String
+
+    init?(requestID: String, body: AssistantJSON?) {
+        guard case .object(let values) = body,
+              Set(values.keys).isSubset(of: ["submissionId", "bookings", "spaces", "bathroomAccess", "phone", "purpose"]),
+              case .string(let submissionID) = values["submissionId"], UUID(uuidString: submissionID) != nil,
+              case .array(let slots) = values["bookings"], (1...12).contains(slots.count),
+              case .array(let proposedSpaces) = values["spaces"], !proposedSpaces.isEmpty,
+              case .string(let phone) = values["phone"], phone.utf16.count <= 40,
+              case .string(let details) = values["purpose"], details.utf16.count <= 1000 else { return nil }
+        var bookings: [Slot] = []
+        for slot in slots {
+            guard case .object(let fields) = slot, Set(fields.keys) == ["date", "start", "end"],
+                  case .string(let date) = fields["date"],
+                  case .string(let start) = fields["start"], LodgeDateTime.canonicalClock(start) == start,
+                  case .string(let end) = fields["end"], LodgeDateTime.canonicalClock(end) == end else { return nil }
+            bookings.append(Slot(date: date, start: start, end: end))
+        }
+        var spaces: [String] = []
+        for space in proposedSpaces {
+            guard case .string(let value) = space, !spaces.contains(value) else { return nil }
+            spaces.append(value)
+        }
+        let bathroomAccess: Bool?
+        if spaces == ["Front yard"] {
+            guard case .bool(let value) = values["bathroomAccess"] else { return nil }
+            bathroomAccess = value
+        } else {
+            guard values["bathroomAccess"] == nil else { return nil }
+            bathroomAccess = nil
+        }
+        self.requestID = requestID; self.submissionID = submissionID; self.bookings = bookings; self.spaces = spaces
+        self.bathroomAccess = bathroomAccess; self.phone = phone; self.details = details
+    }
+}
+
+struct AssistantBuildingDecisionReview: Equatable {
+    let recordID: String
+    let revision: String
+    let decision: String
+    let note: String
+    let authorization: [String: String]?
+
+    init?(recordID: String, body: AssistantJSON?) {
+        guard case .object(let values) = body,
+              Set(values.keys).isSubset(of: ["decision", "note", "revision", "authorization"]),
+              case .string(let decision) = values["decision"],
+              ["approved", "denied"].contains(decision) else { return nil }
+        let revision: String
+        switch values["revision"] {
+        case .string(let value) where !value.isEmpty && value.utf8.count <= 512: revision = value
+        case .number(let value) where value >= 0 && value <= 9_007_199_254_740_991 && value.rounded() == value:
+            revision = String(Int64(value))
+        default: return nil
+        }
+        let note: String
+        switch values["note"] {
+        case .none: note = ""
+        case .string(let value) where value.count <= 3000: note = value
+        default: return nil
+        }
+        guard decision != "denied" || !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let authorization: [String: String]?
+        switch values["authorization"] {
+        case .none, .null: authorization = nil
+        case .object(let fields) where decision == "approved":
+            var parsed: [String: String] = [:]
+            for (key, field) in fields {
+                guard ["date", "record", "fee", "insurance", "conditions"].contains(key),
+                      case .string(let value) = field else { return nil }
+                parsed[key] = value
+            }
+            authorization = parsed
+        default: return nil
+        }
+        self.recordID = recordID; self.revision = revision; self.decision = decision; self.note = note
+        self.authorization = authorization
+    }
+}
 struct AssistantRequest: Decodable, Identifiable {
     let id: String
     let actionId: String
@@ -123,6 +222,15 @@ struct AssistantRequest: Decodable, Identifiable {
     let navigation: AssistantNavigation?
     let receipt: AssistantJSON?
     let authorization: AssistantJSON?
+
+    var hasCurrentExpiry: Bool {
+        guard let expiresAt else { return true }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let expiry = formatter.date(from: expiresAt) { return expiry > Date() }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: expiresAt).map { $0 > Date() } ?? false
+    }
 }
 struct AssistantAttestation: Decodable, Identifiable {
     let id: String
@@ -279,12 +387,24 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
         defer { finish(stamp, model) }
         do {
             let response: AssistantRequestPayload = try await model.request("/api/assistant/requests/\(Self.routeID(request.id))")
+            guard current(stamp, model), response.request.id == request.id else { return }
+            selectedRequest = response.request
+        } catch { if current(stamp, model) { message = error.localizedDescription } }
+    }
+    func inspectLinked(requestID: String, model: AppModel) async {
+        guard MuseReviewLink.isRequestID(requestID), let stamp = begin(model) else { return }
+        defer { finish(stamp, model) }
+        do {
+            let overview: AssistantWorkspacePayload = try await model.request("/api/assistant/workspace")
             guard current(stamp, model) else { return }
+            let response: AssistantRequestPayload = try await model.request("/api/assistant/requests/\(Self.routeID(requestID))")
+            guard current(stamp, model), response.request.id == requestID else { return }
+            assistant = overview.assistant; capabilities = overview.capabilities; attestations = overview.attestations
             selectedRequest = response.request
         } catch { if current(stamp, model) { message = error.localizedDescription } }
     }
     func canApprove(_ request: AssistantRequest) -> Bool {
-        assistant?.enabled == true && request.status == "pending" && (request.mode ?? capabilities.first(where: { $0.id == request.actionId })?.mode) == "approval"
+        assistant?.enabled == true && request.status == "pending" && (request.mode ?? capabilities.first(where: { $0.id == request.actionId })?.mode) == "approval" && request.hasCurrentExpiry
     }
     func isPersonal(_ request: AssistantRequest) -> Bool { (request.mode ?? capabilities.first(where: { $0.id == request.actionId })?.mode) == "personal" }
     private func sameReview(_ a: AssistantAttestation, _ b: AssistantAttestation) -> Bool {
@@ -318,7 +438,8 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
             guard current(stamp, model) else { return nil }
             let fresh = response.request
             selectedRequest = fresh
-            guard fresh.status == "personal", fresh.fingerprint == request.fingerprint, isPersonal(fresh) else {
+            guard fresh.id == request.id, fresh.status == "personal", fresh.fingerprint == request.fingerprint,
+                  fresh.hasCurrentExpiry, isPersonal(fresh) else {
                 message = "This request changed or is no longer waiting for your personal action. Review its current receipt."; return nil
             }
             let queue: AssistantAttestationsPayload = try await model.request("/api/assistant/attestations")
@@ -330,7 +451,19 @@ struct IssuedAssistantToken: Identifiable { let id = UUID(); let value: String }
             guard let reviewedItem, sameReview(reviewedItem, item) else {
                 message = "This personal review changed. Open My Attestations and read its current wording and effects first."; return nil
             }
-            return AssistantNavigation(section: item.section, recordId: item.recordId)
+            var navigation = AssistantNavigation(section: item.section, recordId: item.recordId)
+            if fresh.actionId == "building.decide" {
+                guard item.ready, item.section == "building", let id = item.recordId, fresh.method == "POST",
+                      fresh.path == "/api/building/requests/\(Self.routeID(id))/decision",
+                      let decision = AssistantBuildingDecisionReview(recordID: id, body: fresh.body) else {
+                    message = "This request is missing an exact building decision and revision. Review the current record in Building Requests."; return nil
+                }
+                navigation.buildingDecision = decision
+            } else if fresh.actionId == "building.request", item.ready, item.section == "building", item.recordId == nil,
+                      fresh.method == "POST", fresh.path == "/api/building/requests", fresh.receipt == nil || fresh.receipt == .null {
+                navigation.buildingSubmission = AssistantBuildingSubmissionReview(requestID: fresh.id, body: fresh.body)
+            }
+            return navigation
         } catch { if current(stamp, model) { message = error.localizedDescription }; return nil }
     }
     func decide(_ request: AssistantRequest, decision: String, note: String, model: AppModel) async {
@@ -556,18 +689,68 @@ struct AssistantAttestationReview: View {
     }
 }
 
+struct MuseLinkedReviewSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var requestWorkspace = AssistantWorkspace()
+    @StateObject private var signatureWorkspace = AssistantSignatureWorkspace()
+    @State private var loading = true
+    let link: MuseReviewLink
+    let openReview: (AssistantNavigation) -> Void
+
+    var body: some View {
+        Group {
+            if link.kind == .signature, signatureWorkspace.selected != nil {
+                AssistantSignatureConfirmation(workspace: signatureWorkspace, close: { dismiss() })
+            } else if link.kind == .review, let request = requestWorkspace.selectedRequest {
+                AssistantRequestSheet(request: request, workspace: requestWorkspace, openReview: { navigation in
+                    dismiss()
+                    openReview(navigation)
+                }, close: { dismiss() })
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        Text("Muse request review").font(.title2.weight(.semibold))
+                        Spacer()
+                        Button("Close") { dismiss() }
+                    }
+                    if loading {
+                        ProgressView("Opening your saved request…")
+                    } else {
+                        let message = link.kind == .signature ? signatureWorkspace.message : requestWorkspace.message
+                        Text(message.isEmpty ? "The request is unavailable for this account." : message)
+                    }
+                }
+                .padding(24).frame(minWidth: 450, minHeight: 160)
+            }
+        }
+        .task {
+            switch link.kind {
+            case .review: await requestWorkspace.inspectLinked(requestID: link.requestID, model: model)
+            case .signature: await signatureWorkspace.inspectLinked(requestID: link.requestID, model: model)
+            }
+            loading = false
+        }
+        .onChange(of: model.assistantAccountContext) { _, _ in
+            requestWorkspace.leave(); signatureWorkspace.leave(); dismiss()
+        }
+        .onDisappear { requestWorkspace.leave(); signatureWorkspace.leave() }
+    }
+}
+
 private struct AssistantRequestSheet: View {
     @EnvironmentObject private var model: AppModel
     let request: AssistantRequest
     private var currentRequest: AssistantRequest { workspace.selectedRequest ?? request }
     @ObservedObject var workspace: AssistantWorkspace
     let openReview: (AssistantNavigation) -> Void
+    var close: (() -> Void)? = nil
     @State private var note = ""
     @State private var confirmingApproval = false
     @State private var showingExactChange = true
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { Text(currentRequest.title).font(.title2.weight(.semibold)); Spacer(); Button("Close") { workspace.selectedRequest = nil } }
+            HStack { Text(currentRequest.title).font(.title2.weight(.semibold)); Spacer(); Button("Close") { workspace.selectedRequest = nil; close?() } }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Status: \(assistantStatusLabel(currentRequest.status))").font(.headline)
@@ -597,7 +780,8 @@ private struct AssistantRequestSheet: View {
     }
     @ViewBuilder private var decisionButtons: some View {
         if workspace.canApprove(currentRequest) { Button("Approve change") { confirmingApproval = true }.buttonStyle(.borderedProminent) }
-        if let navigation = currentRequest.navigation {
+        if let navigation = currentRequest.navigation,
+           !workspace.isPersonal(currentRequest) || (currentRequest.status == "personal" && currentRequest.hasCurrentExpiry) {
             Button("Open review") {
                 if workspace.isPersonal(currentRequest) {
                     Task { if let currentNavigation = await workspace.reviewPersonalRequest(currentRequest, model: model) { openReview(currentNavigation) } }

@@ -70,14 +70,22 @@ private struct BuildingAgreementResponse: Decodable { let agreement: BuildingAgr
     @Published var busy = false
     @Published var messageIsWarning = false
     @Published var message = "" { didSet { messageIsWarning = false } }
+    private var loadEpoch: UInt64 = 0
     @discardableResult func load(using model: AppModel) async -> Bool {
-        guard model.user?.can("building.view") == true else { requests = []; canDecide = false; return false }
-        busy = true; defer { busy = false }
+        loadEpoch &+= 1
+        let epoch = loadEpoch
+        let context = model.assistantAccountContext
+        guard model.user?.can("building.view") == true else { requests = []; canDecide = false; busy = false; return false }
+        busy = true; defer { if epoch == loadEpoch { busy = false } }
         do {
             let result: BuildingRequestsResponse = try await model.request("/api/building/requests")
+            guard epoch == loadEpoch, context == model.assistantAccountContext, !Task.isCancelled else { return false }
             requests = result.requests; canDecide = result.canDecide; message = ""
             return true
-        } catch { message = error.localizedDescription; return false }
+        } catch {
+            if epoch == loadEpoch, context == model.assistantAccountContext, !Task.isCancelled { message = error.localizedDescription }
+            return false
+        }
     }
     func decide(_ request: BuildingRequest, decision: String, note: String, authorization: BuildingAuthorization? = nil, using model: AppModel) async -> Bool {
         guard !busy, canDecide, model.user?.can("building.decide") == true, request.status == "pending",
@@ -135,6 +143,14 @@ private struct BuildingAgreementResponse: Decodable { let agreement: BuildingAgr
     }
 }
 
+private struct BuildingDecisionConfirmation {
+    let request: BuildingRequest
+    let decision: String
+    let note: String
+    let authorization: BuildingAuthorization?
+    let accountContext: String
+}
+
 struct BuildingRequestsView: View {
     @EnvironmentObject private var model: AppModel
     @StateObject private var workspace = BuildingRequestsWorkspace()
@@ -143,7 +159,8 @@ struct BuildingRequestsView: View {
     @State private var selectedID: String?
     @State private var filter = "all"
     @State private var note = ""
-    @State private var decision: String?
+    @State private var decisionConfirmation: BuildingDecisionConfirmation?
+    @State private var assistantDecision: AssistantBuildingDecisionReview?
     @State private var authorizationDate = Date()
     @State private var authorizationRecord = ""
     @State private var approvedFee = ""
@@ -159,7 +176,7 @@ struct BuildingRequestsView: View {
     var body: some View {
         VStack(spacing: 0) {
             NativeWorkspaceHeader(title: "Building Requests", subtitle: "Requests to use the Lodge building", symbol: "building.2") {
-                if model.user?.can("building.view") == true { Button("Refresh") { Task { await workspace.load(using: model) } }.disabled(workspace.busy) }
+                if model.user?.can("building.view") == true { Button("Refresh") { Task { await refreshRequestedRecord() } }.disabled(workspace.busy) }
                 if model.user?.can("building.request") == true { Button("New Building Request") { showingNewRequest = true }.buttonStyle(.borderedProminent) }
             }
             if model.user?.can("building.view") == true { AdaptiveWorkspaceSplit(primaryTitle: "Requests", secondaryTitle: "Request details", compactPane: $requestPane) {
@@ -213,6 +230,24 @@ struct BuildingRequestsView: View {
                             LabeledContent("Filed as completed", value: LodgeDateTime.display(filedAt))
                             if let filedBy = request.filedCompletedBy { LabeledContent("Filed by", value: filedBy) }
                         }
+                        if let proposed = assistantDecision, proposed.recordID == request.id {
+                            Section("Muse's proposed decision") {
+                                LabeledContent("Decision", value: proposed.decision == "approved" ? "Approve" : "Decline")
+                                if !proposed.note.isEmpty { LabeledContent("Note to the requester", value: proposed.note) }
+                                if let authorization = proposed.authorization {
+                                    ForEach([("date", "Authorization date"), ("record", "Minutes or resolution reference"), ("fee", "Approved fee"), ("insurance", "Insurance"), ("conditions", "Conditions")], id: \.0) { key, label in
+                                        if let value = authorization[key], !value.isEmpty {
+                                            LabeledContent(label, value: key == "date" ? LodgeCalendarDates.displayDate(value) : value)
+                                        }
+                                    }
+                                }
+                                if request.status == "pending", request.revision.wireText == proposed.revision, workspace.canDecide {
+                                    Button("Review proposed decision") { reviewAssistantDecision(proposed, for: request) }
+                                } else {
+                                    Text("The request has changed. Review its current details.").foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                         if request.status == "pending", workspace.canDecide, model.user?.can("building.decide") == true {
                             Section("Decision") {
                                 TextField("Note to the requester", text: $note, axis: .vertical).lineLimit(3...8)
@@ -228,9 +263,9 @@ struct BuildingRequestsView: View {
                                     Text("Approval applies your saved signature. The officer designated in this agreement must attest before payment access is released.").font(.caption).foregroundStyle(.secondary)
                                 }
                                 HStack {
-                                    Button("Approve") { decision = "approved" }.buttonStyle(.borderedProminent)
+                                    Button("Approve") { reviewEnteredDecision("approved", for: request) }.buttonStyle(.borderedProminent)
                                         .disabled(note.count > 3000 || (request.ownerOnly == true && (authorizationRecord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || approvedFee.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || insuranceDecision.isEmpty)))
-                                    Button("Decline") { decision = "denied" }.disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || note.count > 3000)
+                                    Button("Decline") { reviewEnteredDecision("denied", for: request) }.disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || note.count > 3000)
                                 }
                             }
                         }
@@ -259,30 +294,63 @@ struct BuildingRequestsView: View {
                 }.font(.callout).padding(12)
             }
         }
-        .task {
-            _ = await workspace.load(using: model)
-            openRequestedBuildingRecord()
+        .task { await refreshRequestedRecord() }
+        .onChange(of: model.requestedBuildingSubmissionReview, initial: true) { _, proposal in
+            guard let proposal else { return }
+            model.requestedBuildingSubmissionReview = nil
+            guard model.user?.role == "owner", model.user?.can("building.request") == true,
+                  decisionConfirmation == nil, !showingNewRequest,
+                  newRequest.prepareLinkedDraft(proposal) else {
+                workspace.message = "Open New Building Request to finish any draft already started or complete the proposal's missing details."
+                return
+            }
+            showingNewRequest = true
         }
-        .onChange(of: model.requestedBuildingRequestID) { _, _ in openRequestedBuildingRecord() }
+        .onChange(of: model.requestedBuildingRequestID) { _, id in
+            guard id != nil else { return }
+            if model.requestedBuildingDecisionReview == nil { openRequestedBuildingRecord() }
+            else if !workspace.busy { Task { await refreshRequestedRecord() } }
+        }
         .sheet(isPresented: $showingNewRequest) { NewBuildingRequestView(workspace: newRequest).environmentObject(model) }
         .sheet(item: $recordedAgreement) { agreement in
             if model.user?.can("building.view") == true { BuildingAgreementRecordView(agreement: agreement) }
         }
-        .onChange(of: model.user?.id) { _, _ in recordedAgreement = nil }
-        .onChange(of: model.user?.role) { _, _ in recordedAgreement = nil }
+        .onChange(of: model.user?.id) { _, _ in recordedAgreement = nil; assistantDecision = nil; decisionConfirmation = nil }
+        .onChange(of: model.user?.role) { _, _ in recordedAgreement = nil; assistantDecision = nil; decisionConfirmation = nil }
+        .onChange(of: model.assistantAccountContext) { _, _ in
+            if newRequest.isLinkedDraft { showingNewRequest = false; newRequest.startNew() }
+        }
         .onChange(of: model.user?.can("building.view") ?? false) { _, mayView in if !mayView { recordedAgreement = nil } }
-        .onChange(of: selectedID) { _, id in recordedAgreement = nil; note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; authorizationConditions = ""; if id != nil { requestPane = 1 } }
+        .onChange(of: selectedID) { _, id in
+            recordedAgreement = nil; note = ""; authorizationRecord = ""; approvedFee = ""; insuranceDecision = ""; authorizationConditions = ""
+            if assistantDecision?.recordID != id { assistantDecision = nil }
+            if id != nil { requestPane = 1 }
+        }
         .updateDraftGuard(active: !note.isEmpty || workspace.busy || newRequest.hasUnsubmittedChanges || newRequest.busy, reason: "Finish your building request draft before updating.")
-        .alert(decision == "approved" ? "Approve this building request?" : "Decline this building request?", isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } })) {
+        .alert(decisionConfirmation?.decision == "approved" ? "Approve this building request?" : "Decline this building request?",
+               isPresented: Binding(get: { decisionConfirmation != nil }, set: { if !$0 { decisionConfirmation = nil } }),
+               presenting: decisionConfirmation) { confirmation in
             Button("Confirm decision") {
-                if let request = selected, let decision {
-                    let authorization = request.ownerOnly == true && decision == "approved" ? BuildingAuthorization(date: LodgeCalendarDates.key(authorizationDate), record: authorizationRecord, fee: approvedFee, insurance: insuranceDecision, conditions: authorizationConditions) : nil
-                    Task { if await workspace.decide(request, decision: decision, note: note, authorization: authorization, using: model) { note = "" } }
+                Task {
+                    guard selectedID == confirmation.request.id, model.assistantAccountContext == confirmation.accountContext,
+                          selected?.revision == confirmation.request.revision, selected?.status == "pending" else {
+                        workspace.message = "The account or request changed. Review the current record before deciding."
+                        return
+                    }
+                    if await workspace.decide(confirmation.request, decision: confirmation.decision, note: confirmation.note, authorization: confirmation.authorization, using: model) {
+                        note = ""; assistantDecision = nil
+                    }
                 }
-                decision = nil
             }
-            Button("Cancel", role: .cancel) { decision = nil }
-        } message: { Text("This records your decision and sends the existing portal's decision notification to the requester.") }
+            Button("Cancel", role: .cancel) {}
+        } message: { confirmation in
+            let times = [confirmation.request.start, confirmation.request.end].map(LodgeCalendarDates.displayTime).filter { !$0.isEmpty }.joined(separator: " to ")
+            let details = [confirmation.request.organization, LodgeCalendarDates.displayDate(confirmation.request.date), times].filter { !$0.isEmpty }.joined(separator: " · ")
+            let effect = confirmation.request.ownerOnly == true && confirmation.decision == "approved"
+                ? "This applies your saved signature. The designated officer must attest before the requester is notified."
+                : "This records the decision and the building portal attempts to notify the requester."
+            Text("\(details)\n\n\(effect)")
+        }
         .alert("Attest this Building Use Agreement?", isPresented: $attestationPending) {
             Button("Attest") { if let request = selected { Task { _ = await workspace.attest(request, using: model) } } }
             Button("Cancel", role: .cancel) { }
@@ -292,12 +360,64 @@ struct BuildingRequestsView: View {
             Button("Cancel", role: .cancel) { }
         } message: { Text("This records the fully signed agreement as filed and removes the filing reminder.") }
     }
-    private func openRequestedBuildingRecord() {
-        guard let id = model.requestedBuildingRequestID,
-              workspace.requests.contains(where: { $0.id == id }) else { return }
+    private func refreshRequestedRecord() async {
+        let account = model.assistantAccountContext
+        guard await workspace.load(using: model), model.assistantAccountContext == account, !Task.isCancelled else { return }
+        openRequestedBuildingRecord(afterRefresh: true)
+    }
+    private func openRequestedBuildingRecord(afterRefresh: Bool = false) {
+        guard let id = model.requestedBuildingRequestID else { return }
+        let proposed = model.requestedBuildingDecisionReview
+        guard let record = workspace.requests.first(where: { $0.id == id }) else {
+            if afterRefresh {
+                model.requestedBuildingRequestID = nil
+                model.requestedBuildingDecisionReview = nil
+                workspace.message = "The requested building record is no longer available."
+            }
+            return
+        }
+        model.requestedBuildingRequestID = nil
+        model.requestedBuildingDecisionReview = nil
+        if let proposed {
+            guard proposed.recordID == id, proposed.revision == record.revision.wireText, record.status == "pending" else {
+                workspace.message = "This request changed. Open the current record before reviewing another proposal."
+                return
+            }
+            guard decisionConfirmation == nil, !showingNewRequest, note.isEmpty, authorizationRecord.isEmpty,
+                  approvedFee.isEmpty, insuranceDecision.isEmpty, authorizationConditions.isEmpty else {
+                workspace.message = "Finish or clear the building work already open before reviewing another proposal."
+                return
+            }
+        }
         filter = "all"
         selectedID = id
-        model.requestedBuildingRequestID = nil
+        assistantDecision = proposed
+    }
+    private func reviewEnteredDecision(_ decision: String, for request: BuildingRequest) {
+        let authorization = request.ownerOnly == true && decision == "approved"
+            ? BuildingAuthorization(date: LodgeCalendarDates.key(authorizationDate), record: authorizationRecord, fee: approvedFee, insurance: insuranceDecision, conditions: authorizationConditions)
+            : nil
+        decisionConfirmation = BuildingDecisionConfirmation(request: request, decision: decision, note: note, authorization: authorization, accountContext: model.assistantAccountContext)
+    }
+    private func reviewAssistantDecision(_ proposed: AssistantBuildingDecisionReview, for request: BuildingRequest) {
+        guard proposed.recordID == request.id, proposed.revision == request.revision.wireText,
+              request.status == "pending", workspace.canDecide, model.user?.can("building.decide") == true else { return }
+        var authorization: BuildingAuthorization?
+        if request.ownerOnly == true && proposed.decision == "approved" {
+            guard let fields = proposed.authorization,
+                  let date = fields["date"], LodgeCalendarDates.valid(date),
+                  let record = fields["record"], !record.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let fee = fields["fee"], !fee.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let insurance = fields["insurance"], ["required", "waived"].contains(insurance) else {
+                workspace.message = "The proposal needs a complete Lodge authorization. Review the agreement and enter the confirmed terms in the decision form."
+                return
+            }
+            authorization = BuildingAuthorization(date: date, record: record, fee: fee, insurance: insurance, conditions: fields["conditions"] ?? "")
+        } else if proposed.authorization != nil {
+            workspace.message = "The proposed authorization does not match this request's decision form. Review the current record."
+            return
+        }
+        decisionConfirmation = BuildingDecisionConfirmation(request: request, decision: proposed.decision, note: proposed.note, authorization: authorization, accountContext: model.assistantAccountContext)
     }
     private func openAgreement(_ request: BuildingRequest) async {
         guard !loadingAgreement else { return }
@@ -640,6 +760,19 @@ struct NewBuildingRequestDraft: Encodable, Equatable {
     var details = ""
     var submissionId = UUID().uuidString
     enum CodingKeys: String, CodingKey { case bookings, spaces, bathroomAccess, phone, details = "purpose", submissionId }
+
+    init() {}
+
+    init?(proposal: AssistantBuildingSubmissionReview) {
+        bookings = proposal.bookings.map { BuildingBooking(date: $0.date, start: $0.start, end: $0.end) }
+        spaces = proposal.spaces
+        bathroomAccess = proposal.bathroomAccess
+        phone = proposal.phone
+        details = proposal.details
+        submissionId = proposal.submissionID
+        guard validationMessage == nil else { return nil }
+    }
+
     var validationMessage: String? {
         guard (1...12).contains(bookings.count), bookings.allSatisfy(\.valid) else { return "Enter 1 to 12 dates with a start and end time in Eastern Time, such as 7:30 PM." }
         guard Set(bookings.map { $0.date }).count == bookings.count else { return "List each date only once." }
@@ -686,40 +819,56 @@ struct BuildingSubmissionReceipt: Decodable {
     @Published private(set) var retryPending = false
     private var pendingBody: Data?
     private var baseline: NewBuildingRequestDraft
+    private var linkedDraft: NewBuildingRequestDraft?
     private var checkedKey: Data?
     init() { let initial = NewBuildingRequestDraft(); draft = initial; baseline = initial }
     var hasUnsubmittedChanges: Bool { receipt == nil && draft != baseline }
+    var isLinkedDraft: Bool { linkedDraft != nil }
     var availabilityCurrent: Bool { checkedKey != nil && checkedKey == draft.availabilityKey }
     var conflicts: [BuildingBusyEntry] { availability.filter { entry in draft.bookings.contains { entry.overlaps($0) } } }
     var canSubmit: Bool { !busy && receipt == nil && (retryPending || (draft.validationMessage == nil && availabilityCurrent && conflicts.isEmpty && (availabilityWarning.isEmpty || warningAcknowledged))) }
-    func startNew() { pendingBody = nil; retryPending = false; draft = NewBuildingRequestDraft(); baseline = draft; checkedKey = nil; receipt = nil; message = ""; availability = []; availabilityWarning = ""; warningAcknowledged = false }
+    func startNew() { pendingBody = nil; retryPending = false; draft = NewBuildingRequestDraft(); baseline = draft; linkedDraft = nil; checkedKey = nil; receipt = nil; message = ""; availability = []; availabilityWarning = ""; warningAcknowledged = false }
+    func prepareLinkedDraft(_ proposal: AssistantBuildingSubmissionReview) -> Bool {
+        guard !busy, !hasUnsubmittedChanges, !retryPending, receipt == nil,
+              let proposed = NewBuildingRequestDraft(proposal: proposal) else { return false }
+        startNew()
+        linkedDraft = proposed
+        draft = proposed
+        return true
+    }
     func checkAvailability(using model: AppModel) async {
         guard !busy, !retryPending, model.user?.can("building.request") == true, !draft.bookings.isEmpty, draft.bookings.allSatisfy(\.valid), let key = draft.availabilityKey else { return }
+        let context = model.assistantAccountContext
         let dates = draft.bookings.map(\.date).sorted()
         busy = true; defer { busy = false }
         warningAcknowledged = false; availabilityWarning = ""; availability = []; checkedKey = nil; message = ""
         do {
             let result: BuildingAvailabilityResponse = try await model.request("/api/building/availability?from=\(dates.first!)&to=\(dates.last!)")
-            guard key == draft.availabilityKey else { return }
+            guard context == model.assistantAccountContext, key == draft.availabilityKey else { return }
             availability = result.busy
             var warnings = [result.warning ?? ""].filter { !$0.isEmpty }
             if result.busy.contains(where: { $0.active && dates.contains($0.date) && !$0.knownTimes }) { warnings.append("Some calendar entries have incomplete times. Availability needs further review.") }
             availabilityWarning = warnings.joined(separator: " "); checkedKey = key
         } catch {
-            guard key == draft.availabilityKey else { return }
+            guard context == model.assistantAccountContext, key == draft.availabilityKey else { return }
             availabilityWarning = "Availability could not be confirmed. \(error.localizedDescription)"; checkedKey = key
         }
     }
     func submit(using model: AppModel) async -> Bool {
         guard canSubmit, model.user?.can("building.request") == true else { return false }
+        let context = model.assistantAccountContext
         busy = true; defer { busy = false }
         do {
             if pendingBody == nil {
+                if let linkedDraft, draft.submissionId == linkedDraft.submissionId, draft != linkedDraft {
+                    draft.submissionId = UUID().uuidString
+                }
                 var payload = try JSONSerialization.jsonObject(with: JSONEncoder().encode(draft)) as! [String: Any]
                 payload["acknowledgeAvailabilityWarning"] = !availabilityWarning.isEmpty && warningAcknowledged
                 pendingBody = try JSONSerialization.data(withJSONObject: payload)
             }
             let result: BuildingSubmissionReceipt = try await model.request("/api/building/requests", method: "POST", body: pendingBody)
+            guard context == model.assistantAccountContext else { return false }
             guard result.ok, !result.references.isEmpty else { throw ClientError.invalidResponse }
             retryPending = false; pendingBody = nil; receipt = result
             message = result.wmNotified
@@ -727,14 +876,22 @@ struct BuildingSubmissionReceipt: Decodable {
                 : "Request submitted for review, but notification to the Worshipful Master has not been confirmed."
             messageIsWarning = !result.wmNotified
             return true
-        } catch ClientError.rejected(let detail) { pendingBody = nil; retryPending = false; checkedKey = nil; message = detail; return false }
+        } catch ClientError.rejected(let detail) {
+            guard context == model.assistantAccountContext else { return false }
+            pendingBody = nil; retryPending = false; checkedKey = nil; message = detail; return false
+        }
         catch ClientError.conflict(let detail) {
+            guard context == model.assistantAccountContext else { return false }
             if detail.contains("The building calendar shows") {
                 pendingBody = nil; retryPending = false; checkedKey = nil
             } else { retryPending = pendingBody != nil }
             message = detail; return false
         }
-        catch { retryPending = pendingBody != nil; message = "Submission could not be confirmed. Retry this same request to recover its receipt. " + error.localizedDescription; return false }
+        catch {
+            guard context == model.assistantAccountContext else { return false }
+            retryPending = pendingBody != nil; message = "Submission could not be confirmed. Retry this same request to recover its receipt. " + error.localizedDescription
+            return false
+        }
     }
 }
 
