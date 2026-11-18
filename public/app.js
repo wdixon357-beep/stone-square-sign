@@ -2285,6 +2285,60 @@ const minutesAttendanceIssues = (draft = collectMinutesDraft()) => [
   !draft.attendanceReview?.otherExcused && 'Confirm the Other Brothers Excused list, including when it is blank.',
 ].filter(Boolean);
 
+const canAttestMinutesDraft = item => item?.status === 'draft'
+  && can('minutes.prepare') && item.createdByUserId === state.user?.id;
+
+const minutesPreparationIssues = draft => ({
+  details: minutesMeetingDetails.minutesMeetingDetailsIssues(draft),
+  attendance: minutesAttendanceIssues(draft),
+  closing: typeof draft.closingPrayerGiven === 'boolean' ? [] : ['Confirm whether the Chaplain gave the closing prayer before sending these minutes.'],
+});
+
+const refreshMinutesPrepChecklist = (item = currentMinutes()) => {
+  const visible = canAttestMinutesDraft(item);
+  $('minutesPrepChecklist').classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const checks = minutesPreparationIssues(collectMinutesDraft());
+  for (const [name, issues, done] of [
+    ['Details', checks.details, 'Fields filled'],
+    ['Attendance', checks.attendance, 'Review recorded'],
+    ['Closing', checks.closing, 'Answered'],
+  ]) {
+    $(`minutesPrep${name}State`).textContent = issues.length ? 'Needs review' : done;
+  }
+  const remaining = Object.values(checks).filter(issues => issues.length).length;
+  const message = remaining ? 'Choose a section below to finish the required checks.'
+    : 'The required fields are filled. Review the draft and any flagged notes before attesting.';
+  if ($('minutesPrepStatus').textContent !== message) $('minutesPrepStatus').textContent = message;
+  $('minutesPrepGoToAttest').classList.toggle('hidden', remaining > 0);
+};
+
+const focusMinutesPrepField = field => {
+  setMinutesView(false);
+  field.focus({ preventScroll: true });
+  field.scrollIntoView({ block: 'center' });
+};
+
+const minutesAttendanceTarget = () => {
+  const board = $('minutesOfficerAttendance');
+  const rows = [...board.querySelectorAll('select[data-field="status"]')];
+  const missingStatus = rows.find(input => input.value === 'not_recorded');
+  if (missingStatus) return missingStatus;
+  for (const status of rows) {
+    if (!['excused', 'absent', 'arrived_late'].includes(status.value)) continue;
+    const row = status.closest('.minutes-officer-row');
+    const coverage = row.querySelector('[data-field="stationCoverage"]');
+    if (!coverage.value) return coverage;
+    if (coverage.value === 'vacant') continue;
+    const name = row.querySelector('[data-field="actingName"]');
+    if (!name.value.trim()) return name;
+    const duration = row.querySelector('[data-field="actingWholeMeeting"]');
+    if (!duration.value) return duration;
+  }
+  return ['minutesOfficerRollConfirmed', 'minutesOtherPresentConfirmed', 'minutesOtherExcusedConfirmed']
+    .map(id => $(id)).find(input => !input.checked) || rows[0] || $('addMinutesOfficer');
+};
+
 const financeEditor = (entry = {}) => {
   const row = document.createElement('div');
   row.className = 'minutes-finance-row';
@@ -2320,6 +2374,7 @@ const setMinutesView = (preview) => {
   $('minutesEditorModal').querySelector('.modal-body').scrollTop = 0;
 };
 const scheduleMinutesPreview = () => {
+  refreshMinutesPrepChecklist();
   clearTimeout(minutesPreviewTimer);
   ++minutesPreviewRevision;
   $('minutesPreviewState').textContent = 'Updating preview…';
@@ -2362,8 +2417,8 @@ const updateMinutesEditorControls = (item) => {
   document.querySelectorAll('.remove-section, .minutes-officer-clear').forEach(button => { button.disabled = !editable; });
   $('saveMinutes').classList.toggle('hidden', !editable);
   $('saveExitMinutes').classList.toggle('hidden', !editable);
-  $('submitMinutesReview').classList.toggle('hidden', item.status !== 'draft'
-    || !can('minutes.prepare') || item.createdByUserId !== state.user.id);
+  $('submitMinutesReview').classList.toggle('hidden', !canAttestMinutesDraft(item));
+  refreshMinutesPrepChecklist(item);
   $('authorizeMinutes').classList.toggle('hidden', role !== 'owner' || item.status !== 'awaiting_master_attestation');
   $('markMinutesDistributed').classList.toggle('hidden', item.status !== 'ready_for_distribution'
     || !['owner', 'secretary', 'assistant_secretary'].includes(role));
@@ -3170,6 +3225,10 @@ $('saveExitMinutes').addEventListener('click', async () => {
     button.disabled = false;
   }
 });
+$('minutesPrepDetails').addEventListener('click', () => focusMinutesPrepField($('minutesMeetingDate')));
+$('minutesPrepAttendance').addEventListener('click', () => focusMinutesPrepField(minutesAttendanceTarget()));
+$('minutesPrepClosing').addEventListener('click', () => focusMinutesPrepField($('minutesClosingPrayerGiven')));
+$('minutesPrepGoToAttest').addEventListener('click', () => focusMinutesPrepField($('submitMinutesReview')));
 $('minutesEditView').addEventListener('click', () => setMinutesView(false));
 $('minutesPreviewView').addEventListener('click', () => setMinutesView(true));
 $('minutesPreviewFrame').addEventListener('previewerror', event => { $('minutesPreviewState').textContent = `Preview could not render: ${event.detail}. You can download the PDF above.`; });
@@ -3185,6 +3244,7 @@ $('addMinutesOfficer').addEventListener('click', () => {
   $('minutesOfficerRollConfirmed').checked = false;
   state.minutesOfficerAttendanceEdited = true;
   state.minutesEditorDirty = true;
+  refreshMinutesPrepChecklist();
 });
 $('minutesPresent').addEventListener('input', () => { $('minutesOtherPresentConfirmed').checked = false; });
 $('minutesExcused').addEventListener('input', () => { $('minutesOtherExcusedConfirmed').checked = false; });
@@ -3259,25 +3319,20 @@ $('minutesEditorForm').addEventListener('submit', async (event) => {
 });
 $('submitMinutesReview').addEventListener('click', async () => {
   try {
-    const draft = collectMinutesDraft();
-    const detailIssues = minutesMeetingDetails.minutesMeetingDetailsIssues(Object.fromEntries(['meetingDate','meetingType','degree','openingTime','closingTime','presiding','quorum','nextMeeting'].map(key => [key, draft[key] ?? ''])));
-    if (detailIssues.length) {
-      setMinutesView(false);
-      setMessage($('minutesEditorMessage'), `Complete the meeting details before submitting. ${detailIssues.join(' ')}`, true);
-      $('minutesMeetingDate').focus();
+    const checks = minutesPreparationIssues(collectMinutesDraft());
+    if (checks.details.length) {
+      setMessage($('minutesEditorMessage'), `Complete the meeting details before submitting. ${checks.details.join(' ')}`, true);
+      focusMinutesPrepField($('minutesMeetingDate'));
       return;
     }
-    const attendanceIssues = minutesAttendanceIssues();
-    if (attendanceIssues.length) {
-      setMinutesView(false);
-      setMessage($('minutesEditorMessage'), `Complete the required attendance review before submitting. ${attendanceIssues.join(' ')}`, true);
-      $('minutesAttendanceReview').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (checks.attendance.length) {
+      setMessage($('minutesEditorMessage'), `Complete the required attendance review before submitting. ${checks.attendance.join(' ')}`, true);
+      focusMinutesPrepField(minutesAttendanceTarget());
       return;
     }
-    if (typeof draft.closingPrayerGiven !== 'boolean') {
-      setMinutesView(false);
-      setMessage($('minutesEditorMessage'), 'Confirm whether the Chaplain gave the closing prayer before sending these minutes.', true);
-      $('minutesClosingPrayerGiven').focus();
+    if (checks.closing.length) {
+      setMessage($('minutesEditorMessage'), checks.closing[0], true);
+      focusMinutesPrepField($('minutesClosingPrayerGiven'));
       return;
     }
     await saveMinutesCorrections();

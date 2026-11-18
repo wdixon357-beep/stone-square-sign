@@ -166,6 +166,10 @@ for(const oldFails of [false,true]) for(const finishOldFirst of [false,true]) {
 }
 assert.match(app,/meetingDetailsVersion: currentMinutes\(\)\.draft\.meetingDetailsVersion/,'Edited new records retain the explicit-details version marker');
 assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeetingDetails\(meetingDetails\)/,'A deliberate reorganization carries the currently edited details');
-assert.match(app,/minutesMeetingDetails\.minutesMeetingDetailsIssues\(Object\.fromEntries/,'Submission validates the preparer details before saving or signing');
+const prepSource = app.slice(app.indexOf('const canAttestMinutesDraft'), app.indexOf('const refreshMinutesPrepChecklist'));
+const prepare = vm.runInNewContext(`${prepSource}\nminutesPreparationIssues`, { minutesMeetingDetails, minutesAttendanceIssues: () => [] });
+assert.equal(prepare({...details, openingTime: '', closingPrayerGiven: false}).details.length, 1);
+assert.equal(prepare({...details, closingPrayerGiven: false}).closing.length, 0, 'An explicit No completes the prayer check');
+assert.equal(prepare(details).closing.length, 1, 'The checklist and attestation require a recorded answer');
 assert.match(app,/resetMinutesPreparationContext\(\);\s+restoreWebDrafts/,'A new signed-in workspace resets prior-account operation ownership before restoring its own draft');
 console.log('PASS: required eight-field intake, explicit clocks, source-only handoff, metadata carry, claim validation, failure preservation, owned operation ordering and private account draft restoration using actual browser functions.');

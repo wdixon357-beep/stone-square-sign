@@ -234,6 +234,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
 .minutes-section-card { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: white; }
 .minutes-section-card input { margin-bottom: 9px; color: var(--navy); font-weight: 800; }
 .minutes-section-card textarea { min-height: 130px; resize: vertical; line-height: 1.5; }
+.minutes-prep-checklist { padding: 14px; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 10px; background: #fffdf7; }
+.minutes-prep-checklist h3 { margin: 0 0 5px; }
+.minutes-prep-checklist p { margin: 0 0 10px; }
+.minutes-prep-steps { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 0; padding: 0; list-style: none; }
+.minutes-prep-steps li { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.minutes-prep-steps li span { color: var(--muted); font-size: 13px; }
+#minutesPrepGoToAttest { margin-top: 12px; }
 .minutes-editor-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 .minutes-editor-exit-bar { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin: 0 0 16px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,253,248,.97); box-shadow: 0 8px 20px rgba(7,27,47,.08); }
 .minutes-editor-exit-bar span { flex: 1 1 240px; color: var(--muted); font-size: 12px; line-height: 1.45; }
@@ -408,6 +415,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--gold); box-shado
   .minutes-available-notice { align-items: stretch; flex-direction: column; }
   .minutes-available-notice button { width: 100%; }
   .minutes-row .status, .minutes-row-actions { grid-column: 2; justify-self: start; }
+  .minutes-prep-steps { display: grid; gap: 8px; }
+  .minutes-prep-steps li { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .minutes-prep-steps button { text-align: left; }
   .minutes-editor-actions { flex-direction: column; }
   .minutes-editor-actions button { width: 100%; }
   .minutes-editor-exit-bar { align-items: stretch; }

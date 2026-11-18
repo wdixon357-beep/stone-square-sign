@@ -583,6 +583,16 @@
             <button id="saveExitMinutes" class="primary" type="button">Save draft and exit</button>
             <button id="exitMinutesEditor" class="secondary" type="button">Exit and keep saved draft</button>
           </div>
+          <section id="minutesPrepChecklist" class="minutes-prep-checklist hidden" aria-labelledby="minutesPrepTitle">
+            <h3 id="minutesPrepTitle">Before you send the minutes</h3>
+            <p id="minutesPrepStatus" role="status"></p>
+            <ul class="minutes-prep-steps">
+              <li><button id="minutesPrepDetails" class="secondary small" type="button" aria-describedby="minutesPrepDetailsState">Meeting details</button><span id="minutesPrepDetailsState"></span></li>
+              <li><button id="minutesPrepAttendance" class="secondary small" type="button" aria-describedby="minutesPrepAttendanceState">Attendance and station coverage</button><span id="minutesPrepAttendanceState"></span></li>
+              <li><button id="minutesPrepClosing" class="secondary small" type="button" aria-describedby="minutesPrepClosingState">Closing prayer</button><span id="minutesPrepClosingState"></span></li>
+            </ul>
+            <button id="minutesPrepGoToAttest" class="secondary small hidden" type="button">Go to attestation</button>
+          </section>
             <section id="minutesMasterChanges" class="minutes-master-changes hidden"></section>
             <div id="minutesReviewWarnings" class="minutes-review-warning hidden"></div>
           <form id="minutesEditorForm" class="minutes-editor-form">
