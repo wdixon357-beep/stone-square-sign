@@ -3910,8 +3910,8 @@ $('resetSubmit').addEventListener('click', async () => {
 });
 
 $('logoutBtn').addEventListener('click', async () => {
-  clearMinutesSavedSource();
   legacyReportBridge.clear();
+  clearMinutesSavedSource();
   assistantWorkspace?.dispose();
   signatureAuthorization?.dispose();
   state.realtimeAbort?.abort();
