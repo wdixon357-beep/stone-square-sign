@@ -4170,8 +4170,8 @@ $('logoutBtn').addEventListener('click', async () => {
   state.authEpoch += 1;
   state.legacyToken = '';
   state.user = null;
-  clearHomeDrafts();
   clearMemberAccessInvite();
+  clearHomeDrafts();
   state.reportHandoff = null;
   state.reportHandoffExpiresAt = 0;
   localStorage.removeItem('stone-square-sign-token');
