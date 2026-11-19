@@ -86,6 +86,7 @@ final class ReliabilityCenter: ObservableObject {
             if path.hasPrefix("/api/building") { return "Building Requests" }
             if path.hasPrefix("/api/minutes") { return "Meeting Minutes" }
             if path.hasPrefix("/api/treasury") { return "Treasurer Reports" }
+            if path.hasPrefix("/api/check-orders") { return "Check Orders" }
             return "Dashboard"
         }
     }
@@ -646,6 +647,7 @@ final class AppModel: ObservableObject {
     @Published var correspondenceRecordsRevision = 0
     @Published var treasuryAlerts: [TreasuryAlert] = []
     @Published var treasuryRecordsRevision = 0
+    @Published var checkOrderRecordsRevision = 0
     @Published var user: User?
     @Published var signInSession: SignInSession?
     @Published var showSignInNotice = false
@@ -807,6 +809,24 @@ final class AppModel: ObservableObject {
         let (data, response) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token)
         guard (200..<300).contains(response.statusCode), response.mimeType?.lowercased() == "application/pdf" else {
             throw ClientError.server("The frozen signature document could not be loaded. Nothing was signed by this check.")
+        }
+        return data
+    }
+
+    func checkOrderPDF(id: String, supportingDocument: Bool) async throws -> Data {
+        guard user?.canUseCheckOrders == true, UUID(uuidString: id) != nil, let baseURL else {
+            throw ClientError.unauthorized("This check order is unavailable.")
+        }
+        let document = supportingDocument ? "supporting-document" : "pdf"
+        let path = "/api/check-orders/\(id)/\(document)"
+        guard let url = URL(string: path, relativeTo: baseURL) else { throw ClientError.invalidServer }
+        var request = URLRequest(url: url)
+        request.setValue("application/pdf", forHTTPHeaderField: "Accept")
+        request.setValue("mac", forHTTPHeaderField: "X-Stone-Square-Client")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await ReliableTransport.perform(session: session, request: request, path: path, token: token)
+        guard (200..<300).contains(response.statusCode), response.mimeType?.lowercased() == "application/pdf" else {
+            throw ClientError.server("The check order PDF could not be opened. Refresh Check Orders and try again.")
         }
         return data
     }
@@ -1017,6 +1037,7 @@ final class AppModel: ObservableObject {
         await refreshTreasuryAlerts()
         await refreshBuildingAlerts()
         if user?.canPrepareCorrespondence == true { correspondenceRecordsRevision += 1 }
+        if user?.canUseCheckOrders == true { checkOrderRecordsRevision += 1 }
         guard user?.can("documents.status") == true else {
             documents = []
             return
@@ -1072,6 +1093,7 @@ final class AppModel: ObservableObject {
                     await self.refreshTreasuryAlerts()
                     await self.refreshBuildingAlerts()
                     if self.user?.canPrepareCorrespondence == true { self.correspondenceRecordsRevision += 1 }
+                    if self.user?.canUseCheckOrders == true { self.checkOrderRecordsRevision += 1 }
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
                         if line == "event: minutes_review_changed" || line == "event: minutes_completion_changed" {
@@ -1086,6 +1108,9 @@ final class AppModel: ObservableObject {
                         }
                         if line == "event: correspondence_changed" {
                             self.correspondenceRecordsRevision += 1
+                        }
+                        if line == "event: check_orders_changed", self.user?.canUseCheckOrders == true {
+                            self.checkOrderRecordsRevision += 1
                         }
                         if line == "event: queue_changed" || line == "event: profile_changed" {
                             await self.refresh(silent: true)

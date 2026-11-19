@@ -34,6 +34,7 @@ import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
 import { attendanceReviewIssues, attendanceRecordIssues, closingReviewIssues, minutesContinueIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
+import { initCheckOrderSchema, mountCheckOrderRoutes } from './check-orders.js';
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
 import { mountOfficerReportRoutes } from './officer-report-routes.js';
@@ -560,9 +561,10 @@ const disconnectRealtimeUser = (userId) => {
   }
 };
 
-const broadcast = (type, data = {}) => {
+const broadcast = (type, data = {}, recipientIds = null) => {
   const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of realtimeClients) {
+    if (recipientIds && !recipientIds.includes(client.userId)) continue;
     if (type === 'queue_changed' && !client.permissions?.includes('documents.status')) continue;
     if (type === 'proposals_changed' && client.role !== 'owner' && !client.permissions?.includes('proposals.create')) continue;
     if (type === 'treasury_changed' && !client.permissions?.includes('treasury.view')) continue;
@@ -3980,6 +3982,7 @@ mountCorrespondenceRoutes(app, { requireAuth, broadcast });
 mountMemberFeatures(app, { requireAuth, requireOwner, sendEmail, baseUrl: requestBaseUrl, generateToken, hashSecret, generationFor, rateLimit });
 
 mountTreasuryRoutes(app, { requireAuth, rateLimit, sendEmail, baseUrl: requestBaseUrl, broadcast, generationFor });
+mountCheckOrderRoutes(app, { requireAuth, rateLimit, lockSavedSignature, broadcast });
 
 // Only fixed application machine codes belong in incident categories. Error
 // messages, provider details and arbitrary library codes can contain source data.
@@ -3996,7 +3999,7 @@ const serverIncidentCategory = (error, requestPath) => {
     ? 'minutes_verification' : 'server_error';
 };
 const serverIncidentArea = requestPath => ({
-  minutes: 'minutes', treasury: 'treasury', building: 'building', agenda: 'agenda', reports: 'reports', dues: 'dues',
+  minutes: 'minutes', treasury: 'treasury', 'check-orders': 'checkOrders', building: 'building', agenda: 'agenda', reports: 'reports', dues: 'dues',
 }[String(requestPath || '').split('/')[2]] || 'Dashboard');
 
 app.use(async (error, req, res, _next) => {
@@ -4051,6 +4054,7 @@ await grantTreasuryDuesAccessOnce();
 await initializeBuildingCalendar();
 await initAgendaSchema();
 await initTreasurySchema();
+await initCheckOrderSchema();
 await initGenerationSchema();
 await initActivitySchema();
 await initAssistantSchema();

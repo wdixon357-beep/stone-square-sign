@@ -54,6 +54,8 @@ const state = {
   duesLedger: null,
 };
 let treasuryWorkspace;
+let checkOrdersWorkspace;
+let checkOrdersWorkspaceLoading;
 let assistantWorkspace;
 let assistantWorkspaceLoading;
 let signatureAuthorization;
@@ -266,6 +268,7 @@ const hasUnsavedWorkspace = section => ({
   builder: state.dispensationDirty,
   minutes: state.minutesSourceDirty,
   treasury: Boolean(treasuryWorkspace?.dirty),
+  checkOrders: typeof checkOrdersWorkspace !== 'undefined' && Boolean(checkOrdersWorkspace?.dirty),
   agenda: Boolean(typeof agendaWorkspace !== 'undefined' && agendaWorkspace?.dirty),
   correspondence: Boolean(correspondenceWorkspace?.dirty),
   calendar: Boolean(buildingCalendarWorkspace?.calendarDirty),
@@ -314,7 +317,7 @@ document.addEventListener('pointerdown', event => {
 }, true);
 document.addEventListener('keydown', noteWebActivity, true);
 const webUpdateIsBusy = () => webUpdateRequests > 0 || Boolean(
-  state.editingMinutesId || state.signingDocumentId || treasuryWorkspace?.busy || buildingCalendarWorkspace?.requestBusy ||
+  state.editingMinutesId || state.signingDocumentId || treasuryWorkspace?.busy || (typeof checkOrdersWorkspace !== 'undefined' && checkOrdersWorkspace?.busy) || buildingCalendarWorkspace?.requestBusy ||
   document.querySelector('.modal:not(.hidden)') ||
   [...document.querySelectorAll('button[disabled]')].some(button => button.getClientRects().length)
 );
@@ -643,6 +646,7 @@ const signatureProfileLocked = (user = state.user) => user?.role === 'owner' && 
 const approvedSignatureExplanation = 'Your approved blue handwritten signature is saved and will be used when you review and sign a document. It cannot be replaced here.';
 const DUES_MANAGEMENT_ROLES = new Set(['owner', 'secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer']);
 const canManageDues = (user = state.user) => DUES_MANAGEMENT_ROLES.has(user?.role) && can('dues.manage', user);
+const canOpenCheckOrders = (user = state.user) => ['owner', 'secretary', 'assistant_secretary', 'treasurer', 'assistant_treasurer'].includes(user?.role);
 
 const applyWorkspacePermissions = user => {
   $('minutesPageDescription').textContent = can('minutes.prepare', user) ? 'Prepare and review meeting minutes. The preparing officer attests, and the Worshipful Master reviews and authorizes distribution.' : 'Read finalized meeting minutes.';
@@ -652,6 +656,8 @@ const applyWorkspacePermissions = user => {
   document.querySelectorAll('.calendar-only').forEach(element => element.classList.toggle('hidden', !can('calendar.view', user)));
   const maySeeTreasury = can('treasury.view', user) || can('treasury.prepare', user) || can('treasury.upload', user);
   document.querySelectorAll('.treasury-only').forEach(el => el.classList.toggle('hidden', !maySeeTreasury));
+  document.querySelectorAll('.check-orders-only').forEach(el => el.classList.toggle('hidden', !canOpenCheckOrders(user)));
+  if (!canOpenCheckOrders(user)) checkOrdersWorkspace?.dispose();
   ['reportsNav','reportsMenuCard'].forEach(id => $(id).classList.toggle('hidden', !can('reports.create', user)));
   const mayPrepareCorrespondence = ['owner', 'secretary', 'assistant_secretary'].includes(user.role) && can('reports.create', user);
   ['correspondenceNav','correspondenceMenuCard'].forEach(id => $(id).classList.toggle('hidden', !mayPrepareCorrespondence));
@@ -713,6 +719,7 @@ const clearMemberAccessInvite = () => {
 const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   assistantWorkspace?.dispose();
   signatureAuthorization?.dispose();
+  checkOrdersWorkspace?.dispose();
   state.user = user;
   legacyReportBridge.request();
   clearMemberAccessInvite();
@@ -746,7 +753,7 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   } else hide($('serviceHealthAlert'));
   resetMinutesPreparationContext();
   restoreWebDrafts();
-  const supportedDeepLinks = new Set(['home','building','calendar','reports','correspondence','minutes','treasury','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports','assistant','attestations']);
+  const supportedDeepLinks = new Set(['home','building','calendar','reports','correspondence','minutes','treasury','checkOrders','dues','myDues','suggestions','queue','proposals','settings','agenda','activity','receivedReports','assistant','attestations']);
   showWorkspaceSection(supportedDeepLinks.has(requestedWorkspaceSection) ? requestedWorkspaceSection : 'home');
   hide($('authCard'));
   show($('appCard'));
@@ -782,13 +789,16 @@ const refreshSessionPermissions = async () => {
   try {
     const { user } = await apiFetch('/api/auth/me');
     if (!state.user || !user || state.authEpoch !== authEpoch || user.id !== userId || user.id !== state.user.id) return;
+    const roleChanged = state.user.role !== user.role;
     const before = JSON.stringify([state.user.role, [...(state.user.permissions || [])].sort(), signatureProfileLocked(state.user), state.user.hasSignature]);
     const after = JSON.stringify([user.role, [...(user.permissions || [])].sort(), signatureProfileLocked(user), user.hasSignature]);
     state.user = user;
     legacyReportBridge.request();
     if (before === after) return;
+    if (roleChanged && typeof checkOrdersWorkspace !== 'undefined') checkOrdersWorkspace?.dispose();
     applyWorkspacePermissions(user);
     showWorkspaceSection(state.activeSection || 'home', { skipLoad: true });
+    if (roleChanged && state.activeSection === 'checkOrders') void openCheckOrdersWorkspace();
     clearHomeDrafts();
     if (state.activeSection === 'home') {
       void refreshHomeCalendar();
@@ -815,6 +825,7 @@ const refreshSessionPermissions = async () => {
       clearHomeDrafts();
       if (typeof assistantWorkspace !== 'undefined') assistantWorkspace?.dispose();
       signatureAuthorization?.dispose();
+      if (typeof checkOrdersWorkspace !== 'undefined') checkOrdersWorkspace?.dispose();
       clearMemberAccessInvite();
       clearMinutesSavedSource();
       hide($('appCard')); document.querySelectorAll('.modal').forEach(hide); show($('authCard'));
@@ -1127,7 +1138,7 @@ const visibleDashboardItems = group => [...document.querySelectorAll(`.nav-group
 const dashboardGroupForSection = section => ({
   home: 'home', calendar: 'meetings', minutes: 'meetings', agenda: 'meetings', reports: 'meetings', receivedReports: 'meetings',
   correspondence: 'documents', queue: 'documents', builder: 'documents', approvals: 'documents', proposals: 'documents', proposalReview: 'documents',
-  dues: 'dues', myDues: 'dues', treasury: 'dues',
+  dues: 'dues', myDues: 'dues', treasury: 'dues', checkOrders: 'dues',
   access: 'people', memberAccess: 'people', suggestions: 'people', building: 'people', assistant: 'people', attestations: 'documents',
   activity: 'account', settings: 'account',
 })[section] || 'more';
@@ -1465,6 +1476,25 @@ if (typeof MutationObserver !== 'undefined') {
   }
 }
 
+const openCheckOrdersWorkspace = async () => {
+  const authEpoch = state.authEpoch;
+  const stillOpen = () => state.authEpoch === authEpoch && state.activeSection === 'checkOrders' && canOpenCheckOrders();
+  if (!checkOrdersWorkspace) {
+    const load = checkOrdersWorkspaceLoading ||= import(`/check-orders.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`);
+    try {
+      const { CheckOrdersWorkspace } = await load;
+      if (!stillOpen()) return;
+      checkOrdersWorkspace ||= new CheckOrdersWorkspace({ api: apiFetch, user: () => state.user });
+    } catch {
+      if (stillOpen()) $('checkOrdersSection').textContent = 'Check Orders could not be opened. Return to Home and try again.';
+      return;
+    } finally {
+      if (checkOrdersWorkspaceLoading === load) checkOrdersWorkspaceLoading = null;
+    }
+  }
+  if (stillOpen()) await checkOrdersWorkspace.open();
+};
+
 const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if (state.activeSection && section !== state.activeSection && hasUnsavedWorkspace(state.activeSection)
       && !window.confirm('Leave this unfinished work? It will stay in this browser tab so you can return to it.')) return false;
@@ -1472,6 +1502,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   const sectionPermissions = { building: ['building.view','building.request'], calendar: ['calendar.view'], reports: ['reports.create'], correspondence: ['reports.create'], minutes: ['minutes.view','minutes.prepare'], treasury: ['treasury.view','treasury.prepare','treasury.upload'], dues: ['dues.ledger'], myDues: ['dues.self'], suggestions: ['suggestions.create'], queue: ['documents.status'], proposals: ['proposals.create'], settings: ['settings.manage'] };
   if (sectionPermissions[section] && !sectionPermissions[section].some(permission => can(permission))) section = 'home';
   if (section === 'correspondence' && !['owner', 'secretary', 'assistant_secretary'].includes(state.user?.role)) section = 'home';
+  if (section === 'checkOrders' && !canOpenCheckOrders()) section = 'home';
   $('buildingSection').classList.toggle('hidden', section !== 'building');
   $('calendarSection').classList.toggle('hidden', section !== 'calendar');
   $('buildingNav').classList.toggle('active', section === 'building');
@@ -1502,6 +1533,9 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('treasurySection').classList.toggle('hidden', section !== 'treasury');
   $('treasuryNav').classList.toggle('active', section === 'treasury');
   if (section === 'treasury' && !skipLoad) treasuryWorkspace?.resumeOrList();
+  $('checkOrdersSection').classList.toggle('hidden', section !== 'checkOrders');
+  $('checkOrdersNav').classList.toggle('active', section === 'checkOrders');
+  if (section === 'checkOrders' && !skipLoad) void openCheckOrdersWorkspace();
   const reports = section === 'reports';
   $('reportsSection').classList.toggle('hidden', !reports);
   $('reportsNav').classList.toggle('active', reports);
@@ -1574,7 +1608,7 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
     reports: 'Report Generator', receivedReports: 'Received Reports', correspondence: 'Lodge Correspondence',
     queue: 'Live Queue', builder: 'Create Dispensation', approvals: 'Approvals',
     proposals: 'My Dispensation Proposals', proposalReview: 'Warden Proposals',
-    dues: 'Dues Ledger', myDues: 'My Dues', treasury: 'Treasurer Reports',
+    dues: 'Dues Ledger', myDues: 'My Dues', treasury: 'Treasurer Reports', checkOrders: 'Check Orders',
     access: 'Officer Access', memberAccess: 'Member Access', suggestions: 'Suggestion Box',
     building: 'Building Requests', activity: 'Dashboard Activity', settings: 'My Settings',
     assistant: 'Muse Assistant', attestations: 'My Attestations',
@@ -3132,6 +3166,8 @@ $('memberAccessMenuCard').addEventListener('click',()=>showWorkspaceSection('mem
 $('memberAccessRefresh').addEventListener('click',()=>renderMemberAccess());
 $('treasuryNav').addEventListener('click', () => showWorkspaceSection('treasury'));
 $('treasuryMenuCard').addEventListener('click', () => showWorkspaceSection('treasury'));
+$('checkOrdersNav').addEventListener('click', () => showWorkspaceSection('checkOrders'));
+$('checkOrdersMenuCard').addEventListener('click', () => showWorkspaceSection('checkOrders'));
 $('reportsNav').addEventListener('click', () => showWorkspaceSection('reports'));
 $('reportsMenuCard').addEventListener('click', () => showWorkspaceSection('reports'));
 $('correspondenceNav').addEventListener('click', () => showWorkspaceSection('correspondence'));
@@ -3226,7 +3262,7 @@ $('minutesSourceType').addEventListener('change', () => {
 });
 window.addEventListener('beforeunload', event => {
   if (!state.minutesEditorDirty && !hasUnsavedWorkspace(state.activeSection)
-      && !hasUnsavedWorkspace('agenda') && !hasUnsavedWorkspace('treasury')) return;
+      && !hasUnsavedWorkspace('agenda') && !hasUnsavedWorkspace('treasury') && !hasUnsavedWorkspace('checkOrders')) return;
   event.preventDefault();
   event.returnValue = '';
 });
@@ -3736,6 +3772,7 @@ const startRealtime = async () => {
       await refreshBuildingAlerts();
       await refreshCorrespondenceAlerts();
       await refreshTreasuryAlerts();
+      if (state.activeSection === 'checkOrders') checkOrdersWorkspace?.requestLiveRefresh();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -3759,6 +3796,9 @@ const startRealtime = async () => {
           if (event.includes('event: treasury_changed')) {
             refreshTreasuryAlerts();
             if (state.activeSection === 'treasury' && treasuryWorkspace) treasuryWorkspace.requestLiveRefresh();
+          }
+          if (state.activeSection === 'checkOrders' && event.includes('event: check_orders_changed')) {
+            checkOrdersWorkspace?.requestLiveRefresh();
           }
           if (event.includes('event: queue_changed') || event.includes('event: profile_changed')) {
             scheduleQueueRefresh();
@@ -4165,6 +4205,7 @@ $('logoutBtn').addEventListener('click', async () => {
   clearMinutesSavedSource();
   assistantWorkspace?.dispose();
   signatureAuthorization?.dispose();
+  checkOrdersWorkspace?.dispose();
   state.realtimeAbort?.abort();
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   state.authEpoch += 1;

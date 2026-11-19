@@ -28,6 +28,7 @@
     <link rel="icon" href="/og-image.png" />
     <link rel="stylesheet" href="/styles.css?v=__APP_VERSION__" />
     <link rel="stylesheet" href="/treasury.css?v=__APP_VERSION__">
+    <link rel="stylesheet" href="/check-orders.css?v=__APP_VERSION__">
     <link rel="stylesheet" href="/activity.css?v=__APP_VERSION__">
 </head>
   <body>
@@ -150,6 +151,7 @@
             <button id="duesNav" class="nav-item dues-ledger-only" type="button"><span>$</span> Dues Ledger</button>
             <button id="myDuesNav" class="nav-item dues-self-only" type="button"><span>ME</span> My Dues</button>
             <button id="treasuryNav" class="nav-item treasury-only" type="button"><span>TR</span> Treasurer Reports</button>
+            <button id="checkOrdersNav" class="nav-item check-orders-only hidden" type="button"><span aria-hidden="true">CO</span> Check Orders</button>
             </div>
             <div class="nav-group" data-group="people"><button class="nav-group-title" type="button" data-open-group="people" aria-expanded="false">People And Lodge <span aria-hidden="true">⌄</span></button>
             <button id="accessNav" class="nav-item owner-only" type="button"><span>ACC</span> Officer Access</button>
@@ -229,6 +231,7 @@
               <button id="attestationsMenuCard" class="document-menu-card owner-only" type="button"><i>MY</i><span><strong>My Attestations</strong><small>Review documents that require your own signature or attestation</small></span><b>›</b></button>
               <button id="memberAccessMenuCard" class="document-menu-card owner-only" type="button"><i>MEM</i><span><strong>Member Access</strong><small>Review roster email matches and create Brother accounts</small></span><b>›</b></button>
               <button id="treasuryMenuCard" class="document-menu-card treasury-only" type="button"><i>TR</i><span><strong>Treasurer Reports</strong><small id="treasuryMenuDescription">Read finalized treasurer reports</small></span><b>›</b></button>
+              <button id="checkOrdersMenuCard" class="document-menu-card check-orders-only hidden" type="button"><i aria-hidden="true">CO</i><span><strong>Check Orders</strong><small>Review requests, signatures, and issued checks</small></span><b aria-hidden="true">›</b></button>
               <button id="candidateMenuCard" class="document-menu-card candidate-only" type="button"><i>CT</i><span><strong>Candidate Tracker</strong><small id="candidateMenuDescription">Open the Candidate Tracker</small></span><b>›</b></button>
             </div>
             </details>
@@ -252,6 +255,7 @@
             <div id="memberAccessList" class="dues-rows"></div>
           </section>
           <section id="treasurySection" class="hidden"></section>
+          <section id="checkOrdersSection" class="hidden" aria-label="Check Orders"></section>
           <section id="reportsSection" class="hidden">
             <div class="content-head"><div><p class="eyebrow">REPORTS FOR THE CRAFT</p><h1>Report Generator</h1><p>Preview your report before reviewing, signing and sending it.</p></div><button id="reportSeparateTab" class="secondary" type="button">Open in a separate tab</button></div>
             <p id="reportGeneratorMessage" class="message" role="status"></p>

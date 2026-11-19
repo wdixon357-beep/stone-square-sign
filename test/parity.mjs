@@ -29,6 +29,7 @@ const PAIRS = {
   minutesNav: 'minutes',
   agendaNav: 'agenda',
   treasuryNav: 'treasury',
+  checkOrdersNav: 'checkOrders',
   activityNav: 'activity',
   memberAccessNav: 'memberAccess',
   queueNav: 'documents',

@@ -625,7 +625,7 @@ struct WorkspaceView: View {
                 meetingsExpanded = true
             case .correspondence, .documents, .approvals, .createDispensation, .proposalReview, .myAttestations:
                 documentsExpanded = true
-            case .myDues, .dues, .treasury:
+            case .myDues, .dues, .treasury, .checkOrders:
                 financeExpanded = true
             case .building, .candidateTracker, .access, .memberAccess, .suggestions:
                 peopleExpanded = true
@@ -761,6 +761,7 @@ struct WorkspaceView: View {
         case .minutes: return "Meeting Minutes"
         case .agenda: return "Agenda Creator"
         case .treasury: return "Treasurer Reports"
+        case .checkOrders: return "Check Orders"
         case .candidateTracker: return "Candidate Tracker"
         case .createDispensation: return "Create Dispensation"
         case .access: return "Officer Access"
@@ -859,6 +860,7 @@ struct WorkspaceView: View {
                             if model.user?.canReadDues == true { navItem("Dues Ledger", mark: "$", section: .dues) }
                             if model.user?.can("dues.self") == true { navItem("My Dues", mark: "ME", section: .myDues) }
                             if model.user?.canUseTreasury == true { navItem("Treasurer Reports", mark: "TR", section: .treasury) }
+                            if model.user?.canUseCheckOrders == true { navItem("Check Orders", mark: "CO", section: .checkOrders) }
                         }
                     }
                     if hasPeopleTools {
@@ -954,7 +956,7 @@ struct WorkspaceView: View {
 
     private var hasMeetingsTools: Bool { [.lodgeCalendar, .minutes, .agenda, .reportGenerator, .receivedReports].contains { model.user?.canOpen($0) == true } }
     private var hasDocumentsTools: Bool { [.correspondence, .documents, .createDispensation, .approvals, .proposalReview].contains { model.user?.canOpen($0) == true } }
-    private var hasFinanceTools: Bool { [.dues, .myDues, .treasury].contains { model.user?.canOpen($0) == true } }
+    private var hasFinanceTools: Bool { [.dues, .myDues, .treasury, .checkOrders].contains { model.user?.canOpen($0) == true } }
     private var hasPeopleTools: Bool { [.access, .memberAccess, .candidateTracker, .suggestions, .building].contains { model.user?.canOpen($0) == true } }
     private var hasAccountTools: Bool { [.activity, .mySettings, .settings, .profile].contains { model.user?.canOpen($0) == true } }
 
@@ -1049,6 +1051,7 @@ struct WorkspaceView: View {
             .init(section: .myDues, title: "My Dues", symbol: "dollarsign.circle.fill"),
             .init(section: .dues, title: "Dues Ledger", symbol: "list.bullet.rectangle.portrait.fill"),
             .init(section: .treasury, title: "Treasurer Reports", symbol: "chart.bar.doc.horizontal.fill"),
+            .init(section: .checkOrders, title: "Check Orders", symbol: "doc.plaintext"),
             .init(section: .candidateTracker, title: "Candidate Tracker", symbol: "person.text.rectangle.fill"),
             .init(section: .museAssistant, title: "Muse Assistant", symbol: "person.badge.key.fill"),
             .init(section: .myAttestations, title: "My Attestations", symbol: "checkmark.seal"),
@@ -1240,7 +1243,7 @@ struct WorkspaceView: View {
         switch group {
         case "Meetings And Reports": return [.lodgeCalendar, .minutes, .agenda, .reportGenerator, .receivedReports].contains(section)
         case "Documents And Approvals": return [.correspondence, .documents, .createDispensation, .approvals, .proposalReview, .myAttestations].contains(section)
-        case "Dues And Finance": return [.dues, .myDues, .treasury].contains(section)
+        case "Dues And Finance": return [.dues, .myDues, .treasury, .checkOrders].contains(section)
         case "People And Lodge": return [.access, .memberAccess, .candidateTracker, .suggestions, .building].contains(section)
         case "Account": return [.activity, .mySettings, .settings, .profile, .museAssistant].contains(section)
         default: return false
@@ -1288,6 +1291,8 @@ struct WorkspaceView: View {
         case .treasury:
             if model.user?.can("treasury.prepare") == true || model.user?.can("treasury.upload") == true { TreasuryView(workspace: treasuryWorkspace) }
             else { FinalReportBrowserView(kind: .treasury) }
+        case .checkOrders:
+            CheckOrdersView().id(model.assistantAccountContext)
         case .candidateTracker:
             NativeCandidateTrackerView()
         case .createDispensation: DispensationBuilderView(draft: dispensationBuilderDraft)
@@ -2453,6 +2458,7 @@ struct LandingDashboardView: View {
         if model.user?.role == "owner" { append("Agenda Creator", openAgenda); append("Received Reports", openReceivedReports) }
         if model.user?.canPrepareCorrespondence == true { append("Lodge Correspondence", openCorrespondence) }
         if model.user?.canUseTreasury == true { append("Treasurer Reports", openTreasury) }
+        if model.user?.canUseCheckOrders == true { append("Check Orders", { openSection(.checkOrders) }) }
         if model.user?.canOpen(.building) == true { append("Building Requests", openBuilding) }
         if model.user?.canReadDues == true { append("Dues Ledger", { openSection(.dues) }) }
         if model.user?.canReadApprovals == true { append("Approvals", { openSection(.approvals) }) }
