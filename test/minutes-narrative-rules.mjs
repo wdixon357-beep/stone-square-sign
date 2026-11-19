@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {COMMON_REPORT_RULES,MINUTES_REPORT_RULES,TREASURY_REPORT_RULES,REPORT_RULES_VERSION} from '../report-rules.js';
 const standing=await readFile(new URL('../REPORT-RULES.md',import.meta.url),'utf8');
-assert.equal(REPORT_RULES_VERSION,'2026-10-21.4');
+assert.equal(REPORT_RULES_VERSION,'2026-11-18.1');
 assert.ok(MINUTES_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
 assert.ok(TREASURY_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
 for (const rules of [MINUTES_REPORT_RULES,standing]) {
@@ -27,7 +27,7 @@ for (const rules of [MINUTES_REPORT_RULES,standing]) {
 assert.doesNotMatch(MINUTES_REPORT_RULES,/Otherwise state that whether it was read needs confirmation/i,'Retired public read-aloud filler instruction is gone');
 assert.match(MINUTES_REPORT_RULES,/Never treat a discussion into approval|Never turn a discussion into approval/,'Source-backed decision distinctions remain');
 assert.match(MINUTES_REPORT_RULES,/Do not describe a motion as properly made, seconded, carried, unanimous, defeated, tabled or withdrawn unless/,'Procedural factual validation is not weakened');
-assert.match(MINUTES_REPORT_RULES,/Use true only for explicit completed facts, false only for an explicit negative, and null when unconfirmed/,'Prayer truth values still require evidence');
+assert.match(MINUTES_REPORT_RULES,/Use true only for explicit completed facts, false only for an explicit exception, and null when unconfirmed/,'Prayer truth values still require evidence');
 assert.match(MINUTES_REPORT_RULES,/sourceLineIds/,'Exact source-line verification remains required');
 assert.match(MINUTES_REPORT_RULES,/Set income, expenses and actionItems to empty arrays/,'No duplicate financial/action tables are reintroduced');
 assert.match(MINUTES_REPORT_RULES,/Do not create a separate routine statement or confirmation that the Worshipful Master requested prayer/,'Retired routine WM prayer paragraph remains prohibited');

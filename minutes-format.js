@@ -23,6 +23,7 @@ const isObsoletePrayerPrompt = text => /^Prayer request: confirm whether the Wor
 const isClosingReviewPlaceholder = text => /^(?:Closing time: confirm and enter the time the Lodge was closed|Closing prayer: confirm whether the Chaplain gave the closing prayer(?: and prayed for the sick and distressed)?|Closing record: Opening time, closing time, and a formal Lodge closure statement were not recorded)\.?$/i.test(text);
 const isGenericClosingPrayer = text => /^(?:(?:Closing )?Prayer:\s*)?(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer(?: at (?:the )?end of (?:the )?meeting)?\.?$/i.test(text);
 const isRecordedClosingPrayer = text => /^(?:(?:Closing )?Prayer:\s*)?(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer\b/i.test(text);
+export const isClosingSection = heading => /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(plainBullet(heading).replace(/:$/, ''));
 const isEmptyEntry = value => /^(?:none(?: (?:were )?(?:recorded|reported|noted))?|no entr(?:y|ies)(?: (?:was |were )?(?:recorded|reported|noted))?|not (?:recorded|reported|applicable)|n\/?a|nil)\.?$/i.test(plainBullet(value));
 const praiseLabel = /^praise reports?\s*[:.]?\s*$/i;
 const attendanceLabel = /^attendance (?:and|&) visitors\s*[:.]?\s*$/i;
@@ -107,10 +108,11 @@ export function preparerOffice(name, role) {
 const hasExplicitClockTime = hasExplicitMinutesTime;
 
 export function closingReviewIssues(draft) {
-  if (Number(draft.closingFormatVersion) >= 3) return [
+  const closingFormatVersion = Number(draft.closingFormatVersion);
+  if (closingFormatVersion >= 3) return [
     !hasExplicitClockTime(draft.openingTime) && 'Enter the opening time in Eastern Time with AM or PM.',
     !hasExplicitClockTime(draft.closingTime) && 'Enter the closing time in Eastern Time with AM or PM.',
-    typeof draft.closingPrayerGiven !== 'boolean' && 'Confirm whether the Chaplain gave the closing prayer.',
+    closingFormatVersion < 4 && typeof draft.closingPrayerGiven !== 'boolean' && 'Confirm whether the Chaplain gave the closing prayer.',
   ].filter(Boolean);
   return [
     !String(draft.closingTime || '').trim() && 'Enter the closing time.',
@@ -144,30 +146,50 @@ export function attendanceReviewIssues(draft = {}, {requireConfirmation = true} 
 // asking the Master to repeat the preparer's checklist.
 export const attendanceRecordIssues = draft => attendanceReviewIssues(draft, {requireConfirmation:false});
 
+function closingPrayerFactPrefix(value) {
+  const prefix = value.trim().replace(/^[“"']+|[“"']+$/g, '').trim();
+  if (!prefix || /^(?:Closing(?: prayer)?|Prayer(?: and Closing)?|Chaplain):$/i.test(prefix)) return true;
+  if (/^There being no further business,?$/i.test(prefix)
+    || /^(?:At|During) (?:the )?(?:close|closing|end)(?: of (?:the )?(?:meeting|communication|Lodge))?,?$/i.test(prefix)) return true;
+  if (/^(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}(?:,? \d{4})?\s*[:,]$/i.test(prefix)
+    || hasExplicitClockTime(prefix.replace(/^At\s+/i, '').replace(/[:,]$/, ''))) return true;
+  return /^(?:(?:The )?(?:Worshipful Master|Secretary|Assistant Secretary|Chaplain)|(?:The )?WM(?:\s+[\p{L}.'-]+){0,4}|(?:Bro\.?|Brother|PM|HPM)\s+[\p{L}.'-]+(?:\s+[\p{L}.'-]+){0,3}|I|We)\s+(?:confirmed|affirmed|verified|stated|reported|recorded)(?:\s+that)?$/iu.test(prefix);
+}
+
+const otherOffices = CURRENT_OFFICERS.filter(officer => officer.title !== 'Chaplain').map(officer => officer.title).join('|');
+const otherPrayerActor = String.raw`(?:${otherOffices}|(?:Brother|Bro\.?|PM|HPM) [\p{L}.'-]+(?: [\p{L}.'-]+){0,3})`;
+const pastPrayerAction = '(?:gave|offered|led|delivered)';
+const activeAlternatePrayer = new RegExp(String.raw`\b(?:The )?(${otherPrayerActor}) ${pastPrayerAction} (?:the |a )?closing prayer\b`, 'iu');
+const passiveAlternatePrayer = new RegExp(String.raw`\bThe closing prayer was (?:given|offered|led|delivered) by (?:the )?(${otherPrayerActor})\b`, 'iu');
+const regularChaplain = CURRENT_OFFICERS.find(officer => officer.title === 'Chaplain');
+
+function recordsClosingPrayerException(value) {
+  const text = plainBullet(value).replace(/^Correction:\s*/i, '');
+  if (/\?|\b(?:if|unless|whether|previous meeting|last meeting|next meeting|reportedly|allegedly|unclear|unknown|unconfirmed|unverified|uncertain|possibly|perhaps|denied|disputed|or)\b/i.test(text)) return false;
+  const negative = /\b(?:(?:The )?Chaplain (?:(?:did not|didn['’]t) (?:give|offer|lead|deliver)|never (?:gave|offered|led|delivered)) (?:the |a )?closing prayer|No closing prayer (?:was|had been) (?:given|offered|led|delivered))\b/i.exec(text);
+  if (negative) return closingPrayerFactPrefix(text.slice(0, negative.index));
+  const alternate = activeAlternatePrayer.exec(text) || passiveAlternatePrayer.exec(text);
+  return Boolean(alternate && !namesMatch(alternate[1], regularChaplain.name)
+    && closingPrayerFactPrefix(text.slice(0, alternate.index)));
+}
+
+const pastPrayerStatement = sentence => !/\b(?:not|never|didn't|did not|will|would|should|next meeting|previous meeting|last meeting)\b/i.test(sentence);
+
+function recordsChaplainClosingPrayer(value) {
+  const sentence = plainBullet(value);
+  if (!pastPrayerStatement(sentence)
+    || /\?|\b(?:if|unless|whether|unclear|unknown|unconfirmed|unverified|uncertain|reportedly|allegedly|could|might|asked|requested|instructed|directed|planned|proposed|scheduled|expected|denied|denies|doubted|doubts|false|disputed|refuted|disclaimed|contradicted|perhaps|possibly|or)\b|\bno (?:one|record|evidence|confirmation|indication|statement)\b|\bwithout (?:a )?(?:record|evidence|confirmation)\b|\bmay (?:have|be|not|say|indicate|show|mean|suggest)\b|\b(?:please|needs? to|requires? to) confirm\b|\b(?:needs?|requires?) (?:confirmation|verification)\b|^\s*confirm\b/i.test(sentence)) return false;
+  const action = /\b(?:The\s+)?Chaplain\s+(?:(?:then|also|finally|subsequently)\s+)?(?:gave|offered|delivered|led)\s+(?:(?:the|a)\s+)?closing prayer\b/i.exec(sentence);
+  // A quoted subordinate clause is not an affirmative fact merely because
+  // it contains a past-tense verb. Accept a direct statement or an explicit
+  // officer/person's affirmative report; other prefixes remain unconfirmed.
+  return Boolean(action && closingPrayerFactPrefix(sentence.slice(0, action.index)));
+}
+
 export function detectPrayerFacts(source, {closingFormatVersion = 2} = {}) {
   // Require past-tense evidence about this meeting. Requests, future plans and
   // negated statements cannot establish that the closing prayer happened.
   const sentences = String(source || '').split(/\n|(?<=[.!?])\s+(?=[A-Z])/);
-  const past = sentence => !/\b(?:not|never|didn't|did not|will|would|should|next meeting|previous meeting|last meeting)\b/i.test(sentence);
-  const affirmativePrayerPrefix = value => {
-    const prefix = value.trim().replace(/^[“"']+|[“"']+$/g, '').trim();
-    if (!prefix || /^(?:Closing(?: prayer)?|Prayer(?: and Closing)?|Chaplain):$/i.test(prefix)) return true;
-    if (/^There being no further business,?$/i.test(prefix)
-      || /^(?:At|During) (?:the )?(?:close|closing|end)(?: of (?:the )?(?:meeting|communication|Lodge))?,?$/i.test(prefix)) return true;
-    if (/^(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}(?:,? \d{4})?\s*[:,]$/i.test(prefix)
-      || hasExplicitClockTime(prefix.replace(/^At\s+/i, '').replace(/[:,]$/, ''))) return true;
-    return /^(?:(?:The )?(?:Worshipful Master|Secretary|Assistant Secretary|Chaplain)|(?:The )?WM(?:\s+[\p{L}.'-]+){0,4}|(?:Bro\.?|Brother|PM|HPM)\s+[\p{L}.'-]+(?:\s+[\p{L}.'-]+){0,3}|I|We)\s+(?:confirmed|affirmed|verified|stated|reported|recorded)(?:\s+that)?$/iu.test(prefix);
-  };
-  const currentClosingPrayer = value => {
-    const sentence = plainBullet(value);
-    if (!past(sentence)
-      || /\?|\b(?:if|unless|whether|unclear|unknown|unconfirmed|unverified|uncertain|reportedly|allegedly|could|might|asked|requested|instructed|directed|planned|proposed|scheduled|expected|denied|denies|doubted|doubts|false|disputed|refuted|disclaimed|contradicted|perhaps|possibly|or)\b|\bno (?:one|record|evidence|confirmation|indication|statement)\b|\bwithout (?:a )?(?:record|evidence|confirmation)\b|\bmay (?:have|be|not|say|indicate|show|mean|suggest)\b|\b(?:please|needs? to|requires? to) confirm\b|\b(?:needs?|requires?) (?:confirmation|verification)\b|^\s*confirm\b/i.test(sentence)) return false;
-    const action = /\b(?:The\s+)?Chaplain\s+(?:(?:then|also|finally|subsequently)\s+)?(?:gave|offered|delivered|led)\s+(?:(?:the|a)\s+)?closing prayer\b/i.exec(sentence);
-    // A quoted subordinate clause is not an affirmative fact merely because
-    // it contains a past-tense verb. Accept a direct statement or an explicit
-    // officer/person's affirmative report; other prefixes remain unconfirmed.
-    return Boolean(action && affirmativePrayerPrefix(sentence.slice(0, action.index)));
-  };
   const currentSentences = Number(closingFormatVersion) >= 3 ? sentences.reduce((items, sentence) => {
     if (items.length && /\b(?:Bro|Mr|Dr|Rev|Jr|Sr)\.$/i.test(items.at(-1))) items[items.length - 1] += ` ${sentence}`;
     else items.push(sentence);
@@ -181,14 +203,31 @@ export function detectPrayerFacts(source, {closingFormatVersion = 2} = {}) {
       || /^(?:The )?Chaplain (?:(?:did not|didn't|never) (?:give|offer|lead|deliver)|never (?:gave|offered|led|delivered)|(?:has|had) not (?:given|offered|led|delivered)) (?:the |a )?closing prayer\b/i.test(text)
       || /^No closing prayer (?:was|had been) (?:given|offered|led|delivered)\.?$/i.test(text);
   };
-  const currentPrayerRefuted = currentSentences.some((sentence, index) => currentClosingPrayer(sentence)
+  const currentPrayerRefuted = currentSentences.some((sentence, index) => recordsChaplainClosingPrayer(sentence)
     && refutesCurrentPrayer(currentSentences[index + 1] || ''));
+  const explicitCorrection = value => /^(?:Correction:\s*)?(?:That|This|It)(?: (?:statement|claim|assertion))? (?:(?:is|was) (?:false|untrue|not true)|(?:did not|didn't) happen|never happened)\.?$/i.test(plainBullet(value));
+  const recordedException = Number(closingFormatVersion) >= 4 && currentSentences.some((sentence, index) =>
+    recordsClosingPrayerException(sentence) || recordsChaplainClosingPrayer(sentence) && explicitCorrection(currentSentences[index + 1] || ''));
   return {
-    prayerRequested: sentences.some(s => past(s) && /\b(?:Worshipful Master|WM)\b.*\b(?:asked|requested|directed|instructed)\b.*\bChaplain\b.*\b(?:sick|distress)\w*/i.test(s) && /\b(?:close|closing|end of (?:the )?meeting)\b/i.test(s)) ? true : null,
-    closingPrayerGiven: (Number(closingFormatVersion) >= 3
-      ? !currentPrayerRefuted && currentSentences.some(currentClosingPrayer)
-      : sentences.some(s => past(s) && /\bChaplain\b.*\b(?:gave|offered|delivered|led)\b.*\bclosing prayer\b.*\b(?:sick|distress)\w*/i.test(s))) ? true : null,
+    prayerRequested: sentences.some(s => pastPrayerStatement(s) && /\b(?:Worshipful Master|WM)\b.*\b(?:asked|requested|directed|instructed)\b.*\bChaplain\b.*\b(?:sick|distress)\w*/i.test(s) && /\b(?:close|closing|end of (?:the )?meeting)\b/i.test(s)) ? true : null,
+    closingPrayerGiven: recordedException ? false : (Number(closingFormatVersion) >= 3
+      ? !currentPrayerRefuted && currentSentences.some(recordsChaplainClosingPrayer)
+      : sentences.some(s => pastPrayerStatement(s) && /\bChaplain\b.*\b(?:gave|offered|delivered|led)\b.*\bclosing prayer\b.*\b(?:sick|distress)\w*/i.test(s))) ? true : null,
   };
+}
+
+function omitClosingPrayerSentences(body, isContradictory) {
+  return body.split('\n').flatMap(line => {
+    const bullet = /^\s*(?:[-*•▪]|\d+[.)])\s+/.exec(line)?.[0] || '';
+    const sentences = line.slice(bullet.length).split(/(?<=[.!?]) +(?=[A-Z*_<])/).reduce((parts, sentence) => {
+      if (parts.length && /\b(?:Bro|Mr|Dr|Rev|Jr|Sr)\.$/i.test(parts.at(-1))) parts[parts.length - 1] += ` ${sentence}`;
+      else parts.push(sentence);
+      return parts;
+    }, []);
+    const retained = sentences.filter(sentence => !isContradictory(sentence));
+    if (retained.length === sentences.length) return [line];
+    return retained.length ? [bullet + retained.join(' ')] : [];
+  }).join('\n');
 }
 
 export function separateFormalClosure(body) {
@@ -203,11 +242,13 @@ export function separateFormalClosure(body) {
 export function documentSections(draft) {
   const sections = cleanMinutesSectionsForPresentation(draft.sections, draft);
   const currentClosingFormat = Number(draft.closingFormatVersion) >= 3;
+  const routineClosingPrayer = Number(draft.closingFormatVersion) >= 4;
   // Signed snapshots retain the renderer they were prepared with. A stray
   // bullet in a legacy section must not reformat an already attested PDF.
   const usesBullets = Number(draft.organizerVersion) >= 5;
   const generatedLine = text => usesBullets ? `- ${text}` : text;
-  const closing = sections.filter(s => /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(s.heading.trim()));
+  const closing = sections.filter(s => routineClosingPrayer ? isClosingSection(s.heading)
+    : /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(s.heading.trim()));
   const result = sections.filter(s => !closing.includes(s));
   let sick = result.find(s => isSicknessHeading(s.heading));
   if (!sick) { sick = {heading: SICKNESS_HEADING, body: ''}; result.push(sick); }
@@ -225,13 +266,15 @@ export function documentSections(draft) {
     result.push({heading: 'Next Meeting', body: generatedLine(formatMinutesDate(draft.nextMeeting))});
   }
   let closingBody = closing.map(s => s.body).join('\n').trim();
+  const prayerGiven = draft.closingPrayerGiven ?? (routineClosingPrayer
+    ? detectPrayerFacts(closingBody, {closingFormatVersion:4}).closingPrayerGiven !== false : null);
   if (draft.nextMeeting) closingBody = omitWholeBullets(closingBody, text => repeatsNextMeeting(text, draft, 'Closing'));
   closingBody = omitWholeBullets(closingBody, isStandardPrayerRequest);
   if (currentClosingFormat) {
     closingBody = omitWholeBullets(closingBody, isClosingReviewPlaceholder);
-    // A confirmed generic prayer is printed once by the versioned control.
+    // The generic prayer is printed once by the versioned closing renderer.
     // Retain a sourced closing prayer with additional detail in its own wording.
-    if (draft.closingPrayerGiven === true) closingBody = omitWholeBullets(closingBody, isGenericClosingPrayer);
+    if (prayerGiven === true) closingBody = omitWholeBullets(closingBody, isGenericClosingPrayer);
   } else {
     closingBody = omitWholeBullets(closingBody, text => /^(?:The )?Chaplain (?:gave|offered|led|delivered) the closing prayer and prayed for the sick and distressed\.?$/i.test(text));
   }
@@ -247,14 +290,19 @@ export function documentSections(draft) {
       return true;
     });
   }
+  if (routineClosingPrayer) closingBody = omitClosingPrayerSentences(closingBody, prayerGiven
+    ? recordsClosingPrayerException : recordsChaplainClosingPrayer);
   const closureText = formal.statements.length ? formal.statements.join('\n')
     : draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.`
       : currentClosingFormat ? '' : 'Closing time: confirm and enter the time the Lodge was closed.';
   const closure = closureText ? generatedLine(closureText) : '';
-  const hasRecordedPrayer = currentClosingFormat && closingBody.split('\n').some(line => isRecordedClosingPrayer(plainBullet(line)));
-  const prayer = draft.closingPrayerGiven === true
+  const hasRecordedPrayer = routineClosingPrayer ? detectPrayerFacts(closingBody, {closingFormatVersion:4}).closingPrayerGiven === true
+    : currentClosingFormat && closingBody.split('\n').some(line => isRecordedClosingPrayer(plainBullet(line)));
+  const prayer = prayerGiven === true
     ? hasRecordedPrayer ? '' : generatedLine(currentClosingFormat ? closingPrayerTextV3 : closingPrayerText)
-    : draft.closingPrayerGiven === false || currentClosingFormat ? '' : generatedLine('Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.');
+    : routineClosingPrayer && prayerGiven === false && detectPrayerFacts(closingBody, {closingFormatVersion:4}).closingPrayerGiven !== false
+      ? generatedLine('The Chaplain did not give the closing prayer.')
+      : prayerGiven === false || currentClosingFormat ? '' : generatedLine('Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.');
   result.push({heading: 'Closing of the Lodge', body: [closingBody, prayer, closure].filter(Boolean).join('\n')});
   return result.filter(s => s.body.trim() || isSicknessHeading(s.heading))
     .map(section => usesBullets ? {...section, bulletStyle: true} : section);

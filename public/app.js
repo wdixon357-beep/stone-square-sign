@@ -1640,7 +1640,7 @@ const collectMinutesDraft = () => ({
   sourceType: currentMinutes()?.draft.sourceType || 'transcript',
   ...(currentMinutes()?.draft.meetingDetailsVersion ? { meetingDetailsVersion: currentMinutes().draft.meetingDetailsVersion } : {}),
   officerAttendanceVersion: minutesOfficerAttendanceVersion(),
-  closingFormatVersion: 3,
+  closingFormatVersion: currentMinutes()?.status === 'draft' ? 4 : currentMinutes()?.draft.closingFormatVersion,
   meetingDate: minutesDates.minutesDateValue($('minutesMeetingDate').value) || null,
   meetingType: $('minutesMeetingType').value === 'other'
     ? $('minutesMeetingTypeOther').value.trim()
@@ -2293,7 +2293,6 @@ const canAttestMinutesDraft = item => item?.status === 'draft'
 const minutesPreparationIssues = draft => ({
   details: minutesMeetingDetails.minutesMeetingDetailsIssues(draft),
   attendance: minutesAttendanceIssues(draft),
-  closing: typeof draft.closingPrayerGiven === 'boolean' ? [] : ['Confirm whether the Chaplain gave the closing prayer before sending these minutes.'],
 });
 
 const refreshMinutesPrepChecklist = (item = currentMinutes()) => {
@@ -2304,7 +2303,6 @@ const refreshMinutesPrepChecklist = (item = currentMinutes()) => {
   for (const [name, issues, done] of [
     ['Details', checks.details, 'Fields filled'],
     ['Attendance', checks.attendance, 'Review recorded'],
-    ['Closing', checks.closing, 'Answered'],
   ]) {
     $(`minutesPrep${name}State`).textContent = issues.length ? 'Needs review' : done;
   }
@@ -2505,7 +2503,8 @@ const openMinutesEditor = (id) => {
   $('minutesDegree').value = legacyDegrees[draft.degree] || draft.degree || '';
   $('minutesOpeningTime').value = minutesMeetingDetails.formatMinutesClock(draft.openingTime);
   $('minutesClosingTime').value = minutesMeetingDetails.formatMinutesClock(draft.closingTime);
-  $('minutesClosingPrayerGiven').value = typeof draft.closingPrayerGiven === 'boolean' ? String(draft.closingPrayerGiven) : '';
+  const closingPrayerGiven = draft.closingPrayerGiven ?? (item.status === 'draft' ? true : null);
+  $('minutesClosingPrayerGiven').value = closingPrayerGiven === null ? '' : String(closingPrayerGiven);
   $('minutesPresiding').value = draft.presiding || '';
   $('minutesQuorum').value = /^(yes|quorum present|established)$/i.test(draft.quorum || '') ? 'Yes'
     : /^(no|no quorum)$/i.test(draft.quorum || '') ? 'No' : '';
@@ -3301,7 +3300,6 @@ $('saveExitMinutes').addEventListener('click', async () => {
 });
 $('minutesPrepDetails').addEventListener('click', () => focusMinutesPrepField($('minutesMeetingDate')));
 $('minutesPrepAttendance').addEventListener('click', () => focusMinutesPrepField(minutesAttendanceTarget()));
-$('minutesPrepClosing').addEventListener('click', () => focusMinutesPrepField($('minutesClosingPrayerGiven')));
 $('minutesPrepGoToAttest').addEventListener('click', () => focusMinutesPrepField($('submitMinutesReview')));
 $('minutesEditView').addEventListener('click', () => setMinutesView(false));
 $('minutesPreviewView').addEventListener('click', () => setMinutesView(true));
@@ -3402,11 +3400,6 @@ $('submitMinutesReview').addEventListener('click', async () => {
     if (checks.attendance.length) {
       setMessage($('minutesEditorMessage'), `Complete the required attendance review before submitting. ${checks.attendance.join(' ')}`, true);
       focusMinutesPrepField(minutesAttendanceTarget());
-      return;
-    }
-    if (checks.closing.length) {
-      setMessage($('minutesEditorMessage'), checks.closing[0], true);
-      focusMinutesPrepField($('minutesClosingPrayerGiven'));
       return;
     }
     await saveMinutesCorrections();

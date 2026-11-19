@@ -212,7 +212,7 @@ The Lodge closed at 9:18 PM.`;
   const transcript = await generateMinutesDraft('On 09/17/2026 the Lodge opened at 7:30 PM. A quorum was established. Correspondence from the district was read. The committee reported on the building. A motion was made and seconded. The motion carried. The Lodge closed at 9:05 PM.');
   const futureClosing = await generateMinutesDraft('The Lodge will be closed at 9:00 PM. The Chaplain will give the closing prayer for the sick and distressed.');
   assert.equal(futureClosing.closingTime, null, 'a planned closing time is not a completed closing');
-  assert.equal(futureClosing.closingPrayerGiven, null);
+  assert.equal(futureClosing.closingPrayerGiven, true, 'planned wording does not supply prayer facts, and the routine default applies');
   assert.equal(transcript.sourceType, 'transcript');
   assert.equal(transcript.meetingDate, '2026-09-17');
   for (const heading of ['Communications', 'Committee Reports', 'New Business and Motions']) assert.ok(transcript.sections.some(s => s.heading === heading));

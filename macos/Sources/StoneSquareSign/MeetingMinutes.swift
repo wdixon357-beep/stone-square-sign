@@ -547,7 +547,7 @@ final class MinutesWorkspace: ObservableObject {
     }
     func save() async {
         guard let record = selected, var draft else { return }
-        draft.closingFormatVersion = 3
+        if record.status == "draft" { draft.closingFormatVersion = 4 }
         if record.status == "draft", (draft.officerAttendanceVersion ?? 0) < 2 {
             draft.officerAttendanceVersion = 2
             var review = draft.attendanceReview ?? MinutesAttendanceReview()
@@ -1250,21 +1250,26 @@ struct MeetingMinutesView: View {
                 MinutesDateField(title: "Next meeting date", value: text(\.nextMeeting), preservingDetails: true)
                 Divider()
                 Text("Prayer and closing").font(.headline).foregroundStyle(SignTheme.navy)
-                Text("Confirm the Chaplain's closing prayer for this meeting. The closing section uses the closing time above.").font(.caption).foregroundStyle(.secondary)
-                prayerPicker("Chaplain gave the closing prayer", key: \.closingPrayerGiven)
+                if workspace.selected?.status == "draft" || (workspace.draft?.closingFormatVersion ?? 0) >= 4 {
+                    Text("The minutes include the Chaplain’s closing prayer unless you mark an exception.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Toggle("Chaplain did not give the closing prayer", isOn: Binding(
+                        get: { workspace.draft?.closingPrayerGiven == false },
+                        set: { workspace.draft?.closingPrayerGiven = !$0 }
+                    )).toggleStyle(.checkbox).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Picker("Chaplain gave the closing prayer", selection: Binding(
+                        get: { workspace.draft?.closingPrayerGiven.map { $0 ? "yes" : "no" } ?? "" },
+                        set: { workspace.draft?.closingPrayerGiven = $0.isEmpty ? nil : $0 == "yes" }
+                    )) {
+                        Text("Not recorded").tag(""); Text("Yes").tag("yes"); Text("No").tag("no")
+                    }
+                }
                 if preparingAttendance && !meetingDetailsReady, let draft = workspace.draft {
                     Text(MinutesMeetingDetails(draft: draft).completionMessage).font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }.textFieldStyle(.roundedBorder).padding(10)
-        }
-    }
-    private func prayerPicker(_ label: String, key: WritableKeyPath<MinutesDraft, Bool?>) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(label).font(.caption)
-            Picker(label, selection: Binding(get: { workspace.draft?[keyPath: key].map { $0 ? "yes" : "no" } ?? "" }, set: { workspace.draft?[keyPath: key] = $0.isEmpty ? nil : $0 == "yes" })) {
-                Text("Needs confirmation").tag(""); Text("Yes").tag("yes"); Text("No").tag("no")
-            }.labelsHidden()
         }
     }
     private func namesEditor(_ label: String, binding: Binding<String>) -> some View {

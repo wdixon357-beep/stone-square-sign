@@ -651,7 +651,7 @@ try {
       && !minutesForOfficerBeforeSigning.payload.minutes.some((m) => m.id === minutesId)
       && privatePdfBeforeSigning.status === 404);
   const minutesPreview = await api('POST', `/api/minutes/${minutesId}/preview`, {
-    token: asstToken, body: { draft: {...generatedMinutes.payload.minutes.draft, closingFormatVersion:1,
+    token: asstToken, body: { draft: {...generatedMinutes.payload.minutes.draft, closingFormatVersion:1, closingPrayerGiven:null,
       sections:[...generatedMinutes.payload.minutes.draft.sections, {heading:'Sickness and Distress',
         body:'WM Dixon-Saunders asked the Chaplain to offer a prayer for the sick and distressed at the close of the meeting.'}] } },
   });
@@ -671,9 +671,11 @@ try {
   check('a viewer cannot open the private minutes preview', viewerMinutesPreview.status === 403,
     String(viewerMinutesPreview.status));
   const revisedDraft = structuredClone(generatedMinutes.payload.minutes.draft);
+  revisedDraft.closingPrayerGiven = null;
   await api('PUT', `/api/minutes/${minutesId}`, {token: asstToken, body: {draft: {...revisedDraft, closingTime: null, prayerRequested: null, closingPrayerGiven: null}}});
   const incompleteClosing = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token: asstToken});
-  check('unconfirmed closing details cannot be signed as a complete record', incompleteClosing.status === 409 && /closing time/.test(incompleteClosing.payload.error) && /Chaplain/.test(incompleteClosing.payload.error));
+  check('closing time is still required and the routine prayer needs no extra confirmation', incompleteClosing.status === 409
+    && /closing time/.test(incompleteClosing.payload.error) && !/Chaplain/.test(incompleteClosing.payload.error));
   await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken, body:{draft:{...revisedDraft,openingTime:null}}});
   const missingOpening=await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
   check('new minutes cannot be submitted without actual opening time', missingOpening.status===409 && /opening time/i.test(missingOpening.payload.error));
@@ -744,7 +746,9 @@ try {
   await Promise.all(streamReaders);
   check('Adrian can attest and send the corrected draft to the Worshipful Master',
     submittedMinutes.status === 200 && submittedMinutes.payload.minutes.status === 'awaiting_master_attestation'
-      && Boolean(submittedMinutes.payload.minutes.preparerAttestedAt));
+      && Boolean(submittedMinutes.payload.minutes.preparerAttestedAt)
+      && submittedMinutes.payload.minutes.submittedDraft.closingFormatVersion === 4
+      && submittedMinutes.payload.minutes.submittedDraft.closingPrayerGiven === true);
   const reviewAlerts = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('the Master has a persistent dated alert for Adrian submission', reviewAlerts.status === 200
     && reviewAlerts.payload.alerts.some(a => a.id === minutesId && a.title.includes('September 3, 2026') && a.submittedBy === 'Adrian Reese'));
@@ -913,8 +917,8 @@ try {
   const secretarySubmission = await api('POST', `/api/minutes/${secretaryMinutesId}/preparer-attest`, { token: secToken });
   check('a secretary can attest without the retired WM prayer-request question', secretarySubmission.status === 200
     && secretarySubmission.payload.minutes.draft.prayerRequested === null
-    && secretarySubmission.payload.minutes.draft.closingFormatVersion === 3
-    && secretarySubmission.payload.minutes.submittedDraft.closingFormatVersion === 3);
+    && secretarySubmission.payload.minutes.draft.closingFormatVersion === 4
+    && secretarySubmission.payload.minutes.submittedDraft.closingFormatVersion === 4);
   const secretaryPending = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('McDuffie submission creates the same dated alert and immediate email', secretarySubmission.status === 200
     && secretaryPending.payload.alerts.some(a => a.id === secretaryMinutesId && a.submittedBy === 'William M. McDuffie' && a.title.includes('September 3, 2026'))

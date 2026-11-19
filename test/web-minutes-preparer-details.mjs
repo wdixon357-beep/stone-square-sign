@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import * as minutesAttendance from '../public/minutes-attendance.js';
 import * as minutesDates from '../public/minutes-dates.js';
 import * as minutesMeetingDetails from '../public/minutes-meeting-details.js';
 
@@ -19,6 +20,7 @@ class Element {
   async emit(type) { for (const handler of this.listeners[type] || []) await handler({preventDefault(){},target:this}); }
   focus() { this.focused=true; }
   querySelectorAll() { return this.controls || []; }
+  replaceChildren(...controls) { this.controls=controls; }
 }
 function harness() {
   const elements=Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(match=>[match[1],new Element(match[1])]));
@@ -184,10 +186,66 @@ assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeeting
  assert.equal(h.elements.minutesIntakeQuorum.value,'','The uploaded file takes precedence over the pasted notes');
  assert.match(h.elements.minutesPrefillMessage.textContent,/A file is selected/);
 }
-const prepSource = app.slice(app.indexOf('const canAttestMinutesDraft'), app.indexOf('const refreshMinutesPrepChecklist'));
-const prepare = vm.runInNewContext(`${prepSource}\nminutesPreparationIssues`, { minutesMeetingDetails, minutesAttendanceIssues: () => [] });
-assert.equal(prepare({...details, openingTime: '', closingPrayerGiven: false}).details.length, 1);
-assert.equal(prepare({...details, closingPrayerGiven: false}).closing.length, 0, 'An explicit No completes the prayer check');
-assert.equal(prepare(details).closing.length, 1, 'The checklist and attestation require a recorded answer');
+{
+  const h = harness();
+  const record = {
+    id: 'synthetic-draft',
+    status: 'draft',
+    createdByUserId: h.state.user.id,
+    draft: { ...details, sections: [], attendanceReview: { officerRoll: true, otherPresent: true, otherExcused: true } },
+  };
+  h.state.minutes = [record];
+  const collectSource = app.slice(app.indexOf('const currentMinutes ='), app.indexOf('const minutesDateLabel ='));
+  const prepSource = app.slice(app.indexOf('const minutesAttendanceIssues ='), app.indexOf('const focusMinutesPrepField ='));
+  const editorSource = app.slice(app.indexOf('const openMinutesEditor ='), app.indexOf('const refreshOpenMinutes ='));
+  const attestSource = app.slice(app.indexOf("$('submitMinutesReview').addEventListener"), app.indexOf("$('authorizeMinutes').addEventListener"));
+  const actions = [];
+  let savedDraft;
+  const editor = vm.createContext({
+    ...h.context, minutesAttendance, setMinutesView() {}, clearMinutesSavedSource() {},
+    canReadMinutesSavedSource: () => false, setMinutesMeetingType: value => { h.elements.minutesMeetingType.value = value; },
+    officerAttendanceEditor() {}, fillFinanceEditor() {}, sectionEditor() {}, minutesAttendanceDisplayWarnings: () => [],
+    updateMinutesEditorControls: item => editor.refreshChecklist(item), refreshMinutesPreview() {},
+    focusMinutesPrepField: field => field.focus(), minutesAttendanceTarget: () => h.elements.minutesOfficerRollConfirmed,
+    saveMinutesCorrections: () => { savedDraft = editor.collectDraft(); actions.push('save'); },
+    minutesAction: action => actions.push(action),
+  });
+  vm.runInContext(`${collectSource}\n${prepSource}\n${editorSource}\n${attestSource}
+    this.openEditor = openMinutesEditor;
+    this.collectDraft = collectMinutesDraft;
+    this.refreshChecklist = refreshMinutesPrepChecklist;
+  `, editor);
+  assert.doesNotMatch(html, /id="minutesPrepClosing(?:State)?"/, 'Closing prayer is absent from the checklist');
+  editor.openEditor(record.id);
+  assert.equal(h.elements.minutesClosingPrayerGiven.value, 'true', 'Working drafts show the standard prayer with no action');
+  assert.equal(h.elements.minutesPrepGoToAttest.classList.contains('hidden'), false);
+
+  h.elements.minutesOpeningTime.value = '';
+  await h.elements.submitMinutesReview.emit('click');
+  assert.deepEqual(actions, [], 'Missing details still prevent attestation');
+  assert.match(h.elements.minutesEditorMessage.textContent, /Complete the meeting details/);
+  h.elements.minutesOpeningTime.value = details.openingTime;
+  h.elements.minutesOfficerRollConfirmed.checked = false;
+  await h.elements.submitMinutesReview.emit('click');
+  assert.deepEqual(actions, [], 'Incomplete attendance still prevents attestation');
+  assert.match(h.elements.minutesEditorMessage.textContent, /Complete the required attendance review/);
+  h.elements.minutesOfficerRollConfirmed.checked = true;
+  await h.elements.submitMinutesReview.emit('click');
+  assert.deepEqual(actions, ['save', 'preparer-attest'], 'The standard prayer needs no separate confirmation before submitting');
+  assert.equal(savedDraft.closingPrayerGiven, true);
+  assert.equal(savedDraft.closingFormatVersion, 4);
+
+  record.draft.closingPrayerGiven = false;
+  editor.openEditor(record.id);
+  assert.equal(h.elements.minutesClosingPrayerGiven.value, 'false', 'A recorded exception remains visible');
+  assert.equal(editor.collectDraft().closingPrayerGiven, false, 'A recorded exception survives an editor round trip');
+
+  record.status = 'awaiting_master_attestation';
+  record.draft.closingPrayerGiven = null;
+  record.draft.closingFormatVersion = 2;
+  editor.openEditor(record.id);
+  assert.equal(editor.collectDraft().closingPrayerGiven, null, 'Historical unknowns stay blank in Master review');
+  assert.equal(editor.collectDraft().closingFormatVersion, 2, 'Opening Master review preserves the legacy format');
+}
 assert.match(app,/resetMinutesPreparationContext\(\);\s+restoreWebDrafts/,'A new signed-in workspace resets prior-account operation ownership before restoring its own draft');
-console.log('PASS: required eight-field intake, explicit clocks, source-only handoff, metadata carry, claim validation, failure preservation, owned operation ordering and private account draft restoration using actual browser functions.');
+console.log('PASS: required meeting details and attendance, automatic closing prayer with exception handling, source-only handoff, claim validation, operation ordering, and account draft isolation in the browser.');

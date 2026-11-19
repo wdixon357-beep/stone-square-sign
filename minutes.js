@@ -1,4 +1,4 @@
-import { currentMinutesEditorialDraft } from './minutes-editorial.js';
+import { workingMinutesEditorialDraft } from './minutes-editorial.js';
 import { MINUTES_REPORT_RULES } from './report-rules.js';
 import { minutesDateParts, minutesDateValue } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
@@ -366,26 +366,21 @@ function checkedGeneratedDraft(response, source, localDraft, schema, sourceLines
     }
     if (!known) warnings.push(`Confirm ${field}: the source was cited, but this value needs officer verification.`);
   }
-  for (const field of ['closingPrayerGiven']) {
-    if (generated[field] === null) continue;
-    const quoted = organizeMeetingSource(quotesFor(field));
-    const explicitNegative = /\bChaplain\b[^.!?]*\b(?:did not|never)\b[^.!?]*\b(?:give|offer|deliver|lead)\b[^.!?]*\bclosing prayer\b/i;
-    const supported = generated[field] === true ? localDraft[field] === true && detectPrayerFacts(quotesFor(field), {closingFormatVersion:3})[field] === true : explicitNegative.test(quotesFor(field));
-    if (!supported) {
-      // An unsupported prayer flag must not become a statement in the PDF.
-      // Keep the rest of the sourced draft and require the preparer to confirm
-      // this one fact, just as we do for an unsupported officer status.
-      generated[field] = null;
-      normalized[field] = null;
-      references.delete(field);
-      warnings.push('Confirm whether the Chaplain gave the closing prayer; the cited source does not establish it.');
-    }
+  const closingPrayerField = 'closingPrayerGiven';
+  const prayerFact = text => detectPrayerFacts(text, {closingFormatVersion:4}).closingPrayerGiven;
+  const generatedPrayer = generated[closingPrayerField];
+  if (generatedPrayer !== null && (generatedPrayer !== localDraft[closingPrayerField]
+    || generatedPrayer !== prayerFact(quotesFor(closingPrayerField)))) {
+    generated[closingPrayerField] = null;
+    normalized[closingPrayerField] = null;
+    references.delete(closingPrayerField);
   }
-  for (const field of ['closingPrayerGiven']) {
-    if (normalized[field] !== null) continue;
-    if (generated.sections.some(section => detectPrayerFacts(section.body.replace(/<[^>]*>/g, '').replace(/[*_]/g, ''), {closingFormatVersion:3})[field] === true)) {
-      throw generationError(`The generated minutes claim ${field} without a verified source reference. Review the source and try again.`);
-    }
+  if (generated.sections.some((section, index) => {
+    const fact = prayerFact(section.body.replace(/<[^>]*>/g, '').replace(/[*_]/g, ''));
+    return fact === true && normalized[closingPrayerField] !== true
+      || fact === false && prayerFact(quotesFor(`sections[${index}].body`)) !== false;
+  })) {
+    throw generationError(`The generated minutes claim ${closingPrayerField} without a verified source reference. Review the source and try again.`);
   }
   const attendanceEstablished = (quote, name, field) => {
     const quoted = organizeMeetingSource(quote);
@@ -550,7 +545,7 @@ export const normalizeMinutesDraft = (value = {}) => {
   return {
   organizerVersion: value.organizerVersion || 1,
   officerAttendanceVersion: attendanceVersion,
-  closingFormatVersion: Number(value.closingFormatVersion) >= 3 ? 3 : Number(value.closingFormatVersion) >= 2 ? 2 : 1,
+  closingFormatVersion: Number(value.closingFormatVersion) >= 4 ? 4 : Number(value.closingFormatVersion) >= 3 ? 3 : Number(value.closingFormatVersion) >= 2 ? 2 : 1,
   ...(Number(value.meetingDetailsVersion) >= 1 ? {meetingDetailsVersion:1} : {}),
   sourceType: value.sourceType === 'compiled_notes' ? 'compiled_notes' : 'transcript',
   meetingDate: minutesDateValue(value.meetingDate) || null,
@@ -607,14 +602,14 @@ export const generateMinutesDraft = async (transcript, {
     const issues = minutesMeetingDetailsIssues(meetingDetails);
     if (issues.length) throw Object.assign(new Error(issues.join(' ')), {statusCode:400, code:'MINUTES_MEETING_DETAILS_REQUIRED'});
   }
-  const finish = draft => applyMinutesMeetingDetails(currentMinutesEditorialDraft(draft), meetingDetails);
+  const finish = draft => applyMinutesMeetingDetails(workingMinutesEditorialDraft(draft), meetingDetails);
   const source = String(transcript || '').trim();
   if (source.length < 100) throw Object.assign(new Error('The transcript is too short to create reliable minutes.'), { statusCode: 400 });
   if (source.length > 500_000) throw Object.assign(new Error('The transcript is too long. Upload the Plaud text export for one meeting.'), { statusCode: 400 });
 
   if (testResponse) return finish(normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2}));
   const localDraft = organizeMeetingSource(source, { sourceType });
-  localDraft.closingPrayerGiven = detectPrayerFacts(source, {closingFormatVersion:3}).closingPrayerGiven;
+  localDraft.closingPrayerGiven = detectPrayerFacts(source, {closingFormatVersion:4}).closingPrayerGiven;
   if (typeof generateStructured === 'function') {
     const sourceLines = minutesSourceLines(source);
     const schema = minutesGenerationSchemaForLineCount(sourceLines.length);
@@ -623,7 +618,9 @@ export const generateMinutesDraft = async (transcript, {
       instructions: generationInstructions,
       input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, sourceLines}),
     });
-    return finish(checkedGeneratedDraft(response, source, localDraft, schema, sourceLines));
+    const checked = checkedGeneratedDraft(response, source, localDraft, schema, sourceLines);
+    if (localDraft.closingPrayerGiven === false) checked.closingPrayerGiven = false;
+    return finish(checked);
   }
   return finish(normalizeMinutesDraft(localDraft));
 };

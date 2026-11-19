@@ -1,4 +1,5 @@
 import {omitClosingPrayerCommentary} from './minutes-closing-commentary.js';
+import {detectPrayerFacts, isClosingSection} from './minutes-format.js';
 
 // This is a current-draft edit, never a historical renderer. Remove only
 // procedural/source-analysis boilerplate, not an actual negative meeting fact.
@@ -12,7 +13,7 @@ const referenceDump = /^\s*(?:[-*•]\s*)?(?:\*\*)?Unidentified source reference
 export function currentMinutesEditorialDraft(value) {
   const draft = omitClosingPrayerCommentary(value);
   if (!draft || typeof draft !== 'object') return draft;
-  draft.closingFormatVersion = 3;
+  draft.closingFormatVersion = Number(draft.closingFormatVersion) >= 4 ? 4 : 3;
   if (Array.isArray(draft.sections)) draft.sections = draft.sections.map(section => {
     if (!section || typeof section.body !== 'string') return section;
     const body = section.body.split('\n').filter(line => !referenceDump.test(line)).map(line => {
@@ -24,5 +25,18 @@ export function currentMinutesEditorialDraft(value) {
     }).filter(line => line.trim() && !/^\s*[-*•]\s*$/.test(line)).join('\n');
     return {...section, body};
   });
+  return draft;
+}
+
+export function workingMinutesEditorialDraft(value) {
+  const draft = currentMinutesEditorialDraft(value);
+  draft.closingFormatVersion = 4;
+  if (typeof draft.closingPrayerGiven !== 'boolean') {
+    const closing = (draft.sections || []).filter(section => isClosingSection(section?.heading)).map(section => section.body).join('\n');
+    draft.closingPrayerGiven = detectPrayerFacts(closing, {closingFormatVersion:4}).closingPrayerGiven !== false;
+  }
+  if (Array.isArray(draft.warnings)) {
+    draft.warnings = draft.warnings.filter(warning => !/^Confirm whether the Chaplain gave the closing prayer(?: and prayed for the sick and distressed)?(?:; the cited source does not establish it)?\.?$/i.test(warning));
+  }
   return draft;
 }

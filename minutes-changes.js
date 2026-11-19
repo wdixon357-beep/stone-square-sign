@@ -5,6 +5,7 @@ export const minutesChanges = (submitted, reviewed) => {
   const before = normalizeMinutesDraft(submitted), after = normalizeMinutesDraft(reviewed);
   const changes = [];
   const labels = { meetingDate: 'Meeting date', meetingType: 'Meeting type', degree: 'Degree', openingTime: 'Opening time', closingTime: 'Closing time', prayerRequested: 'Prayer requested by the Worshipful Master', closingPrayerGiven: 'Closing prayer for the sick and distressed', presiding: 'Presiding officer', quorum: 'Quorum', nextMeeting: 'Next meeting', present: 'Brothers present', excused: 'Brothers excused', visitors: 'Visitors', officerAttendance: 'Officer attendance' };
+  if (after.closingFormatVersion >= 4) labels.closingPrayerGiven = 'Chaplain gave the closing prayer';
   const display = value => typeof value === 'string' ? value : value == null ? ''
     : Array.isArray(value) ? value.map(entry => typeof entry === 'string' ? entry
       : `${entry.name}, ${entry.title}: ${attendanceLabel(entry)}${entry.stationCoverage || entry.actingName ? `; ${stationCoverageText(entry)}` : ''}`).join('\n') : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
