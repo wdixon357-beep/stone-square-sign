@@ -356,8 +356,8 @@
               <label for="minutesTranscriptText">Or paste your meeting notes or transcript</label>
               <textarea id="minutesTranscriptText" rows="8" placeholder="Paste compiled notes or a corrected transcript here"></textarea>
               <div class="minutes-source-prefill">
-                <button id="minutesPrefillDetails" class="secondary small" type="button">Fill blank details from pasted notes</button>
-                <p class="helper">Use one labeled detail per line, such as “Meeting date: November 5, 2026” or “Opening time: 7:30 PM.” Review the filled fields before creating the draft.</p>
+                <button id="minutesPrefillDetails" class="secondary small" type="button">Fill blank details from source</button>
+                <p class="helper">Uploaded files and pasted notes can fill blank fields from clear labels, such as “Meeting date: November 5, 2026” or “Opening time: 7:30 PM.” Review the suggestions before creating the draft.</p>
                 <p id="minutesPrefillMessage" class="message" role="status"></p>
               </div>
               <section class="minutes-intake-details" aria-labelledby="minutesIntakeTitle">
@@ -585,7 +585,8 @@
           <button id="reorganizeMinutes" class="secondary small" type="button">Reorganize original source</button>
           <p id="minutesEditorStatus" class="minutes-status-line"></p>
           <div class="minutes-editor-exit-bar" aria-label="Meeting minutes draft controls">
-            <span>Your transcript and saved draft remain available until you return.</span>
+            <span id="minutesDraftSaveState" role="status"></span>
+            <button id="saveMinutesAtTop" class="secondary" type="submit" form="minutesEditorForm">Save draft</button>
             <button id="saveExitMinutes" class="primary" type="button">Save draft and exit</button>
             <button id="exitMinutesEditor" class="secondary" type="button">Exit and keep saved draft</button>
           </div>
@@ -732,6 +733,10 @@
           <p class="eyebrow">SECRETARY'S OFFICE</p><h2 id="minutesClaimTitle">Enter the meeting details</h2>
           <p>Complete all eight details, then create the draft. The source will be assigned to you when you continue.</p>
           <form id="minutesClaimForm">
+            <div class="minutes-source-prefill">
+              <button id="minutesClaimPrefillDetails" class="secondary small" type="button">Fill blank details from source</button>
+              <p id="minutesClaimPrefillMessage" class="message" role="status"></p>
+            </div>
             <div class="minutes-meta-grid minutes-intake-grid" id="minutesClaimFields">
                 <div><label for="minutesClaimMeetingDate">Meeting date</label><div class="minutes-date-control"><input id="minutesClaimMeetingDate" type="text" placeholder="Choose or enter the meeting date" autocomplete="off" /><input id="minutesClaimMeetingDateCalendar" type="date" aria-label="Choose meeting date" title="Choose meeting date" /></div></div>
                 <div><label for="minutesClaimMeetingType">Meeting type</label><select id="minutesClaimMeetingType"><option value="">Choose meeting type</option><option value="Stated Communication">Stated Communication</option><option value="other">Other</option></select><input id="minutesClaimMeetingTypeOther" class="hidden" type="text" aria-label="Other meeting type" placeholder="Enter the meeting type" maxlength="100" /></div>

@@ -150,6 +150,13 @@ const DISPENSATION_DRAFT_FIELDS = ['dispPasteDetails','dispTitle','dispRequestDa
 const MINUTES_MEETING_DETAIL_SUFFIXES = ['MeetingDate','MeetingType','MeetingTypeOther','Degree','OpeningTime','ClosingTime','Presiding','Quorum','NextMeeting'];
 const minutesMeetingDetailFieldIds = prefix => MINUTES_MEETING_DETAIL_SUFFIXES.map(suffix => `${prefix}${suffix}`);
 const MINUTES_SOURCE_DRAFT_FIELDS = ['minutesSourceType','minutesTranscriptText', ...minutesMeetingDetailFieldIds('minutesIntake')];
+const minutesIntakeSuggestions = new Map();
+const untouchedSuggestion = controls => controls.every(([control, value]) => control.value === value);
+const rememberMinutesSourceDraft = userId => {
+  const unreviewed = new Set([...minutesIntakeSuggestions.values()].filter(untouchedSuggestion)
+    .flatMap(controls => controls.map(([control]) => control.id)));
+  writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS.filter(id => !unreviewed.has(id)), userId);
+};
 
 const collectMinutesMeetingDetails = prefix => ({
   meetingDate: minutesDates.minutesDateValue($(`${prefix}MeetingDate`).value),
@@ -195,16 +202,23 @@ const reflectMinutesMeetingDetails = prefix => {
 };
 
 const bindMinutesMeetingDetails = (prefix, draftName) => {
-  const remember = () => {
-    if (prefix === 'minutesIntake') state.minutesSourceDirty = true;
+  const remember = editedId => {
+    if (prefix === 'minutesIntake') {
+      state.minutesSourceDirty = true;
+      for (const [key, controls] of minutesIntakeSuggestions) {
+        if (controls.some(([control]) => control.id === editedId)) minutesIntakeSuggestions.delete(key);
+      }
+      rememberMinutesSourceDraft();
+      return;
+    }
     const name = typeof draftName === 'function' ? draftName() : draftName;
-    if (name) writeSessionDraft(name, prefix === 'minutesIntake' ? MINUTES_SOURCE_DRAFT_FIELDS : minutesMeetingDetailFieldIds(prefix));
+    if (name) writeSessionDraft(name, minutesMeetingDetailFieldIds(prefix));
   };
   for (const id of minutesMeetingDetailFieldIds(prefix)) {
-    $(id).addEventListener('input', remember);
+    $(id).addEventListener('input', () => remember(id));
     $(id).addEventListener('change', () => {
       if (id.endsWith('OpeningTime') || id.endsWith('ClosingTime')) $(id).value = minutesMeetingDetails.formatMinutesClock($(id).value);
-      remember();
+      remember(id);
     });
   }
   $(`${prefix}MeetingType`).addEventListener('change', () => {
@@ -217,11 +231,11 @@ const bindMinutesMeetingDetails = (prefix, draftName) => {
     $(id).addEventListener('change', () => {
       $(id).value = minutesDates.formatMinutesDate($(id).value);
       $(`${id}Calendar`).value = minutesDates.minutesDateParts($(id).value)?.iso || '';
-      remember();
+      remember(id);
     });
     $(`${id}Calendar`).addEventListener('change', () => {
       $(id).value = $(`${id}Calendar`).value ? minutesDates.formatMinutesDate($(`${id}Calendar`).value) : '';
-      remember();
+      remember(id);
     });
   }
 };
@@ -485,6 +499,7 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
     && incidentActor().actorOrigin === requestActor.actorOrigin;
   let incidentReference = passiveBuildingReminders ? buildingReminderIncidents.get(reminderKey)?.reference || '' : '';
   for (let attempt = 1; attempt <= (mayRetry ? 2 : 1); attempt += 1) {
+    init.signal?.throwIfAborted();
     try {
       const response = await fetch(path, {
         ...init,
@@ -524,6 +539,7 @@ const apiFetch = async (path, init = {}, onSuccessResponse) => {
       }
       throw Object.assign(new Error(payload?.error || 'The request could not be completed.'), { status: response.status, incidentReference });
     } catch (error) {
+      if (init.signal?.aborted) throw error;
       if (Number.isInteger(error?.status)) throw error;
       incidentReference ||= newIncidentReference();
       if (mayRetry && attempt === 1) {
@@ -1381,10 +1397,10 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   if(section==='memberAccess'&&!skipLoad)renderMemberAccess();
   $('agendaSection').classList.toggle('hidden', section !== 'agenda');
   $('agendaNav').classList.toggle('active', section === 'agenda');
-  if (section === 'agenda' && !skipLoad) agendaWorkspace?.list();
+  if (section === 'agenda' && !skipLoad) agendaWorkspace?.resumeOrList();
   $('treasurySection').classList.toggle('hidden', section !== 'treasury');
   $('treasuryNav').classList.toggle('active', section === 'treasury');
-  if (section === 'treasury' && !skipLoad) treasuryWorkspace?.list();
+  if (section === 'treasury' && !skipLoad) treasuryWorkspace?.resumeOrList();
   const reports = section === 'reports';
   $('reportsSection').classList.toggle('hidden', !reports);
   $('reportsNav').classList.toggle('active', reports);
@@ -1832,7 +1848,11 @@ const refreshTreasuryAlerts = async () => {
       button.className = 'secondary';
       button.textContent = `${alert.title}. ${alert.message}`;
       button.addEventListener('click', async () => {
-        showWorkspaceSection('treasury', { skipLoad: true });
+        if (!showWorkspaceSection('treasury', { skipLoad: true })) return;
+        if (treasuryWorkspace.dirty || treasuryWorkspace.busy) {
+          treasuryWorkspace.message('Save or finish the open report before opening this banking information.', true);
+          return;
+        }
         await treasuryWorkspace.list();
         const record = treasuryWorkspace.records?.find(item => item.id === alert.id);
         if (record?.status === 'awaiting_preparer' && !record.preparerUserId) {
@@ -2080,7 +2100,7 @@ const sectionEditor = (section, index) => {
   body.setAttribute('aria-label', `Section ${index + 1} content`);
   const remove = document.createElement('button');
   remove.type = 'button'; remove.className = 'text-button danger-text remove-section'; remove.textContent = 'Remove section';
-  remove.addEventListener('click', () => { card.remove(); state.minutesEditorDirty = true; renumberMinutesSections(); scheduleMinutesPreview(); });
+  remove.addEventListener('click', () => { card.remove(); markMinutesEditorEdited(); renumberMinutesSections(); scheduleMinutesPreview(); });
   card.append(label, heading, body, remove);
   return card;
 };
@@ -2267,7 +2287,7 @@ const officerAttendanceEditor = (entry) => {
   clearCoverage.addEventListener('click', () => {
     stationCoverage.value = ''; actingName.value = ''; actingWholeMeeting.value = ''; actingRole.value = '';
     changed(); updateCoverage();
-    state.minutesEditorDirty = true;
+    markMinutesEditorEdited();
     scheduleMinutesPreview();
   });
   row.append(identity, coverage);
@@ -2416,6 +2436,8 @@ const updateMinutesEditorControls = (item) => {
   $('reorganizeMinutes').classList.toggle('hidden', item.status !== 'draft');
   document.querySelectorAll('.remove-section, .minutes-officer-clear').forEach(button => { button.disabled = !editable; });
   $('saveMinutes').classList.toggle('hidden', !editable);
+  $('saveMinutesAtTop').classList.toggle('hidden', !editable);
+  $('minutesDraftSaveState').classList.toggle('hidden', !editable);
   $('saveExitMinutes').classList.toggle('hidden', !editable);
   $('submitMinutesReview').classList.toggle('hidden', !canAttestMinutesDraft(item));
   refreshMinutesPrepChecklist(item);
@@ -2557,13 +2579,16 @@ const openMinutesEditor = (id) => {
   setMessage($('minutesEditorMessage'), '');
   updateMinutesEditorControls(item);
   state.minutesEditorDirty = false;
+  setMinutesSaveState(item.updatedAt ? `Last saved ${formatDate(item.updatedAt)}` : 'Saved draft');
   show($('minutesEditorModal'));
   refreshMinutesPreview();
 };
 
 const refreshOpenMinutes = async (message) => {
   const id = state.editingMinutesId;
+  const epoch = state.authEpoch;
   await renderMinutes();
+  if (state.editingMinutesId !== id || state.authEpoch !== epoch) return;
   const item = state.minutes.find((entry) => entry.id === id);
   if (item) {
     openMinutesEditor(id);
@@ -2571,12 +2596,18 @@ const refreshOpenMinutes = async (message) => {
   }
 };
 
+let minutesActionInFlight = false;
 const minutesAction = async (path, body, message) => {
+  if (minutesActionInFlight || minutesSaveOperation || !state.editingMinutesId) return;
+  const id = state.editingMinutesId, epoch = state.authEpoch;
+  minutesActionInFlight = true;
+  $('minutesEditorForm').inert = true;
   try {
-    const result = await apiFetch(`/api/minutes/${state.editingMinutesId}/${path}`, {
+    const result = await apiFetch(`/api/minutes/${id}/${path}`, {
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
     });
+    if (state.editingMinutesId !== id || state.authEpoch !== epoch) return;
     const finalMessage = [message, ...(result.notificationWarnings || [])].join(' ');
     if (path === 'master-attest') {
       clearMinutesSavedSource();
@@ -2594,16 +2625,45 @@ const minutesAction = async (path, body, message) => {
       await refreshOpenMinutes(finalMessage);
     }
   } catch (error) {
-    setMessage($('minutesEditorMessage'), error.message, true);
+    if (state.editingMinutesId === id && state.authEpoch === epoch) setMessage($('minutesEditorMessage'), error.message, true);
+  } finally {
+    $('minutesEditorForm').inert = false;
+    minutesActionInFlight = false;
   }
 };
 
+let minutesSaveOperation = null;
+const setMinutesSaveState = value => { $('minutesDraftSaveState').textContent = value; };
+const markMinutesEditorEdited = () => {
+  state.minutesEditorDirty = true;
+  if (!minutesSaveOperation) setMinutesSaveState('Unsaved changes');
+};
+
 const saveMinutesCorrections = async () => {
-  const payload = await apiFetch(`/api/minutes/${state.editingMinutesId}`, {
-    method: 'PUT', body: JSON.stringify({ draft: collectMinutesDraft(), expectedUpdatedAt: state.editingMinutesUpdatedAt }),
-  });
-  state.editingMinutesUpdatedAt = payload.minutes.updatedAt;
-  state.minutesEditorDirty = false;
+  if (minutesSaveOperation || minutesActionInFlight) throw new Error('Wait for the current minutes update to finish.');
+  const id = state.editingMinutesId, epoch = state.authEpoch;
+  const draft = collectMinutesDraft(), snapshot = JSON.stringify(draft);
+  const operation = { id, epoch };
+  const isOpen = () => state.editingMinutesId === id && state.authEpoch === epoch;
+  minutesSaveOperation = operation;
+  setMinutesSaveState('Saving draft…');
+  try {
+    const { minutes } = await apiFetch(`/api/minutes/${id}`, {
+      method: 'PUT', body: JSON.stringify({ draft, expectedUpdatedAt: state.editingMinutesUpdatedAt }),
+    });
+    if (!isOpen()) return false;
+    const editedWhileSaving = JSON.stringify(collectMinutesDraft()) !== snapshot;
+    state.minutes = state.minutes.map(item => item.id === id ? minutes : item);
+    state.editingMinutesUpdatedAt = minutes.updatedAt;
+    state.minutesEditorDirty = editedWhileSaving;
+    setMinutesSaveState(editedWhileSaving ? 'Earlier changes saved. You have newer unsaved changes.' : `Last saved ${formatDate(minutes.updatedAt)}`);
+    return !editedWhileSaving;
+  } catch (error) {
+    if (isOpen()) setMinutesSaveState(state.minutesEditorDirty ? 'Unsaved changes. Try saving again.' : 'Draft save could not be confirmed.');
+    throw error;
+  } finally {
+    if (minutesSaveOperation === operation) minutesSaveOperation = null;
+  }
 };
 
 /* What the District Deputy decided, and the proof of it.
@@ -3034,22 +3094,28 @@ $('dispensationForm').addEventListener('input', () => {
   writeSessionDraft('dispensation', DISPENSATION_DRAFT_FIELDS);
 });
 $('minutesTranscriptText').addEventListener('input', () => {
+  if (!$('minutesTranscriptFile').files[0]) clearIntakeSuggestions();
   state.minutesSourceDirty = true;
-  writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS);
+  rememberMinutesSourceDraft();
 });
 $('minutesSourceType').addEventListener('change', () => {
-  if (state.minutesSourceDirty || $('minutesTranscriptText').value.trim()) writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS);
+  if (state.minutesSourceDirty || $('minutesTranscriptText').value.trim()) rememberMinutesSourceDraft();
 });
 window.addEventListener('beforeunload', event => {
-  if (!state.minutesEditorDirty && !hasUnsavedWorkspace(state.activeSection)) return;
+  if (!state.minutesEditorDirty && !hasUnsavedWorkspace(state.activeSection)
+      && !hasUnsavedWorkspace('agenda') && !hasUnsavedWorkspace('treasury')) return;
   event.preventDefault();
   event.returnValue = '';
 });
 
 $('minutesTranscriptFile').addEventListener('change', () => {
   $('minutesSelectedFile').textContent = $('minutesTranscriptFile').files[0]?.name || 'No file selected';
+  clearIntakeSuggestions();
   state.minutesSourceDirty = Boolean($('minutesTranscriptFile').files[0]) || Boolean($('minutesTranscriptText').value.trim())
     || minutesMeetingDetailFieldIds('minutesIntake').some(id => $(id).value.trim());
+  cancelMinutesDetailsRead('minutesIntake');
+  setMessage($('minutesPrefillMessage'), '');
+  if ($('minutesTranscriptFile').files[0]) void prefillMinutesSourceDetails();
 });
 
 let minutesPreparationContext = null;
@@ -3058,6 +3124,23 @@ let minutesSourceBusy = false;
 let minutesClaimTarget = null;
 let minutesClaimOperation = null;
 let minutesClaimBusy = false;
+const minutesDetailsReads = new Map();
+const cancelMinutesDetailsRead = prefix => {
+  minutesDetailsReads.get(prefix)?.abort();
+  minutesDetailsReads.delete(prefix);
+};
+const clearIntakeSuggestions = () => {
+  if (!minutesIntakeSuggestions.size) return;
+  for (const controls of minutesIntakeSuggestions.values()) {
+    if (untouchedSuggestion(controls)) {
+      controls.forEach(([control]) => { control.value = ''; });
+    }
+  }
+  minutesIntakeSuggestions.clear();
+  reflectMinutesMeetingDetails('minutesIntake');
+  rememberMinutesSourceDraft();
+  setMessage($('minutesPrefillMessage'), '');
+};
 const minutesSourceControls = () => ['minutesTranscriptFile', 'minutesTranscriptText', 'minutesSourceType', 'minutesPrefillDetails',
   ...minutesMeetingDetailFieldIds('minutesIntake'), 'minutesIntakeMeetingDateCalendar', 'minutesIntakeNextMeetingCalendar'].map(id => $(id));
 const minutesClaimControls = () => [...$('minutesClaimForm').querySelectorAll('input, select, button'), $('closeMinutesClaim')];
@@ -3067,11 +3150,14 @@ const resetMinutesPreparationContext = () => {
   if (minutesPreparationContext?.userId) {
     if (state.minutesSourceDirty || $('minutesTranscriptText').value.trim() || $('minutesTranscriptFile').files[0]
         || minutesMeetingDetailFieldIds('minutesIntake').some(id => $(id).value.trim())) {
-      writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS, minutesPreparationContext.userId);
+      rememberMinutesSourceDraft(minutesPreparationContext.userId);
     }
     if (minutesClaimTarget) writeSessionDraft(`minutes-claim:${minutesClaimTarget}`, minutesMeetingDetailFieldIds('minutesClaim'), minutesPreparationContext.userId);
   }
   minutesPreparationContext = { userId, epoch };
+  minutesIntakeSuggestions.clear();
+  cancelMinutesDetailsRead('minutesIntake');
+  cancelMinutesDetailsRead('minutesClaim');
   minutesSourceOperation = null;
   minutesClaimOperation = null;
   minutesSourceBusy = false;
@@ -3088,6 +3174,7 @@ const resetMinutesPreparationContext = () => {
   $('minutesSelectedFile').textContent = 'No file selected';
   $('minutesSourceType').value = 'auto';
   setMessage($('minutesPrefillMessage'), '');
+  setMessage($('minutesClaimPrefillMessage'), '');
   state.minutesSourceDirty = false;
   clearMinutesMeetingDetails('minutesIntake');
   clearMinutesMeetingDetails('minutesClaim');
@@ -3113,6 +3200,7 @@ const submitMinutesSource = async ({ handoff = false } = {}) => {
     data.append('meetingDetails', JSON.stringify(details));
   }
   const operation = { userId, epoch };
+  cancelMinutesDetailsRead('minutesIntake');
   minutesSourceOperation = operation;
   minutesSourceBusy = true;
   const ownsOperation = () => minutesSourceOperation === operation && state.user?.id === userId && state.authEpoch === epoch;
@@ -3130,6 +3218,7 @@ const submitMinutesSource = async ({ handoff = false } = {}) => {
     sourceSaved = true;
     if (!ownsOperation()) return;
     $('minutesTranscriptFile').value = '';
+    minutesIntakeSuggestions.clear();
     $('minutesSelectedFile').textContent = 'No file selected';
     $('minutesTranscriptText').value = '';
     setMessage($('minutesPrefillMessage'), '');
@@ -3175,10 +3264,13 @@ const openMinutesClaim = item => {
   restoreSessionDraft(minutesClaimDraftName(), minutesMeetingDetailFieldIds('minutesClaim'));
   reflectMinutesMeetingDetails('minutesClaim');
   setMessage($('minutesClaimMessage'), '');
+  setMessage($('minutesClaimPrefillMessage'), '');
   show($('minutesClaimModal'));
+  void prefillClaimedMinutesDetails();
 };
 const closeMinutesClaim = () => {
   if (minutesClaimBusy) return;
+  cancelMinutesDetailsRead('minutesClaim');
   hide($('minutesClaimModal'));
   minutesClaimTarget = null;
 };
@@ -3193,6 +3285,7 @@ $('minutesClaimForm').addEventListener('submit', async event => {
   if (!details) return;
   const id = minutesClaimTarget, userId = state.user?.id, epoch = state.authEpoch;
   const operation = { id, userId, epoch };
+  cancelMinutesDetailsRead('minutesClaim');
   minutesClaimOperation = operation;
   const ownsOperation = () => minutesClaimOperation === operation && state.user?.id === userId && state.authEpoch === epoch;
   const draftName = minutesClaimDraftName();
@@ -3229,38 +3322,78 @@ $('minutesClaimForm').addEventListener('submit', async event => {
   }
 });
 
-$('minutesPrefillDetails').addEventListener('click', () => {
-  if (!can('minutes.prepare') || minutesSourceBusy) return;
-  const message = $('minutesPrefillMessage');
-  if ($('minutesTranscriptFile').files[0]) {
-    setMessage(message, 'A file is selected as the source. Enter its meeting details below.', true);
-    return;
-  }
-  const suggestions = minutesMeetingDetails.suggestMinutesDetailsFromNotes($('minutesTranscriptText').value);
-  let filled = 0;
-  for (const [key, value] of Object.entries(suggestions)) {
-    const field = $(`minutesIntake${key[0].toUpperCase()}${key.slice(1)}`);
+const fillBlankMinutesDetails = (prefix, suggestions, message) => {
+  const filled = new Map();
+  for (const key of minutesMeetingDetails.MINUTES_MEETING_DETAILS_FIELDS) {
+    const value = suggestions?.[key];
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const field = $(`${prefix}${key[0].toUpperCase()}${key.slice(1)}`);
     if (field.value.trim()) continue;
+    const controls = [field];
     if (key === 'meetingType' && value.toLowerCase() !== 'stated communication') {
       field.value = 'other';
-      $('minutesIntakeMeetingTypeOther').value = value;
+      const other = $(`${prefix}MeetingTypeOther`);
+      other.value = value;
+      controls.push(other);
     } else field.value = key === 'meetingType' ? 'Stated Communication' : value;
-    filled += 1;
+    if (field.value) filled.set(key, controls);
   }
-  if (!filled) {
-    setMessage(message, 'No blank fields could be filled from clear labels in the pasted notes. Enter or check the details below.');
+  if (!filled.size) {
+    setMessage(message, 'No blank fields could be filled from clear labels in the source. Enter or check the details below.');
     return;
   }
-  reflectMinutesMeetingDetails('minutesIntake');
-  state.minutesSourceDirty = true;
-  writeSessionDraft('minutes-source', MINUTES_SOURCE_DRAFT_FIELDS);
-  setMessage(message, `Filled ${filled === 1 ? 'one blank detail' : `${filled} blank details`}. Check the entries below before creating the draft.`);
-});
+  reflectMinutesMeetingDetails(prefix);
+  if (prefix === 'minutesIntake') {
+    for (const [key, controls] of filled) minutesIntakeSuggestions.set(key, controls.map(control => [control, control.value]));
+    state.minutesSourceDirty = true;
+    rememberMinutesSourceDraft();
+  } else writeSessionDraft(minutesClaimDraftName(), minutesMeetingDetailFieldIds(prefix));
+  setMessage(message, `Filled ${filled.size === 1 ? 'one blank detail' : `${filled.size} blank details`}. Check the entries below before creating the draft.`);
+};
+
+const readMinutesDetails = async (prefix, path, options, message) => {
+  cancelMinutesDetailsRead(prefix);
+  const controller = new AbortController(), epoch = state.authEpoch;
+  minutesDetailsReads.set(prefix, controller);
+  const isCurrent = () => minutesDetailsReads.get(prefix) === controller && state.authEpoch === epoch && can('minutes.prepare');
+  setMessage(message, 'Reading the source for meeting details…');
+  try {
+    const {details} = await apiFetch(path, { ...options, signal:controller.signal });
+    if (isCurrent()) fillBlankMinutesDetails(prefix, details, message);
+  } catch (error) {
+    if (isCurrent()) setMessage(message, `${error.message} You can enter the meeting details below.`, true);
+  } finally {
+    if (minutesDetailsReads.get(prefix) === controller) minutesDetailsReads.delete(prefix);
+  }
+};
+
+const prefillMinutesSourceDetails = async () => {
+  if (!can('minutes.prepare') || minutesSourceBusy) return;
+  const message = $('minutesPrefillMessage');
+  const file = $('minutesTranscriptFile').files[0];
+  if (!file) {
+    fillBlankMinutesDetails('minutesIntake', minutesMeetingDetails.suggestMinutesDetailsFromNotes($('minutesTranscriptText').value), message);
+    return;
+  }
+  const body = new FormData();
+  body.append('transcriptFile', file);
+  await readMinutesDetails('minutesIntake', '/api/minutes/source-details', {method:'POST', body}, message);
+};
+const prefillClaimedMinutesDetails = async () => {
+  if (!minutesClaimTarget || minutesClaimBusy || !can('minutes.prepare')) return;
+  await readMinutesDetails('minutesClaim', `/api/minutes/${encodeURIComponent(minutesClaimTarget)}/source-details`, {cache:'no-store'}, $('minutesClaimPrefillMessage'));
+};
+$('minutesPrefillDetails').addEventListener('click', prefillMinutesSourceDetails);
+$('minutesClaimPrefillDetails').addEventListener('click', prefillClaimedMinutesDetails);
 
 $('handoffMinutes').addEventListener('click', () => submitMinutesSource({ handoff: true }));
 $('generateMinutes').addEventListener('click', () => submitMinutesSource());
 
 const closeMinutesEditor = ({ confirmUnsaved = true } = {}) => {
+  if (confirmUnsaved && (minutesSaveOperation || minutesActionInFlight)) {
+    setMessage($('minutesEditorMessage'), 'Wait for the current minutes update to finish.');
+    return false;
+  }
   if (confirmUnsaved && state.minutesEditorDirty
       && !window.confirm('Exit and discard only your latest unsaved corrections? The uploaded transcript and last saved draft will remain available.')) return false;
   clearMinutesSavedSource();
@@ -3282,7 +3415,8 @@ $('saveExitMinutes').addEventListener('click', async () => {
   button.disabled = true;
   try {
     const item = currentMinutes();
-    if (state.minutesEditorDirty) await saveMinutesCorrections();
+    if (minutesSaveOperation || minutesActionInFlight) return;
+    if (state.minutesEditorDirty && !await saveMinutesCorrections()) return;
     closeMinutesEditor({ confirmUnsaved: false });
     if (!await renderMinutes()) {
       setMessage($('minutesMessage'), 'Your changes are saved. The minutes list could not refresh. Reload the list to reopen the record.', true);
@@ -3315,20 +3449,20 @@ $('addMinutesOfficer').addEventListener('click', () => {
   $('minutesOfficerAttendance').append(officerAttendanceEditor({ status: 'not_recorded' }));
   $('minutesOfficerRollConfirmed').checked = false;
   state.minutesOfficerAttendanceEdited = true;
-  state.minutesEditorDirty = true;
+  markMinutesEditorEdited();
   refreshMinutesPrepChecklist();
 });
 $('minutesPresent').addEventListener('input', () => { $('minutesOtherPresentConfirmed').checked = false; });
 $('minutesExcused').addEventListener('input', () => { $('minutesOtherExcusedConfirmed').checked = false; });
-$('addMinutesIncome').addEventListener('click', () => { $('minutesIncome').append(financeEditor()); state.minutesEditorDirty = true; });
-$('addMinutesExpense').addEventListener('click', () => { $('minutesExpenses').append(financeEditor()); state.minutesEditorDirty = true; });
+$('addMinutesIncome').addEventListener('click', () => { $('minutesIncome').append(financeEditor()); markMinutesEditorEdited(); });
+$('addMinutesExpense').addEventListener('click', () => { $('minutesExpenses').append(financeEditor()); markMinutesEditorEdited(); });
 $('addMinutesSection').addEventListener('click', () => {
   const item = currentMinutes();
   if (!item || !(item.status === 'draft' || (item.status === 'awaiting_master_attestation' && state.user?.role === 'owner'))) return;
   const container = $('minutesSections');
   const card = sectionEditor({ heading: 'Meeting Business', body: '' }, container.querySelectorAll('.minutes-section-card').length);
   container.append(card);
-  state.minutesEditorDirty = true;
+  markMinutesEditorEdited();
   card.querySelector('input').focus();
   scheduleMinutesPreview();
 });
@@ -3355,8 +3489,8 @@ for (const id of ['minutesMeetingDate', 'minutesNextMeeting']) {
 for (const id of ['minutesOpeningTime', 'minutesClosingTime']) {
   $(id).addEventListener('change', () => { $(id).value = minutesMeetingDetails.formatMinutesClock($(id).value); });
 }
-$('minutesEditorForm').addEventListener('input', () => { state.minutesEditorDirty = true; scheduleMinutesPreview(); });
-$('minutesEditorForm').addEventListener('change', () => { state.minutesEditorDirty = true; scheduleMinutesPreview(); });
+$('minutesEditorForm').addEventListener('input', () => { markMinutesEditorEdited(); scheduleMinutesPreview(); });
+$('minutesEditorForm').addEventListener('change', () => { markMinutesEditorEdited(); scheduleMinutesPreview(); });
 $('reorganizeMinutes').addEventListener('click', async () => {
   const draft = collectMinutesDraft();
   const meetingDetails = Object.fromEntries(['meetingDate','meetingType','degree','openingTime','closingTime','presiding','quorum','nextMeeting'].map(key => [key, draft[key] ?? '']));
@@ -3376,6 +3510,7 @@ $('reorganizeMinutes').addEventListener('click', async () => {
     if (JSON.stringify(collectMinutesDraft()) !== before) throw new Error('You edited the minutes while the source was being organized. Your latest edits have been kept.');
     currentMinutes().draft = payload.draft;
     openMinutesEditor(state.editingMinutesId);
+    markMinutesEditorEdited();
     setMessage($('minutesEditorMessage'), 'Source reorganized. Review the preview, then save your corrections.');
   } catch (error) { setMessage($('minutesEditorMessage'), error.message, true); }
   finally { button.disabled = false; }
@@ -3383,8 +3518,7 @@ $('reorganizeMinutes').addEventListener('click', async () => {
 $('minutesEditorForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    await saveMinutesCorrections();
-    await refreshOpenMinutes('Corrections saved.');
+    if (await saveMinutesCorrections()) setMessage($('minutesEditorMessage'), 'Corrections saved.');
   } catch (error) {
     setMessage($('minutesEditorMessage'), error.message, true);
   }
@@ -3402,7 +3536,7 @@ $('submitMinutesReview').addEventListener('click', async () => {
       focusMinutesPrepField(minutesAttendanceTarget());
       return;
     }
-    await saveMinutesCorrections();
+    if (!await saveMinutesCorrections()) return;
     await minutesAction('preparer-attest', null,
       'Your corrections and attestation are recorded. The draft is ready for the Worshipful Master.');
   } catch (error) {
@@ -3411,7 +3545,7 @@ $('submitMinutesReview').addEventListener('click', async () => {
 });
 $('authorizeMinutes').addEventListener('click', async () => {
   try {
-    await saveMinutesCorrections();
+    if (!await saveMinutesCorrections()) return;
     await minutesAction('master-attest', null, 'You reviewed and signed the minutes. They are now filed under Historical meeting minutes and highlighted for every officer. McDuffie or Reese can still record distribution to the Craft.');
   } catch (error) { setMessage($('minutesEditorMessage'), error.message, true); }
 });

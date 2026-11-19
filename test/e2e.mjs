@@ -18,6 +18,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mammoth from 'mammoth';
+import { Document, Packer, Paragraph } from 'docx';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { isUniqueViolation, postgresTlsOptions } from '../db.js';
 
@@ -469,10 +470,61 @@ try {
     && finalReaderSession.payload.user.permissions.includes('minutes.view')
     && !finalReaderSession.payload.user.permissions.includes('minutes.prepare'));
 
+  const labeledSource = [
+    'Meeting date: September 3, 2026',
+    'Meeting type: Stated Communication',
+    'Opening time: 19:30',
+    'Closing time: 9:04 PM',
+    'Closing time: 9:30 PM',
+    'Presiding officer: Unconfirmed',
+    'Quorum: Yes',
+    'Attendance: private synthetic attendance text',
+  ];
+  const expectedSourceDetails = {
+    meetingDate: '2026-09-03', meetingType: 'Stated Communication', openingTime: '7:30 PM', quorum: 'Yes',
+  };
+  const reviewFile = (name, contents, token = secToken) => {
+    const body = new FormData();
+    if (name) body.append('transcriptFile', new Blob([contents]), name);
+    return api('POST', '/api/minutes/source-details', { token, body, raw: true });
+  };
+  const originalRecords = await api('GET', '/api/minutes', { token: secToken });
+  const originalDeliveryCount = deliveredMail.length;
+  const sourceDocx = await Packer.toBuffer(new Document({sections:[{children:labeledSource.map(text => new Paragraph(text))}]}));
+  const sourcePdf = await PDFDocument.create();
+  const sourcePdfPage = sourcePdf.addPage();
+  const sourcePdfFont = await sourcePdf.embedFont(StandardFonts.Helvetica);
+  labeledSource.forEach((line, index) => sourcePdfPage.drawText(line, { x:48, y:740-index*20, size:12, font:sourcePdfFont }));
+  for (const [name, contents] of [['notes.txt', labeledSource.join('\n')], ['notes.docx', sourceDocx], ['notes.pdf', await sourcePdf.save()]]) {
+    const reviewed = await reviewFile(name, contents);
+    check(`${name} returns only labeled, unambiguous meeting detail candidates`, reviewed.status === 200
+      && reviewed.headers.get('cache-control') === 'private, no-store'
+      && JSON.stringify(reviewed.payload) === JSON.stringify({ details:expectedSourceDetails }));
+  }
+  const emptyPdf = await PDFDocument.create();
+  emptyPdf.addPage();
+  const invalidUploads = await Promise.all([
+    reviewFile(null), reviewFile('blank.txt', ' \n'), reviewFile('invalid.docx', 'Not a Word file'),
+    reviewFile('scan.pdf', await emptyPdf.save()), reviewFile('notes.md', labeledSource.join('\n')),
+    reviewFile('long.txt', 'x'.repeat(500_001)), reviewFile('large.txt', 'x'.repeat(12*1024*1024+1)),
+  ]);
+  check('meeting detail review rejects missing, blank, unreadable, unsupported, and oversized files',
+    invalidUploads.every(result => result.status === 400 && typeof result.payload.error === 'string'));
+  const unlabeled = await reviewFile('transcript.txt', 'A synthetic attendee spoke at 7:30 PM.');
+  const forbiddenFileReview = await reviewFile('notes.txt', labeledSource.join('\n'), officerToken);
+  const anonymousFileReview = await api('POST', '/api/minutes/source-details');
+  const recordsAfterFileReviews = await api('GET', '/api/minutes', { token: secToken });
+  check('review does not guess unsupported facts, expose a file to a viewer, or create drafts or notices',
+    unlabeled.status === 200 && JSON.stringify(unlabeled.payload) === '{"details":{}}'
+      && forbiddenFileReview.status === 403 && anonymousFileReview.status === 401
+      && JSON.stringify(recordsAfterFileReviews.payload) === JSON.stringify(originalRecords.payload)
+      && deliveredMail.length === originalDeliveryCount);
+
   const handoffForm = new FormData();
   handoffForm.append('sourceType', 'transcript');
   // Multipart text fields use CRLF on the wire. Verify the stored line endings.
   const handoffText = 'WM Dixon-Saunders opened Stone Square Lodge No. 22 in due form.\r\n\r\n'
+    + 'Opening time: 7:30 PM\r\nQuorum: Yes\r\n'
     + 'The officers recorded attendance, sickness and distress, correspondence, committee reports, old business, new business, and the closing time.\r\n'
     + 'This synthetic transcript verifies the private Secretary’s Office handoff and claim workflow.';
   handoffForm.append('transcriptText', handoffText);
@@ -493,6 +545,18 @@ try {
   `${handoffNotices.length} handoff notices delivered`);
   const handoffId = handedOffMinutes.payload.minutes?.id;
   const handoffSourceRoute = `/api/minutes/${handoffId}/source`;
+  const handoffDetailsRoute = `/api/minutes/${handoffId}/source-details`;
+  const [secretaryCandidates, assistantCandidates, ownerCandidates, readerCandidates, anonymousCandidates] = await Promise.all([
+    api('GET', handoffDetailsRoute, { token: secToken }), api('GET', handoffDetailsRoute, { token: asstToken }),
+    api('GET', handoffDetailsRoute, { token: wmToken }), api('GET', handoffDetailsRoute, { token: officerToken }),
+    api('GET', handoffDetailsRoute),
+  ]);
+  const unclaimedCandidates = JSON.stringify({ details:{openingTime:'7:30 PM', quorum:'Yes'} });
+  check('both eligible Secretaries can review only suggested details from an unclaimed handoff',
+    [secretaryCandidates, assistantCandidates].every(result => result.status === 200
+      && result.headers.get('cache-control') === 'private, no-store' && JSON.stringify(result.payload) === unclaimedCandidates)
+      && ownerCandidates.status === 403 && readerCandidates.status === 403 && anonymousCandidates.status === 401
+      && deliveredMail.length === mailBeforeHandoff + 2);
   const [ownerHandoffSource, secretaryUnclaimedSource, assistantUnclaimedSource, anonymousSource] = await Promise.all([
     api('GET', handoffSourceRoute, { token: wmToken }),
     api('GET', handoffSourceRoute, { token: secToken }),
@@ -536,6 +600,9 @@ try {
   const winningToken = winningClaimIndex === 0 ? secToken : asstToken;
   const losingToken = losingClaimIndex === 0 ? secToken : asstToken;
   const claimedDraft = claims[winningClaimIndex].payload.minutes;
+  check('claim-only candidates stop being available after either officer claims the handoff',
+    (await api('GET', handoffDetailsRoute, { token: winningToken })).status === 404
+      && (await api('GET', handoffDetailsRoute, { token: losingToken })).status === 404);
   const [claimantSource, unrelatedSource, readerSource, ownerClaimedSource] = await Promise.all([
     api('GET', handoffSourceRoute, { token: winningToken }),
     api('GET', handoffSourceRoute, { token: losingToken }),
@@ -1049,7 +1116,6 @@ try {
   check('the signed PDF uses the saved address and ignores client overrides',
     profileText.includes('722 Banning Dr., Middletown, DE 19709') && !profileText.includes('Wrong address')
     && profileText.includes('William M. McDuffie') && !profileText.includes('Wrong name'));
-  const { PDFDocument } = await import('pdf-lib');
   const signedProfilePdf = await PDFDocument.load(profilePdf.payload);
   check('blank officer widgets cannot cover the completed name and address',
     !signedProfilePdf.getForm().getFields().some(f => ['Secretary', 'Address_2'].includes(f.getName())));

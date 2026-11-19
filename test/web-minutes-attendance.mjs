@@ -50,6 +50,7 @@ let record = { status: 'draft', createdByUserId: 2, preparerUserId: 2, draft: {}
 const context = {
   document: { createElement: tag => new Element(tag) },
   $: id => elements[id], minutesAttendance, state, currentMinutes: () => record, scheduleMinutesPreview: () => {},
+  markMinutesEditorEdited: () => { state.minutesEditorDirty = true; },
 };
 vm.createContext(context);
 const presentationSource = app.slice(app.indexOf('const minutesAttendanceNeedsPreparerConfirmation ='), app.indexOf('const officerAttendanceEditor ='));

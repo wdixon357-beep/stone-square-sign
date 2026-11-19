@@ -1,6 +1,7 @@
 import { showGenerationStatus } from './generation-status.js';
 import { MinutesPreview } from './minutes-preview.js';
 import { clearCollectionReviewEvidence } from './treasury-review.js';
+import { formatEasternTimestamp } from './eastern-time.js';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const statusNames={awaiting_preparer:'Banking information saved for a report',draft:'Working draft',superseded:'Covered period, source retained for review',ready_for_distribution:'Ready for distribution',distributed:'Distributed'};
 const fields=[['openingBalance','Beginning Balance'],['receipts','Total Receipts'],['disbursements','Total Disbursements'],['transfersIn','Transfers In'],['transfersOut','Transfers Out'],['statementBalance','Bank Statement Ending Balance'],['depositsInTransit','Deposits in Transit'],['outstandingChecks','Outstanding Checks'],['bookBalance',"Treasurer’s Book Balance"]];
@@ -26,27 +27,41 @@ export class TreasuryWorkspace {
   top(){this.root.closest?.('.content')?.scrollTo?.({top:0,left:0,behavior:'auto'});}
   bind(){
     this.root.addEventListener('click',event=>{const tab=event.target.closest('[data-treasury-tab]');if(tab){this.showEditorTab(tab.dataset.treasuryTab);return;}const b=event.target.closest('[data-treasury]');if(b)this.run(b.dataset.treasury,b);});
-    this.root.addEventListener('input',event=>{const path=event.target.dataset.path;if(!path||!this.draft)return;const parts=path.split('.');let obj=this.draft;for(const p of parts.slice(0,-1))obj=obj[p];obj[parts.at(-1)]=event.target.type==='checkbox'?event.target.checked:event.target.value;if(event.target.type!=='checkbox'&&this.isReviewable(path)){this.draft.fieldReviews[path]=String(event.target.value).trim()&&event.target.value!=='review'?'corrected':'unresolved';this.updateReviewControl(path);}this.dirty=true;this.schedule();});
+    this.root.addEventListener('input',event=>{const path=event.target.dataset.path;if(!path||!this.draft||this.editLocked)return;const parts=path.split('.');let obj=this.draft;for(const p of parts.slice(0,-1))obj=obj[p];obj[parts.at(-1)]=event.target.type==='checkbox'?event.target.checked:event.target.value;if(event.target.type!=='checkbox'&&this.isReviewable(path)){this.draft.fieldReviews[path]=String(event.target.value).trim()&&event.target.value!=='review'?'corrected':'unresolved';this.updateReviewControl(path);}this.dirty=true;this.saveState();this.schedule();});
   }
   message(value,error=false){const el=this.root.querySelector('#treasuryMessage');if(el){el.textContent=value;el.classList.toggle('error',error);}}
+  savedLabel(){
+    if(this.dirty)return 'Unsaved changes';
+    const saved=formatEasternTimestamp(this.record?.updatedAt,'');
+    return saved?`Last saved ${saved}`:'Saved draft';
+  }
+  saveState(value=this.savedLabel()){
+    const element=this.root.querySelector('#treasurySaveState');
+    if(element)element.textContent=value;
+  }
   async run(action,button){
     if(this.busy)return;
     const sourceControls=action==='generate'?[...this.root.querySelectorAll('.treasury-source input,.treasury-source textarea,.treasury-source select')].map(element=>({element,disabled:element.disabled})):[];
     try{
       if(action==='new-draft'){if(!this.can('treasury.prepare'))return;this.busy=true;button.disabled=true;const {report}=await this.api('/api/treasury/drafts',{method:'POST'});this.open(report);return;}
-      if(action==='review-field'){const path=button.dataset.path;if(!this.isReviewable(path))return;const state=this.draft.fieldReviews[path],value=this.pathValue(path);if(['matched','confirmed','corrected'].includes(state)){this.draft.fieldReviews[path]='unresolved';this.root.querySelector(`[data-path="${CSS.escape(path)}"]`)?.focus();this.message('Check this value against the uploaded banking information, then confirm it or enter the correction.');}else if(this.valuePresent(value)){this.draft.fieldReviews[path]='confirmed';this.message('Value confirmed against the uploaded banking information.');}else{this.root.querySelector(`[data-path="${CSS.escape(path)}"]`)?.focus();this.message('This information was not found in the upload. Enter the correct value.');}this.updateReviewControl(path);this.dirty=true;return;}
+      if(action==='review-field'){const path=button.dataset.path;if(!this.isReviewable(path))return;const state=this.draft.fieldReviews[path],value=this.pathValue(path);if(['matched','confirmed','corrected'].includes(state)){this.draft.fieldReviews[path]='unresolved';this.root.querySelector(`[data-path="${CSS.escape(path)}"]`)?.focus();this.message('Check this value against the uploaded banking information, then confirm it or enter the correction.');}else if(this.valuePresent(value)){this.draft.fieldReviews[path]='confirmed';this.message('Value confirmed against the uploaded banking information.');}else{this.root.querySelector(`[data-path="${CSS.escape(path)}"]`)?.focus();this.message('This information was not found in the upload. Enter the correct value.');}this.updateReviewControl(path);this.dirty=true;this.saveState();return;}
       if(action==='confirm-prefilled'){let confirmed=0;for(const path of Object.keys(this.draft.fieldReviews||{})){if(this.draft.fieldReviews[path]==='unresolved'&&this.valuePresent(this.pathValue(path))){this.draft.fieldReviews[path]='confirmed';confirmed++;}}this.draft.sourceReviewed=true;this.dirty=true;this.renderEditor();this.schedule();this.loadHandoff().catch(e=>this.message(e.message,true));this.message(confirmed?`${confirmed} prefilled ${confirmed===1?'value was':'values were'} confirmed. Empty fields still need information.`:'The uploaded information was marked reviewed. Empty fields still need information.');return;}
       if(action==='source-file'){const file=this.sourceFiles.find(f=>f.id===button.dataset.id);const blob=await this.api(`/api/treasury/${this.record.id}/sources/${file.id}`);const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=file.name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;}
       if(action==='open'){const record=this.records.find(r=>r.id===button.dataset.id);if(!this.can('treasury.prepare')){if(this.canOpenFinal(record))await this.openFinal(record);return;}this.open(record);return;}
       if(action==='archive-open'){const record=this.archiveRecords.find(r=>r.id===button.dataset.id);if(record)await this.openArchive(record);return;}
-      if(action==='back'){if(this.dirty&&!confirm('Leave these unsaved changes?'))return;await this.list();return;}
+      if(action==='back'){if(this.dirty&&!confirm('Discard these unsaved changes and return to all reports?'))return;await this.list();return;}
       if(action==='add-account'){this.clearCollectionReviews('accounts');this.draft.accounts.push({id:crypto.randomUUID(),name:'Additional account',activityComplete:false,...Object.fromEntries(fields.map(([k])=>[k,null]))});this.editChanged();return;}
       if(action.startsWith('add-')){const kind=action.slice(4);this.clearCollectionReviews(kind);this.draft[kind].push(kind==='transactions'?{date:'',postedDateConfirmed:false,account:this.draft.accounts[0]?.id||'',kind:'review',description:'',amount:null,reference:'',category:''}:kind==='funds'?{name:'',account:this.draft.accounts.find(a=>a.id==='savings')?.id||this.draft.accounts[0]?.id||'',amount:null,restriction:''}:{name:'',dueDate:'',amount:null,note:''});this.editChanged();return;}
       if(action==='remove'){this.clearCollectionReviews(button.dataset.collection);this.draft[button.dataset.collection].splice(Number(button.dataset.index),1);this.editChanged();return;}
       this.busy=true;button.disabled=true;
       if(action==='assign'||action==='start-report'){
-        if(this.dirty)await this.save();
-        const payload=await this.api(`/api/treasury/${this.record.id}/assign`,{method:'POST',body:JSON.stringify({revision:this.record.revision,preparerUserId:action==='start-report'?this.user().id:Number(this.root.querySelector('#treasuryPreparer').value)})});this.open(payload.report);this.message(payload.organizationWarning||'Assigned to '+payload.report.createdBy+'. The original records were organized into the prefilled report.');
+        const pickedPreparer=()=>action==='start-report'?this.user().id:Number(this.root.querySelector('#treasuryPreparer').value);
+        const preparerUserId=pickedPreparer();
+        if(this.dirty&&await this.save()===null)return;
+        if(this.dirty||preparerUserId!==pickedPreparer())throw new Error('Review the latest edits and select the preparing officer again.');
+        const payload=await this.submitReportAction('assign',{preparerUserId});
+        if(!payload)return;
+        this.open(payload.report);this.message(payload.organizationWarning||'Assigned to '+payload.report.createdBy+'. The original records were organized into the prefilled report.');
       }else if(action==='access'){
         await this.api('/api/treasury/access/'+button.dataset.id,{method:'PUT',body:JSON.stringify({enabled:button.dataset.enabled==='true'})});await this.list();
       }else if(action==='generate'){
@@ -61,14 +76,24 @@ export class TreasuryWorkspace {
         if(this.record?.id!==id)return;
         if(JSON.stringify(this.draft)!==before)throw new Error('You edited the report while its source was being organized. Your latest edits have been kept.');
         this.draft=draft;this.editChanged();this.message('Source reorganized. Review the preview and source references, then save your corrections.');
-      }else if(action==='save'){await this.save();this.message('Corrections saved.');}
+      }else if(action==='save'){
+        const saved=await this.save();
+        if(saved!==null)this.message(saved?'Draft saved.':'Earlier edits saved. Your latest edits are still open.');
+      }
       else if(action==='preview'){await this.preview();}
       else if(action==='delete'){if(!confirm('Delete this unsigned treasurer report?'))return;await this.api('/api/treasury/'+button.dataset.id,{method:'DELETE'});await this.list();}
       else if(['preparer-attest','mark-distributed'].includes(action)){
-        if(action!=='mark-distributed')await this.save();
-        const payload=await this.api(`/api/treasury/${this.record.id}/${action}`,{method:'POST',body:JSON.stringify({revision:this.record.revision})});this.open(payload.report);this.message(payload.notificationWarnings?.join(' ')||'Report updated.');
+        if(action==='preparer-attest'&&await this.save()===null)return;
+        if(this.dirty)throw new Error('Save your latest edits and review the report before continuing.');
+        const payload=await this.submitReportAction(action);
+        if(!payload)return;
+        this.open(payload.report);this.message(payload.notificationWarnings?.join(' ')||'Report updated.');
       }
     }catch(error){this.message(error.message,true);}finally{this.busy=false;sourceControls.forEach(({element,disabled})=>{if(element.isConnected)element.disabled=disabled;});if(button.isConnected)button.disabled=false;this.consumePendingRefresh();}
+  }
+  resumeOrList(){
+    if(this.record&&this.workspaceUserId===this.user()?.id&&this.can('treasury.prepare'))return;
+    return this.list();
   }
   async list(){
     if(this.loadingList){this.refreshPending=true;return;}
@@ -84,11 +109,16 @@ export class TreasuryWorkspace {
   refreshPermissions(){
     const source=this.root.querySelector('.treasury-source');if(source)source.hidden=!this.can('treasury.upload');
     this.root.querySelectorAll('[data-treasury="new-draft"]').forEach(button=>button.hidden=!this.can('treasury.prepare'));
-    if(this.record)this.root.querySelectorAll('fieldset').forEach(fieldset=>fieldset.disabled=!this.canEdit());
+    this.refreshEditorLock();
     this.root.querySelectorAll('[data-treasury]').forEach(button=>{
       if(button.dataset.treasury==='open'){const record=this.records?.find(item=>item.id===button.dataset.id);button.hidden=!this.can('treasury.prepare')&&!this.canOpenFinal(record);button.textContent=this.can('treasury.prepare')?'Review':'View PDF';}
       if(['save','organize','assign','start-report','preparer-attest','delete'].includes(button.dataset.treasury))button.hidden=!this.can('treasury.prepare');
     });
+  }
+  refreshEditorLock(){
+    if(this.record)this.root.querySelectorAll('fieldset').forEach(fieldset=>fieldset.disabled=this.editLocked||!this.canEdit());
+    const preparer=this.root.querySelector('#treasuryPreparer');
+    if(preparer)preparer.disabled=Boolean(this.editLocked);
   }
   canOpenFinal(record){return this.can('treasury.view')&&['ready_for_distribution','distributed'].includes(record?.status);}
   canEdit(){return this.can('treasury.prepare')&&this.record.status==='draft'&&this.record.preparerUserId===this.user().id;}
@@ -107,7 +137,7 @@ export class TreasuryWorkspace {
     this.previewView=new MinutesPreview(this.root.querySelector('#treasuryFinalPreview'));
     await this.previewView.show(new Uint8Array(await blob.arrayBuffer()));
   }
-  open(record){this.top();this.record=record;this.draft=structuredClone(record.draft);this.dirty=false;this.editorTab=record.status==='awaiting_preparer'||!record.draft.transactions?.length?'details':'transactions';this.renderEditor();this.schedule();this.loadHandoff().catch(e=>this.message(e.message,true));}
+  open(record){this.top();this.workspaceUserId=this.user()?.id;this.record=record;this.draft=structuredClone(record.draft);this.dirty=false;this.editorTab=record.status==='awaiting_preparer'||!record.draft.transactions?.length?'details':'transactions';this.renderEditor();this.schedule();this.loadHandoff().catch(e=>this.message(e.message,true));}
   async loadHandoff(){
     const id=this.record.id;const [source,{preparers}]=await Promise.all([this.api(`/api/treasury/${id}/source`),this.api('/api/treasury/preparers')]);
     if(this.record?.id!==id)return;this.sourceFiles=source.files;
@@ -144,8 +174,8 @@ export class TreasuryWorkspace {
     const detailsPanel=`<section class="treasury-editor-panel" data-treasury-panel="details"><div id="treasuryHandoff"></div><p id="treasuryGenerationStatus" class="helper generation-status" role="status"></p>${editable?'<button data-treasury="organize" class="secondary" type="button">Reorganize original source</button>':''}<details><summary>Original banking records and notes</summary><div id="treasuryOriginals"></div></details><fieldset ${disabled}><p class="helper"><strong>Fixed reporting period:</strong> Only bank-posted activity from ${esc(d.periodStart||'the first included date')} through ${esc(d.periodEnd||'the report preparation date')} is included. PDFs, screenshots, pasted activity and typed notes are all limited to these dates.</p><p class="treasury-review-key"><span class="review-key-good">✓ Source matched, confirmed or corrected</span><span class="review-key-confirm">? Prefilled and awaiting confirmation</span><span class="review-key-bad">✕ Information not found</span></p>${editable?'<button data-treasury="confirm-prefilled" class="secondary" type="button">Confirm all prefilled values</button>':''}<div class="treasury-grid">${this.input('periodStart','First included date','date',undefined,true)}${this.input('periodEnd','Report prepared through','date',undefined,true)}${this.input('presentedOn','Date actually presented','date')}${this.input('bankName','Bank / credit union')}</div><details><summary>Source and import review</summary><p>${d.sourceNames.map(esc).join(', ')}</p>${d.extractionNotes.map(n=>`<p>${esc(n)}</p>`).join('')}<p>These source lines did not map to a financial field. Add any relevant details below before confirming the import.</p><pre>${esc(d.unmappedLines.join('\n'))}</pre></details></fieldset></section>`;
     const accountsPanel=`<section class="treasury-editor-panel" data-treasury-panel="accounts"><fieldset ${disabled}>${d.accounts.map((a,i)=>`<section class="treasury-group"><h2>${esc(a.name)}</h2>${this.input(`accounts.${i}.name`,'Account label')}<div class="treasury-grid">${fields.map(([key,label])=>this.input(`accounts.${i}.${key}`,label,'number')).join('')}</div>${this.checkbox(`accounts.${i}.activityComplete`,'I checked that every bank-posted transaction for this account is listed on the Transactions page. Blank activity totals may be calculated from those entries.')}<button class="text-button" data-treasury="remove" data-collection="accounts" data-index="${i}" type="button">Remove account</button></section>`).join('')}<button class="secondary" data-treasury="add-account" type="button">Add account</button><section class="treasury-group"><h2>Fenced Money</h2>${d.funds.map((f,i)=>`<div class="treasury-entry"><div class="treasury-grid">${this.input(`funds.${i}.name`,'Fund')}${this.select(`funds.${i}.account`,'Account',accountOptions,f.account)}${this.input(`funds.${i}.amount`,'Amount','number')}${this.input(`funds.${i}.restriction`,'Restriction or designation')}</div><button class="text-button" data-treasury="remove" data-collection="funds" data-index="${i}" type="button">Remove fund</button></div>`).join('')}<button class="secondary" data-treasury="add-funds" type="button">Add fund</button>${this.checkbox('fundsReviewed','I confirmed all Fenced Money. If no funds are listed, none applies.')}</section><section class="treasury-group"><h2>Outstanding Obligations</h2>${d.obligations.map((o,i)=>`<div class="treasury-entry"><div class="treasury-grid">${this.input(`obligations.${i}.name`,'Payee or obligation')}${this.input(`obligations.${i}.amount`,'Amount','number')}${this.input(`obligations.${i}.dueDate`,'Due date','date')}${this.input(`obligations.${i}.note`,'Note')}</div><button class="text-button" data-treasury="remove" data-collection="obligations" data-index="${i}" type="button">Remove obligation</button></div>`).join('')}<button class="secondary" data-treasury="add-obligations" type="button">Add obligation</button>${this.checkbox('obligationsReviewed','I confirmed all Outstanding Obligations. If none are listed, none applies.')}</section></fieldset></section>`;
     const transactionsPanel=`<section class="treasury-editor-panel" data-treasury-panel="transactions"><fieldset ${disabled}><section class="treasury-group treasury-transactions-page"><div class="treasury-section-heading"><div><p class="eyebrow">BANK-POSTED HISTORY</p><h2>Transactions</h2></div><span class="treasury-transaction-count">${d.transactions.length}</span></div><p>Every current-period entry organized from the uploaded PDF, screenshot, pasted activity or typed notes appears here. Confirm the account, bank-posted date, description, direction and amount. Add any missing current-period entries before signing; totals alone do not show what happened. Then confirm the complete activity for each account on the Accounts page. These entries become the Receipts, Disbursements and Transfers sections of the report.</p>${activityNotice}${d.transactions.map((t,i)=>`<div class="treasury-entry treasury-transaction-entry"><div class="treasury-entry-heading"><strong>Transaction ${i+1}</strong><span>${esc(t.date||'Date not found')}</span></div><div class="treasury-grid">${this.input(`transactions.${i}.date`,'Bank-posted date','date')}${this.select(`transactions.${i}.account`,'Account',accountOptions,t.account)}${this.select(`transactions.${i}.kind`,'Entry type',[['review','Needs correction'],['receipt','Receipt'],['payment','Disbursement'],['transfer_in','Transfer into this account'],['transfer_out','Transfer out of this account']],t.kind)}${this.input(`transactions.${i}.amount`,'Amount','number')}${this.input(`transactions.${i}.description`,'Description used on the report')}${this.input(`transactions.${i}.reference`,'Check number or reference')}<label class="check-row"><input data-path="transactions.${i}.postedDateConfirmed" type="checkbox" ${t.postedDateConfirmed?'checked':''}><span>Bank-posted date confirmed</span></label></div><button class="text-button" data-treasury="remove" data-collection="transactions" data-index="${i}" type="button">Remove transaction</button></div>`).join('')}<button class="secondary" data-treasury="add-transactions" type="button">Add transaction</button></section></fieldset></section>`;
-    const reviewPanel=`<section class="treasury-editor-panel" data-treasury-panel="review"><fieldset ${disabled}><label>Treasurer’s remarks<textarea data-path="remarks" rows="4">${esc(d.remarks)}</textarea></label>${this.checkbox('sourceReviewed','I checked the source, amounts, classifications and any unmapped lines.')}</fieldset><div class="treasury-actions">${this.user().role==='owner'&&this.record.status==='draft'&&this.record.preparerUserId!==this.user().id?'<button data-treasury="start-report" class="primary">Prepare this report as WM</button>':''}${editable?'<button data-treasury="save" class="secondary">Save corrections</button>':''}${this.record.status==='draft'&&this.record.preparerUserId===this.user().id?'<button data-treasury="preparer-attest" class="primary">Sign and finalize report</button>':''}${this.record.status==='ready_for_distribution'&&['owner','secretary'].includes(this.user().role)?'<button data-treasury="mark-distributed" class="primary">Mark as distributed</button>':''}</div></section>`;
-    this.root.innerHTML=`<div class="content-head"><div><p class="eyebrow">${esc(statusNames[this.record.status])}</p><h1>Review treasurer report</h1></div><button data-treasury="back" class="secondary">All reports</button></div><p id="treasuryMessage" role="status"></p><div class="treasury-workspace"><div class="treasury-form"><div class="treasury-editor-tabs" role="tablist" aria-label="Treasurer report sections"><button type="button" data-treasury-tab="details" role="tab">Details</button><button type="button" data-treasury-tab="accounts" role="tab">Accounts</button><button type="button" data-treasury-tab="transactions" role="tab">Transactions <span>${d.transactions.length}</span></button><button type="button" data-treasury-tab="review" role="tab">Review</button></div><div class="treasury-form-scroll">${detailsPanel}${accountsPanel}${transactionsPanel}${reviewPanel}</div></div>
+    const reviewPanel=`<section class="treasury-editor-panel" data-treasury-panel="review"><fieldset ${disabled}><label>Treasurer’s remarks<textarea data-path="remarks" rows="4">${esc(d.remarks)}</textarea></label>${this.checkbox('sourceReviewed','I checked the source, amounts, classifications and any unmapped lines.')}</fieldset><div class="treasury-actions">${this.user().role==='owner'&&this.record.status==='draft'&&this.record.preparerUserId!==this.user().id?'<button data-treasury="start-report" class="primary">Prepare this report as WM</button>':''}${this.record.status==='draft'&&this.record.preparerUserId===this.user().id?'<button data-treasury="preparer-attest" class="primary">Sign and finalize report</button>':''}${this.record.status==='ready_for_distribution'&&['owner','secretary'].includes(this.user().role)?'<button data-treasury="mark-distributed" class="primary">Mark as distributed</button>':''}</div></section>`;
+    this.root.innerHTML=`<div class="content-head"><div><p class="eyebrow">${esc(statusNames[this.record.status])}</p><h1>Review treasurer report</h1>${editable?`<p id="treasurySaveState" class="helper" role="status">${esc(this.savedLabel())}</p>`:''}</div><div class="row-buttons"><button type="button" data-treasury="back" class="secondary">All reports</button>${editable?'<button type="button" data-treasury="save" class="primary">Save Draft</button>':''}</div></div><p id="treasuryMessage" role="status"></p><div class="treasury-workspace"><div class="treasury-form"><div class="treasury-editor-tabs" role="tablist" aria-label="Treasurer report sections"><button type="button" data-treasury-tab="details" role="tab">Details</button><button type="button" data-treasury-tab="accounts" role="tab">Accounts</button><button type="button" data-treasury-tab="transactions" role="tab">Transactions <span>${d.transactions.length}</span></button><button type="button" data-treasury-tab="review" role="tab">Review</button></div><div class="treasury-form-scroll">${detailsPanel}${accountsPanel}${transactionsPanel}${reviewPanel}</div></div>
       <aside class="treasury-preview"><h2>Document preview</h2><p id="treasuryPreviewState" role="status"></p><a id="treasuryPdf" class="secondary hidden" download="Treasurer Report.pdf">Download this PDF</a><div id="treasuryEditorLedger">${renderTreasuryTransactions(d)}</div><div id="treasuryPreviewPages" class="minutes-pdf-pages"></div></aside></div>`;
     void showGenerationStatus(this.root.querySelector('#treasuryGenerationStatus'),this.api,this.user()?.role);
     this.previewView=new MinutesPreview(this.root.querySelector('#treasuryPreviewPages'));
@@ -153,5 +183,31 @@ export class TreasuryWorkspace {
   }
   schedule(){clearTimeout(this.timer);this.sequence++;const link=this.root.querySelector('#treasuryPdf');link?.classList.add('hidden');const state=this.root.querySelector('#treasuryPreviewState');if(state)state.textContent='Updating preview…';const ledger=this.root.querySelector('#treasuryEditorLedger');if(ledger)ledger.innerHTML=renderTreasuryTransactions(this.draft);this.timer=setTimeout(()=>this.preview().catch(e=>this.message(e.message,true)),700);}
   async preview(){if(!this.record)return;const sequence=++this.sequence;const blob=await this.api(`/api/treasury/${this.record.id}/preview`,{method:'POST',body:JSON.stringify({draft:this.draft})});if(sequence!==this.sequence)return;if(this.url)URL.revokeObjectURL(this.url);this.url=URL.createObjectURL(blob);await this.previewView.show(new Uint8Array(await blob.arrayBuffer()));if(sequence!==this.sequence)return;const link=this.root.querySelector('#treasuryPdf');link.href=this.url;link.classList.remove('hidden');this.root.querySelector('#treasuryPreviewState').textContent='Preview matches the current fields.';}
-  async save(){const {report}=await this.api('/api/treasury/'+this.record.id,{method:'PUT',body:JSON.stringify({draft:this.draft,revision:this.record.revision})});this.record=report;this.draft=structuredClone(report.draft);this.dirty=false;}
+  async save(){
+    const record=this.record, draft=this.draft, accountId=this.user()?.id;
+    const submitted=JSON.stringify({draft,revision:record.revision});
+    this.saveState('Saving draft…');
+    try{
+      const {report}=await this.api('/api/treasury/'+record.id,{method:'PUT',body:submitted});
+      if(this.record!==record||this.draft!==draft||this.user()?.id!==accountId)return null;
+      this.dirty=JSON.stringify({draft,revision:record.revision})!==submitted;
+      this.record=report;
+      if(!this.dirty)this.draft=structuredClone(report.draft);
+      return !this.dirty;
+    }finally{
+      if(this.record?.id===record.id&&this.user()?.id===accountId)this.saveState();
+    }
+  }
+  async submitReportAction(action, details={}){
+    const record=this.record, accountId=this.user()?.id;
+    this.editLocked=true;
+    this.refreshEditorLock();
+    try{
+      const payload=await this.api(`/api/treasury/${record.id}/${action}`,{method:'POST',body:JSON.stringify({revision:record.revision,...details})});
+      return this.record===record&&this.user()?.id===accountId?payload:null;
+    }finally{
+      this.editLocked=false;
+      this.refreshEditorLock();
+    }
+  }
 }

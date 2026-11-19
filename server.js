@@ -29,7 +29,7 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
-import {MINUTES_MEETING_DETAILS_FIELDS, formatMinutesClock, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails} from './public/minutes-meeting-details.js';
+import {MINUTES_MEETING_DETAILS_FIELDS, formatMinutesClock, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails, suggestMinutesDetailsFromNotes} from './public/minutes-meeting-details.js';
 import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
 import { attendanceReviewIssues, attendanceRecordIssues, closingReviewIssues } from './minutes-format.js';
@@ -2075,6 +2075,42 @@ app.get('/api/minutes/:id/source', requireAuth, requireMinutesView, requireMinut
   }
 });
 
+// Read meeting field candidates without retaining an upload or starting a draft.
+app.post('/api/minutes/source-details', requireAuth, requireMinutesAccess,
+  rateLimit({ key: 'minutes-source-details', maximum: 24, windowMs: 60 * 60 * 1000 }),
+  minutesUpload.single('transcriptFile'), async (req, res, next) => {
+    try {
+      res.setHeader('Cache-Control', 'private, no-store');
+      if (req.assistant) return res.status(403).json({ error: 'Open your own Dashboard session to review meeting details.' });
+      if (!req.file) return res.status(400).json({ error: 'Choose meeting notes or a transcript first.' });
+      let transcript;
+      try {
+        transcript = await transcriptFromUpload(req.file);
+      } catch {
+        return res.status(400).json({ error: 'This file could not be read. Try a text export or enter the meeting details.' });
+      }
+      if (transcript.length > 500_000) return res.status(400).json({ error: 'The meeting source is too long. Upload one meeting at a time.' });
+      // A PDF containing only images still has page markers in the extracted text.
+      const readable = req.file.originalname.toLowerCase().endsWith('.pdf')
+        ? transcript.replace(/^\s*-- \d+ of \d+ --\s*$/gm, '') : transcript;
+      if (!readable.trim()) return res.status(400).json({ error: 'No readable text was found. Try a text export or enter the meeting details.' });
+      res.json({ details: suggestMinutesDetailsFromNotes(transcript) });
+    } catch (error) { next(error); }
+  });
+
+app.get('/api/minutes/:id/source-details', requireAuth, requireMinutesAccess, async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (req.assistant || !OFFICE_ROLES.has(req.user.role)) {
+      return res.status(403).json({ error: 'The Secretary or Assistant Secretary reviews details before claiming a minutes source.' });
+    }
+    const row = await dbGet(`SELECT transcript_text FROM meeting_minutes
+      WHERE id = ? AND status = 'awaiting_preparer' AND preparer_user_id IS NULL`, [req.params.id]);
+    if (!row?.transcript_text) return res.status(404).json({ error: 'This minutes source is no longer available to claim.' });
+    res.json({ details: suggestMinutesDetailsFromNotes(row.transcript_text) });
+  } catch (error) { next(error); }
+});
+
 // The Worshipful Master can place a Plaud transcript or compiled notes into the
 // Secretary's Office queue without spending a generation call. Adrian or
 // McDuffie claims the source before organization so one officer owns the draft.
@@ -2130,7 +2166,7 @@ app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
   rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
     let claimed = false;
     try {
-      if (!['secretary', 'assistant_secretary'].includes(req.user.role)) {
+      if (!OFFICE_ROLES.has(req.user.role)) {
         return res.status(403).json({ error: 'The Secretary or Assistant Secretary claims a minutes source from this queue.' });
       }
       const meetingDetails = enteredMinutesMeetingDetails(req.body?.meetingDetails);

@@ -33,7 +33,7 @@ export class AgendaWorkspace {
     try {
       if (action === 'new') { this.busy = true; const { agenda } = await this.api('/api/agendas', { method: 'POST', body: JSON.stringify({}) }); this.open(agenda); this.message('Draft created and saved. You can return to it from any signed-in device.'); return; }
       if (action === 'open') { const agenda = this.records.find(item => item.id === button.dataset.id); if (agenda) this.open(agenda); return; }
-      if (action === 'back') { if (this.dirty && !confirm('Leave these unsaved agenda changes?')) return; await this.list(); return; }
+      if (action === 'back') { if (this.dirty && !confirm('Discard these unsaved changes and return to all agenda drafts?')) return; await this.list(); return; }
       if (action === 'add-section') { this.draft.sections.push({ id: crypto.randomUUID(), heading: 'New Agenda Section', scheduledTime: '', body: '' }); this.dirty = true; this.renderEditor(); this.saveState('Unsaved changes'); this.schedule(); return; }
       if (action === 'remove-section') { this.draft.sections.splice(Number(button.dataset.index), 1); this.dirty = true; this.renderEditor(); this.saveState('Unsaved changes'); this.schedule(); return; }
       if (action === 'move-up' || action === 'move-down') {
@@ -43,13 +43,22 @@ export class AgendaWorkspace {
         this.dirty = true; this.renderEditor(); this.saveState('Unsaved changes'); this.schedule(); return;
       }
       this.busy = true; button.disabled = true;
-      if (action === 'save') { await this.save(); this.message('Draft saved. You can safely leave and continue later.'); }
+      if (action === 'save') {
+        const saved = await this.save();
+        if (saved === null) return;
+        this.message(saved ? 'Draft saved. You can safely leave and continue later.' : 'Earlier edits saved. Your latest edits are still open.');
+      }
       if (action === 'delete') {
         if (!confirm('Delete this agenda draft?')) return;
         await this.api(`/api/agendas/${button.dataset.id}`, { method: 'DELETE', body: JSON.stringify({ revision: Number(button.dataset.revision) }) }); await this.list();
       }
     } catch (error) { this.message(error.message, true); }
     finally { this.busy = false; if (button.isConnected) button.disabled = false; }
+  }
+  resumeOrList() {
+    const account = this.user();
+    if (this.record && account?.role === 'owner' && this.workspaceUserId === account.id) return;
+    return this.list();
   }
   async list() {
     this.top();
@@ -65,7 +74,7 @@ export class AgendaWorkspace {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return 'Meeting date needs review';
     return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`));
   }
-  open(record) { this.top(); this.record = record; this.draft = clone(record.draft); this.dirty = false; this.renderEditor(); this.saveState(this.savedLabel(record.updatedAt)); this.schedule(); }
+  open(record) { this.top(); this.workspaceUserId = this.user()?.id; this.record = record; this.draft = clone(record.draft); this.dirty = false; this.renderEditor(); this.saveState(this.savedLabel(record.updatedAt)); this.schedule(); }
   section(section, index) {
     return `<article class="agenda-section-card"><div class="agenda-section-head"><strong>Section ${index + 1}</strong><div class="row-buttons"><button class="secondary compact" data-agenda="move-up" data-index="${index}" ${index === 0 ? 'disabled' : ''} aria-label="Move section ${index + 1} up">Up</button><button class="secondary compact" data-agenda="move-down" data-index="${index}" ${index === this.draft.sections.length - 1 ? 'disabled' : ''} aria-label="Move section ${index + 1} down">Down</button><button class="text-button danger-text" data-agenda="remove-section" data-index="${index}">Remove</button></div></div><div class="agenda-section-fields"><label>Heading<input data-field="section.${index}.heading" value="${esc(section.heading)}"></label><label>Target time (Eastern)<input data-field="section.${index}.scheduledTime" value="${esc(formatEasternClockRange(section.scheduledTime))}" placeholder="8:15 PM"></label></div><label>Agenda details<textarea data-field="section.${index}.body" rows="5" placeholder="Enter the details for this item. Put separate items on separate lines.">${esc(section.body)}</textarea></label></article>`;
   }
@@ -91,8 +100,20 @@ export class AgendaWorkspace {
     } catch (error) { if (sequence === this.sequence) { this.root.querySelector('#agendaPreviewState').textContent = error.message; } }
   }
   async save() {
-    const { agenda } = await this.api(`/api/agendas/${this.record.id}`, { method: 'PUT', body: JSON.stringify({ revision: this.record.revision, draft: this.draft }) });
-    this.record = agenda; this.draft = clone(agenda.draft); this.dirty = false;
-    this.saveState(this.savedLabel(agenda.updatedAt));
+    const record = this.record, draft = this.draft, accountId = this.user()?.id;
+    const submitted = JSON.stringify({ revision: record.revision, draft });
+    this.saveState('Saving draft…');
+    try {
+      const { agenda } = await this.api(`/api/agendas/${record.id}`, { method: 'PUT', body: submitted });
+      if (this.record !== record || this.draft !== draft || this.user()?.id !== accountId) return null;
+      this.dirty = JSON.stringify({ revision: record.revision, draft }) !== submitted;
+      this.record = agenda;
+      if (!this.dirty) this.draft = clone(agenda.draft);
+      return !this.dirty;
+    } finally {
+      if (this.record?.id === record.id && this.user()?.id === accountId) {
+        this.saveState(this.dirty ? 'Unsaved changes' : this.savedLabel(this.record.updatedAt));
+      }
+    }
   }
 }

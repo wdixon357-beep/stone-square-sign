@@ -10,6 +10,7 @@ const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), '
 const storageSource = app.slice(app.indexOf('const draftStorageKey ='), app.indexOf('const PROPOSAL_DRAFT_FIELDS ='));
 const helperSource = app.slice(app.indexOf('const MINUTES_MEETING_DETAIL_SUFFIXES ='), app.indexOf('const restoreWebDrafts ='));
 const submissionSource = app.slice(app.indexOf('let minutesPreparationContext ='), app.indexOf("$('handoffMinutes').addEventListener"));
+const fileSource = app.slice(app.indexOf("$('minutesTranscriptFile').addEventListener"), app.indexOf('let minutesPreparationContext ='));
 const details = {meetingDate:'2026-10-15',meetingType:'Stated Communication',degree:'Third Degree',openingTime:'7:30 PM',closingTime:'9:45 PM',presiding:'WM Example',quorum:'Yes',nextMeeting:'2026-11-05'};
 const suffixes = {meetingDate:'MeetingDate',meetingType:'MeetingType',degree:'Degree',openingTime:'OpeningTime',closingTime:'ClosingTime',presiding:'Presiding',quorum:'Quorum',nextMeeting:'NextMeeting'};
 class Element {
@@ -24,21 +25,21 @@ class Element {
 }
 function harness() {
   const elements=Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(match=>[match[1],new Element(match[1])]));
-  const calls=[],opened=[],remembered=[],cleared=[],shown=[],refreshes=[],storage=new Map();
-  let response={minutes:{id:'synthetic-minutes'}},failure=null,refresh=true,wait=null,refreshWait=null;
+  const calls=[],detailCalls=[],opened=[],remembered=[],cleared=[],shown=[],refreshes=[],storage=new Map();
+  let response={minutes:{id:'synthetic-minutes'}},failure=null,refresh=true,wait=null,refreshWait=null, detailResponse={}, detailWait=null;
   const state={user:{id:2},authEpoch:3,minutesSourceDirty:false};
-  const context={FormData,minutesDates,minutesMeetingDetails,state,can: permission=>permission==='minutes.prepare',$:id=>{assert.ok(elements[id],`Actual markup provides ${id}`);return elements[id];},
+  const context={FormData,File,AbortController,minutesDates,minutesMeetingDetails,state,can: permission=>permission==='minutes.prepare',$:id=>{assert.ok(elements[id],`Actual markup provides ${id}`);return elements[id];},
     setMessage:(element,text,error=false)=>{element.textContent=text;element.error=error;},
     sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>{storage.set(key,value);remembered.push({key,values:JSON.parse(value)});},removeItem:key=>{storage.delete(key);cleared.push(key.replace(/^ss22-web-draft:[^:]+:/,''));}},
     show:element=>shown.push(element.id),hide:element=>shown.splice(shown.indexOf(element.id),1),
-    apiFetch:async(path,options)=>{calls.push({path,options});const held=wait,requestFailure=failure,requestResponse=response;if(held)await held;if(requestFailure)throw Error(requestFailure);return requestResponse;},
+    apiFetch:async(path,options)=>{if(path.endsWith('/source-details')){detailCalls.push({path,options});const held=detailWait,candidates=detailResponse;if(held)await held;return {details:candidates};}calls.push({path,options});const held=wait,requestFailure=failure,requestResponse=response;if(held)await held;if(requestFailure)throw Error(requestFailure);return requestResponse;},
     renderMinutes:async()=>{refreshes.push(state.user?.id);const held=refreshWait;if(held)await held;return refresh;},openMinutesEditor:id=>opened.push(id)};
   vm.createContext(context);
-  vm.runInContext(`${storageSource}\n${helperSource}\n${submissionSource}\nthis.submit=submitMinutesSource;this.openClaim=openMinutesClaim;this.closeClaim=closeMinutesClaim;this.collect=collectMinutesMeetingDetails;this.validate=validateMinutesMeetingDetails;this.reflect=reflectMinutesMeetingDetails;this.resetContext=resetMinutesPreparationContext;this.restoreSource=()=>{restoreSessionDraft('minutes-source',MINUTES_SOURCE_DRAFT_FIELDS);reflectMinutesMeetingDetails('minutesIntake');};`,context);
+  vm.runInContext(`${storageSource}\n${helperSource}\n${submissionSource}\n${fileSource}\nthis.submit=submitMinutesSource;this.openClaim=openMinutesClaim;this.closeClaim=closeMinutesClaim;this.collect=collectMinutesMeetingDetails;this.validate=validateMinutesMeetingDetails;this.reflect=reflectMinutesMeetingDetails;this.resetContext=resetMinutesPreparationContext;this.restoreSource=()=>{restoreSessionDraft('minutes-source',MINUTES_SOURCE_DRAFT_FIELDS);reflectMinutesMeetingDetails('minutesIntake');};`,context);
   elements.minutesClaimForm.controls=Object.entries(elements).filter(([id])=>id.startsWith('minutesClaim')||['cancelMinutesClaim','createClaimedMinutes'].includes(id)).map(([,element])=>element);
   context.resetContext();
   const fill=(prefix,values=details)=>{for(const [key,suffix]of Object.entries(suffixes))elements[`${prefix}${suffix}`].value=values[key]||'';};
-  return {elements,calls,opened,remembered,cleared,shown,refreshes,storage,state,context,fill,setFailure:value=>failure=value,setRefresh:value=>refresh=value,setWait:value=>wait=value,setRefreshWait:value=>refreshWait=value};
+  return {elements,calls,detailCalls,opened,remembered,cleared,shown,refreshes,storage,state,context,fill,setFailure:value=>failure=value,setRefresh:value=>refresh=value,setWait:value=>wait=value,setRefreshWait:value=>refreshWait=value,setDetailResponse:value=>detailResponse=value,setDetailWait:value=>detailWait=value};
 }
 
 for(const prefix of ['minutesIntake','minutesClaim']) {
@@ -79,7 +80,7 @@ for(const prefix of ['minutesIntake','minutesClaim']) {
  assert.match(h.elements.minutesIntakeMeetingDate.value,/Friday, October 16, 2026/);assert.match(h.remembered.at(-1).values.minutesIntakeMeetingDate,/October 16/);
 }
 {
- const h=harness();h.context.openClaim({id:'synthetic-source'});assert.equal(h.calls.length,0,'Opening claim details never claims or generates');assert.ok(h.shown.includes('minutesClaimModal'));
+ const h=harness();h.context.openClaim({id:'synthetic-source'});assert.equal(h.calls.length,0,'Opening claim details never claims or generates');assert.equal(h.detailCalls[0].path,'/api/minutes/synthetic-source/source-details');assert.ok(h.shown.includes('minutesClaimModal'));
  await h.elements.minutesClaimForm.emit('submit');assert.equal(h.calls.length,0,'Missing details never start a claim');
  h.fill('minutesClaim');h.setFailure('Synthetic verification error');await h.elements.minutesClaimForm.emit('submit');assert.equal(h.calls[0].path,'/api/minutes/synthetic-source/claim');
  assert.deepEqual(JSON.parse(h.calls[0].options.body),{meetingDetails:details});assert.equal(h.elements.minutesClaimClosingTime.value,'9:45 PM');assert.ok(h.shown.includes('minutesClaimModal'));assert.match(h.elements.minutesClaimMessage.textContent,/details remain/);
@@ -180,11 +181,60 @@ assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeeting
  assert.equal(values.quorum,'Yes');
  assert.equal(h.calls.length,0,'Prefill does not send the notes or generate anything');
  assert.match(h.elements.minutesPrefillMessage.textContent,/Check the entries/);
- h.elements.minutesTranscriptFile.files=[{name:'another-source.docx'}];
+ const file=new File(['clear labels'],'sample.docx');
+ h.elements.minutesTranscriptFile.files=[file];
+ h.setDetailResponse({quorum:'No',closingTime:'9:45 PM',openingTime:'10:30 PM',attendance:'unsupported'});
  h.elements.minutesIntakeQuorum.value='';
- await h.elements.minutesPrefillDetails.emit('click');
- assert.equal(h.elements.minutesIntakeQuorum.value,'','The uploaded file takes precedence over the pasted notes');
- assert.match(h.elements.minutesPrefillMessage.textContent,/A file is selected/);
+ await h.elements.minutesTranscriptFile.emit('change');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.elements.minutesIntakeQuorum.value,'No','The uploaded file takes precedence over the pasted notes');
+ assert.equal(h.elements.minutesIntakeMeetingDate.value,'','Untouched pasted suggestions cannot carry into a different uploaded source');
+ assert.equal(h.elements.minutesIntakeClosingTime.value,'9:45 PM');
+ assert.equal(h.elements.minutesIntakeOpeningTime.value,'8:00 PM','The file never overwrites an officer entry');
+ assert.equal(h.detailCalls[0].path,'/api/minutes/source-details');
+ assert.equal(h.detailCalls[0].options.body.get('transcriptFile').name,'sample.docx');
+ assert.equal(h.calls.length,0,'Selecting a file never creates a draft');
+ const reopened=harness();
+ for(const [key,value] of h.storage) reopened.storage.set(key,value);
+ reopened.context.restoreSource();
+ assert.equal(reopened.elements.minutesIntakeQuorum.value,'','A reload does not retain suggestions from a file the browser can no longer read');
+ assert.equal(reopened.elements.minutesIntakeOpeningTime.value,'8:00 PM','A reload retains officer-entered details');
+ reopened.setDetailResponse({quorum:'Yes',meetingDate:'2026-11-05'});
+ reopened.elements.minutesTranscriptFile.files=[new File(['different meeting'],'new-meeting.txt')];
+ await reopened.elements.minutesTranscriptFile.emit('change');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(reopened.elements.minutesIntakeQuorum.value,'Yes','A new file after reload can fill the correct meeting values');
+ assert.equal(reopened.context.collect('minutesIntake').meetingDate,'2026-11-05');
+ h.elements.minutesIntakeClosingTime.value='10:00 PM';
+ h.elements.minutesTranscriptFile.files=[new File(['new source'],'replacement.txt')];
+ h.setDetailResponse({});
+ await h.elements.minutesTranscriptFile.emit('change');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.elements.minutesIntakeQuorum.value,'','Replacing a source clears untouched suggestions from the earlier file');
+ assert.equal(h.elements.minutesIntakeClosingTime.value,'10:00 PM','Replacing a source retains officer corrections');
+}
+{
+ const h=harness(), slow=deferred();
+ h.elements.minutesTranscriptFile.files=[new File(['old file'],'old.txt')];
+ h.setDetailResponse({openingTime:'8:30 PM'});h.setDetailWait(slow.promise);
+ await h.elements.minutesTranscriptFile.emit('change');
+ h.elements.minutesTranscriptFile.files=[new File(['new file'],'new.txt')];
+ h.setDetailResponse({openingTime:'7:30 PM'});h.setDetailWait(null);
+ await h.elements.minutesTranscriptFile.emit('change');
+ await new Promise(resolve=>setImmediate(resolve));
+ slow.resolve();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.detailCalls[0].options.signal.aborted,true);
+ assert.equal(h.elements.minutesIntakeOpeningTime.value,'7:30 PM','A superseded file preview cannot apply old suggestions');
+}
+{
+ const h=harness();
+ h.setDetailResponse({openingTime:'7:30 PM',closingTime:'9:45 PM',degree:'Third Degree'});
+ h.context.openClaim({id:'minutes-source'});
+ h.elements.minutesClaimClosingTime.value='10:00 PM';
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.elements.minutesClaimOpeningTime.value,'7:30 PM');
+ assert.equal(h.elements.minutesClaimClosingTime.value,'10:00 PM','A claim preview leaves recently typed details alone');
+ assert.equal(h.calls.length,0,'Claim suggestions never create or assign the draft');
 }
 {
   const h = harness();
@@ -207,7 +257,8 @@ assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeeting
     officerAttendanceEditor() {}, fillFinanceEditor() {}, sectionEditor() {}, minutesAttendanceDisplayWarnings: () => [],
     updateMinutesEditorControls: item => editor.refreshChecklist(item), refreshMinutesPreview() {},
     focusMinutesPrepField: field => field.focus(), minutesAttendanceTarget: () => h.elements.minutesOfficerRollConfirmed,
-    saveMinutesCorrections: () => { savedDraft = editor.collectDraft(); actions.push('save'); },
+    setMinutesSaveState() {},
+    saveMinutesCorrections: () => { savedDraft = editor.collectDraft(); actions.push('save'); return true; },
     minutesAction: action => actions.push(action),
   });
   vm.runInContext(`${collectSource}\n${prepSource}\n${editorSource}\n${attestSource}
@@ -248,4 +299,32 @@ assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeeting
   assert.equal(editor.collectDraft().closingFormatVersion, 2, 'Opening Master review preserves the legacy format');
 }
 assert.match(app,/resetMinutesPreparationContext\(\);\s+restoreWebDrafts/,'A new signed-in workspace resets prior-account operation ownership before restoring its own draft');
+{
+  const id = 'synthetic-save';
+  const start = app.indexOf('let minutesSaveOperation');
+  const source = app.slice(start, app.indexOf('/* What the District Deputy',start));
+  const pending = deferred(), requests = [];
+  const element = new Element('minutesDraftSaveState');
+  const state = {authEpoch:1,editingMinutesId:id,editingMinutesUpdatedAt:'old',minutes:[{id}],minutesEditorDirty:true};
+  let body = 'Initial edits';
+  const editor = vm.createContext({state,$:()=>element,formatDate:value=>value,minutesActionInFlight:false,
+    collectMinutesDraft:()=>({sections:[{body}]}),
+    apiFetch:async(path,options)=>{requests.push({path,...JSON.parse(options.body)});await pending.promise;return {minutes:{id,updatedAt:'new',draft:requests.at(-1).draft}};}});
+  vm.runInContext(`${source}\nthis.save=saveMinutesCorrections;this.markEdited=markMinutesEditorEdited;`,editor);
+  const first = editor.save();
+  assert.match(element.textContent,/Saving/);
+  body = 'New edit while waiting';
+  editor.markEdited();
+  await assert.rejects(editor.save(),/current minutes update/);
+  pending.resolve();
+  assert.equal(await first,false,'Newer edits prevent save-and-exit or submission');
+  assert.equal(state.minutesEditorDirty,true);
+  assert.equal(state.editingMinutesUpdatedAt,'new');
+  assert.equal(requests[0].draft.sections[0].body,'Initial edits');
+  assert.match(element.textContent,/newer unsaved changes/);
+  assert.equal(await editor.save(),true);
+  assert.equal(requests[1].expectedUpdatedAt,'new');
+  assert.equal(requests[1].draft.sections[0].body,'New edit while waiting');
+  assert.equal(state.minutesEditorDirty,false);
+}
 console.log('PASS: required meeting details and attendance, automatic closing prayer with exception handling, source-only handoff, claim validation, operation ordering, and account draft isolation in the browser.');
