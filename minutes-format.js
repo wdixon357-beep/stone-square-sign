@@ -1,8 +1,8 @@
 import { formatMinutesDate, minutesDateParts } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
-import { attendanceCoverageIssues } from './public/minutes-attendance.js';
-import {hasExplicitMinutesTime} from './public/minutes-meeting-details.js';
+import { attendanceCoverageChecks, attendanceCoverageIssues } from './public/minutes-attendance.js';
+import {hasExplicitMinutesTime, minutesMeetingDetailChecks} from './public/minutes-meeting-details.js';
 
 // One presentation model for the live PDF and Word record. Formatting never
 // supplies a motion, an outcome, a name, or a time missing from the record.
@@ -120,16 +120,19 @@ export function closingReviewIssues(draft) {
   ].filter(Boolean);
 }
 
+const missingOfficerAttendance = draft => {
+  const rows = Array.isArray(draft.officerAttendance) ? draft.officerAttendance : [];
+  const hasStatus = row => ['present', 'arrived_late', 'excused', 'absent'].includes(row?.status);
+  const regular = CURRENT_OFFICERS.map(officer => ({...officer, officerIndex:rows.findIndex(row => namesMatch(row?.name, officer.name))}))
+    .filter(({officerIndex}) => !hasStatus(rows[officerIndex]));
+  const added = rows.flatMap((row, officerIndex) => row?.name && !hasStatus(row)
+    && !CURRENT_OFFICERS.some(officer => namesMatch(row.name, officer.name)) ? [{...row, officerIndex}] : []);
+  return {regular, added};
+};
+
 export function attendanceReviewIssues(draft = {}, {requireConfirmation = true} = {}) {
   const review = draft.attendanceReview || {};
-  const rows = Array.isArray(draft.officerAttendance) ? draft.officerAttendance : [];
-  const unresolved = CURRENT_OFFICERS.filter((officer) => {
-    const row = rows.find((entry) => namesMatch(entry?.name, officer.name));
-    return !row || !['present', 'arrived_late', 'excused', 'absent'].includes(row.status);
-  });
-  const unresolvedAdditional = rows.filter((entry) => entry?.name
-    && !CURRENT_OFFICERS.some((officer) => namesMatch(entry.name, officer.name))
-    && !['present', 'arrived_late', 'excused', 'absent'].includes(entry.status));
+  const {regular:unresolved, added:unresolvedAdditional} = missingOfficerAttendance(draft);
   return [
     draft.warnings?.includes(UNCITED_PRESIDING_WARNING) && !String(draft.presiding || '').trim()
       && 'Enter and verify the presiding officer from the meeting record before attesting.',
@@ -139,6 +142,26 @@ export function attendanceReviewIssues(draft = {}, {requireConfirmation = true} 
     ...attendanceCoverageIssues(draft),
     requireConfirmation && !review.otherPresent && 'Confirm the Other Brothers Present list, including when no other Brothers were present.',
     requireConfirmation && !review.otherExcused && 'Confirm the Other Brothers Excused list, including when no other Brothers were excused.',
+  ].filter(Boolean);
+}
+
+export function minutesContinueIssues(draft) {
+  const {regular, added} = missingOfficerAttendance(draft);
+  const review = draft.attendanceReview || {};
+  const officerTarget = (field, officerIndex, officerName) => ({field,officerIndex,officerName});
+  return [
+    ...minutesMeetingDetailChecks(draft).map(({field,label}) => ({label,target:{field}})),
+    ...attendanceCoverageChecks({...draft, officerAttendanceVersion:2}).map(({field,officerIndex,label}) => ({
+      label,target:officerTarget(field, officerIndex, draft.officerAttendance[officerIndex]?.name),
+    })),
+    ...[...regular,...added].map(({name,title,officerIndex}) => ({
+      label: `Record attendance for ${title ? `${title} (${name})` : name}.`,
+      target: officerTarget('status', officerIndex, draft.officerAttendance?.[officerIndex]?.name || name),
+    })),
+    !review.officerRoll && {label:'Confirm the complete officer roll.',target:{field:'officerRoll'}},
+    !review.otherPresent && {label:'Confirm the Other Brothers Present list.',target:{field:'otherPresent'}},
+    !review.otherExcused && {label:'Confirm the Other Brothers Excused list.',target:{field:'otherExcused'}},
+    !draft.sections?.some(section => section.body?.trim()) && {label:'Add meeting notes to the draft.',target:{field:'notes'}},
   ].filter(Boolean);
 }
 

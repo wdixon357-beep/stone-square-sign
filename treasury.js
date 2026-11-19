@@ -84,31 +84,59 @@ export function normalizeTreasury(input = {}) {
   return draft;
 }
 const sum = values => values.some(v => v === null) ? null : values.reduce((a, b) => a + b, 0);
-export function calculateTreasury(input) {
+const financialFieldLabels = {
+  openingBalance: 'beginning balance', statementBalance: 'bank statement ending balance', bookBalance: 'book balance',
+  receipts: 'total receipts', disbursements: 'total disbursements', transfersIn: 'transfers in', transfersOut: 'transfers out',
+  depositsInTransit: 'deposits in transit', outstandingChecks: 'outstanding checks', bankHold: 'bank hold',
+  date: 'bank-posted date', account: 'account', kind: 'entry type', amount: 'amount',
+  description: 'description', reference: 'reference', name: 'name',
+};
+const continuation = (label, target) => ({label, target});
+export function calculateTreasury(input, {includeContinueIssues = false} = {}) {
   const draft = normalizeTreasury(input), issues = [], accountIds = new Set(draft.accounts.map(a => a.id));
-  if (!draft.periodStart || !draft.periodEnd) issues.push('Enter the beginning and ending dates of this report.');
-  if (draft.periodStart && draft.periodEnd && draft.periodStart > draft.periodEnd) issues.push('The report ending date is before its beginning date.');
-  if (!draft.accounts.length) issues.push('Include at least one bank account.');
-  if (!draft.sourceReviewed) issues.push('Review the imported text and confirm that the financial entries were captured correctly.');
-  if (!draft.fundsReviewed) issues.push('Confirm the Fenced Money section, including any grants or designated funds.');
-  if (!draft.obligationsReviewed) issues.push('Confirm the Outstanding Obligations section.');
+  const continueIssues = [];
+  const addIssue = (message, ...targets) => {
+    issues.push(message);
+    if (includeContinueIssues) continueIssues.push(...targets);
+  };
+  const accountField = (index, field, verb = 'Enter') => continuation(`${verb} ${draft.accounts[index].name} ${financialFieldLabels[field]}`, `accounts.${index}.${field}`);
+  if (!draft.periodStart || !draft.periodEnd) addIssue('Enter the beginning and ending dates of this report.', continuation('Check the missing reporting period dates', 'period'));
+  if (draft.periodStart && draft.periodEnd && draft.periodStart > draft.periodEnd) addIssue('The report ending date is before its beginning date.', continuation('Check the order of the reporting period dates', 'period'));
+  if (!draft.accounts.length) addIssue('Include at least one bank account.', continuation('Add a bank account', 'add-account'));
+  if (!draft.sourceReviewed) addIssue('Review the imported text and confirm that the financial entries were captured correctly.', continuation('Review and confirm the banking source', 'sourceReviewed'));
+  if (!draft.fundsReviewed) addIssue('Confirm the Fenced Money section, including any grants or designated funds.', continuation('Confirm Fenced Money', 'fundsReviewed'));
+  if (!draft.obligationsReviewed) addIssue('Confirm the Outstanding Obligations section.', continuation('Confirm Outstanding Obligations', 'obligationsReviewed'));
   const unconfirmedPrefills=financialReviewPaths(draft).filter(path=>present(pathValue(draft,path))&&draft.fieldReviews[path]==='unresolved');
-  if(unconfirmedPrefills.length)issues.push(`Confirm or correct ${unconfirmedPrefills.length} prefilled financial ${unconfirmedPrefills.length===1?'field':'fields'} before signing.`);
+  if(unconfirmedPrefills.length) addIssue(`Confirm or correct ${unconfirmedPrefills.length} prefilled financial ${unconfirmedPrefills.length===1?'field':'fields'} before signing.`, ...unconfirmedPrefills.map(path => {
+    const [group, index, field] = path.split('.');
+    const row = {transactions:'Transaction',funds:'Fenced fund',obligations:'Obligation'}[group];
+    const context = row ? `${row} ${Number(index) + 1}` : draft.accounts[index].name;
+    return continuation(`Confirm or correct ${context} ${financialFieldLabels[field]}`, `confirm:${path}`);
+  }));
   for (const [i, t] of draft.transactions.entries()) {
-    if (!accountIds.has(t.account) || t.kind === 'review' || money(t.amount) === null || money(t.amount) < 0) issues.push(`Review the account, direction and amount on activity row ${i + 1}.`);
-    if (!t.date) issues.push(`Confirm the bank-posted date on activity row ${i + 1}.`);
-    if (!t.postedDateConfirmed) issues.push(`Confirm that activity row ${i + 1} uses the bank-posted date.`);
-    if (t.date && ((draft.periodStart && t.date < draft.periodStart) || (draft.periodEnd && t.date > draft.periodEnd))) issues.push(`Activity row ${i + 1} is outside the fixed reporting period.`);
+    const row = `Transaction ${i + 1}`;
+    const target = (field, verb = 'Review') => continuation(`${verb} ${row} ${financialFieldLabels[field]}`, `transactions.${i}.${field}`);
+    const invalid = [!accountIds.has(t.account) && 'account', t.kind === 'review' && 'kind', (money(t.amount) === null || money(t.amount) < 0) && 'amount'].filter(Boolean);
+    if (invalid.length) addIssue(`Review the account, direction and amount on activity row ${i + 1}.`, ...invalid.map(field => target(field)));
+    if (!t.date) addIssue(`Confirm the bank-posted date on activity row ${i + 1}.`, target('date', 'Enter'));
+    if (!t.postedDateConfirmed) addIssue(`Confirm that activity row ${i + 1} uses the bank-posted date.`, continuation(`Confirm ${row} uses the bank-posted date`, `transactions.${i}.postedDateConfirmed`));
+    if (t.date && ((draft.periodStart && t.date < draft.periodStart) || (draft.periodEnd && t.date > draft.periodEnd))) addIssue(`Activity row ${i + 1} is outside the fixed reporting period.`, continuation(`Review ${row} outside the reporting period`, `transactions.${i}.date`));
   }
-  for (const [i, f] of draft.funds.entries()) if (!accountIds.has(f.account) || money(f.amount) === null || money(f.amount) < 0) issues.push(`Review fenced fund ${i + 1}.`);
-  for (const [i, o] of draft.obligations.entries()) if (!o.name || money(o.amount) === null || money(o.amount) < 0) issues.push(`Review obligation ${i + 1}.`);
-  const accounts = draft.accounts.map(a => {
-    if (!a.activityComplete) issues.push(`${a.name}: confirm that every bank-posted transaction in this reporting period is listed. Add any missing receipts, disbursements or transfers before signing.`);
-    for (const field of accountFields.filter(k => !['openingBalance','statementBalance','bookBalance'].includes(k))) if (money(a[field]) !== null && money(a[field]) < 0) issues.push(`${a.name}: ${field.replace(/([A-Z])/g, ' $1').toLowerCase()} must not be negative. Record the direction separately.`);
+  for (const [i, f] of draft.funds.entries()) {
+    const invalid = [!accountIds.has(f.account) && 'account', (money(f.amount) === null || money(f.amount) < 0) && 'amount'].filter(Boolean);
+    if (invalid.length) addIssue(`Review fenced fund ${i + 1}.`, ...invalid.map(field => continuation(`Review Fenced fund ${i + 1} ${financialFieldLabels[field]}`, `funds.${i}.${field}`)));
+  }
+  for (const [i, o] of draft.obligations.entries()) {
+    const invalid = [!o.name && 'name', (money(o.amount) === null || money(o.amount) < 0) && 'amount'].filter(Boolean);
+    if (invalid.length) addIssue(`Review obligation ${i + 1}.`, ...invalid.map(field => continuation(`Review Obligation ${i + 1} ${financialFieldLabels[field]}`, `obligations.${i}.${field}`)));
+  }
+  const accounts = draft.accounts.map((a, i) => {
+    if (!a.activityComplete) addIssue(`${a.name}: confirm that every bank-posted transaction in this reporting period is listed. Add any missing receipts, disbursements or transfers before signing.`, continuation(`Confirm all ${a.name} transactions are listed`, `accounts.${i}.activityComplete`));
+    for (const field of accountFields.filter(k => !['openingBalance','statementBalance','bookBalance'].includes(k))) if (money(a[field]) !== null && money(a[field]) < 0) addIssue(`${a.name}: ${field.replace(/([A-Z])/g, ' $1').toLowerCase()} must not be negative. Record the direction separately.`, accountField(i, field, 'Correct'));
     const entries = draft.transactions.filter(t => t.account === a.id && t.postedDateConfirmed && t.date && (!draft.periodStart || t.date >= draft.periodStart) && (!draft.periodEnd || t.date <= draft.periodEnd));
     const flow = (field, kind) => {
       const rows = entries.filter(t => t.kind === kind), total = sum(rows.map(t => money(t.amount))), stated = money(a[field]);
-      if (a.activityComplete && stated !== null && total !== stated) issues.push(`${a.name}: ${field.replace(/([A-Z])/g, ' $1').toLowerCase()} total does not match the listed activity.`);
+      if (a.activityComplete && stated !== null && total !== stated) addIssue(`${a.name}: ${field.replace(/([A-Z])/g, ' $1').toLowerCase()} total does not match the listed activity.`, accountField(i, field, 'Reconcile'));
       return stated !== null ? stated : a.activityComplete ? total : null;
     };
     const receipts = flow('receipts', 'receipt'), disbursements = flow('disbursements', 'payment'), transfersIn = flow('transfersIn', 'transfer_in'), transfersOut = flow('transfersOut', 'transfer_out');
@@ -117,24 +145,31 @@ export function calculateTreasury(input) {
     const calculated = complete ? opening + receipts - disbursements + transfersIn - transfersOut : null;
     const adjusted = [statement, transit, outstanding].every(n => n !== null) ? statement + transit - outstanding : null;
     const difference = adjusted !== null && book !== null ? adjusted - book : null;
-    if (!complete) issues.push(`${a.name}: complete the opening balance and receipt, disbursement and transfer totals, or confirm that all activity is listed.`);
-    if ([statement, book, transit, outstanding].some(n => n === null)) issues.push(`${a.name}: confirm the statement balance, book balance, deposits in transit and outstanding checks. Enter 0 only when none applies.`);
-    if (calculated !== null && statement !== null && calculated !== statement) issues.push(`${a.name}: beginning balance plus bank activity differs from the statement ending balance by ${currency(calculated - statement)}.`);
-    if (difference !== null && difference !== 0) issues.push(`${a.name}: the adjusted bank balance and book balance differ by ${currency(difference)}.`);
+    if (!complete) {
+      const fields = [['openingBalance', opening], ['receipts', receipts], ['disbursements', disbursements], ['transfersIn', transfersIn], ['transfersOut', transfersOut]];
+      addIssue(`${a.name}: complete the opening balance and receipt, disbursement and transfer totals, or confirm that all activity is listed.`, ...fields.filter(([,value]) => value === null).map(([field]) => accountField(i, field)));
+    }
+    if ([statement, book, transit, outstanding].some(n => n === null)) {
+      const fields = [['statementBalance', statement], ['bookBalance', book], ['depositsInTransit', transit], ['outstandingChecks', outstanding]];
+      addIssue(`${a.name}: confirm the statement balance, book balance, deposits in transit and outstanding checks. Enter 0 only when none applies.`, ...fields.filter(([,value]) => value === null).map(([field]) => accountField(i, field)));
+    }
+    if (calculated !== null && statement !== null && calculated !== statement) addIssue(`${a.name}: beginning balance plus bank activity differs from the statement ending balance by ${currency(calculated - statement)}.`, accountField(i, 'statementBalance', 'Reconcile'));
+    if (difference !== null && difference !== 0) addIssue(`${a.name}: the adjusted bank balance and book balance differ by ${currency(difference)}.`, accountField(i, 'bookBalance', 'Reconcile'));
     const fenced = draft.fundsReviewed ? sum(draft.funds.filter(f => f.account === a.id).map(f => money(f.amount))) : null;
-    if (fenced !== null && book !== null && fenced > book) issues.push(`${a.name}: fenced funds exceed the book balance.`);
+    if (fenced !== null && book !== null && fenced > book) addIssue(`${a.name}: fenced funds exceed the book balance.`, continuation(`Reconcile ${a.name} Fenced Money with the book balance`, 'fundsReviewed'));
     return { id: a.id, name: a.name, opening, receipts, disbursements, transfersIn, transfersOut, calculated, statement, book, transit, outstanding, hold, adjusted, difference, fenced };
   });
   const total = k => sum(accounts.map(a => a[k]));
   const cash = total('statement'), bookCash = total('book'), hold = total('hold'), fenced = draft.fundsReviewed ? sum(draft.funds.map(f => money(f.amount))) : null, obligations = draft.obligationsReviewed ? sum(draft.obligations.map(o => money(o.amount))) : null;
   const ti = total('transfersIn'), to = total('transfersOut');
-  if (accounts.length > 1 && ti !== null && to !== null && ti !== to) issues.push('Transfers between the included accounts do not balance. Confirm both sides or identify an account outside this report.');
+  if (accounts.length > 1 && ti !== null && to !== null && ti !== to) addIssue('Transfers between the included accounts do not balance. Confirm both sides or identify an account outside this report.', continuation('Reconcile transfers between the included accounts', 'transactions'));
   // The Lodge's September report defines unrestricted cash as total cash in bank
   // less Fenced Money. Bank membership shares are retained for compatibility with
   // older drafts, but they are not a category in the approved report format.
   const unrestricted = [cash, fenced].every(n => n !== null) ? cash - fenced : null;
   const afterObligations = unrestricted !== null && obligations !== null ? unrestricted - obligations : null;
-  return { accounts, cash, bookCash, hold, fenced, obligations, unrestricted, afterObligations, issues: [...new Set(issues)], ready: issues.length === 0 };
+  return { accounts, cash, bookCash, hold, fenced, obligations, unrestricted, afterObligations, issues: [...new Set(issues)], ready: issues.length === 0,
+    ...(includeContinueIssues ? {continueIssues} : {}) };
 }
 
 const monthNumber = value => ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(value.slice(0, 3).toLowerCase()) + 1;

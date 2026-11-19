@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { readFile } from 'node:fs/promises';
 import { buildCorrespondencePdf, sharedSigningOfficers } from '../correspondence.js';
+import { CorrespondenceWorkspace } from '../public/correspondence.js';
 
 const probe = createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
 const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
@@ -47,6 +48,19 @@ try {
   assert.equal(saved.status, 201); assert.equal(saved.data.draft.preparedByName, 'William McDuffie');
   assert.equal(saved.data.draft.preparedByOffice, 'Secretary'); assert.equal(saved.data.draft.status, 'draft');
   const id = saved.data.draft.id;
+  const personalDrafts = await api('/api/correspondence?drafts=1', secretary.token);
+  assert.equal(personalDrafts.status, 200);
+  assert.match(personalDrafts.cache, /private, no-store/);
+  assert.deepEqual(personalDrafts.data.drafts, [{
+    id, subject: letter.subject, preparedByUserId: secretary.user.id, status: 'draft',
+    updatedAt: saved.data.draft.updatedAt, continueIssues: [{ label: 'Review the letter and PDF', target: 'review' }],
+  }]);
+  for (const token of [assistant.token, owner.token]) {
+    assert.deepEqual((await api('/api/correspondence?drafts=1', token)).data.drafts, []);
+    assert.equal((await api(`/api/correspondence/${id}/draft`, token)).status, 404);
+  }
+  assert.equal((await api('/api/correspondence?drafts=1', officer.token)).status, 403);
+  assert.deepEqual((await api(`/api/correspondence/${id}/draft`, secretary.token)).data.draft, saved.data.draft);
   const list = await api('/api/correspondence', assistant.token);
   assert.equal(list.status, 200); assert.match(list.cache, /no-store/); assert.equal(list.data.drafts[0].id, id);
   assert.equal((await api(`/api/correspondence/${id}`, assistant.token, 'PUT', { ...letter, subject: 'Changed' })).status, 403);
@@ -89,6 +103,8 @@ try {
   assert.equal(submitted.status, 200);
   assert.equal(submitted.data.draft.status, 'awaiting_secretary');
   assert.equal(submitted.data.draft.assignedToUserId, secretary.user.id);
+  assert.deepEqual((await api('/api/correspondence?drafts=1', owner.token)).data.drafts, []);
+  assert.equal((await api(`/api/correspondence/${wmId}/draft`, owner.token)).status, 404);
   const secretaryAlerts = await api('/api/correspondence/alerts', secretary.token);
   assert.equal(secretaryAlerts.status, 200);
   assert.match(secretaryAlerts.cache, /no-store/);
@@ -99,6 +115,10 @@ try {
   assert.equal(returned.status, 200);
   assert.equal(returned.data.draft.status, 'draft');
   assert.equal(returned.data.draft.returnNote, 'Check the date.');
+  const returnedDrafts = (await api('/api/correspondence?drafts=1', owner.token)).data.drafts;
+  assert.equal(returnedDrafts.length, 1);
+  assert.deepEqual(returnedDrafts[0].continueIssues, [{ label: 'Returned for correction: Check the date.', target: 'return-note' }]);
+  assert.equal((await api('/api/correspondence?drafts=1', secretary.token)).data.drafts.some(item => item.id === wmId), false);
   assert.equal((await api('/api/correspondence/alerts', owner.token)).data.alerts[0].id, wmId);
   assert.equal((await api('/api/correspondence/alerts', secretary.token)).data.alerts.length, 0);
   const resubmitted = await api(`/api/correspondence/${wmId}/submit`, owner.token, 'POST', { expectedUpdatedAt: returned.data.draft.updatedAt });
@@ -235,3 +255,52 @@ try {
     0, 'A duplicate exact-name account makes the shared signing group ambiguous.');
   console.log('PASS: WM can choose McDuffie or Reese for a private letter; only the assigned officer can sign with a reserved signature space and download the PDF for manual email.');
 } finally { server.kill('SIGTERM'); }
+
+const nodes = new Map();
+let focusId;
+globalThis.document = {
+  getElementById: id => {
+    if (!nodes.has(id)) nodes.set(id, {
+      focus: () => { focusId = id; }, scrollIntoView() {},
+      textContent: '', classList: { toggle() {} },
+    });
+    return nodes.get(id);
+  },
+};
+try {
+  const user = { id: 11, role: 'secretary', permissions: ['reports.create'] };
+  const draft = { id: 'our-letter', preparedByUserId: 11, status: 'draft', returnNote: 'Check date.' };
+  const apiCalls = [];
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const workspace = new CorrespondenceWorkspace({ user: () => user, api: async (path, options) => {
+    assert.equal(options, undefined, 'Continuing calls only read routes');
+    apiCalls.push(path);
+    if (path.endsWith('/signers')) return { signers: [] };
+    await wait;
+    return { draft };
+  } });
+  workspace.bind = () => {};
+  workspace.renderList = () => {};
+  workspace.open = async record => {
+    workspace.currentId = record.id;
+    workspace.currentReturnNote = record.returnNote;
+    workspace.pdfUrl = 'blob:fixture';
+  };
+  assert.equal(await workspace.continueDraft({ ...draft, preparedByUserId: 12 }, 'review'), false);
+  assert.equal(apiCalls.length, 0);
+  const opening = workspace.continueDraft(draft, 'review');
+  assert.equal(await workspace.continueDraft(draft, 'review'), false, 'A pending open cannot be repeated');
+  release();
+  assert.equal(await opening, true);
+  assert.equal(focusId, 'correspondencePreview');
+  assert.deepEqual(apiCalls, ['/api/correspondence/signers', '/api/correspondence/our-letter/draft']);
+  workspace.dirty = true;
+  assert.equal(await workspace.continueDraft({ ...draft, id: 'another-letter' }, 'review'), false);
+  assert.equal(workspace.currentId, 'our-letter');
+  assert.equal(await workspace.continueDraft(draft, 'return-note'), true);
+  assert.equal(workspace.dirty, true);
+  assert.equal(focusId, 'correspondenceMessage');
+  assert.match(nodes.get(focusId).textContent, /Check date\./);
+  assert.equal(apiCalls.length, 2);
+} finally { delete globalThis.document; }

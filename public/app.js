@@ -717,6 +717,7 @@ const enterWorkspace = async (user, session, { freshLogin = false } = {}) => {
   legacyReportBridge.request();
   clearMemberAccessInvite();
   homeAlertsLoaded = false;
+  clearHomeDrafts();
   const sessionDays = Number(session?.lifetimeDays);
   const hasSessionPolicy = Number.isFinite(sessionDays) && sessionDays >= 1;
   $('sessionNotice').classList.toggle('hidden', !hasSessionPolicy);
@@ -788,7 +789,11 @@ const refreshSessionPermissions = async () => {
     if (before === after) return;
     applyWorkspacePermissions(user);
     showWorkspaceSection(state.activeSection || 'home', { skipLoad: true });
-    if (state.activeSection === 'home') void refreshHomeCalendar();
+    clearHomeDrafts();
+    if (state.activeSection === 'home') {
+      void refreshHomeCalendar();
+      void refreshHomeDrafts();
+    }
     treasuryWorkspace?.refreshPermissions();
     buildingCalendarWorkspace?.refreshPermissions();
     if (can('documents.status')) void renderDocuments();
@@ -807,6 +812,7 @@ const refreshSessionPermissions = async () => {
       state.authEpoch += 1;
       state.user = null;
       legacyReportBridge.clear();
+      clearHomeDrafts();
       if (typeof assistantWorkspace !== 'undefined') assistantWorkspace?.dispose();
       signatureAuthorization?.dispose();
       clearMemberAccessInvite();
@@ -1310,8 +1316,103 @@ const renderHomeAlertSummary = () => {
   $('homePrimaryActionLabel').textContent = total ? 'Review What Needs Attention' : 'Open Lodge Tools';
   if (!total) {
     const message = document.createElement('p');
-    message.textContent = homeAlertsLoaded ? 'No Lodge records need attention.' : 'Checking Lodge records…';
+    message.textContent = homeAlertsLoaded ? 'No new notices.' : 'Checking Lodge records…';
     list.append(message);
+  }
+};
+
+const homeDraftSources = [
+  {section:'minutes', path:'/api/minutes?drafts=1', key:'minutes', allowed:() => can('minutes.view') && can('minutes.prepare')},
+  {section:'treasury', path:'/api/treasury?drafts=1', key:'reports', allowed:() => can('treasury.prepare')},
+  {section:'agenda', path:'/api/agendas', key:'agendas', allowed:() => state.user?.role === 'owner'},
+  {section:'correspondence', path:'/api/correspondence?drafts=1', key:'drafts',
+    allowed:() => ['owner','secretary','assistant_secretary'].includes(state.user?.role) && can('reports.create')},
+];
+let homeDraftLoad = 0;
+let homeDraftOpen = 0;
+const clearHomeDrafts = () => {
+  ++homeDraftLoad;
+  ++homeDraftOpen;
+  hide($('homeDraftPanel'));
+  $('homeDraftList').replaceChildren();
+  setMessage($('homeDraftMessage'), '');
+};
+
+const refreshHomeDrafts = async () => {
+  const load = ++homeDraftLoad, userId = state.user?.id, epoch = state.authEpoch;
+  const sources = homeDraftSources.filter(source => source.allowed());
+  if (!userId || !sources.length) { clearHomeDrafts(); return; }
+  show($('homeDraftPanel'));
+  const list = $('homeDraftList'), message = $('homeDraftMessage');
+  if (!list.childElementCount) setMessage(message, 'Checking your saved drafts…');
+  const isCurrent = () => load === homeDraftLoad && userId === state.user?.id && epoch === state.authEpoch && state.activeSection === 'home';
+  const [cards, agendaReview, ...results] = await Promise.allSettled([
+    import(`/home-drafts.js?v=${encodeURIComponent(CLIENT_BUILD_VERSION)}`),
+    sources.some(source => source.section === 'agenda') ? import('/agenda-review.js') : null,
+    ...sources.map(source => apiFetch(source.path, {cache:'no-store'})),
+  ]);
+  if (!isCurrent()) return;
+  if (cards.status === 'rejected') { setMessage(message, 'Continue Draft could not load. Reopen Home to try again.', true); return; }
+  const entries = results.flatMap((result,index) => {
+    const source = sources[index];
+    if (result.status !== 'fulfilled' || !source.allowed()) return [];
+    if (source.section === 'agenda' && !agendaReview.value) return [];
+    return (result.value[source.key] || []).filter(record => source.section === 'agenda' ? record.status === 'draft' : Array.isArray(record.continueIssues)).map(record => {
+      const {section} = source;
+      const isLocalAgenda = section === 'agenda' && agendaWorkspace?.record?.id === record.id && agendaWorkspace.workspaceUserId === userId;
+      const isLocalTreasury = section === 'treasury' && treasuryWorkspace?.record?.id === record.id && treasuryWorkspace.workspaceUserId === userId;
+      const agenda = isLocalAgenda && agendaWorkspace.dirty ? agendaWorkspace.draft : record.draft;
+      const date = section === 'minutes' ? record.meetingDate : section === 'agenda' ? agenda?.meetingDate : record.periodEnd || record.draft?.periodEnd;
+      const label = {minutes:'Meeting minutes',treasury:'Treasurer report',agenda:'Agenda',correspondence:'Letter'}[section];
+      const detail = section === 'correspondence' ? record.subject : date && minutesDates.formatMinutesDate(date);
+      const readyLabel = {minutes:'Review and attest to the draft.',treasury:'Review and sign the report.',agenda:'Review the agenda and preview the PDF.'}[section];
+      return {section,record, title:detail ? `${label} · ${detail}` : label, readyLabel,
+        savedLabel:record.updatedAt ? `Last saved ${formatDate(record.updatedAt)}` : '',
+        workingLabel:isLocalTreasury && treasuryWorkspace.dirty ? 'Unsaved edits in this tab. The checklist reflects your last save.'
+          : isLocalAgenda && agendaWorkspace.dirty ? 'Unsaved edits in this tab.' : '',
+        issues:section === 'agenda' ? agendaReview.value.agendaContinueIssues(agenda) : record.continueIssues,
+      };
+    });
+  }).sort((a,b) => String(b.record.updatedAt || '').localeCompare(String(a.record.updatedAt || '')));
+  cards.value.renderHomeDraftCards(list, entries, openHomeDraft);
+  const incomplete = agendaReview.status === 'rejected' || results.some(result => result.status === 'rejected');
+  setMessage(message, incomplete ? 'Some saved drafts could not be loaded.' : entries.length ? '' : 'No saved drafts to continue.', incomplete);
+};
+
+const openHomeDraft = async ({section,record}, target) => {
+  const attempt = ++homeDraftOpen, userId = state.user?.id, epoch = state.authEpoch;
+  const source = homeDraftSources.find(entry => entry.section === section);
+  const isCurrent = () => homeDraftOpen === attempt && state.user?.id === userId && state.authEpoch === epoch && source?.allowed();
+  const message = $('homeDraftMessage');
+  if (!isCurrent()) return;
+  setMessage(message, 'Opening your draft…');
+  try {
+    if (section === 'minutes') {
+      if (state.minutesEditorDirty && state.editingMinutesId !== record.id) throw new Error('Save your open minutes draft before opening another.');
+      if (!state.minutesEditorDirty && !await renderMinutes()) throw new Error('The minutes list could not be refreshed. Try opening the draft again.');
+      if (!isCurrent() || state.activeSection !== 'home') return;
+      const current = state.minutes.find(item => item.id === record.id);
+      if (!canAttestMinutesDraft(current)) throw new Error('This draft has moved to another stage. Open Meeting Minutes to see its latest status.');
+      if (!state.minutesEditorDirty && current.updatedAt !== record.updatedAt) {
+        await refreshHomeDrafts();
+        throw new Error('This draft was updated. Choose an item from its refreshed checklist.');
+      }
+      if (!showWorkspaceSection(section, {skipLoad:true})) return;
+      if (!state.minutesEditorDirty) openMinutesEditor(record.id);
+      window.requestAnimationFrame(() => { if (isCurrent() && state.editingMinutesId === record.id) focusMinutesDraftTarget(target); });
+    } else if (section === 'agenda' || section === 'treasury') {
+      const workspace = section === 'agenda' ? agendaWorkspace : treasuryWorkspace;
+      if (workspace.busy || workspace.dirty && workspace.record?.id !== record.id) throw new Error('Save or finish your open draft before opening another.');
+      const current = section === 'agenda' ? (await apiFetch(`/api/agendas/${encodeURIComponent(record.id)}`)).agenda
+        : (await apiFetch('/api/treasury?drafts=1', {cache:'no-store'})).reports?.find(report => report.id === record.id);
+      if (!isCurrent() || state.activeSection !== 'home') return;
+      if (!current) throw new Error('This draft has moved to another stage. Open the report list to see its latest status.');
+      const stillCurrent = current.revision === record.revision || (section === 'agenda' && workspace.dirty && workspace.record?.id === record.id);
+      if (showWorkspaceSection(section, {skipLoad:true})) await workspace.continueDraft(current, stillCurrent ? target : undefined);
+    } else if (showWorkspaceSection(section, {skipLoad:true})) await correspondenceWorkspace.continueDraft(record, target);
+    if (isCurrent()) setMessage(message, '');
+  } catch (error) {
+    if (isCurrent()) setMessage(message, error.message, true);
   }
 };
 
@@ -1458,7 +1559,10 @@ const showWorkspaceSection = (section, { skipLoad = false } = {}) => {
   $('groupLandingSection').classList.add('hidden');
   setPhoneNavActive(dashboardGroupForSection(section));
   setSidebarGroupExpanded(dashboardGroupForSection(section));
-  if (home && !skipLoad) void refreshHomeCalendar();
+  if (home && !skipLoad) {
+    void refreshHomeCalendar();
+    void refreshHomeDrafts();
+  }
   if (home) renderHomeAlertSummary();
   const sidebarNav = $('workspaceSections');
   if (window.innerWidth <= 1100) {
@@ -1893,6 +1997,7 @@ setInterval(() => { if (can('treasury.prepare')) refreshTreasuryAlerts(); }, 200
 
 const refreshGenerationStatus = element => import('/generation-status.js').then(module => module.showGenerationStatus(element, apiFetch, state.user?.role));
 const renderMinutes = async () => {
+  const userId = state.user?.id, epoch = state.authEpoch;
   state.minutesRecordsRefreshPending = false;
   if (can('minutes.prepare')) void refreshGenerationStatus($('minutesGenerationStatus'));
   try {
@@ -1900,6 +2005,7 @@ const renderMinutes = async () => {
       apiFetch('/api/minutes'),
       apiFetch('/api/archives/minutes'),
     ]);
+    if (state.user?.id !== userId || state.authEpoch !== epoch) return false;
     state.minutes = payload.minutes || [];
     const archive = archivePayload.records || [];
     const list = $('minutesList');
@@ -2337,6 +2443,23 @@ const focusMinutesPrepField = field => {
   setMinutesView(false);
   field.focus({ preventScroll: true });
   field.scrollIntoView({ block: 'center' });
+};
+
+const focusMinutesDraftTarget = ({field, officerIndex, officerName} = {}) => {
+  const fields = {
+    meetingDate:'minutesMeetingDate', meetingType:'minutesMeetingType', degree:'minutesDegree', openingTime:'minutesOpeningTime',
+    closingTime:'minutesClosingTime', presiding:'minutesPresiding', quorum:'minutesQuorum', nextMeeting:'minutesNextMeeting',
+    officerRoll:'minutesOfficerRollConfirmed', otherPresent:'minutesOtherPresentConfirmed',
+    otherExcused:'minutesOtherExcusedConfirmed', notes:'addMinutesSection',
+  };
+  const target = fields[field] ? $(fields[field]) : $('submitMinutesReview');
+  if (officerName && ['status','stationCoverage','actingName','actingWholeMeeting'].includes(field)) {
+    const rows = [...$('minutesOfficerAttendance').querySelectorAll('.minutes-officer-row')];
+    const matches = entry => entry?.querySelector('[data-field="name"]').value === officerName;
+    const row = matches(rows[officerIndex]) ? rows[officerIndex] : rows.find(matches);
+    const control = row?.querySelector(`[data-field="${field}"]`);
+    focusMinutesPrepField(control && !control.closest('.hidden') ? control : row?.querySelector('[data-field="status"]') || $('addMinutesOfficer'));
+  } else focusMinutesPrepField(target);
 };
 
 const minutesAttendanceTarget = () => {
@@ -3624,6 +3747,7 @@ const startRealtime = async () => {
         buffer = events.pop() || '';
         events.forEach((event) => {
           if (event.includes('event: minutes_review_changed') || event.includes('event: minutes_completion_changed')) refreshMinutesReviewAlerts();
+          if (state.activeSection === 'home' && /event: (?:minutes_(?:records|review)_changed|treasury_changed|correspondence_changed)\b/.test(event)) void refreshHomeDrafts();
           if (event.includes('event: correspondence_changed')) {
             refreshCorrespondenceAlerts();
             if (state.activeSection === 'correspondence' && !correspondenceWorkspace?.dirty) correspondenceWorkspace?.load();
@@ -4046,6 +4170,7 @@ $('logoutBtn').addEventListener('click', async () => {
   state.authEpoch += 1;
   state.legacyToken = '';
   state.user = null;
+  clearHomeDrafts();
   clearMemberAccessInvite();
   state.reportHandoff = null;
   state.reportHandoffExpiresAt = 0;

@@ -1,4 +1,5 @@
 import { formatEasternClockRange } from './public/eastern-time.js';
+import { agendaContinueIssues } from './public/agenda-review.js';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
 import crypto from 'node:crypto';
@@ -83,15 +84,8 @@ export const normalizeAgendaDraft = (input = {}) => {
   };
 };
 
-export const agendaIssues = draft => {
-  const issues = [];
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.meetingDate)) issues.push('Choose the meeting date.');
-  if (!draft.meetingType) issues.push('Enter the meeting type.');
-  if (!draft.startTime) issues.push('Enter the meeting start time.');
-  if (!draft.sections.length) issues.push('Add at least one agenda section.');
-  if (draft.sections.some(section => !section.heading)) issues.push('Every agenda section needs a heading.');
-  return issues;
-};
+export const agendaIssues = draft => [...new Set(agendaContinueIssues(draft).map(({ label, target }) =>
+  target.startsWith('section.') ? 'Every agenda section needs a heading.' : label))];
 
 const dateLabel = value => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');

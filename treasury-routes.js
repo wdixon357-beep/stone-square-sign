@@ -49,7 +49,11 @@ async function accountSources(req) {
     files:groups.flatMap(({label,files})=>files.map(file=>({file,accountLabel:label}))),
   };
 }
-const serial = row => {const draft=normalizeTreasury(JSON.parse(row.draft_json));return { preparerUserId:row.preparer_user_id, supersededByReportId:row.superseded_by_report_id||null, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft, submittedDraft:row.submitted_json?normalizeTreasury(JSON.parse(row.submitted_json)):null, calculation:calculateTreasury(draft), preparerAttestedAt:row.preparer_attested_at };};
+const serial = (row, user) => {
+  const draft=normalizeTreasury(JSON.parse(row.draft_json));
+  const {continueIssues, ...calculation}=calculateTreasury(draft,{includeContinueIssues:Boolean(user&&editable(row,user)&&!row.preparer_attested_at)});
+  return { preparerUserId:row.preparer_user_id, supersededByReportId:row.superseded_by_report_id||null, uploadedBy:row.uploader_name||row.preparer_name, id:row.id, status:row.status, revision:row.revision, createdByUserId:row.created_by_user_id, createdBy:row.preparer_name, preparerRole:row.preparer_role, updatedAt:row.updated_at, draft, submittedDraft:row.submitted_json?normalizeTreasury(JSON.parse(row.submitted_json)):null, calculation, preparerAttestedAt:row.preparer_attested_at, ...(continueIssues?{continueIssues}:{}) };
+};
 const fetchRecord = id => dbGet('SELECT * FROM treasury_reports WHERE id = ? AND deleted_at IS NULL',[id]);
 const canPrepare = user => hasPermission(user,'treasury.prepare');
 // A report has exactly one active editor. The administrator can take over through the
@@ -68,7 +72,7 @@ async function currentTreasuryReportingWindow(reference=easternDate()) {
   return treasuryReportingWindow(reference,rows.map(row=>JSON.parse(row.draft_json).periodEnd));
 }
 async function visibleReport(row,user) {
-  if(user.role==='owner'||(canPrepare(user)&&(row.preparer_user_id===user.id||(row.status==='awaiting_preparer'&&row.preparer_user_id===null))))return serial(row);
+  if(user.role==='owner'||(canPrepare(user)&&(row.preparer_user_id===user.id||(row.status==='awaiting_preparer'&&row.preparer_user_id===null))))return serial(row,user);
   const snapshot=finalized(row)?await signedSnapshot(row):null;
   const draft=snapshot?normalizeTreasury(JSON.parse(snapshot.draft_json)):normalizeTreasury();
   draft.sourceNames=[];draft.unmappedLines=[];draft.extractionNotes=[];
@@ -193,6 +197,11 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     res.json({ok:true});
   }));
   app.get('/api/treasury',route(async(req,res)=>{
+    if(req.query.drafts==='1'){
+      const drafts=canPrepare(req.user)?await dbAll("SELECT * FROM treasury_reports WHERE deleted_at IS NULL AND status='draft' AND preparer_user_id=? AND preparer_attested_at IS NULL ORDER BY updated_at DESC, id",[req.user.id]):[];
+      res.json({reports:drafts.map(row=>serial(row,req.user))});
+      return;
+    }
     let filter='',params=[];
     if(req.user.role!=='owner'){
       const working=canPrepare(req.user)
@@ -211,7 +220,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
     await withTransaction(async()=>{
       await dbRun('INSERT INTO treasury_reports (id,draft_json,source_text,created_by_user_id,preparer_name,preparer_role,created_at,updated_at,preparer_user_id,uploader_name,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[id,JSON.stringify(draft),'',req.user.id,req.user.name,req.user.role,time,time,req.user.id,req.user.name,'draft']);
       await audit(req,id,'created',{manual:true});
-    });broadcast('treasury_changed');res.status(201).json({report:serial(await fetchRecord(id))});
+    });broadcast('treasury_changed');res.status(201).json({report:serial(await fetchRecord(id),req.user)});
   }));
   app.post('/api/treasury/generate',requireUpload,rateLimit({key:'treasury-generate',maximum:12,windowMs:3600000}),uploadFields,route(async(req,res)=>{
     const uploaded=fileList(req.files);if(uploaded.reduce((n,f)=>n+f.size,0)>20*1024*1024)throw error(400,'Keep the combined uploads under 20 MB.');
@@ -269,7 +278,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
         organizationWarning='The report was claimed, but the banking source could not be organized automatically. Select Reorganize original source to try again, or enter corrections in the marked fields.';
       }
     }
-    broadcast('treasury_changed',{reason:'report_claimed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id)),organizationWarning});
+    broadcast('treasury_changed',{reason:'report_claimed',reportId:row.id});res.json({report:serial(await fetchRecord(row.id),req.user),organizationWarning});
   }));
   // Return an unsaved replacement. Existing corrections and signatures stay intact.
   app.post('/api/treasury/:id/organize',requirePrepare,rateLimit({key:'treasury-generate',maximum:12,windowMs:3600000}),route(async(req,res)=>{
@@ -301,7 +310,7 @@ export function mountTreasuryRoutes(app,{requireAuth,rateLimit,sendEmail,baseUrl
       await assertAssistantRecordUnchanged(req);
       const result=await dbRun('UPDATE treasury_reports SET draft_json=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?',[JSON.stringify(draft),new Date().toISOString(),row.id,row.revision]);
       if(!result.changes)throw error(409,'This report changed. Reopen it before saving.');await audit(req,row.id,'edited');
-    });res.json({report:serial(await fetchRecord(row.id))});
+    });res.json({report:serial(await fetchRecord(row.id),req.user)});
   }));
   app.get('/api/treasury/:id/pdf',route(async(req,res)=>{
     const row=await record(req),snapshot=finalized(row)?await signedSnapshot(row):null;

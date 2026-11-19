@@ -32,7 +32,7 @@ import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
 import {MINUTES_MEETING_DETAILS_FIELDS, formatMinutesClock, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails, suggestMinutesDetailsFromNotes} from './public/minutes-meeting-details.js';
 import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
-import { attendanceReviewIssues, attendanceRecordIssues, closingReviewIssues } from './minutes-format.js';
+import { attendanceReviewIssues, attendanceRecordIssues, closingReviewIssues, minutesContinueIssues } from './minutes-format.js';
 import { initTreasurySchema, mountTreasuryRoutes, treasuryAccess } from './treasury-routes.js';
 import { initAgendaSchema, mountAgendaRoutes } from './agenda-routes.js';
 import { mountArchiveRoutes } from './archive-routes.js';
@@ -2009,6 +2009,16 @@ const recoverStaleMinutesClaims = async () => {
 };
 app.get('/api/minutes', requireAuth, requireMinutesView, async (req, res, next) => {
   try {
+    if (req.query.drafts === '1') {
+      if (req.assistant || !hasPermission(req.user, 'minutes.prepare')) return res.status(403).json({error:'Minutes preparation access is required.'});
+      const drafts = await dbAll(`SELECT id, meeting_date, updated_at, status, draft_json FROM meeting_minutes
+        WHERE status = 'draft' AND created_by_user_id = ? ORDER BY updated_at DESC`, [req.user.id]);
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.json({minutes:drafts.map(row => ({
+        id:row.id, meetingDate:row.meeting_date, updatedAt:row.updated_at,
+        continueIssues:minutesContinueIssues(workingMinutesDraft(row)),
+      }))});
+    }
     if (!req.assistant) await recoverStaleMinutesClaims();
     const rows = await dbAll(
       `SELECT m.*,

@@ -869,6 +869,14 @@ summary { min-height: 44px; display: flex; align-items: center; }
 .home-panel-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .home-panel-heading .eyebrow { margin-bottom: 4px; }
 .home-panel h2 { margin: 0; color: var(--navy); font-size: 19px; }
+.home-draft-list { display: grid; gap: 14px; }
+.home-draft-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+.home-draft-card-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.home-draft-card h3 { margin: 0; color: var(--navy); font-size: 16px; overflow-wrap: anywhere; }
+.home-draft-card p { margin: 8px 0 0; }
+.home-draft-card ul { margin: 7px 0 0; padding-inline-start: 18px; }
+.home-draft-card summary { margin-top: 8px; color: var(--navy); cursor: pointer; }
+.home-draft-link { padding: 6px 1px; border: 0; background: transparent; color: var(--navy); text-align: start; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .home-count { border-radius: 99px; background: #f1e4c8; color: #674600; padding: 5px 9px; font-size: 11px; font-weight: 800; }
 .home-alert-list, .home-event-list, .home-quick-links { display: grid; gap: 8px; }
 .home-alert-list p, .home-event-list p, .home-grand-view p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }

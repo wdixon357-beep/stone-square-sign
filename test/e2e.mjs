@@ -696,6 +696,16 @@ try {
     generatedMinutes.status === 201 && generatedMinutes.payload.minutes?.status === 'draft',
     `${generatedMinutes.status} ${JSON.stringify(generatedMinutes.payload).slice(0, 160)}`);
   const minutesId = generatedMinutes.payload.minutes?.id;
+  const ownHomeMinutes = await api('GET', '/api/minutes?drafts=1', {token:asstToken});
+  const ownHomeDraft = ownHomeMinutes.payload.minutes?.find(item => item.id === minutesId);
+  const otherHomeMinutes = await api('GET', '/api/minutes?drafts=1', {token:secToken});
+  const viewerHomeMinutes = await api('GET', '/api/minutes?drafts=1', {token:officerToken});
+  check('Home lists an officer’s own saved minutes with actionable checks and no draft content', ownHomeMinutes.status === 200 && !!ownHomeDraft
+    && Object.keys(ownHomeDraft).sort().join(',') === 'continueIssues,id,meetingDate,updatedAt'
+    && ownHomeDraft.continueIssues.some(issue => issue.target.field === 'status' && issue.target.officerName)
+    && ownHomeDraft.continueIssues.some(issue => issue.target.field === 'officerRoll'));
+  check('another Secretary and a finalized-record reader cannot see that draft on Home', otherHomeMinutes.status === 200
+    && !otherHomeMinutes.payload.minutes.some(item => item.id === minutesId) && viewerHomeMinutes.status === 403);
   check('generated minutes always expose Sickness and Distress for editing', generatedMinutes.payload.minutes?.draft.sections.some(s => s.heading === 'Sickness and Distress'));
   const emptyMinutesSave = await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken,body:{draft:{sections:[]}}});
   check('a required empty section cannot bypass the empty-record check', emptyMinutesSave.status === 400);
@@ -777,6 +787,10 @@ try {
   const invalidCoverageAttestation = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
   check('partial coverage cannot be attested without confirming the regular officer arrived', invalidCoverageAttestation.status === 409
     && /partial assignment requires confirmation/.test(invalidCoverageAttestation.payload.error));
+  const coverageHome = await api('GET', '/api/minutes?drafts=1', {token:asstToken});
+  check('Home identifies the specific Senior Warden attendance field needed for partial coverage', coverageHome.payload.minutes
+    ?.find(item => item.id === minutesId)?.continueIssues.some(issue => issue.target.officerName === 'Xavier M. White'
+      && issue.target.field === 'status' && /partial assignment/.test(issue.label)));
   Object.assign(revisedDraft.officerAttendance.find(officer => officer.title === 'Senior Warden'), {
     status:'arrived_late', stationCoverage:'filled', actingName:'PM Mobley', actingWholeMeeting:false,
   });
@@ -816,6 +830,9 @@ try {
       && Boolean(submittedMinutes.payload.minutes.preparerAttestedAt)
       && submittedMinutes.payload.minutes.submittedDraft.closingFormatVersion === 4
       && submittedMinutes.payload.minutes.submittedDraft.closingPrayerGiven === true);
+  const submittedHome = await api('GET', '/api/minutes?drafts=1', {token:asstToken});
+  check('a submitted minutes draft leaves the preparing officer’s Continue Draft list', submittedHome.status === 200
+    && !submittedHome.payload.minutes.some(item => item.id === minutesId));
   const reviewAlerts = await api('GET', '/api/minutes/review-alerts', { token: wmToken });
   check('the Master has a persistent dated alert for Adrian submission', reviewAlerts.status === 200
     && reviewAlerts.payload.alerts.some(a => a.id === minutesId && a.title.includes('September 3, 2026') && a.submittedBy === 'Adrian Reese'));

@@ -5,6 +5,8 @@ const message = (value, error = false) => {
   node.textContent = value;
   node.classList.toggle('error', error);
 };
+const canContinue = (draft, user) => user && draft?.status === 'draft' && draft.preparedByUserId === user.id
+  && (user.role === 'owner' || (['secretary', 'assistant_secretary'].includes(user.role) && user.permissions?.includes('reports.create')));
 
 export class CorrespondenceWorkspace {
   constructor({ api, user }) {
@@ -15,11 +17,14 @@ export class CorrespondenceWorkspace {
     this.pdfUrl = null;
     this.bound = false;
     this.dirty = false;
+    this.busy = false;
+    this.workspaceUserId = this.user()?.id;
     this.previewRenderer = null;
     this.signers = [];
     this.currentSignerUserId = null;
     this.savedSignerUserId = null;
     this.currentUpdatedAt = null;
+    this.currentReturnNote = null;
     this.previewRecordRevision = null;
   }
   bind() {
@@ -81,6 +86,7 @@ export class CorrespondenceWorkspace {
     this.currentId = null;
     this.currentStatus = 'draft';
     this.currentUpdatedAt = null;
+    this.currentReturnNote = null;
     this.currentSignerUserId = null;
     this.savedSignerUserId = null;
     $('correspondenceMatter').value = 'general';
@@ -95,6 +101,15 @@ export class CorrespondenceWorkspace {
     message('New draft. Fill in the verified details and save to preview.');
     return true;
   }
+  syncAccount() {
+    const userId = this.user()?.id;
+    if (this.workspaceUserId === userId) return;
+    this.workspaceUserId = userId;
+    this.signers = [];
+    this.drafts = [];
+    this.newLetter({ confirmDiscard: false });
+    this.renderList();
+  }
   demitStarter() {
     if (!this.newLetter()) return;
     $('correspondenceMatter').value = 'demit';
@@ -105,15 +120,19 @@ export class CorrespondenceWorkspace {
   }
   async load() {
     this.bind();
+    this.syncAccount();
+    const userId = this.workspaceUserId;
     try {
       const available = await this.api('/api/correspondence/signers');
+      if (this.user()?.id !== userId) return;
       this.signers = available.signers || [];
       this.renderSigners();
       const response = await this.api('/api/correspondence');
+      if (this.user()?.id !== userId) return;
       this.drafts = response.drafts || [];
       this.renderList();
       if (!this.currentId && !this.fields().subject) this.newLetter({ confirmDiscard: false });
-    } catch (error) { message(error.message || 'Letters could not be loaded.', true); }
+    } catch (error) { if (this.user()?.id === userId) message(error.message || 'Letters could not be loaded.', true); }
   }
   renderList() {
     const list = $('correspondenceList');
@@ -135,9 +154,11 @@ export class CorrespondenceWorkspace {
   async open(draft) {
     if (this.dirty && !window.confirm('Discard your unsaved changes and open this letter?')) return;
     this.clearPreview();
+    this.workspaceUserId = this.user()?.id;
     this.currentId = draft.id;
     this.currentStatus = draft.status;
     this.currentUpdatedAt = draft.updatedAt;
+    this.currentReturnNote = draft.returnNote;
     this.currentSignerUserId = draft.signingMode === 'either' ? null :
       draft.assignedToUserId || this.signers.find(item => item.name === draft.assignedToName)?.id || null;
     this.savedSignerUserId = this.currentSignerUserId;
@@ -156,12 +177,53 @@ export class CorrespondenceWorkspace {
     message(draft.returnNote ? `Returned for correction: ${draft.returnNote}` : editable ? 'Draft loaded. Review or update it before use.' : 'Read only. The preparing officer owns edits to this letter.');
     await this.preview(draft.id);
   }
+  async continueDraft(draft, target) {
+    if (!canContinue(draft, this.user())) return false;
+    this.bind();
+    this.syncAccount();
+    if (this.busy || (this.dirty && this.currentId !== draft.id)) {
+      message('Save or finish the open letter before continuing another draft.', true);
+      return false;
+    }
+    const userId = this.workspaceUserId;
+    if (!this.dirty) {
+      this.busy = true;
+      try {
+        const [available, { draft: fresh }] = await Promise.all([
+          this.api('/api/correspondence/signers'), this.api(`/api/correspondence/${encodeURIComponent(draft.id)}/draft`),
+        ]);
+        if (!canContinue(fresh, this.user()) || fresh.id !== draft.id || this.user()?.id !== userId) return false;
+        if (this.dirty) {
+          message('Finish reviewing the open letter before continuing this draft.', true);
+          return false;
+        }
+        this.signers = available.signers || [];
+        this.drafts = [fresh, ...this.drafts.filter(letter => letter.id !== fresh.id)];
+        this.renderList();
+        await this.open(fresh);
+      } catch (error) {
+        if (this.user()?.id === userId) message(error.message || 'This letter draft could not be opened.', true);
+        return false;
+      } finally { this.busy = false; }
+    }
+    if (this.user()?.id !== userId || this.currentId !== draft.id) return false;
+    let field = this.dirty ? $('correspondenceSave') : this.pdfUrl ? $('correspondencePreview') : $('correspondenceMessage');
+    if (target === 'return-note' && this.currentReturnNote) {
+      message(`Returned for correction: ${this.currentReturnNote}${this.dirty ? ' Your edits are still open.' : ''}`);
+      field = $('correspondenceMessage');
+    }
+    if (field === $('correspondenceMessage')) field.tabIndex = -1;
+    field.focus({ preventScroll: true });
+    field.scrollIntoView({ block: 'center' });
+    return true;
+  }
   async save() {
+    if (this.busy) return;
     const fields = this.fields();
     if (!fields.recipientLodge || !fields.recipientName || !fields.subject || !fields.body) {
       message('Complete the receiving Lodge, recipient, subject, and letter.', true); return;
     }
-    const button = $('correspondenceSave'); button.disabled = true;
+    const button = $('correspondenceSave'); button.disabled = true; this.busy = true;
     try {
       const response = await this.api(this.currentId ? `/api/correspondence/${encodeURIComponent(this.currentId)}` : '/api/correspondence', {
         method: this.currentId ? 'PUT' : 'POST', body: JSON.stringify(fields),
@@ -169,6 +231,7 @@ export class CorrespondenceWorkspace {
       this.currentId = response.draft.id;
       this.currentStatus = response.draft.status;
       this.currentUpdatedAt = response.draft.updatedAt;
+      this.currentReturnNote = response.draft.returnNote;
       this.currentSignerUserId = response.draft.assignedToUserId;
       this.savedSignerUserId = this.currentSignerUserId;
       this.renderSigners();
@@ -178,7 +241,7 @@ export class CorrespondenceWorkspace {
       await this.load();
       await this.preview(this.currentId);
     } catch (error) { message(error.message || 'The draft could not be saved.', true); }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; this.busy = false; }
   }
   renderHandoff(draft) {
     $('correspondenceHandoff').classList.toggle('hidden', !draft);
@@ -202,36 +265,39 @@ export class CorrespondenceWorkspace {
     $('correspondenceDownload').textContent = draft?.status === 'signed' ? 'Download signed PDF for email' : 'Download draft PDF';
   }
   async submit() {
+    if (this.busy) return;
     if (!this.currentId || this.currentStatus !== 'draft' || this.dirty || this.previewRecordId !== this.currentId || this.previewRecordRevision !== this.currentUpdatedAt || !this.pdfUrl || this.savedSignerUserId !== (Number($('correspondenceSigner').value) || null)) { message('Save and review the PDF before assigning this letter for signature.', true); return; }
     const signer = this.signers.find(item => item.id === this.savedSignerUserId);
     const recipient = signer?.name || 'William McDuffie or Adrian Reese';
     if (!window.confirm(`Send this exact letter to ${recipient} for review and signature? It will be locked against further edits.`)) return;
-    const button = $('correspondenceSubmit'); button.disabled = true;
+    const button = $('correspondenceSubmit'); button.disabled = true; this.busy = true;
     try {
       const response = await this.api(`/api/correspondence/${encodeURIComponent(this.currentId)}/submit`, { method: 'POST', body: JSON.stringify({ signerUserId: signer?.id || null, expectedUpdatedAt: this.currentUpdatedAt }) });
       this.currentStatus = response.draft.status;
       await this.load(); await this.open(response.draft);
       message(`The letter is in ${recipient}’s dashboard signature queue. The first to sign completes it; it has not been emailed.`);
     } catch (error) { message(error.message || 'The letter could not be assigned.', true); }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; this.busy = false; }
   }
   async sign() {
+    if (this.busy) return;
     if (!this.currentId || this.previewRecordId !== this.currentId || this.previewRecordRevision !== this.currentUpdatedAt || !this.pdfUrl || !$('correspondenceConsent').checked) { message('Review this letter’s current PDF and check the signature authorization box before signing.', true); return; }
     if (!window.confirm('Apply your saved signature to this exact letter? You will still need to email the signed PDF yourself.')) return;
-    const button = $('correspondenceSign'); button.disabled = true;
+    const button = $('correspondenceSign'); button.disabled = true; this.busy = true;
     try {
       const response = await this.api(`/api/correspondence/${encodeURIComponent(this.currentId)}/sign`, { method: 'POST', body: JSON.stringify({ consent: true, expectedUpdatedAt: this.previewRecordRevision }) });
       this.currentStatus = response.draft.status;
       await this.load(); await this.open(response.draft);
       message('Signed PDF ready. Download it and attach it to your email. The dashboard has not emailed the letter.');
     } catch (error) { message(error.message || 'The letter could not be signed.', true); }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; this.busy = false; }
   }
   async returnForCorrection() {
-    if (!this.currentId || this.currentStatus !== 'awaiting_secretary') return;
+    if (this.busy || !this.currentId || this.currentStatus !== 'awaiting_secretary') return;
     const reason = window.prompt('What must be corrected before the assigned officer signs this letter?');
     if (reason === null) return;
     if (!reason.trim()) { message('Enter the correction needed before returning the letter.', true); return; }
+    this.busy = true;
     try {
       const response = await this.api(`/api/correspondence/${encodeURIComponent(this.currentId)}/return`, {
         method: 'POST', body: JSON.stringify({ reason: reason.trim() }),
@@ -239,6 +305,7 @@ export class CorrespondenceWorkspace {
       await this.load(); await this.open(response.draft);
       message('Letter returned to draft for correction. Its prior signature request is closed.');
     } catch (error) { message(error.message || 'The letter could not be returned.', true); }
+    finally { this.busy = false; }
   }
   clearPreview() {
     if (this.pdfUrl) URL.revokeObjectURL(this.pdfUrl);
@@ -253,16 +320,18 @@ export class CorrespondenceWorkspace {
   }
   async preview(id) {
     const revision = this.currentUpdatedAt;
+    const userId = this.workspaceUserId;
+    const current = () => this.user()?.id === userId && this.currentId === id && this.currentUpdatedAt === revision && !this.dirty;
     try {
       const pdf = await this.api(`/api/correspondence/${encodeURIComponent(id)}/pdf`);
-      if (this.currentId !== id || this.currentUpdatedAt !== revision) return;
+      if (!current()) return;
       const bytes = new Uint8Array(await pdf.arrayBuffer());
       const { MinutesPreview } = await import('/minutes-preview.js');
       await this.previewReset;
-      if (this.currentId !== id || this.currentUpdatedAt !== revision) return;
+      if (!current()) return;
       this.previewRenderer ||= new MinutesPreview($('correspondencePreview'));
       await this.previewRenderer.show(bytes);
-      if (this.currentId !== id || this.currentUpdatedAt !== revision) return;
+      if (!current()) return;
       if (this.pdfUrl) URL.revokeObjectURL(this.pdfUrl);
       this.pdfUrl = URL.createObjectURL(pdf);
       this.previewRecordId = id;
@@ -271,6 +340,6 @@ export class CorrespondenceWorkspace {
       $('correspondenceOpenPdf').disabled = false;
       $('correspondenceDownload').disabled = false;
       $('correspondenceSign').disabled = false;
-    } catch (error) { message(error.message || 'The preview could not be loaded.', true); }
+    } catch (error) { if (current()) message(error.message || 'The preview could not be loaded.', true); }
   }
 }

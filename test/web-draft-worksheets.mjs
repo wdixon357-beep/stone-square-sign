@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import { formatEasternClockRange, formatEasternTimestamp } from '../public/eastern-time.js';
+import { agendaContinueIssues } from '../public/agenda-review.js';
+import { agendaIssues } from '../agenda.js';
 
 // The worksheet modules share the dashboard's browser PDF dependency. Run
 // their actual editing and save handlers with synthetic controls and requests.
@@ -9,7 +11,7 @@ async function loadWorkspace(file, identifier) {
   const source = await fs.readFile(new URL('../public/' + file, import.meta.url), 'utf8');
   return vm.runInNewContext(
     source.replace(/^import .*$/gm, '').replace('export class', 'class') + '\n' + identifier,
-    { formatEasternClockRange, formatEasternTimestamp, structuredClone, queueMicrotask },
+    { formatEasternClockRange, formatEasternTimestamp, agendaContinueIssues, structuredClone, queueMicrotask },
   );
 }
 
@@ -152,5 +154,51 @@ assert.equal(treasury.opened, undefined);
 treasury.removePreparation();
 treasury.workspace.resumeOrList();
 assert.equal(treasury.listVisits, 1, 'a change to view-only access invalidates draft resume');
+
+const agendaWithBlankOptionalFields = {
+  meetingDate: '2026-11-19', meetingType: 'Stated Communication', startTime: '7:30 PM',
+  subtitle: '', officers: [], sections: [{ heading: 'Opening', scheduledTime: '', body: '' }],
+};
+assert.deepEqual(agendaContinueIssues(agendaWithBlankOptionalFields), [], 'optional agenda fields are not flagged');
+const incompleteAgenda = { meetingDate: '', meetingType: '', startTime: '', sections: [{ heading: '' }, { heading: '' }] };
+assert.deepEqual(agendaContinueIssues(incompleteAgenda).map(issue => issue.target),
+  ['meetingDate', 'meetingType', 'startTime', 'section.0.heading', 'section.1.heading']);
+assert.deepEqual(agendaIssues(incompleteAgenda), [
+  'Choose the meeting date.', 'Enter the meeting type.', 'Enter the meeting start time.', 'Every agenda section needs a heading.',
+]);
+assert.equal(agendaContinueIssues({ ...agendaWithBlankOptionalFields, sections: [] })[0].target, 'add-section');
+
+const agenda = worksheet(AgendaWorkspace, 'subtitle');
+const jumps = [];
+const target = name => ({ dataset: { field: name }, scrollIntoView: () => jumps.push(['scroll', name]), focus: () => jumps.push(['focus', name]) });
+const date = target('meetingDate'), heading = target('section.1.heading'), addSection = target('add-section');
+const activeAgenda = agenda.workspace.record;
+Object.assign(agenda.workspace.draft, { ...agendaWithBlankOptionalFields, sections:[{heading:'Opening'},{heading:''}] });
+const originalOpen = agenda.workspace.open;
+agenda.workspace.open = record => { originalOpen(record); agenda.workspace.draft = structuredClone(record.draft); };
+agenda.workspace.root.querySelector = selector => selector === '[data-agenda="add-section"]' ? addSection : date;
+agenda.workspace.root.querySelectorAll = () => [date, heading];
+agenda.edit('Unsaved note stays open');
+assert.equal(agenda.workspace.continueDraft({ ...activeAgenda }, 'section.1.heading'), true);
+assert.deepEqual(jumps, [['scroll', 'section.1.heading'], ['focus', 'section.1.heading']]);
+assert.equal(agenda.workspace.draft.subtitle, 'Unsaved note stays open');
+assert.equal(agenda.opened, undefined, 'continuing the same agenda keeps the editor instance');
+const otherAgenda = { ...activeAgenda, id: 'other-agenda', draft:{...agendaWithBlankOptionalFields,sections:[]} };
+assert.equal(agenda.workspace.continueDraft(otherAgenda, 'meetingDate'), false, 'a second draft cannot overwrite unsaved work');
+assert.match(agenda.notices.at(-1).value, /Save the open agenda/);
+agenda.workspace.dirty = false;
+agenda.workspace.busy = true;
+assert.equal(agenda.workspace.continueDraft(otherAgenda, 'meetingDate'), false, 'a new agenda waits for an in-flight operation');
+agenda.workspace.busy = false;
+assert.equal(agenda.workspace.continueDraft(otherAgenda, 'add-section'), true);
+assert.equal(agenda.opened, otherAgenda);
+assert.deepEqual(jumps.slice(-2), [['scroll', 'add-section'], ['focus', 'add-section']]);
+const updatedAgenda = {...otherAgenda, revision:2, draft:{...agendaWithBlankOptionalFields, meetingDate:''}};
+assert.equal(agenda.workspace.continueDraft(updatedAgenda, 'add-section'), true);
+assert.equal(agenda.opened, updatedAgenda, 'a newer saved revision replaces a clean older editor');
+assert.deepEqual(jumps.slice(-2), [['scroll','meetingDate'],['focus','meetingDate']], 'an obsolete issue focuses the actual outstanding field');
+agenda.workspace.user = () => ({ id: 5, role: 'treasurer' });
+assert.equal(agenda.workspace.continueDraft(otherAgenda, 'meetingDate'), false, 'agenda drafts remain owner-only');
+assert.equal(agenda.calls.length, 0, 'continuing does not save or submit an agenda');
 
 console.log('PASS: agenda and treasurer draft resume, pending-save edits, revision retries, and protection of treasury handoff and finalization.');

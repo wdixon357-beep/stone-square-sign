@@ -15,19 +15,20 @@ export const formatMinutesClock = value => hasExplicitMinutesTime(value) ? forma
 
 // These are the preparing officer's explicitly entered meeting facts. They are
 // not transcript citations and never establish attendance, motions or approval.
-export function minutesMeetingDetailsIssues(value = {}) {
+export function minutesMeetingDetailChecks(value = {}) {
   const details = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return [
-    !exactDate(details.meetingDate) && 'Enter the meeting date, including the year.',
-    (!clean(details.meetingType) || clean(details.meetingType).length > 100) && 'Select the meeting type or enter its name.',
-    !degrees.includes(clean(details.degree)) && 'Select the degree.',
-    !hasExplicitMinutesTime(details.openingTime) && 'Enter the opening time in Eastern Time with AM or PM.',
-    !hasExplicitMinutesTime(details.closingTime) && 'Enter the closing time in Eastern Time with AM or PM.',
-    (!clean(details.presiding) || clean(details.presiding).length > 160) && 'Enter the presiding officer.',
-    !['Yes', 'No'].includes(clean(details.quorum)) && 'Select Yes or No for quorum.',
-    !exactDate(details.nextMeeting) && 'Enter the next meeting date, including the year.',
-  ].filter(Boolean);
+    ['meetingDate', !exactDate(details.meetingDate), 'Enter the meeting date, including the year.'],
+    ['meetingType', !clean(details.meetingType) || clean(details.meetingType).length > 100, 'Select the meeting type or enter its name.'],
+    ['degree', !degrees.includes(clean(details.degree)), 'Select the degree.'],
+    ['openingTime', !hasExplicitMinutesTime(details.openingTime), 'Enter the opening time in Eastern Time with AM or PM.'],
+    ['closingTime', !hasExplicitMinutesTime(details.closingTime), 'Enter the closing time in Eastern Time with AM or PM.'],
+    ['presiding', !clean(details.presiding) || clean(details.presiding).length > 160, 'Enter the presiding officer.'],
+    ['quorum', !['Yes', 'No'].includes(clean(details.quorum)), 'Select Yes or No for quorum.'],
+    ['nextMeeting', !exactDate(details.nextMeeting), 'Enter the next meeting date, including the year.'],
+  ].filter(([,missing]) => missing).map(([field,,label]) => ({field,label}));
 }
+export const minutesMeetingDetailsIssues = value => minutesMeetingDetailChecks(value).map(check => check.label);
 
 export function normalizeMinutesMeetingDetails(value = {}) {
   const details = Object.fromEntries(MINUTES_MEETING_DETAILS_FIELDS.map(field => [field, clean(value?.[field])]));

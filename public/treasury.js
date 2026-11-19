@@ -26,7 +26,14 @@ export class TreasuryWorkspace {
   consumePendingRefresh(){if(this.refreshPending&&!this.busy&&!this.loadingList&&!this.dirty&&!this.record&&!this.previewView){this.refreshPending=false;queueMicrotask(()=>this.list());}}
   top(){this.root.closest?.('.content')?.scrollTo?.({top:0,left:0,behavior:'auto'});}
   bind(){
-    this.root.addEventListener('click',event=>{const tab=event.target.closest('[data-treasury-tab]');if(tab){this.showEditorTab(tab.dataset.treasuryTab);return;}const b=event.target.closest('[data-treasury]');if(b)this.run(b.dataset.treasury,b);});
+    this.root.addEventListener('click',event=>{
+      const issue=event.target.closest('[data-treasury-continue]');
+      if(issue){this.focusContinueIssue(issue.dataset.treasuryContinue);return;}
+      const tab=event.target.closest('[data-treasury-tab]');
+      if(tab){this.showEditorTab(tab.dataset.treasuryTab);return;}
+      const button=event.target.closest('[data-treasury]');
+      if(button)this.run(button.dataset.treasury,button);
+    });
     this.root.addEventListener('input',event=>{const path=event.target.dataset.path;if(!path||!this.draft||this.editLocked)return;const parts=path.split('.');let obj=this.draft;for(const p of parts.slice(0,-1))obj=obj[p];obj[parts.at(-1)]=event.target.type==='checkbox'?event.target.checked:event.target.value;if(event.target.type!=='checkbox'&&this.isReviewable(path)){this.draft.fieldReviews[path]=String(event.target.value).trim()&&event.target.value!=='review'?'corrected':'unresolved';this.updateReviewControl(path);}this.dirty=true;this.saveState();this.schedule();});
   }
   message(value,error=false){const el=this.root.querySelector('#treasuryMessage');if(el){el.textContent=value;el.classList.toggle('error',error);}}
@@ -38,6 +45,8 @@ export class TreasuryWorkspace {
   saveState(value=this.savedLabel()){
     const element=this.root.querySelector('#treasurySaveState');
     if(element)element.textContent=value;
+    const checklistStatus=this.root.querySelector('#treasuryContinueStatus');
+    if(checklistStatus)checklistStatus.textContent=this.dirty?'Save your changes to refresh this list.':'From the saved draft.';
   }
   async run(action,button){
     if(this.busy)return;
@@ -75,7 +84,7 @@ export class TreasuryWorkspace {
         const {draft}=await this.api(`/api/treasury/${id}/organize`,{method:'POST',body:JSON.stringify({revision})});
         if(this.record?.id!==id)return;
         if(JSON.stringify(this.draft)!==before)throw new Error('You edited the report while its source was being organized. Your latest edits have been kept.');
-        this.draft=draft;this.editChanged();this.message('Source reorganized. Review the preview and source references, then save your corrections.');
+        this.draft=draft;this.changedRowCollections=new Set(['accounts','transactions','funds','obligations']);this.editChanged();this.message('Source reorganized. Review the preview and source references, then save your corrections.');
       }else if(action==='save'){
         const saved=await this.save();
         if(saved!==null)this.message(saved?'Draft saved.':'Earlier edits saved. Your latest edits are still open.');
@@ -95,6 +104,50 @@ export class TreasuryWorkspace {
     if(this.record&&this.workspaceUserId===this.user()?.id&&this.can('treasury.prepare'))return;
     return this.list();
   }
+  continueDraft(record, target){
+    if(!this.can('treasury.prepare')||record?.status!=='draft'||record.preparerUserId!==this.user()?.id||record.preparerAttestedAt)return false;
+    if(this.busy||this.loadingList){this.message('Wait for the current report action, then try again.',true);return false;}
+    const sameDraft=record.id===this.record?.id&&this.workspaceUserId===this.user()?.id;
+    if(this.dirty&&!sameDraft){this.message('Save the open report before continuing another draft.',true);return false;}
+    if(sameDraft&&this.dirty&&record.revision!==this.record.revision){
+      this.showEditorTab('review');
+      const notice=this.root.querySelector('#treasuryMessage');
+      this.message('A newer saved revision is available. Your open edits have been kept. Review them before continuing.',true);
+      if(notice){notice.tabIndex=-1;notice.focus({preventScroll:true});notice.scrollIntoView({block:'center'});}
+      return true;
+    }
+    if(!sameDraft||!this.dirty&&record.revision>this.record.revision)this.open(record);
+    const issues=this.record.continueIssues||[];
+    const next=issues.find(issue=>issue.target===target)||issues[0];
+    this.focusContinueIssue(next?.target||'review');
+    return true;
+  }
+  focusContinueIssue(target){
+    if(typeof target!=='string'||!this.record||!this.canEdit())return;
+    const confirm=target.startsWith('confirm:');
+    const path=confirm?target.slice('confirm:'.length):target;
+    const collection=path.split('.')[0];
+    const panels={accounts:'accounts',funds:'accounts',obligations:'accounts',fundsReviewed:'accounts',obligationsReviewed:'accounts',
+      'add-account':'accounts', transactions:'transactions', sourceReviewed:'review', review:'review'};
+    const tab=panels[collection]||'details';
+    this.showEditorTab(tab);
+    const savedRows=this.record.draft?.[collection], activeRows=this.draft?.[collection];
+    const staleRow=this.dirty&&path.includes('.')&&(this.changedRowCollections?.has(collection)
+      || Array.isArray(savedRows)&&Array.isArray(activeRows)&&savedRows.length!==activeRows.length);
+    const anchors={period:'[data-treasury-period]', 'add-account':'[data-treasury="add-account"]', transactions:'[data-treasury="add-transactions"]', review:'[data-treasury="preparer-attest"]'};
+    const field=anchors[path]||(confirm?'button':'input,select,textarea').split(',').map(tag=>`${tag}[data-path="${CSS.escape(path)}"]`).join(',');
+    const destination=(!staleRow&&this.root.querySelector(field))||this.root.querySelector(`[data-treasury-tab="${tab}"]`);
+    destination?.scrollIntoView?.({block:'center'});
+    destination?.focus?.({preventScroll:true});
+  }
+  refreshContinueChecklist(){
+    const checklist=this.root.querySelector('#treasuryContinueChecklist');
+    if(!checklist)return;
+    const items=this.record.continueIssues||[];
+    checklist.querySelector('summary').textContent=items.length?`What’s left (${items.length})`:'What’s left';
+    checklist.querySelector('ul').innerHTML=(items.length?items:[{label:'Review and sign the report',target:'review'}])
+      .map(item=>`<li><button type="button" class="text-button" data-treasury-continue="${esc(item.target)}">${esc(item.label)}</button></li>`).join('');
+  }
   async list(){
     if(this.loadingList){this.refreshPending=true;return;}
     this.loadingList=true;this.refreshPending=false;
@@ -110,6 +163,8 @@ export class TreasuryWorkspace {
     const source=this.root.querySelector('.treasury-source');if(source)source.hidden=!this.can('treasury.upload');
     this.root.querySelectorAll('[data-treasury="new-draft"]').forEach(button=>button.hidden=!this.can('treasury.prepare'));
     this.refreshEditorLock();
+    const checklist=this.root.querySelector('#treasuryContinueChecklist');
+    if(checklist)checklist.hidden=!this.canEdit();
     this.root.querySelectorAll('[data-treasury]').forEach(button=>{
       if(button.dataset.treasury==='open'){const record=this.records?.find(item=>item.id===button.dataset.id);button.hidden=!this.can('treasury.prepare')&&!this.canOpenFinal(record);button.textContent=this.can('treasury.prepare')?'Review':'View PDF';}
       if(['save','organize','assign','start-report','preparer-attest','delete'].includes(button.dataset.treasury))button.hidden=!this.can('treasury.prepare');
@@ -137,7 +192,7 @@ export class TreasuryWorkspace {
     this.previewView=new MinutesPreview(this.root.querySelector('#treasuryFinalPreview'));
     await this.previewView.show(new Uint8Array(await blob.arrayBuffer()));
   }
-  open(record){this.top();this.workspaceUserId=this.user()?.id;this.record=record;this.draft=structuredClone(record.draft);this.dirty=false;this.editorTab=record.status==='awaiting_preparer'||!record.draft.transactions?.length?'details':'transactions';this.renderEditor();this.schedule();this.loadHandoff().catch(e=>this.message(e.message,true));}
+  open(record){this.top();this.workspaceUserId=this.user()?.id;this.record=record;this.draft=structuredClone(record.draft);this.dirty=false;this.changedRowCollections=new Set();this.editorTab=record.status==='awaiting_preparer'||!record.draft.transactions?.length?'details':'transactions';this.renderEditor();this.schedule();this.loadHandoff().catch(e=>this.message(e.message,true));}
   async loadHandoff(){
     const id=this.record.id;const [source,{preparers}]=await Promise.all([this.api(`/api/treasury/${id}/source`),this.api('/api/treasury/preparers')]);
     if(this.record?.id!==id)return;this.sourceFiles=source.files;
@@ -157,6 +212,8 @@ export class TreasuryWorkspace {
   }
   clearCollectionReviews(collection){
     clearCollectionReviewEvidence(this.draft,collection);
+    this.changedRowCollections??=new Set();
+    this.changedRowCollections.add(collection);
   }
   ensureReviewPaths(){this.draft.fieldReviews??={};const add=path=>{if(!Object.hasOwn(this.draft.fieldReviews,path))this.draft.fieldReviews[path]='unresolved';};this.draft.accounts.forEach((_row,index)=>fields.forEach(([field])=>add(`accounts.${index}.${field}`)));this.draft.transactions.forEach((_row,index)=>['date','account','kind','amount','description','reference'].forEach(field=>add(`transactions.${index}.${field}`)));this.draft.funds.forEach((_row,index)=>['name','account','amount','restriction'].forEach(field=>add(`funds.${index}.${field}`)));this.draft.obligations.forEach((_row,index)=>['name','amount','dueDate','note'].forEach(field=>add(`obligations.${index}.${field}`)));}
   isReviewable(path){return Boolean(path&&this.draft?.fieldReviews&&Object.hasOwn(this.draft.fieldReviews,path));}
@@ -171,15 +228,17 @@ export class TreasuryWorkspace {
     this.ensureReviewPaths();const d=this.draft,editable=this.canEdit(),accountOptions=[['','Choose account'],...d.accounts.map(a=>[a.id,a.name])];
     const activityNotice=d.transactions.length?`<p class="helper"><strong>${d.transactions.length} current-period ${d.transactions.length===1?'transaction was':'transactions were'} organized from the uploaded records.</strong></p>`:`<p class="treasury-activity-notice"><strong>No current-period transactions were found.</strong> No bank-posted activity from ${esc(d.periodStart||'the first included date')} through ${esc(d.periodEnd||'the report preparation date')} appeared in the uploaded records. Earlier statements remain available under Original banking records and notes, but their transactions are not included in this report.</p>`;
     this.previewView?.clear();this.sequence++;const disabled=editable?'':'disabled';
-    const detailsPanel=`<section class="treasury-editor-panel" data-treasury-panel="details"><div id="treasuryHandoff"></div><p id="treasuryGenerationStatus" class="helper generation-status" role="status"></p>${editable?'<button data-treasury="organize" class="secondary" type="button">Reorganize original source</button>':''}<details><summary>Original banking records and notes</summary><div id="treasuryOriginals"></div></details><fieldset ${disabled}><p class="helper"><strong>Fixed reporting period:</strong> Only bank-posted activity from ${esc(d.periodStart||'the first included date')} through ${esc(d.periodEnd||'the report preparation date')} is included. PDFs, screenshots, pasted activity and typed notes are all limited to these dates.</p><p class="treasury-review-key"><span class="review-key-good">✓ Source matched, confirmed or corrected</span><span class="review-key-confirm">? Prefilled and awaiting confirmation</span><span class="review-key-bad">✕ Information not found</span></p>${editable?'<button data-treasury="confirm-prefilled" class="secondary" type="button">Confirm all prefilled values</button>':''}<div class="treasury-grid">${this.input('periodStart','First included date','date',undefined,true)}${this.input('periodEnd','Report prepared through','date',undefined,true)}${this.input('presentedOn','Date actually presented','date')}${this.input('bankName','Bank / credit union')}</div><details><summary>Source and import review</summary><p>${d.sourceNames.map(esc).join(', ')}</p>${d.extractionNotes.map(n=>`<p>${esc(n)}</p>`).join('')}<p>These source lines did not map to a financial field. Add any relevant details below before confirming the import.</p><pre>${esc(d.unmappedLines.join('\n'))}</pre></details></fieldset></section>`;
+    const detailsPanel=`<section class="treasury-editor-panel" data-treasury-panel="details"><div id="treasuryHandoff"></div><p id="treasuryGenerationStatus" class="helper generation-status" role="status"></p>${editable?'<button data-treasury="organize" class="secondary" type="button">Reorganize original source</button>':''}<details><summary>Original banking records and notes</summary><div id="treasuryOriginals"></div></details><fieldset ${disabled}><p class="helper" tabindex="-1" data-treasury-period><strong>Fixed reporting period:</strong> Only bank-posted activity from ${esc(d.periodStart||'the first included date')} through ${esc(d.periodEnd||'the report preparation date')} is included. PDFs, screenshots, pasted activity and typed notes are all limited to these dates.</p><p class="treasury-review-key"><span class="review-key-good">✓ Source matched, confirmed or corrected</span><span class="review-key-confirm">? Prefilled and awaiting confirmation</span><span class="review-key-bad">✕ Information not found</span></p>${editable?'<button data-treasury="confirm-prefilled" class="secondary" type="button">Confirm all prefilled values</button>':''}<div class="treasury-grid">${this.input('periodStart','First included date','date',undefined,true)}${this.input('periodEnd','Report prepared through','date',undefined,true)}${this.input('presentedOn','Date actually presented','date')}${this.input('bankName','Bank / credit union')}</div><details><summary>Source and import review</summary><p>${d.sourceNames.map(esc).join(', ')}</p>${d.extractionNotes.map(n=>`<p>${esc(n)}</p>`).join('')}<p>These source lines did not map to a financial field. Add any relevant details below before confirming the import.</p><pre>${esc(d.unmappedLines.join('\n'))}</pre></details></fieldset></section>`;
     const accountsPanel=`<section class="treasury-editor-panel" data-treasury-panel="accounts"><fieldset ${disabled}>${d.accounts.map((a,i)=>`<section class="treasury-group"><h2>${esc(a.name)}</h2>${this.input(`accounts.${i}.name`,'Account label')}<div class="treasury-grid">${fields.map(([key,label])=>this.input(`accounts.${i}.${key}`,label,'number')).join('')}</div>${this.checkbox(`accounts.${i}.activityComplete`,'I checked that every bank-posted transaction for this account is listed on the Transactions page. Blank activity totals may be calculated from those entries.')}<button class="text-button" data-treasury="remove" data-collection="accounts" data-index="${i}" type="button">Remove account</button></section>`).join('')}<button class="secondary" data-treasury="add-account" type="button">Add account</button><section class="treasury-group"><h2>Fenced Money</h2>${d.funds.map((f,i)=>`<div class="treasury-entry"><div class="treasury-grid">${this.input(`funds.${i}.name`,'Fund')}${this.select(`funds.${i}.account`,'Account',accountOptions,f.account)}${this.input(`funds.${i}.amount`,'Amount','number')}${this.input(`funds.${i}.restriction`,'Restriction or designation')}</div><button class="text-button" data-treasury="remove" data-collection="funds" data-index="${i}" type="button">Remove fund</button></div>`).join('')}<button class="secondary" data-treasury="add-funds" type="button">Add fund</button>${this.checkbox('fundsReviewed','I confirmed all Fenced Money. If no funds are listed, none applies.')}</section><section class="treasury-group"><h2>Outstanding Obligations</h2>${d.obligations.map((o,i)=>`<div class="treasury-entry"><div class="treasury-grid">${this.input(`obligations.${i}.name`,'Payee or obligation')}${this.input(`obligations.${i}.amount`,'Amount','number')}${this.input(`obligations.${i}.dueDate`,'Due date','date')}${this.input(`obligations.${i}.note`,'Note')}</div><button class="text-button" data-treasury="remove" data-collection="obligations" data-index="${i}" type="button">Remove obligation</button></div>`).join('')}<button class="secondary" data-treasury="add-obligations" type="button">Add obligation</button>${this.checkbox('obligationsReviewed','I confirmed all Outstanding Obligations. If none are listed, none applies.')}</section></fieldset></section>`;
     const transactionsPanel=`<section class="treasury-editor-panel" data-treasury-panel="transactions"><fieldset ${disabled}><section class="treasury-group treasury-transactions-page"><div class="treasury-section-heading"><div><p class="eyebrow">BANK-POSTED HISTORY</p><h2>Transactions</h2></div><span class="treasury-transaction-count">${d.transactions.length}</span></div><p>Every current-period entry organized from the uploaded PDF, screenshot, pasted activity or typed notes appears here. Confirm the account, bank-posted date, description, direction and amount. Add any missing current-period entries before signing; totals alone do not show what happened. Then confirm the complete activity for each account on the Accounts page. These entries become the Receipts, Disbursements and Transfers sections of the report.</p>${activityNotice}${d.transactions.map((t,i)=>`<div class="treasury-entry treasury-transaction-entry"><div class="treasury-entry-heading"><strong>Transaction ${i+1}</strong><span>${esc(t.date||'Date not found')}</span></div><div class="treasury-grid">${this.input(`transactions.${i}.date`,'Bank-posted date','date')}${this.select(`transactions.${i}.account`,'Account',accountOptions,t.account)}${this.select(`transactions.${i}.kind`,'Entry type',[['review','Needs correction'],['receipt','Receipt'],['payment','Disbursement'],['transfer_in','Transfer into this account'],['transfer_out','Transfer out of this account']],t.kind)}${this.input(`transactions.${i}.amount`,'Amount','number')}${this.input(`transactions.${i}.description`,'Description used on the report')}${this.input(`transactions.${i}.reference`,'Check number or reference')}<label class="check-row"><input data-path="transactions.${i}.postedDateConfirmed" type="checkbox" ${t.postedDateConfirmed?'checked':''}><span>Bank-posted date confirmed</span></label></div><button class="text-button" data-treasury="remove" data-collection="transactions" data-index="${i}" type="button">Remove transaction</button></div>`).join('')}<button class="secondary" data-treasury="add-transactions" type="button">Add transaction</button></section></fieldset></section>`;
     const reviewPanel=`<section class="treasury-editor-panel" data-treasury-panel="review"><fieldset ${disabled}><label>Treasurer’s remarks<textarea data-path="remarks" rows="4">${esc(d.remarks)}</textarea></label>${this.checkbox('sourceReviewed','I checked the source, amounts, classifications and any unmapped lines.')}</fieldset><div class="treasury-actions">${this.user().role==='owner'&&this.record.status==='draft'&&this.record.preparerUserId!==this.user().id?'<button data-treasury="start-report" class="primary">Prepare this report as WM</button>':''}${this.record.status==='draft'&&this.record.preparerUserId===this.user().id?'<button data-treasury="preparer-attest" class="primary">Sign and finalize report</button>':''}${this.record.status==='ready_for_distribution'&&['owner','secretary'].includes(this.user().role)?'<button data-treasury="mark-distributed" class="primary">Mark as distributed</button>':''}</div></section>`;
-    this.root.innerHTML=`<div class="content-head"><div><p class="eyebrow">${esc(statusNames[this.record.status])}</p><h1>Review treasurer report</h1>${editable?`<p id="treasurySaveState" class="helper" role="status">${esc(this.savedLabel())}</p>`:''}</div><div class="row-buttons"><button type="button" data-treasury="back" class="secondary">All reports</button>${editable?'<button type="button" data-treasury="save" class="primary">Save Draft</button>':''}</div></div><p id="treasuryMessage" role="status"></p><div class="treasury-workspace"><div class="treasury-form"><div class="treasury-editor-tabs" role="tablist" aria-label="Treasurer report sections"><button type="button" data-treasury-tab="details" role="tab">Details</button><button type="button" data-treasury-tab="accounts" role="tab">Accounts</button><button type="button" data-treasury-tab="transactions" role="tab">Transactions <span>${d.transactions.length}</span></button><button type="button" data-treasury-tab="review" role="tab">Review</button></div><div class="treasury-form-scroll">${detailsPanel}${accountsPanel}${transactionsPanel}${reviewPanel}</div></div>
+    this.root.innerHTML=`<div class="content-head"><div><p class="eyebrow">${esc(statusNames[this.record.status])}</p><h1>Review treasurer report</h1>${editable?`<p id="treasurySaveState" class="helper" role="status">${esc(this.savedLabel())}</p>`:''}</div><div class="row-buttons"><button type="button" data-treasury="back" class="secondary">All reports</button>${editable?'<button type="button" data-treasury="save" class="primary">Save Draft</button>':''}</div></div><p id="treasuryMessage" role="status"></p>${editable&&Array.isArray(this.record.continueIssues)?'<details id="treasuryContinueChecklist" class="panel"><summary>What’s left</summary><p id="treasuryContinueStatus" class="helper"></p><ul></ul></details>':''}<div class="treasury-workspace"><div class="treasury-form"><div class="treasury-editor-tabs" role="tablist" aria-label="Treasurer report sections"><button type="button" data-treasury-tab="details" role="tab">Details</button><button type="button" data-treasury-tab="accounts" role="tab">Accounts</button><button type="button" data-treasury-tab="transactions" role="tab">Transactions <span>${d.transactions.length}</span></button><button type="button" data-treasury-tab="review" role="tab">Review</button></div><div class="treasury-form-scroll">${detailsPanel}${accountsPanel}${transactionsPanel}${reviewPanel}</div></div>
       <aside class="treasury-preview"><h2>Document preview</h2><p id="treasuryPreviewState" role="status"></p><a id="treasuryPdf" class="secondary hidden" download="Treasurer Report.pdf">Download this PDF</a><div id="treasuryEditorLedger">${renderTreasuryTransactions(d)}</div><div id="treasuryPreviewPages" class="minutes-pdf-pages"></div></aside></div>`;
     void showGenerationStatus(this.root.querySelector('#treasuryGenerationStatus'),this.api,this.user()?.role);
     this.previewView=new MinutesPreview(this.root.querySelector('#treasuryPreviewPages'));
     this.showEditorTab(this.editorTab);
+    this.refreshContinueChecklist();
+    this.saveState();
   }
   schedule(){clearTimeout(this.timer);this.sequence++;const link=this.root.querySelector('#treasuryPdf');link?.classList.add('hidden');const state=this.root.querySelector('#treasuryPreviewState');if(state)state.textContent='Updating preview…';const ledger=this.root.querySelector('#treasuryEditorLedger');if(ledger)ledger.innerHTML=renderTreasuryTransactions(this.draft);this.timer=setTimeout(()=>this.preview().catch(e=>this.message(e.message,true)),700);}
   async preview(){if(!this.record)return;const sequence=++this.sequence;const blob=await this.api(`/api/treasury/${this.record.id}/preview`,{method:'POST',body:JSON.stringify({draft:this.draft})});if(sequence!==this.sequence)return;if(this.url)URL.revokeObjectURL(this.url);this.url=URL.createObjectURL(blob);await this.previewView.show(new Uint8Array(await blob.arrayBuffer()));if(sequence!==this.sequence)return;const link=this.root.querySelector('#treasuryPdf');link.href=this.url;link.classList.remove('hidden');this.root.querySelector('#treasuryPreviewState').textContent='Preview matches the current fields.';}
@@ -192,7 +251,8 @@ export class TreasuryWorkspace {
       if(this.record!==record||this.draft!==draft||this.user()?.id!==accountId)return null;
       this.dirty=JSON.stringify({draft,revision:record.revision})!==submitted;
       this.record=report;
-      if(!this.dirty)this.draft=structuredClone(report.draft);
+      this.refreshContinueChecklist();
+      if(!this.dirty){this.draft=structuredClone(report.draft);this.changedRowCollections?.clear();}
       return !this.dirty;
     }finally{
       if(this.record?.id===record.id&&this.user()?.id===accountId)this.saveState();

@@ -1,5 +1,6 @@
 import { formatEasternClockRange, formatEasternTimestamp } from './eastern-time.js';
 import { MinutesPreview } from './minutes-preview.js';
+import { agendaContinueIssues } from './agenda-review.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 const clone = value => structuredClone(value);
@@ -60,15 +61,44 @@ export class AgendaWorkspace {
     if (this.record && account?.role === 'owner' && this.workspaceUserId === account.id) return;
     return this.list();
   }
+  continueDraft(record, target) {
+    const account = this.user();
+    if (account?.role !== 'owner' || !record?.id || record.status !== 'draft') return false;
+    const sameAccount = this.workspaceUserId === account.id;
+    if (!sameAccount || this.record?.id !== record.id) {
+      if (sameAccount && (this.dirty || this.busy)) {
+        this.message('Save the open agenda before continuing a different draft.', true);
+        return false;
+      }
+      this.open(record);
+    } else if (!this.dirty && record.revision > this.record.revision) {
+      this.open(record);
+    }
+    const checks = agendaContinueIssues(this.draft);
+    const desired = checks.find(issue => issue.target === target)?.target || checks[0]?.target;
+    const control = desired === 'add-section' ? this.root.querySelector('[data-agenda="add-section"]')
+      : desired ? Array.from(this.root.querySelectorAll('[data-field]')).find(field => field.dataset.field === desired)
+      : this.root.querySelector('#agendaPreviewState');
+    if (control?.id === 'agendaPreviewState') control.tabIndex = -1;
+    control?.scrollIntoView({ block: 'center', inline: 'nearest' });
+    control?.focus({ preventScroll: true });
+    return true;
+  }
   async list() {
+    const accountId = this.user()?.id, sequence = ++this.sequence;
+    const isCurrent = () => this.sequence === sequence && this.user()?.id === accountId;
     this.top();
-    clearTimeout(this.timer); this.sequence += 1; await this.preview?.clear(); this.preview = null; if (this.url) URL.revokeObjectURL(this.url);
+    clearTimeout(this.timer); await this.preview?.clear();
+    if (!isCurrent()) return;
+    this.preview = null; if (this.url) URL.revokeObjectURL(this.url);
     this.record = null; this.draft = null; this.dirty = false;
     this.root.innerHTML = `<div class="content-head"><div><p class="eyebrow">WORSHIPFUL MASTER</p><h1>Agenda Creator</h1><p>Start an agenda, save the draft, and return whenever you are ready to finish it.</p></div><button class="primary" data-agenda="new" type="button">Create agenda draft</button></div><p id="agendaMessage" class="message" role="status"></p><div id="agendaList" class="agenda-list"></div>`;
     try {
-      this.records = (await this.api('/api/agendas')).agendas;
+      const { agendas } = await this.api('/api/agendas');
+      if (!isCurrent()) return;
+      this.records = agendas;
       this.root.querySelector('#agendaList').innerHTML = this.records.length ? this.records.map(item => `<article class="agenda-record"><div><h2>${esc(this.dateLabel(item.draft.meetingDate))}</h2><p>Draft · ${esc(item.draft.meetingType)} · ${esc(this.savedLabel(item.updatedAt))}</p></div><div class="row-buttons"><button class="secondary" data-agenda="open" data-id="${esc(item.id)}">Resume Draft</button><button class="secondary danger-text" data-agenda="delete" data-id="${esc(item.id)}" data-revision="${item.revision}">Delete Draft</button></div></article>`).join('') : '<div class="empty-state"><h2>No agenda drafts yet</h2><p>Create a draft and save your progress as you build the meeting order.</p></div>';
-    } catch (error) { this.message(error.message, true); }
+    } catch (error) { if (isCurrent()) this.message(error.message, true); }
   }
   dateLabel(value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return 'Meeting date needs review';

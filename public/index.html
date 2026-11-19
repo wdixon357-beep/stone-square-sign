@@ -196,6 +196,11 @@
             <div class="landing-head"><p class="eyebrow">YOUR LODGE WORK</p><h1 id="landingGreeting">Welcome</h1><p>Review What Needs Attention And Open Your Lodge Tools.</p><span id="landingRole"></span><button id="homePrimaryAction" class="home-primary-action" type="button"><span id="homePrimaryActionLabel">Open Lodge Tools</span> <span aria-hidden="true">→</span></button></div>
             <div class="home-layout">
               <div class="home-main">
+                <section id="homeDraftPanel" class="home-panel hidden" aria-labelledby="homeDraftHeading">
+                  <div class="home-panel-heading"><h2 id="homeDraftHeading">Continue Draft</h2></div>
+                  <p id="homeDraftMessage" class="message" role="status"></p>
+                  <div id="homeDraftList" class="home-draft-list"></div>
+                </section>
                 <section class="home-panel home-attention"><div class="home-panel-heading"><div><p class="eyebrow">YOUR LODGE WORK</p><h2>Needs Attention</h2></div><span id="homeAlertCount" class="home-count hidden"></span></div><div id="homeAlertList" class="home-alert-list"><p>Checking Lodge records…</p></div></section>
                 <section id="homeCalendarPanel" class="home-panel calendar-only"><div class="home-panel-heading"><div><p class="eyebrow">LODGE CALENDAR</p><h2>Coming Up</h2></div><button id="homeOpenCalendar" class="home-text-action" type="button">Open Calendar</button></div><div id="homeUpcomingEvents" class="home-event-list"><p>Checking the Lodge calendar…</p></div></section>
               </div>

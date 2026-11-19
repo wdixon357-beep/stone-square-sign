@@ -199,9 +199,30 @@ export function mountCorrespondenceRoutes(app, { requireAuth, broadcast }) {
   app.get('/api/correspondence', requireAuth, async (req, res, next) => {
     try {
       if (!eligible(req.user)) return denied(res);
-      const rows = await dbAll(`SELECT ${queueColumns} FROM correspondence_drafts ORDER BY updated_at DESC LIMIT 100`);
       res.setHeader('Cache-Control', 'private, no-store');
+      if (req.query.drafts === '1') {
+        const drafts = await dbAll(`SELECT id,subject,status,prepared_by_user_id,return_note,updated_at FROM correspondence_drafts
+          WHERE status='draft' AND prepared_by_user_id=? ORDER BY updated_at DESC LIMIT 100`, [req.user.id]);
+        return res.json({ drafts: drafts.map(row => ({
+          id: row.id, subject: row.subject, status: row.status,
+          preparedByUserId: row.prepared_by_user_id, updatedAt: row.updated_at,
+          continueIssues: [row.return_note
+            ? { label: `Returned for correction: ${row.return_note}`, target: 'return-note' }
+            : { label: 'Review the letter and PDF', target: 'review' }],
+        })) });
+      }
+      const rows = await dbAll(`SELECT ${queueColumns} FROM correspondence_drafts ORDER BY updated_at DESC LIMIT 100`);
       res.json({ drafts: rows.map(dto) });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/correspondence/:id/draft', requireAuth, async (req, res, next) => {
+    try {
+      if (!eligible(req.user)) return denied(res);
+      res.setHeader('Cache-Control', 'private, no-store');
+      const row = await dbGet(`SELECT ${queueColumns} FROM correspondence_drafts
+        WHERE id=? AND status='draft' AND prepared_by_user_id=?`, [req.params.id, req.user.id]);
+      if (!row) return res.status(404).json({ error: 'This letter is no longer available as your draft.' });
+      res.json({ draft: dto(row) });
     } catch (error) { next(error); }
   });
   app.post('/api/correspondence', requireAuth, async (req, res, next) => {
