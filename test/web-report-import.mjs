@@ -151,6 +151,23 @@ function harness({ mode = '', opener = true } = {}) {
   check('Applying clears reusable suggestions without signing or sending', h.element('apply').disabled && h.messages.length === 2);
 }
 {
+  const h = harness(); await h.connect(); h.source('Keep the source while reviewing');
+  h.state.suggestions = { fields: {}, fieldLabels: {}, warnings: ['Review these notes against the source.'], evidence: [] };
+  await h.click('organize');
+  check('An empty result offers manual review and displays returned warnings',
+    !h.element('suggestions').hidden && h.element('suggestionsStep').hidden && h.element('suggestionsHeading').textContent === 'Review your notes manually'
+    && h.element('warnings').children[0].textContent === 'Review these notes against the source.'
+    && h.element('status').textContent.includes('Use your notes'));
+  await h.element('apply').onclick();
+  check('An empty result disables Apply and preserves the notes and report', h.element('apply').disabled
+    && h.element('source').value === 'Keep the source while reviewing'
+    && h.messages.every(message => message.data.kind !== 'report-assistant-apply'));
+  h.state.suggestions = { fields: { title: 'Verified title' }, warnings: [], evidence: [] };
+  await h.click('organize');
+  check('Later verified fields restore the review and Apply controls', !h.element('suggestionsStep').hidden
+    && h.element('suggestionsHeading').textContent === 'Review suggested entries' && !h.element('apply').disabled);
+}
+{
   const h = harness(); await h.connect(); h.source('Imported report'); await h.click('organize'); h.state.authError = 401; await h.click('apply');
   check('Expired account at Apply keeps source and blocks field transfer', h.element('source').value === 'Imported report' && h.element('workspace').hidden && h.messages.length === 1);
 }

@@ -74,7 +74,8 @@ assert.match(app, /event: minutes_records_changed/, 'the website must refresh an
 assert.match(nativeAPI, /event: minutes_records_changed/, 'the Mac app must refresh an open minutes archive after publication');
 assert.match(nativeMinutes, /mayReview\(record\) \? "Review" : "View PDF"/, 'the Mac app must open another preparer signed minutes as a finalized PDF');
 assert.match(server, /publishedMinutesSnapshot[\s\S]*buildMinutesDocx/, 'finalized Word copies must use captured attestation snapshots');
-assert.match(app, /preparer_completion'[\s\S]*showPdfBlob\(await apiFetch[\s\S]*completion-alert-seen/, 'a completed-review alert must open the signed PDF before acknowledgment');
+const completionAlert = app.slice(app.indexOf("if (alert.kind === 'preparer_completion')"), app.indexOf("const refreshBuildingAlerts ="));
+assert.match(completionAlert, /const pdf = await apiFetch\(`\/api\/minutes\/\$\{record.id\}\/pdf`\)[\s\S]*showPdfBlob\(pdf,[\s\S]*completion-alert-seen/, 'a completed-review alert must open the signed PDF before acknowledgment');
 assert.match(html, /id="treasuryAlerts"[^>]+aria-live="polite"/, 'waiting banking records must have a persistent accessible alert region');
 assert.match(app, /\/api\/treasury\/alerts/, 'the website must refresh waiting banking-record alerts');
 assert.match(app, /\/api\/treasury\/alerts\/\$\{alert\.id\}\/dismiss/, 'the website must let each preparer clear a seen banking reminder');

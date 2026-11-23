@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import express from 'express';
+import crypto from 'node:crypto';
 
 process.env.DATABASE_URL = '';
 process.env.PGLITE_DIR = '';
 process.env.NODE_ENV = 'test';
 const { connect, close, initSchema, dbRun, dbGet, dbAll } = await import('../db.js');
 const { initializeBuildingCalendar, mountBuildingCalendar } = await import('../building-calendar.js');
+const { buildingStoreHash, executeBuildingStoreOperation, initBuildingStoreSchema } = await import('../building-store.js');
+const { readAssistantBuildingArchive } = await import('../assistant-building.js');
 
 await connect();
 let listener;
@@ -104,6 +107,77 @@ try {
   assert.equal((await api('/api/building/alerts',assistant)).status,403,'Cached reminders never bypass current access checks');
   assert.equal(portalReads.get(assistant),readsBeforeRevoked);
   console.log('PASS building attestation alerts, signer boundary, owner filing, idempotency, cached polling and access revocation.');
+  // After a verified cutover the same portal CAS changes the authoritative
+  // archive. Polling must see that revision without bridge or workflow writes.
+  const restrictAgain = () => dbRun('UPDATE users SET permissions_json=? WHERE id=?',[JSON.stringify([]),assistant]);
+  await dbRun('UPDATE users SET permissions_json=? WHERE id=?',[JSON.stringify(['building.view']),assistant]);
+  const warden = await addUser('Synthetic Warden', 'warden');
+  await initBuildingStoreSchema();
+  const attestingOrganization='Zeta Phi Beta Sorority, Incorporated, Gamma Alpha Rho Zeta Chapter';
+  const flexibleTerms={version:'gapz-2026-09-23-v4',text:'Administrative attestation by the Secretary or Assistant Secretary'};
+  const archived = [
+    {id:old.id,org:attestingOrganization,date:'2026-11-10',status:'approved',
+      statusAccessHash:'hidden-status-credential',agreement:{reviewStatus:'awaiting_secretary_attestation'}},
+    {id:flexible.id,org:attestingOrganization,date:'2026-11-11',status:'approved',
+      agreement:{reviewStatus:'awaiting_secretary_attestation',...flexibleTerms,signatureData:'private-ink'}},
+    {id:'SSL-FILED',org:'Synthetic filed chapter',date:'2026-11-12',status:'approved',
+      agreement:{reviewStatus:'fully_executed',secretaryAttestation:{attestedAt:'2026-11-10T12:00:00.000Z'}}},
+    {id:'SSL-CANCELLED',org:attestingOrganization,date:'2026-11-13',status:'cancelled',
+      agreement:{reviewStatus:'awaiting_secretary_attestation'}},
+    {id:'SSL-OTHER',org:'Synthetic other chapter',date:'2026-11-14',status:'approved',
+      agreement:{reviewStatus:'awaiting_secretary_attestation',...flexibleTerms}},
+  ];
+  const raw = JSON.stringify(archived);
+  const timestamp = new Date().toISOString();
+  await dbRun("INSERT INTO building_store_entries(key,value_text,value_sha256,created_at,updated_at) VALUES('resv:all',?,?,?,?)",
+    [raw,buildingStoreHash(raw),timestamp,timestamp]);
+  await dbRun("UPDATE building_store_state SET state='ready' WHERE id=1");
+  const filedRaw = archived.find(record=>record.id==='SSL-FILED');
+  const filedRevision = buildingStoreHash(JSON.stringify(filedRaw));
+  await dbRun(`INSERT INTO building_workflow_records
+    (request_id,organization,event_date,agreement_status,attestation_roles_json,portal_revision,updated_at,filed_revision)
+    VALUES (?,?,?,?,?,?,?,?)`,[filedRaw.id,filedRaw.org,filedRaw.date,'fully_executed','[]',filedRevision,timestamp,filedRevision]);
+  const beforeReads = [...portalReads];
+  const workflowBefore = await dbAll('SELECT * FROM building_workflow_records ORDER BY request_id');
+  const direct = await api('/api/building/alerts',assistant);
+  assert.equal(direct.status,200);
+  assert.deepEqual(direct.data.alerts.map(alert=>alert.id),[old.id,flexible.id]);
+  assert.match(direct.data.alerts[0].message,/McDuffie is named/);
+  assert.match(direct.data.alerts[1].message,/Review and attest/);
+  assert.doesNotMatch(JSON.stringify(direct.data),/private-ink|hidden-status-credential/);
+  assert.deepEqual((await api('/api/building/alerts',owner)).data.alerts,[],'The exact filed archive revision stays filed');
+  assert.deepEqual((await api('/api/building/alerts',warden)).data.alerts,[],'A Warden has no officer attestation or filing reminder');
+  assert.deepEqual(await dbAll('SELECT * FROM building_workflow_records ORDER BY request_id'),workflowBefore);
+  assert.deepEqual([...portalReads],beforeReads,'Migrated alert reads do not contact the portal');
+  const {revision,sha256,byteLength}=await readAssistantBuildingArchive();
+  assert.deepEqual(await readAssistantBuildingArchive({knownArchive:{revision,sha256,byteLength}}),{unchanged:true});
+
+  const compareAndSet = async (expected, records) => {
+    const body={operation:'cas',key:'resv:all',expected,value:JSON.stringify(records)};
+    const result=await executeBuildingStoreOperation(body,{requestId:crypto.randomUUID(),payloadSha256:buildingStoreHash(JSON.stringify(body))});
+    assert.equal(result,1);
+    return body.value;
+  };
+  const changed = structuredClone(archived);
+  Object.assign(changed[0].agreement,flexibleTerms);
+  const reassigned=await compareAndSet(raw,changed);
+  const fromPortalRevision=await api('/api/building/alerts',assistant);
+  assert.equal(fromPortalRevision.status,200);
+  assert.match(fromPortalRevision.data.alerts[0].message,/Review and attest/,'An updated signature assignment appears on the next poll');
+  changed[0].status='denied';
+  changed[1].agreement.reviewStatus='fully_executed';
+  changed[1].agreement.secretaryAttestation={attestedAt:'2026-11-10T13:00:00.000Z'};
+  await compareAndSet(reassigned,changed);
+  assert.deepEqual((await api('/api/building/alerts',assistant)).data.alerts,[],'Both prior reminders follow the new live archive transition');
+  assert.deepEqual((await api('/api/building/alerts',owner)).data.alerts.map(alert=>alert.id),[flexible.id]);
+  assert.deepEqual(await dbAll('SELECT * FROM building_workflow_records ORDER BY request_id'),workflowBefore);
+  await restrictAgain();
+  assert.equal((await api('/api/building/alerts',assistant)).status,403,'Direct archive reminders still require current permission');
+  await dbRun("UPDATE building_store_entries SET value_text=? WHERE key='resv:all'",[raw]);
+  assert.equal((await api('/api/building/alerts',owner)).status,503,'A previously cached ready archive never masks a failed integrity check');
+  assert.deepEqual([...portalReads],beforeReads,'Active storage failure never falls back to the legacy portal');
+  console.log('PASS migrated alert reads, signed-version visibility, request and filing revisions, no workflow writes, active access, and fail-closed recovery.');
+
 } finally {
   if (listener) await new Promise(resolve=>listener.close(resolve));
   await close();

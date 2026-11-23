@@ -28,7 +28,7 @@ import { buildDuesPdf, buildDuesXlsx, duesExportFileName } from './dues-export.j
 import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
-import { applyMinutesMeetingDetails, generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
+import { applyMinutesMeetingDetails, generateMinutesDraft, MINUTES_REJECTED_OUTPUT_CODES, normalizeMinutesDraft } from './minutes.js';
 import { detectMinutesSourceType } from './minutes-organizer.js';
 import {MINUTES_MEETING_DETAILS_FIELDS, formatMinutesClock, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails, suggestMinutesDetailsFromNotes} from './public/minutes-meeting-details.js';
 import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
@@ -2175,7 +2175,8 @@ app.post('/api/minutes/handoff', requireAuth, requireOwner,
     } catch (error) { next(error); }
   });
 
-const minutesRecoveryNotice = 'Your original meeting source and details were saved. Automatic organization could not verify its source references.';
+const minutesRecoverySaved = 'Your original meeting source and details were saved.';
+const minutesRecoveryNotice = minutesRecoverySaved + ' Automatic organization could not verify the generated minutes.';
 const minutesResumeNotice = 'An existing draft was reopened for these notes. Its earlier meeting details are still saved. Review them before continuing.';
 
 async function prepareNewMinutesDraft(transcript, { sourceType, meetingDetails, userId }) {
@@ -2183,7 +2184,7 @@ async function prepareNewMinutesDraft(transcript, { sourceType, meetingDetails, 
     const draft = await generateMinutesDraft(transcript, { sourceType, meetingDetails, generateStructured: generationFor(userId) });
     return { draft };
   } catch (error) {
-    if (error.code !== 'MINUTES_SECTION_EVIDENCE_INVALID') throw error;
+    if (error.statusCode !== 502 || !MINUTES_REJECTED_OUTPUT_CODES.has(error.code)) throw error;
     // Recover the upload, not the rejected narrative or its claimed evidence.
     const draft = applyMinutesMeetingDetails(normalizeMinutesDraft({
       sourceType: detectMinutesSourceType(transcript, sourceType), officerAttendanceVersion: 2, closingFormatVersion: 4, sections: [],
@@ -2198,7 +2199,7 @@ async function findRecoveredMinutes({ userId, meetingDate, sourceName, transcrip
     `SELECT id FROM meeting_minutes WHERE preparer_user_id = ? AND meeting_date = ?
       AND source_name = ? AND transcript_text = ? AND status = 'draft'
       AND position(? in draft_json) > 0 ORDER BY created_at DESC LIMIT 1`,
-    [userId, meetingDate, sourceName, transcript, minutesRecoveryNotice],
+    [userId, meetingDate, sourceName, transcript, minutesRecoverySaved],
   );
 }
 
@@ -3983,7 +3984,17 @@ app.post('/api/reports/organize', requireAuth, rateLimit({key:'report-organize',
     if(req.body.master === true && req.user.role !== 'owner')return res.status(403).json({error:"Only the Worshipful Master can organize a Worshipful Master's report."});
     const generateStructured=generationFor(req.user.id);
     if(!generateStructured)return res.status(503).json({error:'Report assistance is not configured. You can still complete the report manually.'});
-    const result=await organizeReport(req.body,{schema:await reportSchema({assertion:createReportAssertion(req.user).assertion}),generateStructured});
+    let result;
+    try {
+      result=await organizeReport(req.body,{schema:await reportSchema({assertion:createReportAssertion(req.user).assertion}),generateStructured});
+    } catch (error) {
+      if (!['REPORT_SUGGESTION_VERIFICATION_FAILED', 'GENERATION_INVALID_RESPONSE'].includes(error.code)) throw error;
+      await addAudit({ userId: req.user.id, action: 'report_suggestions_rejected', ip: req.ip,
+        details: { category: error.code } });
+      result={fields:{},fieldLabels:{},evidence:[],warnings:[
+        'Automatic organization could not verify the report suggestions. Review your original notes and complete the report manually, or choose Organize again.',
+      ]};
+    }
     res.setHeader('Cache-Control','no-store');res.json(result);
   }catch(error){next(error);}
 });
@@ -4030,10 +4041,7 @@ mountCheckOrderRoutes(app, { requireAuth, rateLimit, lockSavedSignature, broadca
 // messages, provider details and arbitrary library codes can contain source data.
 const serverIncidentCategory = (error, requestPath) => {
   const knownCodes = new Set([
-    'MINUTES_SOURCE_VERIFICATION_FAILED', 'MINUTES_SECTION_EVIDENCE_INVALID', 'MINUTES_UNSUPPORTED_SECOND',
-    'MINUTES_UNSUPPORTED_UNANIMOUS_VOTE', 'MINUTES_UNSUPPORTED_APPROVAL',
-    'MINUTES_UNSUPPORTED_REJECTION', 'MINUTES_UNSUPPORTED_TABLING', 'MINUTES_UNSUPPORTED_WITHDRAWAL',
-    'GENERATION_INVALID_RESPONSE', 'GENERATION_USAGE_UNKNOWN', 'GENERATION_ALREADY_PENDING',
+    ...MINUTES_REJECTED_OUTPUT_CODES, 'REPORT_SCHEMA_UNAVAILABLE', 'REPORT_SUGGESTION_VERIFICATION_FAILED', 'GENERATION_USAGE_UNKNOWN', 'GENERATION_ALREADY_PENDING',
     'GENERATION_BUDGET_PAUSED', 'GENERATION_MONTHLY_LIMIT', 'GENERATION_SOURCE_TOO_LARGE', 'GENERATION_REQUEST_REJECTED',
   ]);
   if (typeof error?.code === 'string' && knownCodes.has(error.code)) return error.code;

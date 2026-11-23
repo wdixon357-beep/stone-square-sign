@@ -108,7 +108,7 @@ const fetchImpl = async (url, options) => {
   let result;
   if (body.text.format.name === 'stone_square_officer_report') {
     const title=input.source.includes('Source note mentions OpenAI')?'Source note mentions OpenAI':'Synthetic report notes';
-    result={suggestions:[{field:'title',value:title,quote:title}],warnings:['GPT-5.6 Luna organized the report. Review each suggestion.', 'Historical GPT-5.6 Terra notice.']};
+    result={suggestions:[{field:'title',value:title,quote:mode==='unsupported_report_suggestion'?'Unsupported synthetic quote':title}],warnings:['GPT-5.6 Luna organized the report. Review each suggestion.', 'Historical GPT-5.6 Terra notice.']};
   } else if (body.text.format.name === 'stone_square_meeting_minutes') {
     if ('source' in input || !Array.isArray(input.sourceLines) || !input.sourceLines.every((entry,index)=>entry.line===index+1 && typeof entry.text==='string')) throw Error('Invalid or duplicated minutes source catalog');
     const source=input.sourceLines.map(entry=>entry.text).join('\\n');
@@ -327,6 +327,19 @@ try {
   await start(true);
   owner = await registerOwner();
   const assistant = await officer(owner, 'assistant_secretary');
+  const unverifiedReportInput={...reportInput,source:reportInput.source+' for the recovery test.'};
+  const beforeRejectedReport=await providerCalls();
+  await control({mode:'unsupported_report_suggestion'});
+  const rejectedReport=await api('/api/reports/organize',owner.token,'POST',unverifiedReportInput);
+  check('Rejected report suggestions return a manual-review notice with no fields and no automatic retry',
+    rejectedReport.status===200 && Object.keys(rejectedReport.data.fields).length===0
+      && rejectedReport.data.evidence.length===0 && /complete the report manually/.test(rejectedReport.data.warnings.join())
+      && await providerCalls()===beforeRejectedReport+1);
+  await control({mode:'success'});
+  const retriedReport=await api('/api/reports/organize',owner.token,'POST',unverifiedReportInput);
+  check('An explicit report retry makes one new request and only applies verified suggestions',
+    retriedReport.status===200 && retriedReport.data.fields.title==='Synthetic report notes'
+      && await providerCalls()===beforeRejectedReport+2);
   const omissionSource = 'Meeting date: September 17, 2026\nPresent: Brother Example Officer\nThe Lodge opened on the Third Degree at 7:30 PM.\nMinutes of the previous meeting were reviewed.\nConclusion: Both were approved as submitted.\nThe Lodge closed at 9:00 PM.';
   await control({mode:'procedural_omission'});
   const beforeOmission = await providerCalls();
@@ -348,35 +361,22 @@ try {
   await control({mode:'unsupported_second'});
   const unsupportedSource = omissionSource+'\nA separate proposal was discussed.';
   const unsupported = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(unsupportedSource));
-  check('A nearby unknown-seconder statement cannot hide a fabricated affirmative second',
-    unsupported.status===502 && /^SS22-[A-Z0-9]+$/.test(unsupported.data.incidentReference||'') && /unsupported second/.test(unsupported.data.error));
-  const currentActivity = (await api('/api/admin/activity',owner.token)).data;
-  const captured = currentActivity.incidents.find(incident=>incident.reference===unsupported.data.incidentReference);
-  check('The exact generation failure is recorded server-side with its actor, status and safe category',
-    captured?.userId===assistant.user.id && captured.status===502 && captured.path==='/api/minutes/generate' && captured.category==='MINUTES_UNSUPPORTED_SECOND');
-  check('The failure log contains no pasted source or provider payload',
-    !JSON.stringify(captured).includes(unsupportedSource) && !JSON.stringify(captured).includes('Brother Example'));
-  check('Rejected generation preserves the earlier saved draft without saving a substitute',
-    (await api('/api/minutes',assistant.token)).data.minutes.length===recordsBeforeUnsupported && (await api('/api/minutes',assistant.token)).data.minutes.find(item=>item.id===savedOmission.id).updatedAt===savedOmission.updatedAt);
+  check('A fabricated affirmative second is discarded and the original source is retained',
+    unsupported.status===201 && !!unsupported.data.recoveryNotice && unsupported.data.minutes.draft.sections.every(section=>!section.body.trim()));
+  check('Review recovery preserves the earlier saved draft and creates only one unsigned source record',
+    (await api('/api/minutes',assistant.token)).data.minutes.length===recordsBeforeUnsupported+1
+      && (await api('/api/minutes',assistant.token)).data.minutes.find(item=>item.id===savedOmission.id).updatedAt===savedOmission.updatedAt);
   const beforeUnsupportedRetry = await providerCalls();
   const unsupportedRetry = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(unsupportedSource));
-  check('Retrying a rejected cached interpretation does not make a silent paid retry',
-    unsupportedRetry.status===502 && await providerCalls()===beforeUnsupportedRetry);
+  check('Retrying a recovered source preserves its existing draft without another paid request',
+    unsupportedRetry.status===200 && unsupportedRetry.data.minutes.id===unsupported.data.minutes.id && await providerCalls()===beforeUnsupportedRetry);
 
-  // Reproduce the rejected fourteen-action provider shape without a real call.
-  // A provider that violates the constrained wire format must still fail closed
-  // before insertion, preserving every field of the earlier saved draft.
-  const beforeForbiddenRecords = (await api('/api/minutes',assistant.token)).data.minutes;
   const beforeForbiddenCalls = await providerCalls();
   await control({mode:'forbidden_actions'});
   const forbidden = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(omissionSource+'\nA distinct synthetic source for the forbidden-action regression.'));
-  check('Provider contract rejects fourteen extra actions without automatic retry',
-    forbidden.status===502 && await providerCalls()===beforeForbiddenCalls+1);
-  const forbiddenIncident = (await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===forbidden.data.incidentReference);
-  check('Forbidden actions are rejected by the shared provider validator before creating minutes',
-    forbiddenIncident?.category==='GENERATION_INVALID_RESPONSE' && forbiddenIncident.userId===assistant.user.id);
-  assert.deepEqual((await api('/api/minutes',assistant.token)).data.minutes,beforeForbiddenRecords);
-  check('Rejected action-table response preserves existing source, draft, signatures and workflow',true);
+  check('A malformed provider response keeps the source and rejects all suggested content without automatic retry',
+    forbidden.status===201 && !!forbidden.data.recoveryNotice && forbidden.data.minutes.draft.sections.every(section=>!section.body.trim())
+      && forbidden.data.minutes.draft.actionItems.length===0 && await providerCalls()===beforeForbiddenCalls+1);
 
   await control({mode:'default_metadata_citation'});
   const metadataSource = omissionSource+'\nThe meeting schedule was discussed.';
@@ -474,15 +474,13 @@ try {
   const invalidSectionCases = [
     // The adapter's strict wire-schema check catches a missing required field
     // before the minutes-specific quote verifier receives the response.
-    {name:'missing embedded line references',mutate:sections=>{delete sections[4].sourceLineIds;},category:'GENERATION_INVALID_RESPONSE'},
+    {name:'missing embedded line references',mutate:sections=>{delete sections[4].sourceLineIds;}},
     {name:'empty line references on populated text',mutate:sections=>{sections[4].sourceLineIds=[];}},
-    {name:'an out-of-bounds source line',mutate:sections=>{sections[4].sourceLineIds=[9999];},category:'GENERATION_INVALID_RESPONSE'},
+    {name:'an out-of-bounds source line',mutate:sections=>{sections[4].sourceLineIds=[9999];}},
     {name:'evidence attached to an empty section',mutate:sections=>{sections[1].sourceLineIds=[5];}},
     {name:'obsolete parallel section indexes',extraEvidence:[{field:'sections[4].body',sourceLineIds:[5]}]},
-    {name:'an unsupported affirmative second',mutate:sections=>{sections[8].body+=' Brother Example seconded the motion.';},category:'MINUTES_UNSUPPORTED_SECOND'},
+    {name:'an unsupported affirmative second',mutate:sections=>{sections[8].body+=' Brother Example seconded the motion.';}},
   ];
-  const sectionRecordsBefore = (await api('/api/minutes',sectionAssistant.token)).data.minutes.length;
-  let recoveredSectionCount=0;
   let recoveredSource, recoveredOrder;
   for (const [index,testCase] of invalidSectionCases.entries()) {
     const sections=structuredClone(sectionFixture);testCase.mutate?.(sections);
@@ -490,7 +488,7 @@ try {
     const callsBefore=await providerCalls();
     const badSource=sectionSource+`\nSynthetic source case ${index+1}.`;
     const rejection=await api('/api/minutes/generate',sectionAssistant.token,'POST',minutesForm(badSource));
-    if (!testCase.category) {
+    {
       const recovery = rejection.data.minutes;
       assert.equal(rejection.status,201,JSON.stringify(rejection.data));
       assert.match(rejection.data.recoveryNotice,/original meeting source and details were saved/);
@@ -502,20 +500,10 @@ try {
       assert.ok(['officerRoll','otherPresent','otherExcused'].every(field=>recovery.draft.attendanceReview[field]===false));
       assert.equal((await api(`/api/minutes/${recovery.id}/source`,sectionAssistant.token)).data.sourceText.replace(/\r\n/g,'\n'),badSource);
       assert.equal(await providerCalls(),callsBefore+1,'recovery does not make a second provider call');
-      recoveredSectionCount++;
       recoveredSource ||= badSource;
       recoveredOrder ||= recovery;
       check(`Invalid ${testCase.name} keeps the source and officer details without copying any rejected text`,true);
-      continue;
     }
-    const incident=(await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===rejection.data.incidentReference);
-    assert.equal(rejection.status,502,JSON.stringify(rejection.data));
-    assert.equal(incident?.category,testCase.category||'MINUTES_SECTION_EVIDENCE_INVALID',testCase.name);
-    check(`HTTP verification rejects ${testCase.name} before saving and records its safe category`,
-      rejection.status===502 && /^SS22-[A-Z0-9]+$/.test(rejection.data.incidentReference||'')
-        && incident?.category===(testCase.category||'MINUTES_SECTION_EVIDENCE_INVALID')
-        && incident.userId===sectionAssistant.user.id && await providerCalls()===callsBefore+1
-        && (await api('/api/minutes',sectionAssistant.token)).data.minutes.length===sectionRecordsBefore+recoveredSectionCount);
   }
   const beforeResumeCalls = await providerCalls();
   const resumed = await api('/api/minutes/generate',sectionAssistant.token,'POST',minutesForm(recoveredSource,{...enteredDetails, closingTime:'10:00 PM'}));
@@ -554,6 +542,11 @@ try {
   });
   const inputs=(await readFile(inputsFile,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
   reopenedSectionMinutes=(await api('/api/minutes',sectionAssistant.token)).data.minutes.find(item=>item.id===sectionMinutes.id);
+  const strictIncident=(await api('/api/admin/activity',owner.token)).data.incidents
+    .find(item=>item.reference===rejectedReorganization.data.incidentReference);
+  assert.equal(strictIncident?.category,'MINUTES_SECTION_EVIDENCE_INVALID');
+  assert.equal(strictIncident?.userId,sectionAssistant.user.id);
+  assert.doesNotMatch(JSON.stringify(strictIncident),/Brother Example Officer|Synthetic source case/);
   assert.equal(rejectedReorganization.status,502,JSON.stringify(rejectedReorganization.data));
   assert.equal(await providerCalls(),beforeRejectedReorganization+1,'reorganization explicitly requests one new interpretation');
   assert.equal(inputs.at(-1).input.sourceLines.map(entry=>entry.text).join('\n'),originalSectionInput,'reorganization receives the original stored source');

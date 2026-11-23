@@ -14,18 +14,35 @@ const hasTable = async table => Boolean((await dbGet('SELECT to_regclass(?) AS p
 
 // One SELECT binds raw bytes, retained digest, actual database digest, length,
 // expiry and migration readiness to the same database observation. No portal
-// credentials, cache refresh, synchronization or workflow writes are involved.
-export async function readAssistantBuildingArchive() {
-  if (!await hasTable('building_store_entries') || !await hasTable('building_store_state')) throw assistantError(503,'Building record storage is unavailable.');
-  const row = await dbGet(`SELECT value_text,value_sha256,revision::text AS revision,expires_at,
-    octet_length(convert_to(value_text,'UTF8')) AS value_bytes,
-    encode(sha256(convert_to(value_text,'UTF8')),'hex') AS actual_sha256,
-    (SELECT state FROM building_store_state WHERE id=1) AS store_state
-    FROM building_store_entries WHERE key='resv:all'`);
+// credentials, synchronization or workflow writes are involved. An unchanged
+// verified fingerprint lets the reminder reader avoid transferring signed files.
+export async function readAssistantBuildingArchive({allowUninitialized = false, knownArchive} = {}) {
+  const tables = await dbGet('SELECT to_regclass(?) AS entries, to_regclass(?) AS state',
+    ['public.building_store_entries','public.building_store_state']);
+  const hasEntries = Boolean(tables?.entries);
+  const hasState = Boolean(tables?.state);
+  if (allowUninitialized && !hasEntries && !hasState) return null;
+  if (!hasEntries || !hasState) throw assistantError(503,'Building record storage is unavailable.');
+  const row = await dbGet(`WITH archive AS (
+    SELECT value_text,value_sha256,revision::text AS revision,expires_at,
+      octet_length(convert_to(value_text,'UTF8')) AS value_bytes,
+      encode(sha256(convert_to(value_text,'UTF8')),'hex') AS actual_sha256,
+      state.state AS store_state FROM building_store_state state
+    LEFT JOIN building_store_entries entry ON entry.key='resv:all' WHERE state.id=1
+  ) SELECT CASE WHEN revision=? AND value_sha256=? AND value_bytes=? THEN NULL ELSE value_text END AS value_text,
+    value_sha256,revision,expires_at,value_bytes,actual_sha256,store_state FROM archive`,
+  [knownArchive?.revision ?? null,knownArchive?.sha256 ?? null,knownArchive?.byteLength ?? null]);
+  if (allowUninitialized && row?.store_state === 'uninitialized' && row.revision === null) return null;
+  const byteLength = Number(row?.value_bytes);
   if (!row || row.store_state !== 'ready' || row.expires_at !== null || !/^[1-9][0-9]*$/.test(row.revision)
       || !/^[a-f0-9]{64}$/.test(row.value_sha256 || '') || row.actual_sha256 !== row.value_sha256
-      || !Number.isSafeInteger(Number(row.value_bytes)) || Number(row.value_bytes) > BUILDING_STORE_MAX_VALUE_BYTES
-      || Buffer.byteLength(row.value_text) !== Number(row.value_bytes) || digest(row.value_text) !== row.actual_sha256) {
+      || !Number.isSafeInteger(byteLength) || byteLength < 0 || byteLength > BUILDING_STORE_MAX_VALUE_BYTES) {
+    throw assistantError(503,'Building records could not be verified.');
+  }
+  if (knownArchive?.revision === row.revision && knownArchive.sha256 === row.actual_sha256
+      && knownArchive.byteLength === byteLength) return {unchanged:true};
+  if (typeof row.value_text !== 'string' || Buffer.byteLength(row.value_text) !== byteLength
+      || digest(row.value_text) !== row.actual_sha256) {
     throw assistantError(503,'Building records could not be verified.');
   }
   let records;
@@ -37,7 +54,7 @@ export async function readAssistantBuildingArchive() {
       || !/^[A-Za-z0-9_-]{1,100}$/.test(record.id) || ids.has(record.id)) throw assistantError(503,'Building record identities could not be verified.');
     ids.add(record.id);
   }
-  return {records,revision:row.revision,sha256:row.actual_sha256,byteLength:Number(row.value_bytes)};
+  return {records,revision:row.revision,sha256:row.actual_sha256,byteLength};
 }
 
 function projectBuildingRequest(record, filing) {

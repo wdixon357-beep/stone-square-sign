@@ -4,7 +4,7 @@ import { hasPermission, resolvePermissions } from './access-control.js';
 import { createBuildingAlertCache } from './building-alert-cache.js';
 import { initSignaturePolicySchema, assertApprovedSignature } from './signature-policy.js';
 import { mountBuildingAgreementRoutes } from './building-agreements.js';
-import { assistantBuildingProjection, assistantBuildingAlerts, assistantBuildingReviewSource } from './assistant-building.js';
+import { readAssistantBuildingArchive, assistantBuildingProjection, assistantBuildingAlerts, assistantBuildingReviewSource } from './assistant-building.js';
 import { formatEasternClock } from './public/eastern-time.js';
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode});
 const DATE=/^\d{4}-\d{2}-\d{2}$/;const TIME=/^(?:[01]\d|2[0-3]):[0-5]\d$/;
@@ -132,6 +132,7 @@ export async function initializeBuildingCalendar(){
 const showEvent=(r,editable)=>({...JSON.parse(r.event_json),id:r.id,revision:String(r.revision),editable});
 const audit=(req,action,details)=>dbRun('INSERT INTO audit_events (user_id,action,ip_address,details_json,created_at) VALUES (?,?,?,?,?)',[req.user.id,action,req.ip,JSON.stringify(details),new Date().toISOString()]);
 const PORTAL='https://request.stonesquare22pha.org';
+const PORTAL_ATTESTATION_ORGANIZATION='Zeta Phi Beta Sorority, Incorporated, Gamma Alpha Rho Zeta Chapter';
 export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildingEmail=async()=>false,alertCache=createBuildingAlertCache()}){
  const alertKey=req=>JSON.stringify([req.user.id,req.user.role,resolvePermissions(req.user)]);
  let lastObservation=0;
@@ -174,6 +175,29 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
   const payload=await remote('/api/reservation?list&dashboard=1',req);
   if(!Array.isArray(payload.requests)||payload.store===false)throw fail(503,'Building request storage is temporarily unavailable.');
   return {payload,observedAt};
+ };
+ let archiveReminderCache;
+ const loadArchiveReminders=async()=>{
+  const previous=archiveReminderCache;
+  const archive=await readAssistantBuildingArchive({allowUninitialized:!previous,knownArchive:previous});
+  if(!archive)return null;
+  if(archive.unchanged)return previous.rows;
+  const rows=archive.records.flatMap(record=>{
+   const agreement=record.agreement;
+   if(record.status!=='approved'||!['awaiting_secretary_attestation','fully_executed'].includes(agreement?.reviewStatus))return [];
+   if(agreement.reviewStatus==='awaiting_secretary_attestation'&&String(record.org||'').trim()!==PORTAL_ATTESTATION_ORGANIZATION)return [];
+   if(agreement.reviewStatus==='fully_executed'&&!agreement.secretaryAttestation?.attestedAt)return [];
+   // Same signed-version rule as the request portal. The reminder never
+   // authorizes a signature; the portal still checks the actual agreement.
+   const eitherOfficer=agreement.version==='gapz-2026-09-23-v4'
+    && String(agreement.text||'').includes('Administrative attestation by the Secretary or Assistant Secretary');
+   return [{request_id:record.id,organization:String(record.org||record.organization||'').slice(0,250),
+    event_date:String(record.date||'').slice(0,10),agreement_status:agreement.reviewStatus,
+    attestation_roles_json:JSON.stringify(eitherOfficer?['secretary','assistant_secretary']:['secretary']),
+    portal_revision:crypto.createHash('sha256').update(JSON.stringify(record)).digest('hex')}];
+  }).sort((a,b)=>a.event_date.localeCompare(b.event_date)||a.request_id.localeCompare(b.request_id));
+  archiveReminderCache={revision:archive.revision,sha256:archive.sha256,byteLength:archive.byteLength,rows};
+  return rows;
  };
  const listRequests=async(req,{background=false}={})=>{
   const key=alertKey(req);
@@ -230,11 +254,20 @@ export function mountBuildingCalendar(app,{requireAuth,fetcher=fetch,sendBuildin
  app.get('/api/building/alerts',requireAuth,permit('building.view'),async(req,res,next)=>{try{
   res.setHeader('Cache-Control','private, no-store');
   if(req.assistant)return res.json(await assistantBuildingAlerts());
-  // Refresh the authenticated portal view first. The small local record also lets
-  // Adrian see a pending McDuffie-only agreement without granting signing rights.
-  await listRequests(req,{background:true});
-  const rows=await dbAll(`SELECT request_id,organization,event_date,agreement_status,attestation_roles_json,portal_revision,filed_revision
-    FROM building_workflow_records WHERE agreement_status IN ('awaiting_secretary_attestation','fully_executed') ORDER BY event_date,request_id`);
+  // Verify the current authority even when reusing the small reminder
+  // projection, which excludes signed files and credentials. An unavailable
+  // active archive fails closed.
+  let rows=await loadArchiveReminders();
+  if(rows===null){
+   // Installations that have not migrated still use their configured portal.
+   await listRequests(req,{background:true});
+   rows=await dbAll(`SELECT request_id,organization,event_date,agreement_status,attestation_roles_json,portal_revision,filed_revision
+     FROM building_workflow_records WHERE agreement_status IN ('awaiting_secretary_attestation','fully_executed') ORDER BY event_date,request_id`);
+  }else if(req.user.role==='owner'){
+   const filings=await dbAll('SELECT request_id,filed_revision FROM building_workflow_records WHERE filed_revision IS NOT NULL');
+   const revisions=new Map(filings.map(row=>[row.request_id,row.filed_revision]));
+   rows=rows.map(row=>({...row,filed_revision:revisions.get(row.request_id)}));
+  }
   const alerts=rows.flatMap(row=>{
    if(row.agreement_status==='awaiting_secretary_attestation'&&['secretary','assistant_secretary'].includes(req.user.role)){
     const roles=JSON.parse(row.attestation_roles_json),mayAttest=roles.includes(req.user.role);

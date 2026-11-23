@@ -15,6 +15,10 @@ const buildingRefresh = client.slice(client.indexOf('func refreshBuildingAlerts(
 assert.match(buildingRefresh, /catch \{ \/\* Preserve action reminders/, 'Failed refresh retains the existing building alert list');
 assert.match(client, /presentation: ReliabilityPresentation = \.foreground/, 'Foreground actions keep the default actionable behavior');
 assert.match(client, /"area": ReliabilityCenter\.area\(for: incident\.path\)/, 'Incident audit metadata identifies the affected area');
+const liveQueue = client.slice(client.indexOf('func startLiveQueue()'), client.indexOf('func upload(url: URL)'));
+assert.match(liveQueue, /reconnectDelaySeconds = min\(60, reconnectDelaySeconds \* 2\)/, 'Repeated live feed failures use bounded backoff');
+assert.match(liveQueue, /if line\.hasPrefix\(": heartbeat"\) \{ reconnectDelaySeconds = 3 \}/, 'An established connection resets feed backoff');
+assert.match(client, /guard passiveRefresh == nil else \{ return \}/, 'Overlapping timer and event refreshes do not start competing passive reads');
 if (process.platform !== 'darwin') {
   console.log('PASS: native reminder scoping contracts; compiled transport lifecycle checks run on macOS.');
   process.exit(0);
@@ -27,6 +31,7 @@ try {
 final class ReliabilityFixture: URLProtocol {
     static var buildingStatus = 502
     static var buildingReference = "SS22-TEST-A"
+    static var buildingAttemptReferences: [String] = []
     static var saveStatus = 502
     static var buildingCalls = 0
     static var saveCalls = 0
@@ -94,7 +99,8 @@ final class ReliabilityFixture: URLProtocol {
             return
         } else if endpoint == "/api/building/alerts" {
             Self.buildingCalls += 1; status = Self.buildingStatus
-            object = status == 200 ? ["alerts":[]] : ["error":"Synthetic upstream outage", "incidentReference":Self.buildingReference]
+            let reference = Self.buildingAttemptReferences.isEmpty ? Self.buildingReference : Self.buildingAttemptReferences.removeFirst()
+            object = status == 200 ? ["alerts":[]] : ["error":"Synthetic upstream outage", "incidentReference":reference]
         } else if endpoint == "/api/minutes/QA-SAVE" {
             Self.saveCalls += 1; status = Self.saveStatus
             object = status == 200 ? ["ok":true] : ["error":"Synthetic save failure", "incidentReference":"SS22-TEST-FOREGROUND"]
@@ -164,6 +170,29 @@ extension ReliableTransport {
         precondition(center.notice?.recovered == true && center.notice?.title == "Building Request reminders refreshed successfully.")
         precondition(reported("SS22-TEST-A", "recovered") && reported("SS22-TEST-B", "recovered"), "Separate-call recovery resolves every tracked failure reference")
         center.dismiss()
+        ReliabilityFixture.buildingStatus = 502
+        ReliabilityFixture.buildingAttemptReferences = ["SS22-ATTEMPT-ONE", "SS22-ATTEMPT-TWO"]
+        _ = try await perform("/api/building/alerts")
+        ReliabilityFixture.buildingStatus = 200
+        _ = try await perform("/api/building/alerts")
+        precondition(reported("SS22-ATTEMPT-ONE", "recovered") && reported("SS22-ATTEMPT-TWO", "recovered"),
+                     "Both server-issued references from a failed read and retry recover when that exact route succeeds")
+        center.dismiss()
+        ReliabilityFixture.buildingStatus = 502
+        ReliabilityFixture.buildingReference = "SS22-CANCEL-SAFE-READ"
+        let safeReadCalls = ReliabilityFixture.buildingCalls, safeReadReports = ReliabilityFixture.reports.count
+        let cancelledRead = Task { try await perform("/api/building/alerts") }
+        for _ in 0..<200 {
+            if center.notice?.retryReference == "SS22-CANCEL-SAFE-READ" { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        precondition(center.notice?.retryReference == "SS22-CANCEL-SAFE-READ", "The fixture reached the pause before retry")
+        cancelledRead.cancel()
+        do { _ = try await cancelledRead.value; preconditionFailure("The cancelled read must stop") }
+        catch is CancellationError {}
+        precondition(ReliabilityFixture.buildingCalls == safeReadCalls + 1 && ReliabilityFixture.reports.count == safeReadReports,
+                     "A cancelled read must not make a second request or report a false outage")
+        precondition(center.notice == nil, "The transient retry banner clears when a read is cancelled")
         ReliabilityFixture.buildingStatus = 502; ReliabilityFixture.buildingReference = "SS22-TEST-C"
         _ = try await perform("/api/building/alerts")
         precondition(center.notice != nil)
@@ -199,6 +228,12 @@ extension ReliableTransport {
         let queued = try JSONSerialization.jsonObject(with: UserDefaults.standard.data(forKey: pendingKey)!) as! [[String: Any]]
         let queuedReference = queued.last!["reference"] as! String
         precondition(center.notice?.title == "Treasurer Report reminders could not refresh.")
+        let offlineDeliveryAttempts = ReliabilityFixture.incidentCalls
+        do { _ = try await perform("/api/treasury/alerts"); preconditionFailure("Expected the same passive disconnection") } catch {}
+        let repeatedQueue = try JSONSerialization.jsonObject(with: UserDefaults.standard.data(forKey: pendingKey)!) as! [[String: Any]]
+        precondition(repeatedQueue.filter { $0["path"] as? String == "/api/treasury/alerts" && $0["state"] as? String == "open" }.count == 1)
+        precondition(repeatedQueue.last?["reference"] as? String == queuedReference, "Repeated passive connection failures share one open incident")
+        precondition(ReliabilityFixture.incidentCalls == offlineDeliveryAttempts, "A passive network failure must not immediately launch another transport attempt")
         ReliabilityFixture.incidentStatus = 200
         _ = try await perform("/api/minutes")
         precondition(reported(queuedReference, "open"), "Queued incidents are flushed without a live request")

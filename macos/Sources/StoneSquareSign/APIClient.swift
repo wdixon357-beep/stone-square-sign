@@ -38,6 +38,7 @@ struct ReliabilityNotice: Identifiable {
     var path: String? = nil
     var background = false
     var requestKey: String? = nil
+    var retryReference: String? = nil
 }
 
 @MainActor
@@ -49,6 +50,7 @@ final class ReliabilityCenter: ObservableObject {
         var notice: ReliabilityNotice
         var references: Set<String>
         let reference: String
+        var backgroundNetworkReference: String?
         var dismissed = false
         let order: Int
     }
@@ -118,14 +120,27 @@ final class ReliabilityCenter: ObservableObject {
         notice = ReliabilityNotice(
             title: background ? "Refreshing \(Self.area(for: path))" : "Oops, something went wrong.",
             message: "The dashboard is reconnecting now. Incident \(reference).", recovered: false,
-            path: path, background: background, requestKey: requestKey)
+            path: path, background: background, requestKey: requestKey, retryReference: reference)
     }
 
-    func failed(reference: String, queued: Bool = false, path: String? = nil, method: String = "GET", presentation: ReliabilityPresentation = .foreground) {
+    func cancelRetry(reference: String?) {
+        guard let reference, notice?.retryReference == reference else { return }
+        showNextFailure()
+    }
+
+    func backgroundNetworkReference(path: String, method: String) -> String? {
+        guard let requestKey = key(path: path, method: method, reference: nil) else { return nil }
+        return failures[requestKey]?.backgroundNetworkReference
+    }
+
+    func failed(reference: String, queued: Bool = false, path: String? = nil, method: String = "GET",
+                presentation: ReliabilityPresentation = .foreground, networkFailure: Bool = false, relatedReferences: Set<String> = []) {
         let background = presentation == .background
         let requestKey = key(path: path, method: method, reference: reference)!
         if background, var previous = failures[requestKey] {
             previous.references.insert(reference)
+            previous.references.formUnion(relatedReferences)
+            if networkFailure { previous.backgroundNetworkReference = reference }
             failures[requestKey] = previous
             return
         }
@@ -139,8 +154,11 @@ final class ReliabilityCenter: ObservableObject {
             path: path, background: background, requestKey: requestKey)
         var references = failures[requestKey]?.references ?? []
         references.insert(reference)
+        references.formUnion(relatedReferences)
         sequence += 1
-        failures[requestKey] = Failure(notice: failureNotice, references: references, reference: reference, order: sequence)
+        let networkReference = background && networkFailure ? reference : failures[requestKey]?.backgroundNetworkReference
+        failures[requestKey] = Failure(notice: failureNotice, references: references, reference: reference,
+                                       backgroundNetworkReference: networkReference, order: sequence)
         if !background || notice == nil || notice?.recovered == true || notice?.requestKey == requestKey {
             notice = failureNotice
         }
@@ -160,10 +178,12 @@ final class ReliabilityCenter: ObservableObject {
     }
 
     @discardableResult
-    func recovered(reference: String? = nil, path: String? = nil, method: String = "GET", presentation: ReliabilityPresentation = .foreground) -> [String] {
+    func recovered(reference: String? = nil, path: String? = nil, method: String = "GET",
+                   presentation: ReliabilityPresentation = .foreground, relatedReferences: Set<String> = []) -> [String] {
         guard let requestKey = key(path: path, method: method, reference: reference) else { return [] }
         let previous = failures.removeValue(forKey: requestKey)
         var references = previous?.references ?? []
+        references.formUnion(relatedReferences)
         if let reference { references.insert(reference) }
         // Success on another path cannot establish recovery of this failure.
         guard notice?.requestKey == requestKey, previous?.dismissed != true else { return references.sorted() }
@@ -240,7 +260,7 @@ enum ReliableTransport {
     static func perform(session: URLSession, request: URLRequest, path: String, token: String?, presentation: ReliabilityPresentation = .foreground,
                         cancellationPolicy: ReliableCancellationPolicy = .reportFailure) async throws -> (Data, HTTPURLResponse) {
         let presentation = ReliabilityCenter.presentation(for: path, requested: presentation)
-        let method = request.httpMethod ?? "GET"
+        let method = request.httpMethod?.uppercased() ?? "GET"
         let mayRetry = method == "GET" || method == "HEAD"
         let expectsCancellation = permitsExpectedCancellation(cancellationPolicy, request: request, path: path)
         if expectsCancellation { try Task.checkCancellation() }
@@ -248,14 +268,18 @@ enum ReliableTransport {
         let context = contextFingerprint(url: request.url, token: token) ?? "invalid-origin"
         let epoch = ReliabilityCenter.shared.begin(context: context)
         var reference: String?
+        var serverReferences: Set<String> = []
         for attempt in 1...(mayRetry ? 2 : 1) {
             do {
+                if mayRetry { try Task.checkCancellation() }
                 let (data, response) = try await session.data(for: request)
                 if expectsCancellation { try Task.checkCancellation() }
+                if mayRetry { try Task.checkCancellation() }
                 guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
                 if (200..<300).contains(http.statusCode) {
                     let recoveredReferences = ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch)
-                        ? ReliabilityCenter.shared.recovered(reference: reference, path: path, method: method, presentation: presentation) : []
+                        ? ReliabilityCenter.shared.recovered(reference: reference, path: path, method: method,
+                                                           presentation: presentation, relatedReferences: serverReferences) : []
                     if productionService {
                         for recoveredReference in recoveredReferences {
                             queue(PendingIncident(reference: recoveredReference, path: path, method: method, status: http.statusCode, state: "recovered", category: "temporary_connection", context: context))
@@ -266,6 +290,7 @@ enum ReliableTransport {
                 }
                 let payload = try? JSONDecoder().decode(APIError.self, from: data)
                 let retryable = http.statusCode >= 500 || http.statusCode == 408 || http.statusCode == 429 || payload?.retryable == true
+                if retryable, let serverReference = payload?.incidentReference { serverReferences.insert(serverReference) }
                 reference = reference ?? payload?.incidentReference ?? newReference()
                 if mayRetry && retryable && attempt == 1 {
                     if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
@@ -279,7 +304,8 @@ enum ReliableTransport {
                         queue(PendingIncident(reference: reference, path: path, method: method, status: http.statusCode, state: "open", category: "service_response", context: context))
                     }
                     if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
-                        ReliabilityCenter.shared.failed(reference: reference, queued: productionService, path: path, method: method, presentation: presentation)
+                        ReliabilityCenter.shared.failed(reference: reference, queued: productionService, path: path, method: method,
+                                                        presentation: presentation, relatedReferences: serverReferences)
                     }
                     if productionService {
                         scheduleQueuedReports(session: session, request: request, token: token, epoch: epoch)
@@ -289,8 +315,18 @@ enum ReliableTransport {
             } catch let client as ClientError {
                 throw client
             } catch {
-                if expectsCancellation && isExpectedCancellation(error) { throw CancellationError() }
-                reference = reference ?? newReference()
+                // A cancelled view or polling task is not a failed read. URL
+                // cancellation without task cancellation keeps its prior audit.
+                if (mayRetry && Task.isCancelled) || (expectsCancellation && isExpectedCancellation(error)) {
+                    if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
+                        ReliabilityCenter.shared.cancelRetry(reference: reference)
+                    }
+                    throw CancellationError()
+                }
+                let current = ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch)
+                let networkReference = current && presentation == .background
+                    ? ReliabilityCenter.shared.backgroundNetworkReference(path: path, method: method) : nil
+                reference = reference ?? networkReference ?? newReference()
                 if mayRetry && attempt == 1 {
                     if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
                         ReliabilityCenter.shared.retrying(reference: reference!, path: path, method: method, presentation: presentation)
@@ -298,12 +334,24 @@ enum ReliableTransport {
                     try? await Task.sleep(for: .seconds(2))
                     continue
                 }
-                if ReliabilityCenter.shared.isCurrent(context: context, epoch: epoch) {
-                    ReliabilityCenter.shared.failed(reference: reference!, queued: productionService, path: path, method: method, presentation: presentation)
+                if serverReferences.isEmpty, let networkReference, reference != networkReference {
+                    // Another passive read may have established the same
+                    // outage while this attempt waited to retry.
+                    ReliabilityCenter.shared.cancelRetry(reference: reference)
+                    reference = networkReference
+                }
+                if current {
+                    ReliabilityCenter.shared.failed(reference: reference!, queued: productionService, path: path, method: method,
+                                                    presentation: presentation, networkFailure: serverReferences.isEmpty,
+                                                    relatedReferences: serverReferences)
                 }
                 if productionService {
                     queue(PendingIncident(reference: reference!, path: path, method: method, status: 0, state: "open", category: "network_error", context: context))
-                    scheduleQueuedReports(session: session, request: request, token: token, epoch: epoch)
+                    // Keep passive connection reports queued until a real
+                    // response gives the worker a usable connection.
+                    if presentation == .foreground {
+                        scheduleQueuedReports(session: session, request: request, token: token, epoch: epoch)
+                    }
                 }
                 throw ClientError.server("The dashboard could not connect. Incident \(reference!).")
             }
@@ -704,6 +752,9 @@ final class AppModel: ObservableObject {
     }
     private var liveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
+    private var liveCycle: UUID?
+    private var passiveRefresh: UUID?
+    private var pollDelaySeconds = 20
     private var candidateTrackerAuthenticated = false
     private let candidateTrackerBaseURL = URL(string: "https://tracker.stonesquare22pha.org/")!
     private let decoder: JSONDecoder = {
@@ -856,21 +907,26 @@ final class AppModel: ObservableObject {
     }
 
     func restoreSession() async {
-        guard token != nil, !restoringSession else { return }
+        guard let restoringToken = token, !restoringSession else { return }
+        let restoringOrigin = baseURL
         restoringSession = true
         sessionConnectionError = nil
         defer { restoringSession = false }
         do {
             let response: MeResponse = try await request("/api/auth/me")
+            guard token == restoringToken, baseURL == restoringOrigin, !Task.isCancelled else { return }
             applyAuthenticatedSession(response.session, user: response.user, freshLogin: false)
             await refresh(silent: true)
+            guard token == restoringToken, baseURL == restoringOrigin, !Task.isCancelled else { return }
             startLiveQueue()
         } catch ClientError.unauthorized(let message) {
+            guard token == restoringToken, baseURL == restoringOrigin, !Task.isCancelled else { return }
             // Only an explicit rejection from the service invalidates this Mac's login.
             signOut(localOnly: true)
             self.message = message
             isError = true
         } catch {
+            guard token == restoringToken, baseURL == restoringOrigin, !Task.isCancelled else { return }
             // An outage or sleeping host is not a sign-out. Retain the local credential.
             sessionConnectionError = "Stone Square Sign could not connect. Your automatic login is still saved."
         }
@@ -1022,20 +1078,36 @@ final class AppModel: ObservableObject {
     }
 
     func refresh(silent: Bool = false) async {
-        let currentToken = token
+        let refreshID = UUID()
+        if silent {
+            // The fallback timer and live updates can arrive together.
+            guard passiveRefresh == nil else { return }
+            passiveRefresh = refreshID
+        }
+        defer { if passiveRefresh == refreshID { passiveRefresh = nil } }
+        let currentToken = token, currentOrigin = baseURL
+        func isCurrent() -> Bool {
+            !Task.isCancelled && token == currentToken && baseURL == currentOrigin
+        }
         if currentToken != nil {
             do {
                 let account: MeResponse = try await request("/api/auth/me", presentation: silent ? .background : .foreground)
-                guard currentToken == token else { return }
+                guard isCurrent() else { return }
+                pollDelaySeconds = 20
                 user = account.user
             } catch {
-                if !silent { show(error) }
+                guard isCurrent() else { return }
+                if silent { pollDelaySeconds = min(120, pollDelaySeconds * 2) }
+                else { show(error) }
                 return
             }
         }
         await refreshMinutesReviewAlerts()
+        guard isCurrent() else { return }
         await refreshTreasuryAlerts()
+        guard isCurrent() else { return }
         await refreshBuildingAlerts()
+        guard isCurrent() else { return }
         if user?.canPrepareCorrespondence == true { correspondenceRecordsRevision += 1 }
         if user?.canUseCheckOrders == true { checkOrderRecordsRevision += 1 }
         guard user?.can("documents.status") == true else {
@@ -1044,37 +1116,45 @@ final class AppModel: ObservableObject {
         }
         do {
             let response: DocumentsResponse = try await request("/api/documents", presentation: silent ? .background : .foreground)
+            guard isCurrent(), user?.can("documents.status") == true else { return }
             documents = response.documents
             if user?.role == "owner" {
                 let officerResponse: OfficersResponse = try await request("/api/officers", presentation: silent ? .background : .foreground)
+                guard isCurrent(), user?.role == "owner" else { return }
                 officers = officerResponse.officers
                 pendingInvitations = officerResponse.pending ?? []
                 let profileResponse: SubmissionProfilesResponse = try await request("/api/submission-profiles", presentation: silent ? .background : .foreground)
+                guard isCurrent(), user?.role == "owner" else { return }
                 submissionProfiles = profileResponse.profiles
             }
         } catch {
-            if !silent { show(error) }
+            if !silent, isCurrent() { show(error) }
         }
     }
 
     func startLiveQueue() {
-        /* The live stream only pushes on document and profile events. An officer creating his
-         * account pushes nothing, so a Master watching this screen to see a man come in would
-         * sit on a stale page. This re-reads on a slow timer so officer status moves on its own.
-         * ponytail: a poll, not a broadcast; make the server broadcast on registration when the
-         * deploy pipeline is calm and this can drop to a fallback. */
+        // Keep a fallback poll for entitlement and record changes that a
+        // particular account may not receive through the live stream.
+        let cycle = UUID()
+        liveCycle = cycle
+        pollDelaySeconds = 20
         heartbeatTask?.cancel()
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
-                guard let self, self.token != nil, !Task.isCancelled else { return }
+                let delay = self?.pollDelaySeconds ?? 20
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, self.token != nil, self.liveCycle == cycle, !Task.isCancelled else { return }
                 await self.refresh(silent: true)
             }
         }
         liveTask?.cancel()
         liveTask = Task { [weak self] in
             guard let self else { return }
-            while !Task.isCancelled, self.token != nil {
+            var reconnectDelaySeconds = 3
+            @MainActor func isCurrent() -> Bool {
+                !Task.isCancelled && self.liveCycle == cycle && self.token != nil
+            }
+            while isCurrent() {
                 do {
                     guard let baseURL = self.baseURL,
                           let url = URL(string: "/api/events", relativeTo: baseURL) else {
@@ -1084,18 +1164,23 @@ final class AppModel: ObservableObject {
                     if let token = self.token {
                         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                     }
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await self.session.bytes(for: request)
+                    guard isCurrent() else { return }
                     guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                         throw ClientError.invalidResponse
                     }
                     self.isLive = true
                     await self.refreshMinutesReviewAlerts()
+                    guard isCurrent() else { return }
                     await self.refreshTreasuryAlerts()
+                    guard isCurrent() else { return }
                     await self.refreshBuildingAlerts()
+                    guard isCurrent() else { return }
                     if self.user?.canPrepareCorrespondence == true { self.correspondenceRecordsRevision += 1 }
                     if self.user?.canUseCheckOrders == true { self.checkOrderRecordsRevision += 1 }
                     for try await line in bytes.lines {
-                        if Task.isCancelled { break }
+                        guard isCurrent() else { return }
+                        if line.hasPrefix(": heartbeat") { reconnectDelaySeconds = 3 }
                         if line == "event: minutes_review_changed" || line == "event: minutes_completion_changed" {
                             await self.refreshMinutesReviewAlerts()
                         }
@@ -1116,12 +1201,11 @@ final class AppModel: ObservableObject {
                             await self.refresh(silent: true)
                         }
                     }
-                } catch {
-                    self.isLive = false
-                    if !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    }
-                }
+                } catch { /* Both refused and ended streams use the same backoff. */ }
+                guard isCurrent() else { return }
+                self.isLive = false
+                try? await Task.sleep(for: .seconds(reconnectDelaySeconds))
+                reconnectDelaySeconds = min(60, reconnectDelaySeconds * 2)
             }
         }
     }
@@ -1671,6 +1755,8 @@ final class AppModel: ObservableObject {
         ReliabilityCenter.shared.resetSession(context: ReliableTransport.contextFingerprint(url: baseURL, token: nil))
         signInSession = nil
         showSignInNotice = false
+        liveCycle = nil
+        passiveRefresh = nil
         liveTask?.cancel()
         heartbeatTask?.cancel()
         isLive = false

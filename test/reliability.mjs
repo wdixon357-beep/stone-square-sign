@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { MINUTES_REJECTED_OUTPUT_CODES } from '../minutes.js';
 
 const web = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
@@ -23,7 +24,7 @@ assert.match(mac, /mayRetry = method == "GET" \|\| method == "HEAD"/);
 
 const categorySource = server.slice(server.indexOf('const serverIncidentCategory ='), server.indexOf('app.use(async (error, req, res, _next) =>'));
 assert.ok(categorySource.includes('const serverIncidentArea ='), 'Exercise the actual safe server incident classifiers');
-const classifiers = vm.runInNewContext(`${categorySource}\n({category:serverIncidentCategory,area:serverIncidentArea})`);
+const classifiers = vm.runInNewContext(`${categorySource}\n({category:serverIncidentCategory,area:serverIncidentArea})`, {MINUTES_REJECTED_OUTPUT_CODES});
 assert.equal(classifiers.category({statusCode:502,code:'MINUTES_UNSUPPORTED_SECOND'},'/api/minutes/generate'),'MINUTES_UNSUPPORTED_SECOND');
 assert.equal(classifiers.category({statusCode:502,code:'MINUTES_SECTION_EVIDENCE_INVALID'},'/api/minutes/generate'),'MINUTES_SECTION_EVIDENCE_INVALID');
 assert.equal(classifiers.category({statusCode:502,code:'GENERATION_REQUEST_REJECTED'},'/api/reports/organize'),'GENERATION_REQUEST_REJECTED');

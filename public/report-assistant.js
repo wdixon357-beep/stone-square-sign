@@ -210,13 +210,17 @@ $('organize').onclick = async () => {
       quote.textContent = result.evidence.filter(item => item.field === field).map(item => item.quote).join('\n');
       details.append(summary, quote); block.append(details); $('fields').append(block);
     }
+    const hasFields = Object.keys(result.fields).length > 0;
+    $('suggestionsStep').hidden = !hasFields;
+    $('suggestionsHeading').textContent = hasFields ? 'Review suggested entries' : 'Review your notes manually';
     $('suggestions').hidden = false;
-    status('Review these suggestions. Your report has not changed.');
+    status(hasFields ? 'Review these suggestions. Your report has not changed.'
+      : 'No entries were ready to apply. Use your notes to complete the report.');
   } catch (error) { showError(error); }
   finally { busy = false; syncControls(); }
 };
 $('apply').onclick = async () => {
-  if (!suggestions || busy || sourceKey !== $('source').value || !account) return;
+  if (!suggestions || !Object.keys(suggestions.fields).length || busy || sourceKey !== $('source').value || !account) return;
   if (!connected()) return status('The report window is closed. Your suggestions remain here for review.', true);
   const result = suggestions, key = currentKey();
   busy = true; syncControls();

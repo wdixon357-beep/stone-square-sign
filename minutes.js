@@ -110,6 +110,13 @@ export const MINUTES_GENERATION_SCHEMA = {
 const generationInstructions = MINUTES_REPORT_RULES;
 
 const generationError = (message, code = 'MINUTES_SOURCE_VERIFICATION_FAILED') => Object.assign(new Error(message), {statusCode: 502, code});
+export const MINUTES_REJECTED_OUTPUT_CODES = new Set([
+  'GENERATION_INVALID_RESPONSE', 'MINUTES_SOURCE_VERIFICATION_FAILED', 'MINUTES_SOURCE_LINE_CONTRACT_REQUIRED',
+  'MINUTES_SECTION_EVIDENCE_INVALID', 'MINUTES_UNSUPPORTED_SECOND', 'MINUTES_UNSUPPORTED_UNANIMOUS_VOTE',
+  'MINUTES_UNSUPPORTED_APPROVAL', 'MINUTES_UNSUPPORTED_REJECTION', 'MINUTES_UNSUPPORTED_TABLING',
+  'MINUTES_UNSUPPORTED_WITHDRAWAL',
+]);
+
 const otherAttendanceNames = (list, officerAttendance, attendanceVersion) => list.filter((name) => (
   !officerAttendance.some((officer) => attendanceVersion < 2 ? namesMatch(name, officer.name)
     : officerNameMatches(name, officer) || officer.actingName && sameAttendancePerson(name, officer.actingName))
@@ -613,26 +620,15 @@ export const generateMinutesDraft = async (transcript, {
   if (typeof generateStructured === 'function') {
     const sourceLines = minutesSourceLines(source);
     const schema = minutesGenerationSchemaForLineCount(sourceLines.length);
-    let checked, validationError;
-    const validateResult = response => {
-      try {
-        checked = checkedGeneratedDraft(response, source, localDraft, schema, sourceLines);
-      } catch (error) {
-        // A malformed section reference can be recovered without keeping a
-        // broken response reusable. Preserve existing billing behavior for
-        // other rejected results, which still fail verification below.
-        if (error.code === 'MINUTES_SECTION_EVIDENCE_INVALID') throw error;
-        validationError = error;
-      }
-    };
+    let checked;
+    const validateResult = response => { checked = checkedGeneratedDraft(response, source, localDraft, schema, sourceLines); };
     const response = await generateStructured({
       purpose: 'minutes', schemaName: 'stone_square_meeting_minutes', schema,
       instructions: generationInstructions,
       input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, sourceLines}),
       validateResult,
     });
-    if (!checked && !validationError) validateResult(response);
-    if (validationError) throw validationError;
+    if (!checked) validateResult(response);
     if (localDraft.closingPrayerGiven === false) checked.closingPrayerGiven = false;
     return finish(checked);
   }
