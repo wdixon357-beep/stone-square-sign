@@ -90,6 +90,22 @@ try {
     await generator.forUser(2)(request); assert.equal(calls, 2);
   });
 
+  await test('a rejected legacy cached result retains its charge and stops being reused without an automatic call', async () => {
+    await reset(); let calls = 0;
+    const generate = factory(async () => { calls++; return response(); }).forUser(1);
+    await generate(request);
+    const legacy = await dbGet("SELECT * FROM ai_generation_requests WHERE state = 'completed'");
+    const validationError = Object.assign(new Error('Synthetic invalid source reference'), {code:'MINUTES_SECTION_EVIDENCE_INVALID'});
+    await assert.rejects(() => generate({...request, validateResult: () => {throw validationError;}}), error => error===validationError);
+    assert.equal(calls,1);
+    const rejected = await dbGet('SELECT * FROM ai_generation_requests WHERE id = ?', [legacy.id]);
+    assert.equal(rejected.state,'failed');
+    assert.equal(rejected.charged_units,legacy.charged_units);
+    assert.equal(rejected.result_json,legacy.result_json);
+    await generate(request);
+    assert.equal(calls,2);
+  });
+
   await test('simultaneous duplicate request has one reservation and one provider call', async () => {
     await reset(); const entered = deferred(), release = deferred(); let calls = 0;
     const generator = factory(async () => { calls++; entered.resolve(); await release.promise; return response(); });

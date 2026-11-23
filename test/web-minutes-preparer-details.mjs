@@ -25,7 +25,7 @@ class Element {
 }
 function harness() {
   const elements=Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(match=>[match[1],new Element(match[1])]));
-  const calls=[],detailCalls=[],opened=[],remembered=[],cleared=[],shown=[],refreshes=[],storage=new Map();
+  const calls=[],detailCalls=[],opened=[],openedNotices=[],remembered=[],cleared=[],shown=[],refreshes=[],storage=new Map();
   let response={minutes:{id:'synthetic-minutes'}},failure=null,refresh=true,wait=null,refreshWait=null, detailResponse={}, detailWait=null;
   const state={user:{id:2},authEpoch:3,minutesSourceDirty:false};
   const context={FormData,File,AbortController,minutesDates,minutesMeetingDetails,state,can: permission=>permission==='minutes.prepare',$:id=>{assert.ok(elements[id],`Actual markup provides ${id}`);return elements[id];},
@@ -33,13 +33,13 @@ function harness() {
     sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>{storage.set(key,value);remembered.push({key,values:JSON.parse(value)});},removeItem:key=>{storage.delete(key);cleared.push(key.replace(/^ss22-web-draft:[^:]+:/,''));}},
     show:element=>shown.push(element.id),hide:element=>shown.splice(shown.indexOf(element.id),1),
     apiFetch:async(path,options)=>{if(path.endsWith('/source-details')){detailCalls.push({path,options});const held=detailWait,candidates=detailResponse;if(held)await held;return {details:candidates};}calls.push({path,options});const held=wait,requestFailure=failure,requestResponse=response;if(held)await held;if(requestFailure)throw Error(requestFailure);return requestResponse;},
-    renderMinutes:async()=>{refreshes.push(state.user?.id);const held=refreshWait;if(held)await held;return refresh;},openMinutesEditor:id=>opened.push(id)};
+    renderMinutes:async()=>{refreshes.push(state.user?.id);const held=refreshWait;if(held)await held;return refresh;},openMinutesEditor:(id,{recoveryNotice}={})=>{opened.push(id);openedNotices.push(recoveryNotice);}};
   vm.createContext(context);
   vm.runInContext(`${storageSource}\n${helperSource}\n${submissionSource}\n${fileSource}\nthis.submit=submitMinutesSource;this.openClaim=openMinutesClaim;this.closeClaim=closeMinutesClaim;this.collect=collectMinutesMeetingDetails;this.validate=validateMinutesMeetingDetails;this.reflect=reflectMinutesMeetingDetails;this.resetContext=resetMinutesPreparationContext;this.restoreSource=()=>{restoreSessionDraft('minutes-source',MINUTES_SOURCE_DRAFT_FIELDS);reflectMinutesMeetingDetails('minutesIntake');};`,context);
   elements.minutesClaimForm.controls=Object.entries(elements).filter(([id])=>id.startsWith('minutesClaim')||['cancelMinutesClaim','createClaimedMinutes'].includes(id)).map(([,element])=>element);
   context.resetContext();
   const fill=(prefix,values=details)=>{for(const [key,suffix]of Object.entries(suffixes))elements[`${prefix}${suffix}`].value=values[key]||'';};
-  return {elements,calls,detailCalls,opened,remembered,cleared,shown,refreshes,storage,state,context,fill,setFailure:value=>failure=value,setRefresh:value=>refresh=value,setWait:value=>wait=value,setRefreshWait:value=>refreshWait=value,setDetailResponse:value=>detailResponse=value,setDetailWait:value=>detailWait=value};
+  return {elements,calls,detailCalls,opened,openedNotices,remembered,cleared,shown,refreshes,storage,state,context,fill,setResponse:value=>response=value,setFailure:value=>failure=value,setRefresh:value=>refresh=value,setWait:value=>wait=value,setRefreshWait:value=>refreshWait=value,setDetailResponse:value=>detailResponse=value,setDetailWait:value=>detailWait=value};
 }
 
 for(const prefix of ['minutesIntake','minutesClaim']) {
@@ -86,6 +86,28 @@ for(const prefix of ['minutesIntake','minutesClaim']) {
  assert.deepEqual(JSON.parse(h.calls[0].options.body),{meetingDetails:details});assert.equal(h.elements.minutesClaimClosingTime.value,'9:45 PM');assert.ok(h.shown.includes('minutesClaimModal'));assert.match(h.elements.minutesClaimMessage.textContent,/details remain/);
  h.setFailure(null);await h.elements.minutesClaimForm.emit('submit');assert.deepEqual(h.opened,['synthetic-minutes']);assert.ok(h.cleared.includes('minutes-claim:synthetic-source'));assert.equal(h.shown.includes('minutesClaimModal'),false);
 }
+for (const claim of [false, true]) {
+ const h=harness();
+ const recoveryNotice='The original source and meeting details were saved. Automatic organization could not verify its source references.';
+ h.setResponse({minutes:{id:'recovery-draft'},recoveryNotice});
+ if (claim) {
+   h.context.openClaim({id:'recovery-draft'});
+   h.fill('minutesClaim');
+   await h.elements.minutesClaimForm.emit('submit');
+   assert.ok(h.cleared.includes('minutes-claim:recovery-draft'),'A saved claim clears its intake details');
+   assert.equal(h.shown.includes('minutesClaimModal'),false);
+ } else {
+   h.fill('minutesIntake');
+   h.elements.minutesTranscriptText.value='Synthetic meeting source needs review';
+   await h.context.submit();
+   assert.equal(h.elements.minutesTranscriptText.value,'','A confirmed recovery draft clears the sent intake source');
+ }
+ assert.equal(h.calls.length,1,'Recovery needs only the original request');
+ assert.deepEqual(h.opened,['recovery-draft']);
+ assert.deepEqual(h.openedNotices,[recoveryNotice]);
+ assert.equal(h.elements.minutesMessage.textContent,recoveryNotice);
+}
+
 {
  const h=harness();h.fill('minutesIntake');h.elements.minutesTranscriptText.value='First account source';
  let release;h.setWait(new Promise(resolve=>{release=resolve;}));const pending=h.context.submit();
@@ -253,7 +275,7 @@ assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeeting
   let savedDraft;
   const editor = vm.createContext({
     ...h.context, minutesAttendance, setMinutesView() {}, clearMinutesSavedSource() {},
-    canReadMinutesSavedSource: () => false, setMinutesMeetingType: value => { h.elements.minutesMeetingType.value = value; },
+    canReadMinutesSavedSource: () => true, setMinutesMeetingType: value => { h.elements.minutesMeetingType.value = value; },
     officerAttendanceEditor() {}, fillFinanceEditor() {}, sectionEditor() {}, minutesAttendanceDisplayWarnings: () => [],
     updateMinutesEditorControls: item => editor.refreshChecklist(item), refreshMinutesPreview() {},
     focusMinutesPrepField: field => field.focus(), minutesAttendanceTarget: () => h.elements.minutesOfficerRollConfirmed,
@@ -267,7 +289,15 @@ assert.match(app,/meetingDetails: minutesMeetingDetails\.normalizeMinutesMeeting
     this.refreshChecklist = refreshMinutesPrepChecklist;
   `, editor);
   assert.doesNotMatch(html, /id="minutesPrepClosing(?:State)?"/, 'Closing prayer is absent from the checklist');
+  const recoveryNotice = 'The original source and meeting details were saved.';
+  editor.openEditor(record.id, { recoveryNotice });
+  assert.equal(h.elements.minutesRecoveryNotice.classList.contains('hidden'), false);
+  assert.ok(h.elements.minutesRecoveryNotice.textContent.startsWith(recoveryNotice));
+  assert.match(h.elements.minutesRecoveryNotice.textContent, /Check the saved notes or transcript/);
+  assert.ok(h.shown.includes('minutesSavedSource'));
   editor.openEditor(record.id);
+  assert.equal(h.elements.minutesRecoveryNotice.classList.contains('hidden'), true);
+  assert.equal(h.elements.minutesRecoveryNotice.textContent, '', 'An ordinary editor open clears an earlier recovery notice');
   assert.equal(h.elements.minutesClosingPrayerGiven.value, 'true', 'Working drafts show the standard prayer with no action');
   assert.equal(h.elements.minutesPrepGoToAttest.classList.contains('hidden'), false);
 

@@ -184,9 +184,24 @@ struct MinutesRecord: Codable, Identifiable {
     var createdByUserId: Int?; var preparerRole: String?; var preparerAttestedAt: String?; var masterAttestedAt: String?
     var sourceUploadedByUserId: Int?; var sourceUploadedBy: String?; var preparerUserId: Int?; var preparer: String?; var claimedAt: String?
     var approvedByLodgeOn: String?; var approvalNote: String?
+    var sourceName: String? = nil
 }
 struct MinutesListPayload: Decodable { let minutes: [MinutesRecord] }
-struct MinutesPayload: Decodable { let minutes: MinutesRecord; let notificationWarnings: [String]? }
+struct MinutesPayload: Decodable {
+    let minutes: MinutesRecord
+    let notificationWarnings: [String]?
+    let recoveryNotice: String?
+}
+private struct SavedMinutesSource: Decodable {
+    let sourceName: String
+    let sourceText: String
+
+    var numberedText: String {
+        sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: "\n").enumerated()
+            .map { "\($0.offset + 1)  \($0.element)" }.joined(separator: "\n")
+    }
+}
 struct ReorganizedPayload: Decodable { let draft: MinutesDraft }
 struct MinutesSavePayload: Encodable { let draft: MinutesDraft; let expectedUpdatedAt: String }
 
@@ -470,6 +485,13 @@ final class MinutesWorkspace: ObservableObject {
         updatePreview()
     }
     func close() { previewTask?.cancel(); revision += 1; selected = nil; draft = nil; pdf = nil; dirty = false }
+    fileprivate func savedSource(for record: MinutesRecord) async throws -> SavedMinutesSource {
+        let context = accountContext
+        guard selected?.id == record.id else { throw CancellationError() }
+        let data = try await request("/api/minutes/\(record.id)/source")
+        guard accountContext == context, selected?.id == record.id, !Task.isCancelled else { throw CancellationError() }
+        return try JSONDecoder().decode(SavedMinutesSource.self, from: data)
+    }
     private func sourceUploadBody(includingMeetingDetails: Bool) throws -> (body: Data, contentType: String) {
         let boundary = "Minutes-\(UUID().uuidString)"
         var body = Data()
@@ -503,10 +525,14 @@ final class MinutesWorkspace: ObservableObject {
             let upload = try sourceUploadBody(includingMeetingDetails: true)
             let result = try await request("/api/minutes/generate", method: "POST", body: upload.body, contentType: upload.contentType)
             guard accountContext == context else { return }
-            let record = try JSONDecoder().decode(MinutesPayload.self, from: result).minutes
+            let payload = try JSONDecoder().decode(MinutesPayload.self, from: result)
             await refresh()
             guard accountContext == context else { return }
-            clearLocalSourceDraft(); open(record)
+            clearLocalSourceDraft(); open(payload.minutes)
+            if let notice = payload.recoveryNotice {
+                message = notice
+                messageIsWarning = true
+            }
         } catch { if accountContext == context { message = error.localizedDescription } }
         guard accountContext == context else { return }
         await refreshGenerationStatus()
@@ -533,11 +559,12 @@ final class MinutesWorkspace: ObservableObject {
         do {
             let data = try await request("/api/minutes/\(record.id)/claim", method: "POST", body: JSONEncoder().encode(MinutesClaimPayload(meetingDetails: meetingDetails.normalized)))
             guard accountContext == context else { return }
-            let claimed = try JSONDecoder().decode(MinutesPayload.self, from: data).minutes
+            let payload = try JSONDecoder().decode(MinutesPayload.self, from: data)
             await refresh()
             guard accountContext == context else { return }
-            open(claimed)
-            message = "This source is assigned to you. Review every section before attesting."
+            open(payload.minutes)
+            message = payload.recoveryNotice ?? "This source is assigned to you. Review every section before attesting."
+            messageIsWarning = payload.recoveryNotice != nil
         } catch {
             guard accountContext == context else { return }
             await refresh()
@@ -651,6 +678,51 @@ struct LodgeDocumentPreview: NSViewRepresentable {
     final class Coordinator { var data: Data? }
 }
 
+private struct SavedMinutesSourceView: View {
+    let workspace: MinutesWorkspace
+    let record: MinutesRecord
+    @Environment(\.dismiss) private var dismiss
+    @State private var source: SavedMinutesSource?
+    @State private var loadError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Saved meeting source").font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            if let source {
+                Text(source.sourceName).font(.callout).foregroundStyle(.secondary)
+                ScrollView {
+                    Text(verbatim: source.numberedText)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else if let loadError {
+                Text(loadError).fixedSize(horizontal: false, vertical: true)
+                Text("Close and reopen the saved source to try again.").foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                ProgressView("Loading the saved source…")
+                Spacer()
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 460, idealWidth: 700, minHeight: 360, idealHeight: 540)
+        .task {
+            do {
+                source = try await workspace.savedSource(for: record)
+            } catch {
+                if !(error is CancellationError), !Task.isCancelled {
+                    loadError = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
 struct MeetingMinutesView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -664,6 +736,7 @@ struct MeetingMinutesView: View {
     @State private var approvalNote = ""
     @State private var showingHistory = false
     @State private var readonlyRecord: MinutesRecord?
+    @State private var savedSourceRecord: MinutesRecord?
     @State private var deferredRecordsRefresh = false
     @State private var editorPane = 0
     @State private var changingAttendance = false
@@ -781,7 +854,11 @@ struct MeetingMinutesView: View {
             openRequestedSignedMinutes()
         }
         .onChange(of: model.requestedMinutesRecordID) { _, _ in openRequestedSignedMinutes() }
-        .onChange(of: workspace.selected?.id) { _, _ in changingAttendance = false }
+        .onChange(of: workspace.selected?.id) { _, _ in
+            changingAttendance = false
+            savedSourceRecord = nil
+        }
+        .onChange(of: model.user?.id) { _, _ in savedSourceRecord = nil }
         .onChange(of: model.minutesRecordsRevision) { _, _ in
             if workspace.dirty { deferredRecordsRefresh = true }
             else { Task { await workspace.refresh() } }
@@ -808,6 +885,9 @@ struct MeetingMinutesView: View {
         }
         .sheet(item: $readonlyRecord) { record in
             FinalReportBrowserView(kind: .minutes, initialSelection: record.id, onClose: { readonlyRecord = nil }).environmentObject(model).frame(minWidth: 620, idealWidth: 900, minHeight: 540, idealHeight: 700)
+        }
+        .sheet(item: $savedSourceRecord) { record in
+            SavedMinutesSourceView(workspace: workspace, record: record)
         }
         .onChange(of: workspace.draft) { old, new in
             guard old != nil, old != new else { return }
@@ -934,6 +1014,13 @@ struct MeetingMinutesView: View {
     private func mayReview(_ record: MinutesRecord) -> Bool {
         model.user?.role == "owner" || record.preparerUserId == model.user?.id || (record.preparerUserId == nil && record.createdByUserId == model.user?.id)
     }
+    private func mayReadSavedSource(_ record: MinutesRecord) -> Bool {
+        record.sourceName?.isEmpty == false
+            && ["draft", "awaiting_master_attestation"].contains(record.status)
+            && model.user?.can("minutes.view") == true
+            && model.user?.can("minutes.prepare") == true
+            && mayReview(record)
+    }
     private func mayDelete(_ record: MinutesRecord) -> Bool {
         guard ["awaiting_preparer", "draft"].contains(record.status) else { return false }
         return model.user?.role == "owner" || record.preparerUserId == model.user?.id || (record.preparerUserId == nil && record.createdByUserId == model.user?.id)
@@ -983,6 +1070,9 @@ struct MeetingMinutesView: View {
                         Text(workspace.draft?.sourceType == "compiled_notes" ? "Compiled meeting notes" : "Meeting transcript").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         Spacer()
                         if workspace.selected?.status == "draft" { Button("Reorganize source") { confirmReorganize = true } }
+                    }
+                    if let record = workspace.selected, mayReadSavedSource(record) {
+                        Button("View saved source") { savedSourceRecord = record }
                     }
                     if !attendanceReminders.isEmpty {
                         DisclosureGroup("Review reminders") { ForEach(attendanceReminders, id: \.self) { Text($0).font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3) } }

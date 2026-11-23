@@ -189,13 +189,18 @@ export function extractOfficerCoverage(source, roster = CURRENT_OFFICERS) {
   });
 }
 
+const sourceTypeFromLines = lines => lines.filter(line => /^\d+[.)]\s/.test(line)).length >= 2
+  || lines.filter(knownHeading).length >= 2 ? 'compiled_notes' : 'transcript';
+
+export const detectMinutesSourceType = (source, sourceType) => ['compiled_notes', 'transcript'].includes(sourceType)
+  ? sourceType : sourceTypeFromLines(source.split('\n').map(clean).filter(Boolean));
+
 export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   const rawLines = source.split('\n');
   const lines = rawLines.map(clean).filter(Boolean);
   const markedHeadings = new Set(rawLines.filter(line => /^\s*#{1,6}\s+\S/.test(line)
     || /^\s*(?:\d+[.)]\s*)?(?:\*\*[^*]+\*\*|__[^_]+__)\s*:?\s*$/.test(line)).map(clean));
-  const numbered = lines.filter(line => /^\d+[.)]\s/.test(line));
-  const detectedType = numbered.length >= 2 || lines.filter(knownHeading).length >= 2 ? 'compiled_notes' : 'transcript';
+  const detectedType = sourceTypeFromLines(lines);
   const type = ['compiled_notes', 'transcript'].includes(sourceType) ? sourceType : detectedType;
   const attendance = { present: [], excused: [], absent: [], visitors: [] };
   const content = [];

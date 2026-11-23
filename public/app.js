@@ -2654,13 +2654,19 @@ $('minutesSavedSource').addEventListener('toggle', async () => {
   }
 });
 
-const openMinutesEditor = (id) => {
+const openMinutesEditor = (id, { recoveryNotice } = {}) => {
   if (!can('minutes.prepare')) return;
   setMinutesView(false);
   const item = state.minutes.find((entry) => entry.id === id);
   if (!item) return;
   clearMinutesSavedSource();
-  if (canReadMinutesSavedSource(item)) show($('minutesSavedSource'));
+  const canReadSource = canReadMinutesSavedSource(item);
+  if (canReadSource) show($('minutesSavedSource'));
+  const notice = $('minutesRecoveryNotice');
+  notice.textContent = recoveryNotice
+    ? recoveryNotice + (canReadSource ? ' Open “Check the saved notes or transcript” below to write your draft.' : '')
+    : '';
+  notice.classList.toggle('hidden', !recoveryNotice);
   state.editingMinutesId = id;
   state.editingMinutesUpdatedAt = item.updatedAt;
   state.minutesOfficerAttendanceEdited = false;
@@ -3394,8 +3400,8 @@ const submitMinutesSource = async ({ handoff = false } = {}) => {
       const warnings = payload.notificationWarnings?.length ? ` ${payload.notificationWarnings.join(' ')}` : '';
       setMessage($('minutesMessage'), `Transcript sent to Adrian Reese and William McDuffie. It is waiting for one of them to claim it.${warnings}`, Boolean(payload.notificationWarnings?.length));
     } else {
-      setMessage($('minutesMessage'), 'Draft created. Review every section before sending it to the Worshipful Master.');
-      openMinutesEditor(payload.minutes.id);
+      setMessage($('minutesMessage'), payload.recoveryNotice || 'Draft created. Review every section before sending it to the Worshipful Master.');
+      openMinutesEditor(payload.minutes.id, { recoveryNotice: payload.recoveryNotice });
     }
   } catch (error) {
     if (!ownsOperation()) return;
@@ -3465,8 +3471,8 @@ $('minutesClaimForm').addEventListener('submit', async event => {
       return;
     }
     if (!ownsOperation()) return;
-    setMessage($('minutesMessage'), 'This source is assigned to you. Review the preview and attendance before submitting.');
-    openMinutesEditor(payload.minutes.id);
+    setMessage($('minutesMessage'), payload.recoveryNotice || 'This source is assigned to you. Review the preview and attendance before submitting.');
+    openMinutesEditor(payload.minutes.id, { recoveryNotice: payload.recoveryNotice });
   } catch (error) {
     if (!ownsOperation()) return;
     await renderMinutes();

@@ -613,12 +613,26 @@ export const generateMinutesDraft = async (transcript, {
   if (typeof generateStructured === 'function') {
     const sourceLines = minutesSourceLines(source);
     const schema = minutesGenerationSchemaForLineCount(sourceLines.length);
+    let checked, validationError;
+    const validateResult = response => {
+      try {
+        checked = checkedGeneratedDraft(response, source, localDraft, schema, sourceLines);
+      } catch (error) {
+        // A malformed section reference can be recovered without keeping a
+        // broken response reusable. Preserve existing billing behavior for
+        // other rejected results, which still fail verification below.
+        if (error.code === 'MINUTES_SECTION_EVIDENCE_INVALID') throw error;
+        validationError = error;
+      }
+    };
     const response = await generateStructured({
       purpose: 'minutes', schemaName: 'stone_square_meeting_minutes', schema,
       instructions: generationInstructions,
       input: JSON.stringify({sourceType: localDraft.sourceType, officerRoster: CURRENT_OFFICERS, sourceLines}),
+      validateResult,
     });
-    const checked = checkedGeneratedDraft(response, source, localDraft, schema, sourceLines);
+    if (!checked && !validationError) validateResult(response);
+    if (validationError) throw validationError;
     if (localDraft.closingPrayerGiven === false) checked.closingPrayerGiven = false;
     return finish(checked);
   }

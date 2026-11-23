@@ -110,7 +110,7 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
       // racing another reservation. This transaction ends before the HTTP call.
       const control = await dbGet('SELECT halted FROM ai_generation_control WHERE id = 1 FOR UPDATE');
       const existing = await dbGet(`SELECT * FROM ai_generation_requests WHERE user_id = ? AND request_hash = ? AND state IN ${ACTIVE_STATES}`, [userId, hash]);
-      if (existing?.state === 'completed') return { cached: existing.result_json };
+      if (existing?.state === 'completed') return { id: existing.id, cached: existing.result_json };
       if (existing) throw fail('GENERATION_ALREADY_PENDING', 'This report request is already processing or has an unconfirmed charge. Its allowance remains reserved.', 409);
       if (control.halted) throw fail('GENERATION_BUDGET_PAUSED', 'Paid report generation is paused because reported usage needs review.', 503);
       const timestamp = clock(), month = timestamp.slice(0, 7), id = crypto.randomUUID();
@@ -156,7 +156,7 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
     if (!key) return undefined;
     if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) throw new TypeError('A valid officer account is required');
     const user = String(Number(userId));
-    return async ({ purpose, schemaName, schema, instructions, input }) => {
+    return async ({ purpose, schemaName, schema, instructions, input, validateResult }) => {
       if (!['minutes', 'treasury', 'report', 'dues'].includes(purpose)) throw new TypeError('Unsupported report generation kind');
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(schemaName || '') || typeof instructions !== 'string' || !instructions.trim()) throw new TypeError('A report schema and instructions are required');
       validateSchema(schema);
@@ -174,6 +174,14 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
         let cached;
         try { cached = JSON.parse(reservation.cached); } catch { throw invalidResult(); }
         if (!matches(cached, schema)) throw invalidResult();
+        try {
+          validateResult?.(cached);
+        } catch (error) {
+          // Keep the original charge and response in the ledger. A later officer-
+          // initiated request may retry without reusing a rejected response.
+          await dbRun("UPDATE ai_generation_requests SET state = 'failed' WHERE id = ? AND state = 'completed'", [reservation.id]);
+          throw error;
+        }
         return cached;
       }
       const controller = new AbortController();
@@ -225,8 +233,13 @@ export function createGenerator({ apiKey = '', fetchImpl = globalThis.fetch, now
         result = JSON.parse(texts[0].text);
         if (!matches(result, schema)) throw invalidResult();
       } catch { error = invalidResult(); }
+      if (!error) {
+        try { validateResult?.(result); } catch (failure) { error = failure; }
+      } else {
+        result = null;
+      }
       try {
-        await settle(reservation, { state: error ? 'failed' : 'completed', usage, result: error ? null : result,
+        await settle(reservation, { state: error ? 'failed' : 'completed', usage, result,
           responseId: typeof payload.id === 'string' ? payload.id.slice(0, 200) : null, halt: exceedsBound });
       } catch {
         await markUnknown(reservation); throw uncertain();

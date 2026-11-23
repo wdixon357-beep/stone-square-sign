@@ -28,7 +28,8 @@ import { buildDuesPdf, buildDuesXlsx, duesExportFileName } from './dues-export.j
 import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
-import { generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
+import { applyMinutesMeetingDetails, generateMinutesDraft, normalizeMinutesDraft } from './minutes.js';
+import { detectMinutesSourceType } from './minutes-organizer.js';
 import {MINUTES_MEETING_DETAILS_FIELDS, formatMinutesClock, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails, suggestMinutesDetailsFromNotes} from './public/minutes-meeting-details.js';
 import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
 import { initGenerationSchema, generationFor, generationStatus } from './ai-generation.js';
@@ -2174,6 +2175,33 @@ app.post('/api/minutes/handoff', requireAuth, requireOwner,
     } catch (error) { next(error); }
   });
 
+const minutesRecoveryNotice = 'Your original meeting source and details were saved. Automatic organization could not verify its source references.';
+const minutesResumeNotice = 'An existing draft was reopened for these notes. Its earlier meeting details are still saved. Review them before continuing.';
+
+async function prepareNewMinutesDraft(transcript, { sourceType, meetingDetails, userId }) {
+  try {
+    const draft = await generateMinutesDraft(transcript, { sourceType, meetingDetails, generateStructured: generationFor(userId) });
+    return { draft };
+  } catch (error) {
+    if (error.code !== 'MINUTES_SECTION_EVIDENCE_INVALID') throw error;
+    // Recover the upload, not the rejected narrative or its claimed evidence.
+    const draft = applyMinutesMeetingDetails(normalizeMinutesDraft({
+      sourceType: detectMinutesSourceType(transcript, sourceType), officerAttendanceVersion: 2, closingFormatVersion: 4, sections: [],
+      warnings: [minutesRecoveryNotice],
+    }), meetingDetails);
+    return { draft, recoveryNotice: minutesRecoveryNotice, organizationIssue: error.code };
+  }
+}
+
+async function findRecoveredMinutes({ userId, meetingDate, sourceName, transcript }) {
+  return dbGet(
+    `SELECT id FROM meeting_minutes WHERE preparer_user_id = ? AND meeting_date = ?
+      AND source_name = ? AND transcript_text = ? AND status = 'draft'
+      AND position(? in draft_json) > 0 ORDER BY created_at DESC LIMIT 1`,
+    [userId, meetingDate, sourceName, transcript, minutesRecoveryNotice],
+  );
+}
+
 app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
   rateLimit({ key: 'minutes-generate', maximum: 12, windowMs: 60 * 60 * 1000 }), async (req, res, next) => {
     let claimed = false;
@@ -2202,7 +2230,7 @@ app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
       claimed = true;
       broadcast('minutes_records_changed', { minutesId: row.id, reason: 'source_claimed', preparer: req.user.name });
       const sourceType = String(JSON.parse(row.draft_json || '{}').sourceType || 'auto');
-      const draft = await generateMinutesDraft(row.transcript_text, { sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
+      const { draft, recoveryNotice, organizationIssue } = await prepareNewMinutesDraft(row.transcript_text, { sourceType, meetingDetails, userId: req.user.id });
       const savedAt = nowIso();
       const saved = await dbRun(
         `UPDATE meeting_minutes SET meeting_date = ?, draft_json = ?, status = 'draft',
@@ -2216,10 +2244,10 @@ app.post('/api/minutes/:id/claim', requireAuth, requireMinutesAccess,
         action: 'minutes_source_claimed',
         ip: req.ip,
         userAgent: req.get('user-agent') || '',
-        details: { minutesId: row.id, sourceUploadedByUserId: row.source_uploaded_by_user_id, enteredMeetingDetails: meetingDetails },
+        details: { minutesId: row.id, sourceUploadedByUserId: row.source_uploaded_by_user_id, enteredMeetingDetails: meetingDetails, organizationIssue },
       });
       broadcast('minutes_records_changed', { minutesId: row.id, reason: 'draft_created', preparer: req.user.name });
-      res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)) });
+      res.json({ minutes: minutesForResponse(await getMinutesRow(row.id)), recoveryNotice });
     } catch (error) {
       if (claimed) {
         try {
@@ -2240,24 +2268,38 @@ app.post('/api/minutes/generate', requireAuth, requireMinutesAccess,
       const uploadedText = await transcriptFromUpload(req.file);
       const transcript = uploadedText || String(req.body.transcriptText || '').trim();
       if (!transcript) return res.status(400).json({ error: 'Choose meeting notes or a transcript, or paste the text.' });
-      const draft = await generateMinutesDraft(transcript, { sourceType: req.body.sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
-      const id = crypto.randomUUID();
-      const time = nowIso();
-      await dbRun(
-        `INSERT INTO meeting_minutes
-          (id, meeting_date, source_name, transcript_text, draft_json, status,
-           created_by_user_id, source_uploaded_by_user_id, preparer_user_id,
-           updated_by_user_id, created_at, updated_at, claimed_at)
-         VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
-        [id, draft.meetingDate, req.file?.originalname || (draft.sourceType === 'compiled_notes' ? 'Pasted meeting notes' : 'Pasted transcript'), transcript,
-          JSON.stringify(draft), req.user.id, req.user.id, req.user.id, req.user.id, time, time, time],
-      );
-      await dbRun(
-        `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
-         VALUES (?, 'minutes_draft_created', ?, ?, ?, ?)`,
-        [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: id, enteredMeetingDetails: meetingDetails }), time],
-      );
-      res.status(201).json({ minutes: minutesForResponse(await getMinutesRow(id)) });
+      if (transcript.length > 500_000) throw httpError(400, 'The transcript is too long. Upload the Plaud text export for one meeting.');
+      const sourceType = detectMinutesSourceType(transcript.trim(), req.body.sourceType);
+      const sourceName = req.file?.originalname || (sourceType === 'compiled_notes' ? 'Pasted meeting notes' : 'Pasted transcript');
+      const original = { userId: req.user.id, meetingDate: meetingDetails.meetingDate, sourceName, transcript };
+      const existing = await findRecoveredMinutes(original);
+      if (existing) {
+        return res.status(200).json({ minutes: minutesForResponse(await getMinutesRow(existing.id)), recoveryNotice: minutesResumeNotice });
+      }
+      const { draft, recoveryNotice, organizationIssue } = await prepareNewMinutesDraft(transcript, { sourceType, meetingDetails, userId: req.user.id });
+      const { id, created } = await withTransaction(async () => {
+        await dbGet('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.user.id]);
+        const existingDraft = await findRecoveredMinutes(original);
+        if (existingDraft) return { id: existingDraft.id, created: false };
+        const id = crypto.randomUUID();
+        const time = nowIso();
+        await dbRun(
+          `INSERT INTO meeting_minutes
+            (id, meeting_date, source_name, transcript_text, draft_json, status,
+             created_by_user_id, source_uploaded_by_user_id, preparer_user_id,
+             updated_by_user_id, created_at, updated_at, claimed_at)
+           VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`,
+          [id, draft.meetingDate, sourceName, transcript,
+            JSON.stringify(draft), req.user.id, req.user.id, req.user.id, req.user.id, time, time, time],
+        );
+        await dbRun(
+          `INSERT INTO audit_events (user_id, action, ip_address, user_agent, details_json, created_at)
+           VALUES (?, 'minutes_draft_created', ?, ?, ?, ?)`,
+          [req.user.id, req.ip, req.get('user-agent') || '', JSON.stringify({ minutesId: id, enteredMeetingDetails: meetingDetails, organizationIssue }), time],
+        );
+        return { id, created: true };
+      });
+      res.status(created ? 201 : 200).json({ minutes: minutesForResponse(await getMinutesRow(id)), recoveryNotice: created ? recoveryNotice : minutesResumeNotice });
     } catch (error) {
       next(error);
     }

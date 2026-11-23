@@ -393,14 +393,16 @@ try {
   const cachedMetadata = await api(`/api/minutes/${metadataMinutes.id}/reorganize`,assistant.token,'POST',{expectedUpdatedAt:metadataMinutes.updatedAt});
   check('The same optional metadata citation remains usable from existing provider cache without another call',
     cachedMetadata.status===200 && await providerCalls()===beforeMetadataCalls+1);
-  const beforeInvalidMetadata = (await api('/api/minutes',assistant.token)).data.minutes;
   await control({mode:'default_metadata_invalid_section'});
-  const invalidMetadata = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(metadataSource+'\nA distinct source-verification case.'));
-  const invalidMetadataIncident = (await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===invalidMetadata.data.incidentReference);
-  check('Ignoring an optional default reference never accepts metadata as a real section evidence',
-    invalidMetadata.status===502 && invalidMetadataIncident?.category==='MINUTES_SECTION_EVIDENCE_INVALID');
-  assert.deepEqual((await api('/api/minutes',assistant.token)).data.minutes,beforeInvalidMetadata);
-  check('A genuine source-reference failure leaves all saved minutes untouched',true);
+  const metadataWithoutEvidence = metadataSource+'\nA distinct source-verification case.';
+  const invalidMetadata = await api('/api/minutes/generate',assistant.token,'POST',minutesForm(metadataWithoutEvidence));
+  const recoveredMetadata = invalidMetadata.data.minutes;
+  check('Optional metadata citations never substantiate section claims; only the original source becomes a draft',
+    invalidMetadata.status===201 && !!invalidMetadata.data.recoveryNotice
+      && recoveredMetadata.status==='draft' && recoveredMetadata.draft.sections.every(section=>!section.body.trim()));
+  const storedMetadata = await api(`/api/minutes/${recoveredMetadata.id}/source`,assistant.token);
+  assert.equal(storedMetadata.data.sourceText.replace(/\r\n/g,'\n'),metadataWithoutEvidence);
+  assert.deepEqual((await api('/api/minutes',assistant.token)).data.minutes.find(item=>item.id===metadataMinutes.id),metadataMinutes);
 
   // Keep this multipart regression isolated from the earlier rate bucket. Its
   // intentionally empty agenda sections must never shift a later body's quote.
@@ -480,12 +482,32 @@ try {
     {name:'an unsupported affirmative second',mutate:sections=>{sections[8].body+=' Brother Example seconded the motion.';},category:'MINUTES_UNSUPPORTED_SECOND'},
   ];
   const sectionRecordsBefore = (await api('/api/minutes',sectionAssistant.token)).data.minutes.length;
+  let recoveredSectionCount=0;
+  let recoveredSource, recoveredOrder;
   for (const [index,testCase] of invalidSectionCases.entries()) {
     const sections=structuredClone(sectionFixture);testCase.mutate?.(sections);
     await control({mode:'section_fixture',sections,extraEvidence:testCase.extraEvidence});
     const callsBefore=await providerCalls();
     const badSource=sectionSource+`\nSynthetic source case ${index+1}.`;
     const rejection=await api('/api/minutes/generate',sectionAssistant.token,'POST',minutesForm(badSource));
+    if (!testCase.category) {
+      const recovery = rejection.data.minutes;
+      assert.equal(rejection.status,201,JSON.stringify(rejection.data));
+      assert.match(rejection.data.recoveryNotice,/original meeting source and details were saved/);
+      assert.equal(recovery.status,'draft');
+      assert.equal(recovery.draft.meetingDate,sectionMinutes.draft.meetingDate);
+      assert.equal(recovery.preparerAttestedAt,null);
+      assert.equal(recovery.masterAttestedAt,null);
+      assert.ok(recovery.draft.sections.every(section=>!section.body.trim()));
+      assert.ok(['officerRoll','otherPresent','otherExcused'].every(field=>recovery.draft.attendanceReview[field]===false));
+      assert.equal((await api(`/api/minutes/${recovery.id}/source`,sectionAssistant.token)).data.sourceText.replace(/\r\n/g,'\n'),badSource);
+      assert.equal(await providerCalls(),callsBefore+1,'recovery does not make a second provider call');
+      recoveredSectionCount++;
+      recoveredSource ||= badSource;
+      recoveredOrder ||= recovery;
+      check(`Invalid ${testCase.name} keeps the source and officer details without copying any rejected text`,true);
+      continue;
+    }
     const incident=(await api('/api/admin/activity',owner.token)).data.incidents.find(item=>item.reference===rejection.data.incidentReference);
     assert.equal(rejection.status,502,JSON.stringify(rejection.data));
     assert.equal(incident?.category,testCase.category||'MINUTES_SECTION_EVIDENCE_INVALID',testCase.name);
@@ -493,8 +515,37 @@ try {
       rejection.status===502 && /^SS22-[A-Z0-9]+$/.test(rejection.data.incidentReference||'')
         && incident?.category===(testCase.category||'MINUTES_SECTION_EVIDENCE_INVALID')
         && incident.userId===sectionAssistant.user.id && await providerCalls()===callsBefore+1
-        && (await api('/api/minutes',sectionAssistant.token)).data.minutes.length===sectionRecordsBefore);
+        && (await api('/api/minutes',sectionAssistant.token)).data.minutes.length===sectionRecordsBefore+recoveredSectionCount);
   }
+  const beforeResumeCalls = await providerCalls();
+  const resumed = await api('/api/minutes/generate',sectionAssistant.token,'POST',minutesForm(recoveredSource,{...enteredDetails, closingTime:'10:00 PM'}));
+  check('Repeating a recovered intake returns the existing draft without new generation or a duplicate',
+    resumed.status===200 && resumed.data.minutes.id===recoveredOrder.id && await providerCalls()===beforeResumeCalls
+      && resumed.data.minutes.draft.closingTime===enteredDetails.closingTime && /earlier meeting details/.test(resumed.data.recoveryNotice));
+  await control({mode:'section_fixture',sections:sectionFixture});
+  const retried = await api(`/api/minutes/${recoveredOrder.id}/reorganize`,sectionAssistant.token,'POST',{
+    expectedUpdatedAt:recoveredOrder.updatedAt,sourceType:'compiled_notes',
+  });
+  check('An officer-initiated organization can obtain a fresh verified result after rejected output',
+    retried.status===200 && retried.data.draft.sections.some(section=>section.body.trim())
+      && await providerCalls()===beforeResumeCalls+1);
+  const handedOffSource = sectionSource + '\nSynthetic handoff requiring source-only recovery.';
+  const handoff = await api('/api/minutes/handoff',owner.token,'POST',minutesForm(handedOffSource));
+  assert.equal(handoff.status,201);
+  await control({mode:'section_fixture',sections:sectionFixture,extraEvidence:[{field:'sections[4].body',sourceLineIds:[5]}]});
+  const beforeClaim=await providerCalls();
+  const claim = await api(`/api/minutes/${handoff.data.minutes.id}/claim`,sectionAssistant.token,'POST',
+    {meetingDetails:enteredDetails});
+  assert.equal(claim.status,200,JSON.stringify(claim.data));
+  assert.ok(claim.data.recoveryNotice && claim.data.minutes.draft.sections.every(section=>!section.body.trim()));
+  assert.equal(claim.data.minutes.id,handoff.data.minutes.id);
+  assert.equal(claim.data.minutes.preparerUserId,sectionAssistant.user.id);
+  assert.equal((await api(`/api/minutes/${claim.data.minutes.id}/source`,sectionAssistant.token)).data.sourceText.replace(/\r\n/g,'\n'),handedOffSource);
+  assert.equal(await providerCalls(),beforeClaim+1);
+  const emptyAttestation = await api(`/api/minutes/${claim.data.minutes.id}/preparer-attest`,sectionAssistant.token,'POST',
+    {expectedUpdatedAt:claim.data.minutes.updatedAt});
+  check('Failed organization of a handoff preserves the claim and source in the same unsigned record until the officer adds minutes',
+    emptyAttestation.status===400 && /at least one section/.test(emptyAttestation.data.error));
   const invalidReorganization=structuredClone(sectionFixture);invalidReorganization[4].sourceLineIds=[];
   await control({mode:'section_fixture',sections:invalidReorganization});
   const beforeRejectedReorganization=await providerCalls();
