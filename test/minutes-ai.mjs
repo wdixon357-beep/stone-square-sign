@@ -619,7 +619,9 @@ const generator=createGenerator({apiKey:'SYNTHETIC-CACHE-FIXTURE',fetchImpl:asyn
  return new Response(JSON.stringify({id:'resp_fixture_'+providerCalls,model:'gpt-5.6-luna',status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}],usage:{input_tokens:1000,output_tokens:100}}),{status:200,headers:{'Content-Type':'application/json'}});
 }});
 const organize=generator.forUser(71);
-const legacy=async request=>organize({...request,schema:legacySchema});
+// Recreate the earlier caller, which cached a response before checking its
+// minutes-specific evidence and unsupported tables.
+const legacy=async ({validateResult: _validateResult, ...request})=>organize({...request,schema:legacySchema});
 try{
  await assert.rejects(generateMinutesDraft(fixture.source,{generateStructured:legacy}),/unsupported transaction or action tables/);
  assert.equal(providerCalls,1);
@@ -667,7 +669,8 @@ try{
  let currentLineRequest;
  await generateMinutesDraft(fixture.source,{sourceType:'compiled_notes',generateStructured:async request=>{currentLineRequest=request;return fixture.response;}});
  const oldInput=JSON.stringify({sourceType:'compiled_notes',officerRoster:JSON.parse(currentLineRequest.input).officerRoster,source:fixture.source});
- const priorRequest={...currentLineRequest,schema:quotedSchema,input:oldInput,instructions:'Synthetic prior copied-quotation contract'};
+ const {validateResult: _validateLineContract, ...lineRequest} = currentLineRequest;
+ const priorRequest={...lineRequest,schema:quotedSchema,input:oldInput,instructions:'Synthetic prior copied-quotation contract'};
  const contractForUser=contractGenerator.forUser(74);
  assert.deepEqual(await contractForUser(priorRequest),quotedResult);
  assert.deepEqual(await contractForUser(priorRequest),quotedResult);assert.equal(contractProviderCalls,1);
