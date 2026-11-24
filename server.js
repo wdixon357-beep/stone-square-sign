@@ -2363,7 +2363,7 @@ app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, rateL
     const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType ?? saved.sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
     const current = await getMinutesRow(row.id);
     if (!current || current.status !== 'draft' || current.updated_at !== row.updated_at) return res.status(409).json({ error: 'The record changed while its source was being organized. Reopen it before continuing.' });
-    res.json({ draft });
+    res.json({ draft: workingMinutesDraft(current, draft) });
   } catch (error) { next(error); }
 });
 

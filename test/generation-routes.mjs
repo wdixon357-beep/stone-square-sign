@@ -475,7 +475,12 @@ try {
   const sectionCached = await api(`/api/minutes/${sectionMinutes.id}/reorganize`,sectionAssistant.token,'POST',{expectedUpdatedAt:sectionMinutes.updatedAt});
   check('Reorganizing the same verified section-local result uses cache without another provider call',
     sectionCached.status===200 && await providerCalls()===beforeSectionCache
+      && sectionCached.data.draft.attendanceFormatVersion===1
       && JSON.stringify(sectionCached.data.draft)===JSON.stringify(sectionMinutes.draft));
+  const afterSectionCache = (await api('/api/minutes',sectionAssistant.token)).data.minutes.find(item=>item.id===sectionMinutes.id);
+  check('Previewing the reorganized minutes leaves the saved draft, source and attestations unchanged',
+    JSON.stringify(afterSectionCache)===JSON.stringify(reopenedSectionMinutes)
+      && (await api(`/api/minutes/${sectionMinutes.id}/source`,sectionAssistant.token)).data.sourceText===originalSectionInput);
   const sectionAttestation = await api(`/api/minutes/${sectionMinutes.id}/preparer-attest`,sectionAssistant.token,'POST',{expectedUpdatedAt:sectionMinutes.updatedAt});
   check('Accepted source lines never confirm attendance or bypass the preparer attestation checks',
     sectionAttestation.status===409 && await providerCalls()===beforeSectionCache);
