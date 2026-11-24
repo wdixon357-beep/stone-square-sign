@@ -2,7 +2,7 @@ import upng from '@pdf-lib/upng';
 import { formatMinutesDate } from './public/minutes-dates.js';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readFile } from 'node:fs/promises';
-import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
+import { attendanceNameBlocks, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
 import { attendanceLabel, stationCoverageText } from './public/minutes-attendance.js';
 
 import {
@@ -244,8 +244,6 @@ export const buildMinutesPdf = async ({
     }
   };
 
-  const bullets = text => renderBlocks(bulletItems(text));
-
   startPage('Stone Square Lodge No. 22');
   page.drawImage(seal, {x: LEFT + WIDTH - 60, y: y - 33, width: 60, height: 60});
   page.drawText('Meeting Minutes', { x: LEFT, y, size: 24, font: bold, color: NAVY });
@@ -270,8 +268,7 @@ export const buildMinutesPdf = async ({
   for (const [heading, names, emptyMessage] of minutesAttendanceDocumentGroups(draft)) {
     if (!names.length && !emptyMessage) continue;
     ruleHeading(heading);
-    if (names.length) bullets(names.join('\n'));
-    else renderBlocks(sectionBlocks({body:emptyMessage}));
+    renderBlocks(attendanceNameBlocks(heading, names, emptyMessage));
   }
 
   // Render the editor's sections in order. No separate inferred financial ledger,

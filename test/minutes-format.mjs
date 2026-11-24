@@ -1,3 +1,4 @@
+import { attendanceNameBlocks } from '../minutes-format.js';
 import assert from 'node:assert/strict';
 import {withMinutesEntryGrouping} from '../minutes-sections.js';
 import { attendanceReviewIssues, sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText, UNCITED_PRESIDING_WARNING } from '../minutes-format.js';
@@ -329,3 +330,8 @@ const mixed = {heading:'Meeting Business',body:'- First complete item.\n- Second
 const layoutField = {attendanceFormatVersion:1,sections:[mixed]};
 assert.deepEqual(sectionBlocks(documentSections(layoutField)[0]).map(x=>x.bullet),[true,true,false]);
 assert.deepEqual(sectionBlocks(documentSections({sections:[mixed]})[0]).map(x=>x.bullet),[false,false,false]);
+
+const attendeeNames = ['Past Master A. Example', 'Past Master B. Example Jr.', 'Past Master C. Example (Chris)'];
+assert.deepEqual(attendanceNameBlocks('Other Stone Square Brothers Present', attendeeNames),
+  attendeeNames.map(text => ({text, bullet:true, runs:[{text, bold:true}]})));
+assert.equal(attendanceNameBlocks('Other Stone Square Brothers Present', [], 'No additional Stone Square Brothers recorded.')[0].bullet, false);

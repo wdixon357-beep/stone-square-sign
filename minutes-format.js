@@ -1,7 +1,7 @@
 import { formatMinutesDate, minutesDateParts } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
-import { attendanceCoverageChecks, attendanceCoverageIssues } from './public/minutes-attendance.js';
+import { attendanceCoverageChecks, attendanceCoverageIssues, OTHER_STONE_SQUARE_BROTHERS_PRESENT } from './public/minutes-attendance.js';
 import {hasExplicitMinutesTime, minutesMeetingDetailChecks} from './public/minutes-meeting-details.js';
 
 // One presentation model for the live PDF and Word record. Formatting never
@@ -349,6 +349,14 @@ export function sectionBlocks(section) {
       if (!text || isEmptyEntry(text) || praiseLabel.test(plainBullet(text))) return [];
       return [{text, runs: emphasisRuns(text), bullet: list || (section.explicitBullets === true && marker.test(line))}];
     });
+}
+
+export function attendanceNameBlocks(heading, names, emptyMessage) {
+  if (!names.length) return sectionBlocks({body: emptyMessage});
+  if (heading === OTHER_STONE_SQUARE_BROTHERS_PRESENT) {
+    return names.map(text => ({text, bullet: true, runs: [{text, bold: true}]}));
+  }
+  return bulletItems(names.join('\n')).map(item => ({...item, bullet: true}));
 }
 
 export function bulletItems(value) {

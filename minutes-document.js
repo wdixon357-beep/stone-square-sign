@@ -4,7 +4,7 @@ import {
   Paragraph, Table, TableCell, TableRow, TextRun, VerticalAlign, WidthType,
 } from 'docx';
 import { readFile } from 'node:fs/promises';
-import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
+import { attendanceNameBlocks, sectionBlocks, documentSections, preparerOffice } from './minutes-format.js';
 import { attendanceLabel, stationCoverageText } from './public/minutes-attendance.js';
 
 import {
@@ -45,7 +45,7 @@ const sectionHeading = (text) => new Paragraph({
   children: [new TextRun({ text: String(text || '').toUpperCase(), size: 23, bold: true, color: '10263D' })],
 });
 
-const bodyParagraphs = (section, keepNext = false) => (typeof section === 'string' ? bulletItems(section).map(item => ({...item, bullet:true})) : sectionBlocks(section)).map(item => new Paragraph({
+const bodyParagraphs = (blocks, keepNext = false) => blocks.map(item => new Paragraph({
   keepNext,
   ...(item.bullet ? {bullet: {level: 0}, indent: {left: 260, hanging: 200}} : {}),
   spacing: {after: 130, line: 288},
@@ -109,7 +109,7 @@ const officerTable = (draft) => Number(draft.officerAttendanceVersion) >= 2 ? ne
 
 const nameGroup = (heading, names, emptyMessage) => names.length || emptyMessage ? [
   sectionHeading(heading),
-  ...bodyParagraphs(names.length ? names.join('\n') : {body:emptyMessage}),
+  ...bodyParagraphs(attendanceNameBlocks(heading, names, emptyMessage)),
 ] : [];
 
 const signatureCell = ({ name, role, signature, when, label }) => new TableCell({
@@ -154,7 +154,7 @@ export const buildMinutesDocx = async ({
     ...minutesAttendanceDocumentGroups(draft, {legacyVisitorsBeforeExcused:true}).flatMap(group => nameGroup(...group)),
     ...documentSections(draft).flatMap((item) => [
       sectionHeading(item.heading || 'Meeting Notes'),
-      ...bodyParagraphs(item, item.heading === 'Closing of the Lodge'),
+      ...bodyParagraphs(sectionBlocks(item), item.heading === 'Closing of the Lodge'),
     ]),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
