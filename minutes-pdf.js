@@ -6,7 +6,7 @@ import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './
 import { attendanceLabel, stationCoverageText } from './public/minutes-attendance.js';
 
 import {
-  additionalPresent, nonOfficerExcused, officerAttendanceRows,
+  minutesAttendanceDocumentGroups, officerAttendanceRows,
 } from './minutes-layout.js';
 
 const LETTER = [612, 792];
@@ -267,11 +267,12 @@ export const buildMinutesPdf = async ({
       officer.name, officer.title, attendanceLabel(officer),
       ...(coverageEnabled ? [stationCoverageText(officer)] : []),
     ]), coverageEnabled ? [155, 105, 76, 186] : [220, 200, 102], { size: 8 });
-  const additional = additionalPresent(draft);
-  if (additional.length) { ruleHeading('Other Brothers Present'); bullets(additional.join('\n')); }
-  const excused = nonOfficerExcused(draft);
-  if (excused.length) { ruleHeading('Other Brothers Excused'); bullets(excused.join('\n')); }
-  if (draft.visitors?.length) { ruleHeading('Visitors'); bullets(draft.visitors.join('\n')); }
+  for (const [heading, names, emptyMessage] of minutesAttendanceDocumentGroups(draft)) {
+    if (!names.length && !emptyMessage) continue;
+    ruleHeading(heading);
+    if (names.length) bullets(names.join('\n'));
+    else renderBlocks(sectionBlocks({body:emptyMessage}));
+  }
 
   // Render the editor's sections in order. No separate inferred financial ledger,
   // speculative motion results, empty worksheets, or repeated remarks pages.

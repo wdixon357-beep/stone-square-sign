@@ -665,19 +665,21 @@
               <div id="minutesOfficerAttendance" class="minutes-officer-attendance"></div>
               <button id="addMinutesOfficer" class="secondary small minutes-add-row" type="button">Add officer or pro tem</button>
               <label id="minutesOfficerRollConfirmation" class="minutes-confirmation"><input id="minutesOfficerRollConfirmed" type="checkbox" /> I reviewed the complete officer roll, station coverage and any late arrivals.</label>
-              <div class="minutes-attendance-grid minutes-other-attendance">
-                <div>
-                  <label for="minutesPresent">Other Brothers present</label>
-                  <textarea id="minutesPresent" rows="4" placeholder="Enter one Brother per line. Leave blank only when none were present."></textarea>
-                  <label id="minutesOtherPresentConfirmation" class="minutes-confirmation"><input id="minutesOtherPresentConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were present.</label>
-                </div>
-                <div>
-                  <label for="minutesExcused">Other Brothers excused</label>
-                  <textarea id="minutesExcused" rows="4" placeholder="Enter one Brother per line. Leave blank only when none were excused."></textarea>
-                  <label id="minutesOtherExcusedConfirmation" class="minutes-confirmation"><input id="minutesOtherExcusedConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were excused.</label>
-                </div>
+              <div class="minutes-attendance-list">
+                <label for="minutesExcused">Other Brothers excused</label>
+                <textarea id="minutesExcused" rows="4" placeholder="Enter one Brother per line. Leave blank only when none were excused."></textarea>
+                <label id="minutesOtherExcusedConfirmation" class="minutes-confirmation"><input id="minutesOtherExcusedConfirmed" type="checkbox" /> I confirmed this list, including if no other Brothers were excused.</label>
               </div>
-              <div class="minutes-visitors-field"><label for="minutesVisitors">Visitors, if any</label><textarea id="minutesVisitors" rows="3" placeholder="Enter one visitor per line only when visitors attended."></textarea></div>
+              <section class="minutes-attendance-list" aria-labelledby="minutesOtherPresentHeading">
+                <h4 id="minutesOtherPresentHeading"><label for="minutesPresent">Other Stone Square Brothers Present</label></h4>
+                <p id="minutesOtherPresentHelp">List Stone Square members who attended and do not already appear in the officer roll or under station coverage.</p>
+                <textarea id="minutesPresent" aria-describedby="minutesOtherPresentHelp" rows="4" placeholder="Enter one Brother per line."></textarea>
+                <label id="minutesOtherPresentConfirmation" class="minutes-confirmation"><input id="minutesOtherPresentConfirmed" type="checkbox" /> I reviewed this list, including when it is blank.</label>
+              </section>
+              <section class="minutes-attendance-list" aria-labelledby="minutesVisitorsHeading">
+                <h4 id="minutesVisitorsHeading"><label for="minutesVisitors">Visitors</label></h4>
+                <textarea id="minutesVisitors" rows="3" placeholder="Enter one visitor per line only when visitors attended."></textarea>
+              </section>
               </div>
             </section>
             <div id="minutesSections" class="minutes-sections"></div>

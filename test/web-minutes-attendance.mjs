@@ -158,6 +158,27 @@ assert.match(displayedText(elements.minutesAttendanceSummary),/Officer Example.*
 assert.match(elements.minutesAttendanceReviewNote.textContent,/Secretary's Office is completing attendance/);
 for (const id of ['minutesOfficerRollConfirmation','minutesOtherPresentConfirmation','minutesOtherExcusedConfirmation','minutesAttendancePreparerInstructions','minutesOfficerAttendanceInstructions']) assert.equal(elements[id].classList.contains('hidden'),true);
 assert.equal(elements.toggleMinutesAttendanceEdit.classList.contains('hidden'),false);
+const attendanceGroups = elements.minutesAttendanceSummary.children.at(-1).children;
+assert.deepEqual(attendanceGroups.map(group => group.children[0].textContent),
+  ['Other Brothers excused', 'Other Stone Square Brothers Present', 'Visitors']);
+const categoryFixture = {
+  officerAttendance: [
+    {name:'Late Officer', title:'Example Office', status:'arrived_late', stationCoverage:'filled', actingName:'Covering Person', actingWholeMeeting:false},
+    {name:'Absent Officer', title:'Other Office', status:'absent', stationCoverage:'vacant'},
+  ],
+  present: ['Bro. Local Example', 'Local Example', 'Late Officer', 'Covering Person', 'Absent Officer', 'Excused Person', 'Absent Member', 'Guest Example'],
+  excused: ['Excused Person'], absent: ['Absent Member'], visitors: ['Bro. Guest Example, Example Lodge No. 5'],
+};
+context.presentAttendance(record, categoryFixture);
+let visibleGroups = elements.minutesAttendanceSummary.children.at(-1).children;
+assert.equal(visibleGroups[1].children[1].textContent, 'Bro. Local Example');
+assert.equal(visibleGroups[2].children[1].textContent, 'Bro. Guest Example, Example Lodge No. 5');
+assert.match(displayedText(elements.minutesAttendanceSummary.children[0]), /Covering Person.*until Late Officer arrived/);
+context.presentAttendance(record, {...categoryFixture,present:[]});
+visibleGroups = elements.minutesAttendanceSummary.children.at(-1).children;
+assert.equal(visibleGroups[1].children[1].textContent, 'No additional Stone Square Brothers recorded.');
+assert.match(html, /<section[^>]+aria-labelledby="minutesOtherPresentHeading">\s*<h4[^>]+><label for="minutesPresent">Other Stone Square Brothers Present<\/label>[\s\S]*?<\/section>\s*<section[^>]+aria-labelledby="minutesVisitorsHeading">/,
+  'The existing present field has its own visible section immediately before Visitors');
 const preparerRecord={...record,createdByUserId:1,preparerUserId:1};
 context.presentAttendance(preparerRecord);
 assert.equal(context.needsPreparerConfirmation(preparerRecord),true,'The owner acting as actual preparer still completes preparation requirements');

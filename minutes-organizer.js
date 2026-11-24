@@ -1,6 +1,7 @@
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { detectPrayerFacts } from './minutes-format.js';
 import { SICKNESS_HEADING, isSicknessHeading, joinWrappedMinutesEntries } from './minutes-sections.js';
+import { NO_ADDITIONAL_STONE_SQUARE_BROTHERS } from './public/minutes-attendance.js';
 
 // Preserve agenda blocks before interpreting their contents. In compiled notes the
 // author has already supplied context; a speaker's name must never start a section.
@@ -33,7 +34,9 @@ const headings = [
 ];
 const knownHeading = line => headings.find(([, matcher]) => typeof matcher === 'function'
   ? matcher(line) : matcher.test(undecorated(line).replace(/:$/, '')))?.[0];
-const emptyAttendance = value => /^(?:none(?: recorded| reported| present)?|no (?:one|visitors?|visiting brothers?|guests?|absences|excused brothers?)(?: were present| present| recorded| reported)?|n\/?a|not applicable)[.!]?$/i.test(String(value || '').trim());
+const emptyAttendance = value => String(value || '').trim() === NO_ADDITIONAL_STONE_SQUARE_BROTHERS
+  || /^(?:none(?: recorded| reported| present)?|no (?:one|visitors?|visiting brothers?|guests?|absences|excused brothers?)(?: were present| present| recorded| reported)?|n\/?a|not applicable)[.!]?$/i.test(String(value || '').trim());
+const attendanceSourceLabel = /^(?:(?:other\s+)?(?:stone square\s+)?(?:brothers?|members?|officers?)\s+)?(present|excused|absent|visitors?)(?:\s+(?:brothers?|members?|officers?))?(?:\s*:\s*(.*))?$/i;
 const names = text => [...new Set(clean(text)
   .replace(/,\s*(PM|HPM|Jr\.?|Sr\.?|II|III|IV)(?=\s*(?:[,;]|$))/gi, ' $1')
   .replace(/\s+(?:and|&)\s+/gi, ';').split(/\s*[;,|]\s*/).map(clean).filter(name => !emptyAttendance(name))
@@ -206,7 +209,7 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   const lines = (type === 'compiled_notes'
     ? joinWrappedMinutesEntries(rawLines.join('\n'), line => {
       const text = clean(line);
-      return knownHeading(text) || unknownHeading(text, markedHeadings) || /^[^:]+:\s+/.test(text);
+      return knownHeading(text) || attendanceSourceLabel.test(undecorated(text)) || unknownHeading(text, markedHeadings) || /^[^:]+:\s+/.test(text);
     }).split('\n')
     : rawLines).map(clean);
   const attendance = { present: [], excused: [], absent: [], visitors: [] };
@@ -218,17 +221,17 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
       if (type === 'compiled_notes') content.push('');
       continue;
     }
-    const label = /^(?:(?:brothers?|members?|officers?)\s+)?(present|excused|absent|visitors?)(?:\s+(?:brothers?|members?|officers?))?\s*:\s*(.*)$/i.exec(undecorated(line));
+    const label = attendanceSourceLabel.exec(undecorated(line));
     if (label) {
       attendanceLabel = label[1].toLowerCase().replace(/^visitor$/, 'visitors');
       attendance[attendanceLabel].push(...(attendanceLabel === 'visitors' ? visitorNames(label[2]) : names(label[2])));
       continue;
     }
-    const onlyLabel = /^(present|excused|absent|visitors?)$/i.exec(line);
-    if (onlyLabel) { attendanceLabel = onlyLabel[1].toLowerCase().replace(/^visitor$/, 'visitors'); continue; }
+    if (attendanceLabel && emptyAttendance(line)) continue;
     const ambiguousAttendanceName = attendanceLabel && unknownHeading(line, markedHeadings) && possibleUppercaseAttendanceName(line, markedHeadings);
+    const visitorWithAffiliation = attendanceLabel === 'visitors' && /\b(?:lodge|chapter|council|court|temple)\s+(?:no\.?\s*|#\s*)\d+\.?$/i.test(line);
     if (attendanceLabel && !knownHeading(line) && (!unknownHeading(line, markedHeadings) || ambiguousAttendanceName) && !/^\d+[.)]/.test(line)
-      && !/[.!?:]/.test(line.replace(/\b(?:Bro|Jr|Sr)\./g,'')) && line.split(' ').length <= 5) {
+      && (visitorWithAffiliation || !/[.!?:]/.test(line.replace(/\b(?:Bro|Jr|Sr)\./g,'')) && line.split(' ').length <= 5)) {
       if (ambiguousAttendanceName) placementWarnings.push(`Uppercase entries under ${attendanceLabel} were kept as names. Confirm that none is a section heading.`);
       attendance[attendanceLabel].push(...(attendanceLabel === 'visitors' ? visitorNames(line) : names(line))); continue;
     }

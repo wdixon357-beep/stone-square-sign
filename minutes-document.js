@@ -8,7 +8,7 @@ import { bulletItems, sectionBlocks, documentSections, preparerOffice } from './
 import { attendanceLabel, stationCoverageText } from './public/minutes-attendance.js';
 
 import {
-  additionalPresent, nonOfficerExcused, officerAttendanceRows,
+  minutesAttendanceDocumentGroups, officerAttendanceRows,
 } from './minutes-layout.js';
 
 const BLACK = '000000';
@@ -107,9 +107,9 @@ const officerTable = (draft) => Number(draft.officerAttendanceVersion) >= 2 ? ne
   ],
 });
 
-const nameGroup = (heading, names) => names.length ? [
+const nameGroup = (heading, names, emptyMessage) => names.length || emptyMessage ? [
   sectionHeading(heading),
-  ...bodyParagraphs(names.join('\n')),
+  ...bodyParagraphs(names.length ? names.join('\n') : {body:emptyMessage}),
 ] : [];
 
 const signatureCell = ({ name, role, signature, when, label }) => new TableCell({
@@ -151,9 +151,7 @@ export const buildMinutesDocx = async ({
     detailsTable(draft),
     sectionHeading('Officers Present, Excused and Absent'),
     officerTable(draft),
-    ...nameGroup('Other Brothers Present', additionalPresent(draft)),
-    ...nameGroup('Visitors', draft.visitors || []),
-    ...nameGroup('Other Brothers Excused', nonOfficerExcused(draft)),
+    ...minutesAttendanceDocumentGroups(draft, {legacyVisitorsBeforeExcused:true}).flatMap(group => nameGroup(...group)),
     ...documentSections(draft).flatMap((item) => [
       sectionHeading(item.heading || 'Meeting Notes'),
       ...bodyParagraphs(item, item.heading === 'Closing of the Lodge'),

@@ -1,4 +1,5 @@
-import { normalizeOfficerCoverage, attendanceLabel, sameAttendancePerson } from './public/minutes-attendance.js';
+import { normalizeOfficerCoverage, attendanceLabel, sameAttendancePerson, otherStoneSquareBrothersPresent,
+  OTHER_STONE_SQUARE_BROTHERS_PRESENT, NO_ADDITIONAL_STONE_SQUARE_BROTHERS } from './public/minutes-attendance.js';
 
 export const CURRENT_OFFICERS = [
   { name: 'W. Aaron Dixon-Saunders', title: 'Worshipful Master' },
@@ -67,6 +68,16 @@ export const additionalPresent = (draft) => (draft.present || []).filter((name) 
 export const nonOfficerExcused = (draft) => (draft.excused || []).filter((name) => (
   !CURRENT_OFFICERS.some((officer) => namesMatch(name, officer.name))
 ));
+
+export function minutesAttendanceDocumentGroups(draft, {legacyVisitorsBeforeExcused = false} = {}) {
+  const excused = ['Other Brothers Excused', nonOfficerExcused(draft)];
+  const visitors = ['Visitors', draft.visitors || []];
+  if (Number(draft.attendanceFormatVersion) >= 1) {
+    return [excused, [OTHER_STONE_SQUARE_BROTHERS_PRESENT, otherStoneSquareBrothersPresent(draft), NO_ADDITIONAL_STONE_SQUARE_BROTHERS], visitors];
+  }
+  const present = ['Other Brothers Present', additionalPresent(draft)];
+  return legacyVisitorsBeforeExcused ? [present, visitors, excused] : [present, excused, visitors];
+}
 
 export const statusLabel = attendanceLabel;
 

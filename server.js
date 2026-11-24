@@ -1094,9 +1094,10 @@ const enteredMinutesMeetingDetails = value => {
 // submitted snapshot and previously finalized records keep their original format.
 const workingMinutesDraft = (row, value) => {
   const saved = JSON.parse(row.draft_json);
-  const input = {...(value ?? saved), entryFormatVersion: saved.entryFormatVersion,
-    closingFormatVersion: row.status === 'draft' ? 4 : saved.closingFormatVersion};
   const editable = row.status === 'draft' || row.status === 'awaiting_master_attestation';
+  const input = {...(value ?? saved), entryFormatVersion: saved.entryFormatVersion,
+    attendanceFormatVersion: editable ? 1 : saved.attendanceFormatVersion,
+    closingFormatVersion: row.status === 'draft' ? 4 : saved.closingFormatVersion};
   const draft = normalizeMinutesDraft(editable ? withMinutesEntryGrouping(input) : input);
   if (row.status === 'draft' || row.status === 'awaiting_master_attestation' && draft.closingFormatVersion >= 4) {
     return workingMinutesEditorialDraft(draft, {groupEntries:false});

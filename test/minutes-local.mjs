@@ -18,6 +18,21 @@ try {
   ]);
   assert.match(imported.sections.find(section=>section.heading==='Communications').body, /distinct notice/);
   assert.match(imported.sections.find(section=>section.heading==='Communications').body, /at the\n\nAnother paragraph/);
+  const localAttendance = await generateMinutesDraft(`Other Stone Square Brothers Present
+Local Example
+Excused Example
+Guest Example
+No additional Stone Square Brothers recorded.
+Visitors
+Bro. Guest Example, Example Lodge No. 5
+Other Brothers Excused: Excused Example
+Communications
+The Secretary read an invitation for the next meeting.`, {sourceType:'compiled_notes'});
+  assert.deepEqual(localAttendance.present, ['Local Example']);
+  assert.deepEqual(localAttendance.excused, ['Excused Example']);
+  assert.equal(localAttendance.visitors.length, 1);
+  assert.match(localAttendance.visitors[0], /Guest Example.*Lodge No\. 5/);
+  assert.ok(localAttendance.sections.every(section => !/Other Stone Square|Guest Example/.test(section.body)));
 
   const sicknessAliases = [
     'Sickness and Distress', 'SICKNESS & DISTRESS', '3. Sick and Distressed:',

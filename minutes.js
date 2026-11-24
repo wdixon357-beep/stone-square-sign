@@ -4,7 +4,7 @@ import { minutesDateParts, minutesDateValue } from './public/minutes-dates.js';
 import { SICKNESS_HEADING, isSicknessHeading, joinWrappedMinutesEntries, withMinutesEntryGrouping } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { organizeMeetingSource, extractOfficerCoverage, officerNameMatches } from './minutes-organizer.js';
-import { normalizeOfficerCoverage, sameAttendancePerson } from './public/minutes-attendance.js';
+import { normalizeOfficerCoverage, otherStoneSquareBrothersPresent, sameAttendancePerson } from './public/minutes-attendance.js';
 import { cleanMinutesSectionsForPresentation, detectPrayerFacts, UNCITED_PRESIDING_WARNING } from './minutes-format.js';
 import {MINUTES_MEETING_DETAILS_FIELDS, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails} from './public/minutes-meeting-details.js';
 
@@ -594,9 +594,13 @@ export const normalizeMinutesDraft = (value = {}) => {
     !CURRENT_OFFICERS.some((officer) => sameOfficer(entry, officer))
   )));
   const otherNames = list => otherAttendanceNames(list, officerAttendance, attendanceVersion);
+  const attendanceFormatVersion = Number(value.attendanceFormatVersion) >= 1;
+  const visitors = normalizeVisitors(value.visitors);
+  const present = otherNames(rawPresent);
   return {
   organizerVersion: value.organizerVersion || 1,
   ...(Number(value.entryFormatVersion) >= 1 ? {entryFormatVersion: 1} : {}),
+  ...(attendanceFormatVersion ? {attendanceFormatVersion: 1} : {}),
   officerAttendanceVersion: attendanceVersion,
   closingFormatVersion: Number(value.closingFormatVersion) >= 4 ? 4 : Number(value.closingFormatVersion) >= 3 ? 3 : Number(value.closingFormatVersion) >= 2 ? 2 : 1,
   ...(Number(value.meetingDetailsVersion) >= 1 ? {meetingDetailsVersion:1} : {}),
@@ -612,9 +616,11 @@ export const normalizeMinutesDraft = (value = {}) => {
   presiding: value.presiding ? String(value.presiding).trim() : null,
   quorum: canonicalQuorum(value.quorum),
   nextMeeting: value.nextMeeting ? String(value.nextMeeting).trim() : null,
-  present: otherNames(rawPresent),
+  present: attendanceFormatVersion
+    ? otherStoneSquareBrothersPresent({present, officerAttendance, visitors, excused: rawExcused, absent: value.absent})
+    : present,
   excused: otherNames(rawExcused),
-  visitors: normalizeVisitors(value.visitors),
+  visitors,
   officerAttendance,
   attendanceReview: {
     officerRoll: value.attendanceReview?.officerRoll === true,
@@ -635,7 +641,7 @@ export const normalizeMinutesDraft = (value = {}) => {
     description: entry?.description ? String(entry.description).trim() : null,
     amount: entry?.amount ? String(entry.amount).trim() : null,
   })) : [],
-  sections: normalizeSections(value.sections, {...value, visitors: normalizeVisitors(value.visitors)}),
+  sections: normalizeSections(value.sections, {...value, visitors}),
   warnings: Array.isArray(value.warnings) ? value.warnings.map(String).filter(warning => warning
     && !(Number(value.closingFormatVersion) >= 2
       && /^Confirm whether the Worshipful Master asked the Chaplain to (?:pray for the sick and distressed|offer a prayer for sickness and distress) at (?:closing|the close of the meeting)(?:[.;].*)?$/i.test(warning))) : [],
@@ -678,7 +684,9 @@ export const generateMinutesDraft = async (transcript, {
     if (localDraft.closingPrayerGiven === false) checked.closingPrayerGiven = false;
     return finish(checked);
   }
-  return finish(normalizeMinutesDraft(withMinutesEntryGrouping(localDraft)));
+  return finish(normalizeMinutesDraft(withMinutesEntryGrouping({
+    ...localDraft, present: otherStoneSquareBrothersPresent(localDraft),
+  })));
 };
 
 export function applyMinutesMeetingDetails(draft, supplied) {

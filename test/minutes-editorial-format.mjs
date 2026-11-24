@@ -214,6 +214,48 @@ for (const text of await texts(normalizeMinutesDraft(JSON.parse(signedPreparerJs
   assert.doesNotMatch(text, /A family asked for continued prayers during recovery\./, 'Captured historical PDF and Word retain their original layout');
 }
 
+const attendanceFixture = {
+  ...submitted, officerAttendanceVersion: 2,
+  officerAttendance: [
+    {name:'Late Officer', title:'Example Office', status:'arrived_late', stationCoverage:'filled', actingName:'Covering Person', actingWholeMeeting:false},
+    {name:'Absent Officer', title:'Second Office', status:'absent', stationCoverage:'vacant'},
+  ],
+  present: ['Bro. Local Example', 'Local Example', 'Late Officer', 'Covering Person', 'Absent Officer', 'Excused Person', 'Absent Member', 'Guest Example'],
+  excused: ['Excused Person'], absent: ['Absent Member'], visitors: ['Bro. Guest Example, Example Lodge No. 5'],
+};
+const attendanceJson = JSON.stringify(attendanceFixture);
+const attendanceRow = {...pending,draft_json:attendanceJson,submitted_draft_json:attendanceJson};
+const attendanceHeading = 'Other Stone Square Brothers Present';
+const attendanceDraft = workingCopy(attendanceRow);
+assert.equal(attendanceDraft.attendanceFormatVersion, 1);
+assert.deepEqual(attendanceDraft.present, ['Bro. Local Example']);
+assert.deepEqual(attendanceDraft.visitors, attendanceFixture.visitors);
+assert.deepEqual(attendanceDraft.excused, attendanceFixture.excused);
+assert.equal(attendanceRow.submitted_draft_json, attendanceJson);
+for (const text of await texts(attendanceDraft, attendanceRow.status)) {
+  const headings = text.toLowerCase();
+  const start = headings.indexOf(attendanceHeading.toLowerCase());
+  const end = headings.indexOf('visitors', start);
+  assert.ok(start > headings.indexOf('other brothers excused') && end > start, 'PDF and Word place the additional member section directly before visitors');
+  const members = text.slice(start, end);
+  assert.equal((members.match(/Local Example/g) || []).length, 1);
+  assert.doesNotMatch(members, /Late Officer|Covering Person|Absent Officer|Excused Person|Absent Member|Guest Example/);
+  assert.match(text.slice(end), /Guest Example/);
+  assert.match(text.slice(0,start), /Covering Person/);
+}
+for (const text of await texts({...attendanceDraft,present:[]}, attendanceRow.status)) {
+  assert.match(text, /Other Stone Square Brothers Present\s*No additional Stone Square Brothers recorded\.[\s\S]*?Visitors/i);
+}
+const legacyArchive = normalizeMinutesDraft(JSON.parse(attendanceJson));
+assert.equal(legacyArchive.attendanceFormatVersion, undefined);
+const [legacyPdf, legacyWord] = await texts(legacyArchive, 'approved_by_lodge');
+assert.match(legacyPdf, /Other Brothers Present[\s\S]*Other Brothers Excused[\s\S]*Visitors/);
+assert.match(legacyWord, /Other Brothers Present[\s\S]*Visitors[\s\S]*Other Brothers Excused/i);
+assert.ok(!legacyPdf.toLowerCase().includes(attendanceHeading.toLowerCase()) && !legacyWord.toLowerCase().includes(attendanceHeading.toLowerCase()));
+for (const text of await texts(normalizeMinutesDraft(JSON.parse(JSON.stringify(attendanceDraft))), 'approved_by_lodge')) {
+  assert.match(text, /Other Stone Square Brothers Present[\s\S]*Visitors/i, 'Newly finalized copies retain the layout captured at signing');
+}
+
 const preparerApply = server.slice(server.indexOf('const applyMinutesPreparerSignature ='), server.indexOf('const finishMinutesPreparerSignature ='));
 const masterApply = server.slice(server.indexOf('const applyMinutesMasterSignature ='), server.indexOf('const finishMinutesMasterSignature ='));
 const signatureReview = server.slice(server.indexOf("for (const phase of ['preparer','master'])"), server.indexOf("registerSignatureOperation('documents.sign'"));

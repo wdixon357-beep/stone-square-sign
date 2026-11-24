@@ -30,6 +30,29 @@ export function sameAttendancePerson(left, right) {
     || (officeAlias(left) || officeAlias(right)) && a.at(-1) === b.at(-1));
 }
 
+export const OTHER_STONE_SQUARE_BROTHERS_PRESENT = 'Other Stone Square Brothers Present';
+export const NO_ADDITIONAL_STONE_SQUARE_BROTHERS = 'No additional Stone Square Brothers recorded.';
+
+const visitorName = value => String(value || '').replace(
+  /(?:\s*[,;(]\s*|\s+[-–—]\s+|\s+(?:of|from|representing)\s+)[^,;]*\b(?:lodge|chapter|council|court|temple)\b.*$/i, '',
+).trim();
+
+export function otherStoneSquareBrothersPresent(draft = {}) {
+  const namesIn = value => Array.isArray(value) ? value : [];
+  const excluded = [
+    ...namesIn(draft.officerAttendance).flatMap(officer => [officer?.name, officer?.stationCoverage === 'filled' && officer.actingName]),
+    ...namesIn(draft.excused), ...namesIn(draft.absent), ...namesIn(draft.visitors).map(visitorName),
+  ].filter(Boolean);
+  const names = [];
+  for (const entry of namesIn(draft.present)) {
+    const name = String(entry || '').trim();
+    if (name && name !== NO_ADDITIONAL_STONE_SQUARE_BROTHERS
+      && !excluded.some(other => sameAttendancePerson(name, other))
+      && !names.some(other => sameAttendancePerson(name, other))) names.push(name);
+  }
+  return names;
+}
+
 export function attendanceCoverageChecks(draft = {}) {
   if (Number(draft.officerAttendanceVersion) < 2 || !draft.officerAttendanceVersion) return [];
   return (Array.isArray(draft.officerAttendance) ? draft.officerAttendance : []).flatMap((row, officerIndex) => {

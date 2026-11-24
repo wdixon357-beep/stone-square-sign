@@ -2389,9 +2389,13 @@ const renderMinutesAttendanceSummary = (draft) => {
   if (!officers.children.length) { const empty = document.createElement('p'); empty.textContent = 'No officer attendance recorded.'; officers.append(empty); }
   summary.append(officers);
   const lists = document.createElement('div'); lists.className = 'minutes-attendance-summary-lists';
-  for (const [key, label] of [['present', 'Other Brothers present'], ['excused', 'Other Brothers excused'], ['visitors', 'Visitors']]) {
+  for (const [label, entries, emptyMessage = 'No names recorded.'] of [
+    ['Other Brothers excused', draft.excused],
+    [minutesAttendance.OTHER_STONE_SQUARE_BROTHERS_PRESENT, minutesAttendance.otherStoneSquareBrothersPresent(draft), minutesAttendance.NO_ADDITIONAL_STONE_SQUARE_BROTHERS],
+    ['Visitors', draft.visitors],
+  ]) {
     const group = document.createElement('div'); const heading = document.createElement('h4'); heading.textContent = label;
-    const names = document.createElement('p'); names.textContent = draft[key]?.length ? draft[key].join(', ') : 'No names recorded.';
+    const names = document.createElement('p'); names.textContent = entries?.length ? entries.join(', ') : emptyMessage;
     group.append(heading, names); lists.append(group);
   }
   summary.append(lists);
@@ -2550,7 +2554,7 @@ const minutesAttendanceIssues = (draft = collectMinutesDraft()) => [
   draft.officerAttendance?.some((officer) => officer.status === 'not_recorded')
     && 'Choose Present, Arrived later, Excused or Absent for every officer.',
   ...(Number(draft.officerAttendanceVersion) >= 2 ? minutesAttendance.attendanceCoverageIssues(draft) : []),
-  !draft.attendanceReview?.otherPresent && 'Confirm the Other Brothers Present list, including when it is blank.',
+  !draft.attendanceReview?.otherPresent && 'Confirm the Other Stone Square Brothers Present list, including when it is blank.',
   !draft.attendanceReview?.otherExcused && 'Confirm the Other Brothers Excused list, including when it is blank.',
 ].filter(Boolean);
 
