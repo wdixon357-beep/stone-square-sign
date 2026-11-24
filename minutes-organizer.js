@@ -30,6 +30,7 @@ const headings = [
   ['Elections', /^elections?$/i],
   ['Good of the Order', /^(?:good of the order|praise reports?|(?:brothers?|wardens?|past masters?)'? remarks)$/i],
   ['Upcoming Events and Reminders', /^(?:upcoming events(?: and reminders)?|announcements)$/i],
+  ['After Closing', /^after closing$/i],
   ['Prayer and Closing', /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i],
 ];
 const knownHeading = line => headings.find(([, matcher]) => typeof matcher === 'function'
