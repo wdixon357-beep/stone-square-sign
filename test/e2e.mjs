@@ -775,7 +775,7 @@ try {
   const incompleteAttendance = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
   check('the secretary must review officers and both other-Brother lists before submission', incompleteAttendance.status === 409
     && /officer roll/i.test(incompleteAttendance.payload.error)
-    && /Other Brothers Present/.test(incompleteAttendance.payload.error)
+    && /Other Stone Square Brothers Present/.test(incompleteAttendance.payload.error)
     && /Other Brothers Excused/.test(incompleteAttendance.payload.error));
   revisedDraft.officerAttendance = revisedDraft.officerAttendance.map((officer) => ({...officer, status:'present'}));
   revisedDraft.attendanceReview = {officerRoll:true, otherPresent:true, otherExcused:true};
@@ -813,7 +813,7 @@ try {
     ownerDraftAttendanceEdit.status===200 && ownerDraftAttendanceEdit.payload.minutes.draft.attendanceReview.otherPresent===false
       && ownerDraftAttendanceEdit.payload.minutes.draft.attendanceReview.officerRoll===true);
   const needsPreparerAttendance = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, {token:asstToken});
-  check('the preparing Secretary must confirm attendance changed by the owner before submission',needsPreparerAttendance.status===409 && /Other Brothers Present/.test(needsPreparerAttendance.payload.error));
+  check('the preparing Secretary must confirm attendance changed by the owner before submission',needsPreparerAttendance.status===409 && /Other Stone Square Brothers Present/.test(needsPreparerAttendance.payload.error));
   await api('PUT', `/api/minutes/${minutesId}`, {token:asstToken,body:{draft:revisedDraft}});
   const alertStreamAbort = new AbortController();
   const ownerStream = await fetch(`${BASE}/api/events`, { headers: { Authorization: `Bearer ${wmToken}` }, signal: alertStreamAbort.signal });

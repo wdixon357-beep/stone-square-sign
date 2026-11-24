@@ -1157,13 +1157,13 @@ struct MeetingMinutesView: View {
                 Toggle("I reviewed the complete officer roll, including station coverage and late arrivals.", isOn: attendanceConfirmation(\.officerRoll))
             }
             Divider()
-            namesEditor("Other Brothers present", binding: attendanceNames(\.present, confirmation: \.otherPresent))
-            if preparingAttendance {
-                Toggle("I confirmed this list, including if no other Brothers were present.", isOn: attendanceConfirmation(\.otherPresent))
-            }
             namesEditor("Other Brothers excused", binding: attendanceNames(\.excused, confirmation: \.otherExcused))
             if preparingAttendance {
                 Toggle("I confirmed this list, including if no other Brothers were excused.", isOn: attendanceConfirmation(\.otherExcused))
+            }
+            namesEditor("Other Stone Square Brothers Present", binding: attendanceNames(\.present, confirmation: \.otherPresent))
+            if preparingAttendance {
+                Toggle("I confirmed this list, including if no other Stone Square Brothers were present.", isOn: attendanceConfirmation(\.otherPresent))
             }
             Divider()
             namesEditor("Visitors, if any", binding: names(\.visitors))
@@ -1196,8 +1196,8 @@ struct MeetingMinutesView: View {
                 }
             }
             Divider()
-            attendanceSummaryNames("Other Brothers present", values: workspace.draft?.present ?? [])
             attendanceSummaryNames("Other Brothers excused", values: workspace.draft?.excused ?? [])
+            attendanceSummaryNames("Other Stone Square Brothers Present", values: workspace.draft?.present ?? [])
             attendanceSummaryNames("Visitors", values: workspace.draft?.visitors ?? [])
         }
     }

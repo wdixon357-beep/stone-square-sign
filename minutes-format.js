@@ -141,7 +141,7 @@ export function attendanceReviewIssues(draft = {}, {requireConfirmation = true} 
     unresolved.length && `Record Present, Arrived later, Excused, or Absent for every Lodge officer. Still incomplete: ${unresolved.map((officer) => officer.name).join(', ')}.`,
     unresolvedAdditional.length && `Record attendance for each added officer or pro tem entry. Still incomplete: ${unresolvedAdditional.map((entry) => entry.name).join(', ')}.`,
     ...attendanceCoverageIssues(draft),
-    requireConfirmation && !review.otherPresent && 'Confirm the Other Brothers Present list, including when no other Brothers were present.',
+    requireConfirmation && !review.otherPresent && 'Confirm the Other Stone Square Brothers Present list, including when no other Brothers were present.',
     requireConfirmation && !review.otherExcused && 'Confirm the Other Brothers Excused list, including when no other Brothers were excused.',
   ].filter(Boolean);
 }
@@ -160,7 +160,7 @@ export function minutesContinueIssues(draft) {
       target: officerTarget('status', officerIndex, draft.officerAttendance?.[officerIndex]?.name || name),
     })),
     !review.officerRoll && {label:'Confirm the complete officer roll.',target:{field:'officerRoll'}},
-    !review.otherPresent && {label:'Confirm the Other Brothers Present list.',target:{field:'otherPresent'}},
+    !review.otherPresent && {label:'Confirm the Other Stone Square Brothers Present list.',target:{field:'otherPresent'}},
     !review.otherExcused && {label:'Confirm the Other Brothers Excused list.',target:{field:'otherExcused'}},
     !draft.sections?.some(section => section.body?.trim()) && {label:'Add meeting notes to the draft.',target:{field:'notes'}},
   ].filter(Boolean);
@@ -273,7 +273,9 @@ export function documentSections(draft) {
   const generatedLine = text => usesBullets ? `- ${text}` : text;
   const closing = sections.filter(s => routineClosingPrayer ? isClosingSection(s.heading)
     : /^(?:prayer and closing|closing(?: of the lodge)?|adjournment)$/i.test(s.heading.trim()));
-  const result = sections.filter(s => !closing.includes(s));
+  const currentLayout = Number(draft.attendanceFormatVersion) >= 1;
+  const afterClosing = currentLayout ? sections.filter(s => /^after closing$/i.test(s.heading.trim())) : [];
+  const result = sections.filter(s => !closing.includes(s) && !afterClosing.includes(s));
   let sick = result.find(s => isSicknessHeading(s.heading));
   if (!sick) { sick = {heading: SICKNESS_HEADING, body: ''}; result.push(sick); }
   // Older records used a separate prayer-request control. Their renderer keeps
@@ -316,8 +318,11 @@ export function documentSections(draft) {
   }
   if (routineClosingPrayer) closingBody = omitClosingPrayerSentences(closingBody, prayerGiven
     ? recordsClosingPrayerException : recordsChaplainClosingPrayer);
+  const inForm = currentLayout && draft.closingTime && closingBody.split('\n')
+    .some(line => /^the lodge was closed in form\.?$/i.test(plainBullet(line)));
+  if (inForm) closingBody = omitWholeBullets(closingBody, text => /^the lodge was closed in form\.?$/i.test(text));
   const closureText = formal.statements.length ? formal.statements.join('\n')
-    : draft.closingTime ? `The Lodge was closed at ${draft.closingTime}.`
+    : draft.closingTime ? `The Lodge was closed${inForm ? ' in form' : ''} at ${draft.closingTime}.`
       : currentClosingFormat ? '' : 'Closing time: confirm and enter the time the Lodge was closed.';
   const closure = closureText ? generatedLine(closureText) : '';
   const hasRecordedPrayer = routineClosingPrayer ? detectPrayerFacts(closingBody, {closingFormatVersion:4}).closingPrayerGiven === true
@@ -328,6 +333,7 @@ export function documentSections(draft) {
       ? generatedLine('The Chaplain did not give the closing prayer.')
       : prayerGiven === false || currentClosingFormat ? '' : generatedLine('Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.');
   result.push({heading: 'Closing of the Lodge', body: [closingBody, prayer, closure].filter(Boolean).join('\n')});
+  result.push(...afterClosing);
   return result.filter(s => s.body.trim() || isSicknessHeading(s.heading))
     .map(section => usesBullets ? {...section, bulletStyle: true} : section);
 }

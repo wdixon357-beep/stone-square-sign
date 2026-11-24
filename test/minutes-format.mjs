@@ -315,3 +315,12 @@ assert.ok(formalResult.indexOf('A closing prayer') < formalResult.indexOf(formal
 assert.ok(formalResult.indexOf('Minutes will be distributed') < formalResult.indexOf(formalClosure));
 assert.ok(!formalResult.includes('The Lodge was closed at'));
 assert.deepEqual(formalSource,formalBefore);
+
+const chronologicalDraft = {attendanceFormatVersion:1, closingFormatVersion:4, closingPrayerGiven:true, closingTime:'9:45 PM', sections:[
+  {heading:'Closing',body:'The Chaplain gave the closing prayer for the families.\nThe Lodge was closed in form.'},
+  {heading:'After Closing',body:'The officers rehearsed for the visitation.'},
+]};
+const chronological = documentSections(chronologicalDraft);
+assert.deepEqual(chronological.slice(-2).map(s=>s.heading), ['Closing of the Lodge','After Closing']);
+assert.equal(chronological.at(-2).body, 'The Chaplain gave the closing prayer for the families.\nThe Lodge was closed in form at 9:45 PM.');
+assert.equal(documentSections({...chronologicalDraft,attendanceFormatVersion:undefined}).at(-1).heading,'Closing of the Lodge');

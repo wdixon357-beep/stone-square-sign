@@ -20,6 +20,9 @@ assert.match(native, /if preparingAttendance && model\.user\?\.can\("minutes\.pr
 assert.match(native, /DisclosureGroup\("Change attendance", isExpanded: \$changingAttendance\)/, 'Review corrections remain optional');
 assert.match(native, /private func resetOfficerConfirmation\(\) \{\s*guard preparingAttendance else \{ return \}/, 'Review corrections cannot require a second confirmation');
 const attendanceFields = native.slice(native.indexOf('private var attendanceFields:'), native.indexOf('private var attendanceSummary:'));
+const attendanceSummary = native.slice(native.indexOf('private var attendanceSummary:'), native.indexOf('private func attendanceSummaryNames('));
+assert.match(attendanceFields, /namesEditor\("Other Stone Square Brothers Present", binding: attendanceNames\(\\\.present, confirmation: \\\.otherPresent\)\)\s*if preparingAttendance \{\s*Toggle\([^\n]+attendanceConfirmation\(\\\.otherPresent\)\)\s*\}\s*Divider\(\)\s*namesEditor\("Visitors, if any", binding: names\(\\\.visitors\)\)/, 'Native editor uses the saved member list and keeps it immediately before visitors');
+assert.match(attendanceSummary, /attendanceSummaryNames\("Other Stone Square Brothers Present", values: workspace\.draft\?\.present \?\? \[\]\)\s*attendanceSummaryNames\("Visitors", values: workspace\.draft\?\.visitors \?\? \[\]\)/, 'Native review shows the recorded member list immediately before visitors');
 assert.equal((attendanceFields.match(/if preparingAttendance \{/g) || []).length, 3, 'Each confirmation toggle is preparer-only');
 assert.match(native, /Text\(MinutesAttendanceWorkflow\.statusLabel\("not_recorded", preparing: preparingAttendance\)\)/, 'Unknown status does not ask the WM to confirm an officer again');
 
