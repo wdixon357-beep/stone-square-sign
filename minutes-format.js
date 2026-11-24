@@ -335,7 +335,7 @@ export function documentSections(draft) {
   result.push({heading: 'Closing of the Lodge', body: [closingBody, prayer, closure].filter(Boolean).join('\n')});
   result.push(...afterClosing);
   return result.filter(s => s.body.trim() || isSicknessHeading(s.heading))
-    .map(section => usesBullets ? {...section, bulletStyle: true} : section);
+    .map(section => usesBullets ? {...section, bulletStyle: true} : currentLayout ? {...section, explicitBullets: true} : section);
 }
 
 // One block model controls both PDF and Word. The explicit draft version keeps
@@ -343,9 +343,12 @@ export function documentSections(draft) {
 export function sectionBlocks(section) {
   const list = section.bulletStyle === true || /^(?:sickness (?:and|&) distress|communications|correspondence|upcoming events(?: and reminders)?|reminders)$/i.test(String(section.heading || '').trim());
   return String(section.body || '').replace(/\r/g, '').split(/\n+|\s+[•▪]\s*/)
-    .map(line => line.replace(/^\s*(?:[-*•▪]|\d+[.)])\s+/, '').trim())
-    .filter(line => line && !isEmptyEntry(line) && !praiseLabel.test(plainBullet(line)))
-    .map(text => ({text, runs: emphasisRuns(text), bullet: list}));
+    .flatMap(line => {
+      const marker = /^\s*(?:[-*•▪]|\d+[.)])\s+/;
+      const text = line.replace(marker, '').trim();
+      if (!text || isEmptyEntry(text) || praiseLabel.test(plainBullet(text))) return [];
+      return [{text, runs: emphasisRuns(text), bullet: list || (section.explicitBullets === true && marker.test(line))}];
+    });
 }
 
 export function bulletItems(value) {

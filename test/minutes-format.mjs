@@ -324,3 +324,8 @@ const chronological = documentSections(chronologicalDraft);
 assert.deepEqual(chronological.slice(-2).map(s=>s.heading), ['Closing of the Lodge','After Closing']);
 assert.equal(chronological.at(-2).body, 'The Chaplain gave the closing prayer for the families.\nThe Lodge was closed in form at 9:45 PM.');
 assert.equal(documentSections({...chronologicalDraft,attendanceFormatVersion:undefined}).at(-1).heading,'Closing of the Lodge');
+
+const mixed = {heading:'Meeting Business',body:'- First complete item.\n- Second complete item.\nA separate paragraph.'};
+const layoutField = {attendanceFormatVersion:1,sections:[mixed]};
+assert.deepEqual(sectionBlocks(documentSections(layoutField)[0]).map(x=>x.bullet),[true,true,false]);
+assert.deepEqual(sectionBlocks(documentSections({sections:[mixed]})[0]).map(x=>x.bullet),[false,false,false]);
