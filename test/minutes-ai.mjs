@@ -372,6 +372,33 @@ try {
   mismatchedSection.draft.sections[2].sourceLineIds=[8];
   await assert.rejects(generateMinutesDraft(source,{generateStructured:async()=>mismatchedSection}),
     error=>error.statusCode===502 && error.code==='MINUTES_UNSUPPORTED_APPROVAL','An exact quote attached to the wrong claim still cannot establish approval');
+
+  const separateOutcomes = source + '\nThe roof motion was approved.\nThe chair motion was rejected.';
+  const namedOutcomeFixture = response();
+  namedOutcomeFixture.draft.sections.push({
+    heading:'Committee Reports', body:'- The roof motion was rejected.\n- The chair motion was approved.',
+    sourceLineIds:[15,16],
+  });
+  await assert.rejects(generateMinutesDraft(separateOutcomes,{generateStructured:async()=>namedOutcomeFixture}),
+    error=>error.code==='MINUTES_MOTION_OUTCOME_MISMATCH','Two cited motions cannot borrow each other’s votes');
+  namedOutcomeFixture.draft.sections.at(-1).body = '- The roof motion was\n  rejected.\n- The chair motion was\n  approved.';
+  await assert.rejects(generateMinutesDraft(separateOutcomes,{generateStructured:async()=>namedOutcomeFixture}),
+    error=>error.code==='MINUTES_MOTION_OUTCOME_MISMATCH','A continuation is verified before its outcome can enter the draft');
+  namedOutcomeFixture.draft.sections.at(-1).body = '- The roof motion carried.';
+  const incompleteOutcomes = await generateMinutesDraft(separateOutcomes,{generateStructured:async()=>namedOutcomeFixture});
+  assert.ok(incompleteOutcomes.warnings.some(message=>/line 16 records a named motion outcome/.test(message)),
+    'A cited but omitted explicit motion outcome still appears in the review');
+  namedOutcomeFixture.draft.sections.at(-1).body += '\n- The chair motion was defeated.';
+  const correctOutcomes = await generateMinutesDraft(separateOutcomes,{generateStructured:async()=>namedOutcomeFixture});
+  assert.ok(!correctOutcomes.warnings.some(message=>/records a named motion outcome/.test(message)));
+  const reorderedOutcomes = separateOutcomes + '\nThe roof motion was later reconsidered.\nThe roof motion was rejected.\nThe parking motion was tabled.';
+  namedOutcomeFixture.draft.sections.at(-1).body = '- The roof motion was tabled.\n- The chair motion was rejected.';
+  namedOutcomeFixture.draft.sections.at(-1).sourceLineIds = [15,16,17,18,19];
+  await assert.rejects(generateMinutesDraft(reorderedOutcomes,{generateStructured:async()=>namedOutcomeFixture}),
+    error=>error.code==='MINUTES_MOTION_OUTCOME_MISMATCH','Conflicting evidence does not support a third result');
+  namedOutcomeFixture.draft.sections.at(-1).body = '- The roof motion was approved.\n- The chair motion was rejected.';
+  const ambiguousOutcomes = await generateMinutesDraft(reorderedOutcomes,{generateStructured:async()=>namedOutcomeFixture});
+  assert.ok(ambiguousOutcomes.warnings.some(message=>message.includes('more than one outcome')));
   const privateMarker='PRIVATE_SOURCE_ONLY: medical detail not included in the section body.';
   const privateEvidence=response();
   privateEvidence.draft.sections.push({heading:'Other Meeting Business',body:'- A private matter was reserved for officer review.',sourceLineIds:[15]});

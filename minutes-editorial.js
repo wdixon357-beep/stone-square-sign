@@ -1,5 +1,6 @@
 import {omitClosingPrayerCommentary} from './minutes-closing-commentary.js';
 import {detectPrayerFacts, isClosingSection} from './minutes-format.js';
+import {withMinutesEntryGrouping} from './minutes-sections.js';
 
 // This is a current-draft edit, never a historical renderer. Remove only
 // procedural/source-analysis boilerplate, not an actual negative meeting fact.
@@ -16,20 +17,22 @@ export function currentMinutesEditorialDraft(value) {
   draft.closingFormatVersion = Number(draft.closingFormatVersion) >= 4 ? 4 : 3;
   if (Array.isArray(draft.sections)) draft.sections = draft.sections.map(section => {
     if (!section || typeof section.body !== 'string') return section;
-    const body = section.body.split('\n').filter(line => !referenceDump.test(line)).map(line => {
+    const body = section.body.split('\n').map(line => {
+      if (referenceDump.test(line)) return '';
       let cleaned = line;
       for (const sentence of sentences) cleaned = cleaned.replace(sentence, '');
       if (cleaned === line) return line;
       const meaningful = cleaned.replace(/<\/?(?:strong|em|u)>|[*_]/gi, '').replace(/^\s*[-•]\s*/, '').trim();
       return meaningful ? cleaned.replace(/[\t ]+$/, '') : '';
-    }).filter(line => line.trim() && !/^\s*[-*•]\s*$/.test(line)).join('\n');
+    }).map(line => /^\s*[-*•]\s*$/.test(line) ? '' : line)
+      .filter(line => line.trim() || draft.entryFormatVersion >= 1).join('\n');
     return {...section, body};
   });
   return draft;
 }
 
-export function workingMinutesEditorialDraft(value) {
-  const draft = currentMinutesEditorialDraft(value);
+export function workingMinutesEditorialDraft(value, {groupEntries = !value?.entryFormatVersion} = {}) {
+  const draft = currentMinutesEditorialDraft(groupEntries ? withMinutesEntryGrouping(value) : value);
   draft.closingFormatVersion = 4;
   if (typeof draft.closingPrayerGiven !== 'boolean') {
     const closing = (draft.sections || []).filter(section => isClosingSection(section?.heading)).map(section => section.body).join('\n');

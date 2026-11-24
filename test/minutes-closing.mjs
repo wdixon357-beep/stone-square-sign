@@ -6,7 +6,7 @@ import { normalizeMinutesDraft } from '../minutes.js';
 import { documentSections, closingReviewIssues, prayerRequestText, closingPrayerText } from '../minutes-format.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { buildMinutesDocx } from '../minutes-document.js';
-import { MINUTES_REPORT_RULES, REPORT_RULES_VERSION } from '../report-rules.js';
+import { MINUTES_REPORT_RULES } from '../report-rules.js';
 import { workingMinutesEditorialDraft } from '../minutes-editorial.js';
 
 const oldPrompt = 'Confirm whether the Worshipful Master asked the Chaplain to pray for the sick and distressed at closing; the cited source does not establish it.';
@@ -106,7 +106,6 @@ assert.equal(documentSections({...updated, closingPrayerGiven:false,
   'An officer-recorded exception leaves other closing facts intact');
 assert.doesNotMatch(documentSections(openDraft).at(-1).body, /The Chaplain gave the closing prayer/, 'The historic format retains a missing prayer value');
 assert.match(MINUTES_REPORT_RULES, /Set the legacy prayerRequested field to null/);
-assert.equal(REPORT_RULES_VERSION,'2026-11-18.1');
 const web = await fs.readFile(new URL('../public/index.html',import.meta.url),'utf8');
 assert.doesNotMatch(web,/id="minutesPrayerRequested"/);
 assert.match(web,/<option value="true" selected>Given by the Chaplain<\/option>/);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {withMinutesEntryGrouping} from '../minutes-sections.js';
 import { attendanceReviewIssues, sectionBlocks, bulletItems, cleanMinutesSectionsForPresentation, closingReviewIssues, detectPrayerFacts, documentSections, emphasisRuns, preparerOffice, prayerRequestText, closingPrayerText, UNCITED_PRESIDING_WARNING } from '../minutes-format.js';
 import { normalizeMinutesDraft } from '../minutes.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
@@ -24,6 +25,18 @@ for (const heading of ['Sickness and Distress', 'Communications', 'Upcoming Even
   const blocks = sectionBlocks({heading, body:'- First separate update.\n- Second separate update.'});
   assert.equal(blocks.length, 2); assert.ok(blocks.every(item => item.bullet));
 }
+
+const wrappedBody = 'Brother Example and his family asked that the\nExample family be kept in prayer.\n- A second family asked for prayers;\n  their request remained separate.\n\nAnother item was recorded at the\n\nCommittee matters remain separate.';
+const wrappedDraft = {organizerVersion:1, closingFormatVersion:4, sections:[{heading:'Sickness and Distress',body:wrappedBody}]};
+const workingDraft = withMinutesEntryGrouping(wrappedDraft);
+assert.deepEqual(withMinutesEntryGrouping(workingDraft), workingDraft, 'preserve explicit and paragraph boundaries on repeated saves');
+assert.deepEqual(sectionBlocks(documentSections(workingDraft)[0]).map(item=>item.text), [
+  'Brother Example and his family asked that the Example family be kept in prayer.',
+  'A second family asked for prayers; their request remained separate.',
+  'Another item was recorded at the',
+  'Committee matters remain separate.',
+]);
+assert.equal(wrappedDraft.sections[0].body, wrappedBody, 'the legacy snapshot is unchanged');
 
 for (const value of ['2026-09-03', '9/3/2026', 'September 3, 2026', 'Sept. 3rd, 2026', 'Thu, Sept. 3, 2026', 'Thursday, 2026-09-03']) {
   assert.equal(formatMinutesDate(value), 'Thursday, September 3, 2026');

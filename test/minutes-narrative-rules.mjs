@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {COMMON_REPORT_RULES,MINUTES_REPORT_RULES,TREASURY_REPORT_RULES,REPORT_RULES_VERSION} from '../report-rules.js';
 const standing=await readFile(new URL('../REPORT-RULES.md',import.meta.url),'utf8');
-assert.equal(REPORT_RULES_VERSION,'2026-11-18.1');
+assert.equal(REPORT_RULES_VERSION,'2026-11-23.1');
 assert.ok(MINUTES_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
 assert.ok(TREASURY_REPORT_RULES.startsWith(COMMON_REPORT_RULES));
 for (const rules of [MINUTES_REPORT_RULES,standing]) {
@@ -29,6 +29,8 @@ assert.match(MINUTES_REPORT_RULES,/Never treat a discussion into approval|Never 
 assert.match(MINUTES_REPORT_RULES,/Do not describe a motion as properly made, seconded, carried, unanimous, defeated, tabled or withdrawn unless/,'Procedural factual validation is not weakened');
 assert.match(MINUTES_REPORT_RULES,/Use true only for explicit completed facts, false only for an explicit exception, and null when unconfirmed/,'Prayer truth values still require evidence');
 assert.match(MINUTES_REPORT_RULES,/sourceLineIds/,'Exact source-line verification remains required');
+assert.match(MINUTES_REPORT_RULES,/single logical line for each separate matter/,'Physical line wraps cannot create extra bullets');
+assert.match(MINUTES_REPORT_RULES,/particular motion's subject and disposition/,'Each outcome needs evidence for its own motion');
 assert.match(MINUTES_REPORT_RULES,/Set income, expenses and actionItems to empty arrays/,'No duplicate financial/action tables are reintroduced');
 assert.match(MINUTES_REPORT_RULES,/Do not create a separate routine statement or confirmation that the Worshipful Master requested prayer/,'Retired routine WM prayer paragraph remains prohibited');
 assert.match(standing,/Already filed or signed documents retain their original text and rendering/,'Historical snapshots remain protected');

@@ -31,7 +31,7 @@ const visitorPlaceholder = /^(?:(?:additional )?(?:brothers|brethren)(?: and vis
 
 // Use the same cleanup for editable drafts and documents made from historical
 // snapshots. Return new objects; neither saved nor attested records are changed.
-export function cleanMinutesSectionsForPresentation(sections, {visitors = [], present = [], excused = [], officerAttendance = [], quorum = '', closingFormatVersion = 1} = {}) {
+export function cleanMinutesSectionsForPresentation(sections, {visitors = [], present = [], excused = [], officerAttendance = [], quorum = '', closingFormatVersion = 1, entryFormatVersion = 0} = {}) {
   const input = Array.isArray(sections) ? sections : [];
   const meaningfulVisitor = value => {
     const text = plainBullet(value);
@@ -47,15 +47,16 @@ export function cleanMinutesSectionsForPresentation(sections, {visitors = [], pr
     const named = /^(?:visitors?|visiting brothers)\s*:\s*(.+)$/i.exec(plainBullet(line));
     return named && meaningfulVisitor(named[1]);
   }));
+  const omitted = entryFormatVersion >= 1 ? [''] : [];
   const cleanBody = value => String(value || '').replace(/\r/g, '').split('\n').flatMap(line => {
     const text = plainBullet(line);
-    if (Number(closingFormatVersion) >= 2 && (isStandardPrayerRequest(text) || isObsoletePrayerPrompt(text))) return [];
-    if (!text || /^[-*•▪]$/.test(text) || isEmptyEntry(text) || praiseLabel.test(text)) return [];
-    if (!hasVisitors && (attendanceLabel.test(text) || /^visitors?\s*[:.]?$/i.test(text) || visitorPlaceholder.test(text))) return [];
+    if (Number(closingFormatVersion) >= 2 && (isStandardPrayerRequest(text) || isObsoletePrayerPrompt(text))) return omitted;
+    if (!text || /^[-*•▪]$/.test(text) || isEmptyEntry(text) || praiseLabel.test(text)) return omitted;
+    if (!hasVisitors && (attendanceLabel.test(text) || /^visitors?\s*[:.]?$/i.test(text) || visitorPlaceholder.test(text))) return omitted;
     const visitor = /^visitors?\s*:\s*(.+)$/i.exec(text);
-    if (visitor && !meaningfulVisitor(visitor[1])) return [];
+    if (visitor && !meaningfulVisitor(visitor[1])) return omitted;
     const praise = /^praise reports?\s*:\s*(.+)$/i.exec(text);
-    if (praise) return isEmptyEntry(praise[1]) ? [] : [praise[1]];
+    if (praise) return isEmptyEntry(praise[1]) ? omitted : [praise[1]];
     return [line];
   }).join('\n').trim();
   const normalizedName = value => plainBullet(value).toLowerCase().replace(/\b(?:brother|bro|pm|hpm)\.?\s*/g, '').replace(/[^a-z0-9]/g, '');

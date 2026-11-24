@@ -768,6 +768,9 @@ try {
     check(`preparer cannot submit without entered ${field}`,blocked.status===409);
   }
   revisedDraft.sections[0].body += ' The officers were examined in their stations and duties.';
+  const groupedReviewBody = '- The committee sent the\nFirst report.\n\n- A purchase was discussed with\n- None recorded\nThe next committee sent an independent update.';
+  const canonicalReviewBody = groupedReviewBody.replace('the\nFirst', 'the First').replace('- None recorded', '');
+  revisedDraft.sections.push({heading:'Building Committee Update',body:groupedReviewBody});
   await api('PUT', `/api/minutes/${minutesId}`, { token: asstToken, body: { draft: revisedDraft } });
   const incompleteAttendance = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
   check('the secretary must review officers and both other-Brother lists before submission', incompleteAttendance.status === 409
@@ -850,6 +853,9 @@ try {
   const duplicateSubmit = await api('POST', `/api/minutes/${minutesId}/preparer-attest`, { token: asstToken });
   check('repeat submission does not send duplicate alerts', duplicateSubmit.status === 409 && deliveredMail.length === mailBeforeDuplicate);
   const editedByMaster = structuredClone(revisedDraft);
+  // Released editors omit the server's entry-format marker.
+  delete editedByMaster.entryFormatVersion;
+  editedByMaster.sections.find(s=>s.heading==='Building Committee Update').body = canonicalReviewBody;
   editedByMaster.sections[0].body += ' The Master corrected the meeting record during review.';
   editedByMaster.prayerRequested = false;
   editedByMaster.sections.find(s => s.heading === 'Sickness and Distress').body = 'Prayers were requested for Brother Example.';
@@ -859,6 +865,11 @@ try {
   check('a stale review correction cannot overwrite newer minutes', staleMasterEdit.status === 409);
   const masterEdit = await api('PUT', `/api/minutes/${minutesId}`, { token: wmToken, body: { draft: editedByMaster } });
   check('the Master can correct minutes during review without erasing the first attestation', masterEdit.status === 200 && Boolean(masterEdit.payload.minutes.preparerAttestedAt));
+  check('an older review client preserves grouped entries, paragraph breaks and the preparer snapshot',
+    masterEdit.payload.minutes.draft.entryFormatVersion===1
+      && masterEdit.payload.minutes.draft.sections.find(s=>s.heading==='Building Committee Update').body===canonicalReviewBody
+      && masterEdit.payload.minutes.submittedDraft.sections.find(s=>s.heading==='Building Committee Update').body===canonicalReviewBody
+      && !masterEdit.payload.minutes.masterChanges.some(change=>change.field==='Building Committee Update'));
   check('review corrections preserve exact submitted and revised text', masterEdit.payload.minutes.masterChanges.some(change => change.before.includes('officers were examined') && !change.before.includes('Master corrected') && change.after.includes('Master corrected')));
   check('prayer corrections are outlined for the preparing officer', masterEdit.payload.minutes.masterChanges.some(change => change.field === 'Prayer requested by the Worshipful Master' && change.before === 'Yes' && change.after === 'No'));
   check('Sickness and Distress corrections are outlined under their own section', masterEdit.payload.minutes.masterChanges.some(change => change.field === 'Sickness and Distress' && change.after.includes('Prayers were requested for Brother Example.')));

@@ -29,6 +29,7 @@ import { createSessionPolicy } from './session-policy.js';
 import { buildMinutesDocx, minutesFileName } from './minutes-document.js';
 import { buildMinutesPdf } from './minutes-pdf.js';
 import { applyMinutesMeetingDetails, generateMinutesDraft, MINUTES_REJECTED_OUTPUT_CODES, normalizeMinutesDraft } from './minutes.js';
+import { withMinutesEntryGrouping } from './minutes-sections.js';
 import { detectMinutesSourceType } from './minutes-organizer.js';
 import {MINUTES_MEETING_DETAILS_FIELDS, formatMinutesClock, minutesMeetingDetailsIssues, normalizeMinutesMeetingDetails, suggestMinutesDetailsFromNotes} from './public/minutes-meeting-details.js';
 import { minutesChanges, preparerAttendanceReviewForEdit, reviewedMinutesChanges } from './minutes-changes.js';
@@ -1063,9 +1064,17 @@ const minutesUpload = multer({
 const transcriptFromUpload = async (file) => {
   if (!file) return '';
   const name = file.originalname.toLowerCase();
-  if (name.endsWith('.pdf')) return extractTextFromPdf(file.buffer);
-  if (name.endsWith('.docx')) return (await mammoth.extractRawText({ buffer: file.buffer })).value;
-  return file.buffer.toString('utf8');
+  let text;
+  try {
+    if (name.endsWith('.pdf')) text = await extractTextFromPdf(file.buffer);
+    else if (name.endsWith('.docx')) text = (await mammoth.extractRawText({ buffer: file.buffer })).value;
+    else text = file.buffer.toString('utf8');
+  } catch {
+    throw httpError(400, 'This file could not be read. Select a readable text export or paste the notes.');
+  }
+  const readable = name.endsWith('.pdf') ? text.replace(/^\s*-- \d+ of \d+ --\s*$/gm, '') : text;
+  if (!readable.trim()) throw httpError(400, 'No readable text was found. Select a text export or paste the notes.');
+  return text;
 };
 
 const enteredMinutesMeetingDetails = value => {
@@ -1085,9 +1094,12 @@ const enteredMinutesMeetingDetails = value => {
 // pending/final records retain the format in which they were submitted.
 const workingMinutesDraft = (row, value) => {
   const saved = JSON.parse(row.draft_json);
-  const draft = normalizeMinutesDraft({...(value ?? saved), closingFormatVersion: row.status === 'draft' ? 4 : saved.closingFormatVersion});
+  const input = {...(value ?? saved), entryFormatVersion: saved.entryFormatVersion,
+    closingFormatVersion: row.status === 'draft' ? 4 : saved.closingFormatVersion};
+  const needsGrouping = row.status === 'draft' && (value != null || !saved.entryFormatVersion);
+  const draft = normalizeMinutesDraft(needsGrouping ? withMinutesEntryGrouping(input) : input);
   if (row.status === 'draft' || row.status === 'awaiting_master_attestation' && draft.closingFormatVersion >= 4) {
-    return workingMinutesEditorialDraft(draft);
+    return workingMinutesEditorialDraft(draft, {groupEntries:false});
   }
   return row.status === 'awaiting_master_attestation' ? currentMinutesEditorialDraft(draft) : draft;
 };
@@ -2096,17 +2108,8 @@ app.post('/api/minutes/source-details', requireAuth, requireMinutesAccess,
       res.setHeader('Cache-Control', 'private, no-store');
       if (req.assistant) return res.status(403).json({ error: 'Open your own Dashboard session to review meeting details.' });
       if (!req.file) return res.status(400).json({ error: 'Choose meeting notes or a transcript first.' });
-      let transcript;
-      try {
-        transcript = await transcriptFromUpload(req.file);
-      } catch {
-        return res.status(400).json({ error: 'This file could not be read. Try a text export or enter the meeting details.' });
-      }
+      const transcript = await transcriptFromUpload(req.file);
       if (transcript.length > 500_000) return res.status(400).json({ error: 'The meeting source is too long. Upload one meeting at a time.' });
-      // A PDF containing only images still has page markers in the extracted text.
-      const readable = req.file.originalname.toLowerCase().endsWith('.pdf')
-        ? transcript.replace(/^\s*-- \d+ of \d+ --\s*$/gm, '') : transcript;
-      if (!readable.trim()) return res.status(400).json({ error: 'No readable text was found. Try a text export or enter the meeting details.' });
       res.json({ details: suggestMinutesDetailsFromNotes(transcript) });
     } catch (error) { next(error); }
   });
@@ -2135,7 +2138,7 @@ app.post('/api/minutes/handoff', requireAuth, requireOwner,
       const transcript = uploadedText || String(req.body.transcriptText || '').trim();
       if (!transcript) return res.status(400).json({ error: 'Choose meeting notes or a transcript, or paste the text.' });
       if (transcript.length > 500_000) return res.status(400).json({ error: 'The meeting source is too long. Upload one meeting at a time.' });
-      const sourceType = ['auto', 'compiled_notes', 'transcript'].includes(req.body.sourceType) ? req.body.sourceType : 'auto';
+      const sourceType = detectMinutesSourceType(transcript, req.body.sourceType);
       const id = crypto.randomUUID();
       const time = nowIso();
       const sourceName = req.file?.originalname || (sourceType === 'compiled_notes' ? 'Pasted meeting notes' : 'Pasted transcript');
@@ -2177,6 +2180,10 @@ app.post('/api/minutes/handoff', requireAuth, requireOwner,
 
 const minutesRecoverySaved = 'Your original meeting source and details were saved.';
 const minutesRecoveryNotice = minutesRecoverySaved + ' Automatic organization could not verify the generated minutes.';
+const minutesOrganizationUnavailable = new Set([
+  'GENERATION_BUDGET_PAUSED', 'GENERATION_MONTHLY_LIMIT', 'GENERATION_REQUEST_REJECTED',
+  'GENERATION_SOURCE_TOO_LARGE', 'GENERATION_USAGE_UNKNOWN',
+]);
 const minutesResumeNotice = 'An existing draft was reopened for these notes. Its earlier meeting details are still saved. Review them before continuing.';
 
 async function prepareNewMinutesDraft(transcript, { sourceType, meetingDetails, userId }) {
@@ -2184,13 +2191,16 @@ async function prepareNewMinutesDraft(transcript, { sourceType, meetingDetails, 
     const draft = await generateMinutesDraft(transcript, { sourceType, meetingDetails, generateStructured: generationFor(userId) });
     return { draft };
   } catch (error) {
-    if (error.statusCode !== 502 || !MINUTES_REJECTED_OUTPUT_CODES.has(error.code)) throw error;
+    const rejected = error.statusCode === 502 && MINUTES_REJECTED_OUTPUT_CODES.has(error.code);
+    if (!rejected && !minutesOrganizationUnavailable.has(error.code)) throw error;
     // Recover the upload, not the rejected narrative or its claimed evidence.
+    const recoveryNotice = rejected ? minutesRecoveryNotice
+      : minutesRecoverySaved + ' Automatic organization is unavailable. Open the saved source to prepare the draft.';
     const draft = applyMinutesMeetingDetails(normalizeMinutesDraft({
       sourceType: detectMinutesSourceType(transcript, sourceType), officerAttendanceVersion: 2, closingFormatVersion: 4, sections: [],
-      warnings: [minutesRecoveryNotice],
+      warnings: [recoveryNotice],
     }), meetingDetails);
-    return { draft, recoveryNotice: minutesRecoveryNotice, organizationIssue: error.code };
+    return { draft, recoveryNotice, organizationIssue: error.code };
   }
 }
 
@@ -2346,9 +2356,10 @@ app.post('/api/minutes/:id/reorganize', requireAuth, requireMinutesAccess, rateL
     if (!canOpenWorkingMinutes(req.user, row)) return res.status(404).json({ error: 'Meeting minutes not found.' });
     if (row.status !== 'draft') return res.status(409).json({ error: 'Reopen this record before preparing corrections.' });
     if (req.body.expectedUpdatedAt !== row.updated_at) return res.status(409).json({ error: 'The record changed. Refresh before reorganizing.' });
+    const saved = JSON.parse(row.draft_json);
     const meetingDetails = enteredMinutesMeetingDetails(req.body.meetingDetails
-      ?? Object.fromEntries(MINUTES_MEETING_DETAILS_FIELDS.map(field => [field, JSON.parse(row.draft_json)[field]])));
-    const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
+      ?? Object.fromEntries(MINUTES_MEETING_DETAILS_FIELDS.map(field => [field, saved[field]])));
+    const draft = await generateMinutesDraft(row.transcript_text, { sourceType: req.body.sourceType ?? saved.sourceType, meetingDetails, generateStructured: generationFor(req.user.id) });
     const current = await getMinutesRow(row.id);
     if (!current || current.status !== 'draft' || current.updated_at !== row.updated_at) return res.status(409).json({ error: 'The record changed while its source was being organized. Reopen it before continuing.' });
     res.json({ draft });

@@ -1,7 +1,7 @@
 import { workingMinutesEditorialDraft } from './minutes-editorial.js';
 import { MINUTES_REPORT_RULES } from './report-rules.js';
 import { minutesDateParts, minutesDateValue } from './public/minutes-dates.js';
-import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
+import { SICKNESS_HEADING, isSicknessHeading, joinWrappedMinutesEntries, withMinutesEntryGrouping } from './minutes-sections.js';
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { organizeMeetingSource, extractOfficerCoverage, officerNameMatches } from './minutes-organizer.js';
 import { normalizeOfficerCoverage, sameAttendancePerson } from './public/minutes-attendance.js';
@@ -114,7 +114,7 @@ export const MINUTES_REJECTED_OUTPUT_CODES = new Set([
   'GENERATION_INVALID_RESPONSE', 'MINUTES_SOURCE_VERIFICATION_FAILED', 'MINUTES_SOURCE_LINE_CONTRACT_REQUIRED',
   'MINUTES_SECTION_EVIDENCE_INVALID', 'MINUTES_UNSUPPORTED_SECOND', 'MINUTES_UNSUPPORTED_UNANIMOUS_VOTE',
   'MINUTES_UNSUPPORTED_APPROVAL', 'MINUTES_UNSUPPORTED_REJECTION', 'MINUTES_UNSUPPORTED_TABLING',
-  'MINUTES_UNSUPPORTED_WITHDRAWAL',
+  'MINUTES_UNSUPPORTED_WITHDRAWAL', 'MINUTES_MOTION_OUTCOME_MISMATCH',
 ]);
 
 const otherAttendanceNames = (list, officerAttendance, attendanceVersion) => list.filter((name) => (
@@ -209,6 +209,22 @@ const withoutNegatedFact = (text, pattern) => pattern ? text.replace(new RegExp(
 const negatedProcedure = (verbs, extra = '') => new RegExp(String.raw`\b(?:(?:not|never|wasn't|isn't|weren't)\s+(?:yet\s+)?(?:been\s+)?(?:properly\s+)?(?:unanimously\s+)?(?:${verbs})|(?:no one|nobody|no brother|no member|no person)\s+(?:${verbs})${extra ? `|${extra}` : ''})\b`, 'i');
 
 
+const motionDisposition = /^(?:the\s+)?(?:(?<prefix>[\p{L}\p{N}][\p{L}\p{N}\p{P} ]{0,95}?)\s+motion|motion\s+(?:on|about|concerning|to)\s+(?<suffix>[\p{L}\p{N}][\p{L}\p{N}\p{P} ]{0,95}?))\s+(?:was\s+)?(?<negative>not\s+)?(?:unanimously\s+)?(?<verb>approved|adopted|passed|carried|rejected|defeated|failed|tabled|withdrawn)\b/iu;
+const dispositionAliases = {approved:'approved', adopted:'approved', passed:'approved', carried:'approved',
+  rejected:'rejected', defeated:'rejected', failed:'rejected', tabled:'tabled', withdrawn:'withdrawn'};
+
+// Compare exact named subjects when both the source and draft state them.
+// Pronouns, paraphrases, and a later reversal may need officer review.
+function namedMotionOutcomes(text) {
+  return text.split(/\n|(?<=[.!?])\s+/).flatMap(line => {
+    const match = motionDisposition.exec(line.trim().replace(/^(?:[-*•▪]|\d+[.)])\s+/, ''));
+    if (!match) return [];
+    const {prefix,suffix,negative,verb} = match.groups;
+    const topic = (prefix || suffix).toLowerCase().replace(/^the\s+/, '').replace(/\s+/g, ' ').trim();
+    return topic ? [{topic, outcome: (negative ? 'not ' : '') + dispositionAliases[verb.toLowerCase()]}] : [];
+  });
+}
+
 function checkedGeneratedDraft(response, source, localDraft, schema, sourceLines) {
   const sectionEvidenceError = () => generationError('The meeting section source references are incomplete or invalid. Your source has not been changed.', 'MINUTES_SECTION_EVIDENCE_INVALID');
   // Never guess positions for an older free-quotation or parallel-index
@@ -297,11 +313,19 @@ function checkedGeneratedDraft(response, source, localDraft, schema, sourceLines
     throw generationError('Minutes generation did not supply source references for all extracted content. Please try again.');
   }
   const quotesFor = field => (references.get(field) || []).map(entry => entry.quote).join('\n');
+  const motionText = text => joinWrappedMinutesEntries(text).replace(/<[^>]*>/g, '').replace(/[*_]/g, '');
+  const sourceOutcomes = sourceLines.filter(({text}) => /\bmotion\b/i.test(text)).flatMap(({line,text}) =>
+    namedMotionOutcomes(proceduralClaims(text)).map(claim => ({...claim,line})));
+  const outcomesByTopic = new Map();
+  for (const {topic,outcome} of sourceOutcomes) {
+    if (!outcomesByTopic.has(topic)) outcomesByTopic.set(topic, new Set());
+    outcomesByTopic.get(topic).add(outcome);
+  }
   // Exact quotes alone do not establish that a paraphrase is faithful. Reject
   // these recognizable violations rather than silently publishing bad prose.
   generated.sections.forEach((section, index) => {
-    const body = section.body.replace(/<[^>]*>/g, '').replace(/[*_]/g, '');
-    const quote = quotesFor(`sections[${index}].body`);
+    const body = motionText(section.body);
+    const quote = (references.get(`sections[${index}].body`) || []).map(entry => joinWrappedMinutesEntries(entry.quote)).join('\n');
     if (/treasur/i.test(section.heading) && /(?:[$£€]\s*\d|\b\d[\d,.]*\s*(?:dollars?|cents?)\b|\b(?:balance|receipts|disbursements|income|expenses|total)\s*(?:was|were|of|is|:)?\s*\d)/i.test(body)) {
       throw generationError('The generated minutes included treasury figures. The minutes should record the report reading status without amounts. Please try again.');
     }
@@ -344,17 +368,38 @@ function checkedGeneratedDraft(response, source, localDraft, schema, sourceLines
       if (noVote.test(quote) && !noVote.test(body)) {
         warnings.push(`Confirm ${section.heading}: the cited source says no vote or decision was recorded, but the draft omits that distinction.`);
       }
+      const citedOutcomes = namedMotionOutcomes(citedClaims);
+      for (const {topic,outcome} of namedMotionOutcomes(statedClaims)) {
+        const matchingOutcomes = new Set(outcomesByTopic.get(topic));
+        for (const claim of citedOutcomes) if (claim.topic === topic) matchingOutcomes.add(claim.outcome);
+        if (matchingOutcomes.size && !matchingOutcomes.has(outcome)) {
+          throw generationError('The outcome of a named motion conflicts with the original notes. Review the recorded decision.', 'MINUTES_MOTION_OUTCOME_MISMATCH');
+        }
+        if (matchingOutcomes.size > 1) {
+          warnings.push(`Confirm ${section.heading}: the source gives more than one outcome for a motion. Check which decision was final.`);
+        } else if (matchingOutcomes.size && !citedOutcomes.some(claim => claim.topic === topic && claim.outcome === outcome)) {
+          warnings.push(`Confirm ${section.heading}: the cited lines do not tie a named motion to its recorded outcome.`);
+        }
+      }
     }
   });
   const motionLine = /\b(?:motion|moved|seconded|vote(?:d)?|carried|adopted|unanimous(?:ly)?)\b/i;
   const sectionCoverage = new Set([...references].filter(([field]) => /^sections\[\d+\]\.body$/.test(field))
     .flatMap(([, entries]) => entries.flatMap(entry => Array.from({length: entry.lastLine - entry.firstLine + 1}, (_, offset) => entry.firstLine + offset))));
-  source.split('\n').forEach((line, index) => {
-    if (motionLine.test(line) && !sectionCoverage.has(index + 1)) {
-      warnings.push(`Motion source review: line ${index + 1} mentions a motion or vote but is not linked to a minutes section.`);
+  const motionKey = ({topic,outcome}) => JSON.stringify([topic,outcome]);
+  const recordedOutcomes = new Set(generated.sections.flatMap(section =>
+    namedMotionOutcomes(proceduralClaims(motionText(section.body)))).map(motionKey));
+  for (const {text, line} of sourceLines) {
+    if (motionLine.test(text) && !sectionCoverage.has(line)) {
+      warnings.push(`Motion source review: line ${line} mentions a motion or vote but is not linked to a minutes section.`);
     }
-  });
-  const normalized = normalizeMinutesDraft({...generated, officerAttendanceVersion: 2, closingFormatVersion: 3, sourceType: localDraft.sourceType, organizerVersion: localDraft.organizerVersion});
+  }
+  for (const claim of sourceOutcomes) {
+    if (sectionCoverage.has(claim.line) && !recordedOutcomes.has(motionKey(claim))) {
+      warnings.push(`Motion source review: line ${claim.line} records a named motion outcome. Confirm the draft includes that motion and its outcome.`);
+    }
+  }
+  const normalized = normalizeMinutesDraft(withMinutesEntryGrouping({...generated, officerAttendanceVersion: 2, closingFormatVersion: 3, sourceType: localDraft.sourceType, organizerVersion: localDraft.organizerVersion}));
   const comparable = value => String(value || '').toLowerCase().replace(/[.\s]/g, '');
   for (const field of ['meetingDate', 'degree', 'openingTime', 'closingTime', 'quorum']) {
     if (!generated[field]) continue;
@@ -491,7 +536,7 @@ const canonicalQuorum = (value) => {
 const visitorPlaceholder = value => /^(?:(?:visitors?|guests?)\s*:\s*)?(?:none(?: (?:(?:was|were) )?(?:recorded|reported|present|noted))?|not (?:recorded|reported|applicable)|n[/.]?a|no (?:visitors?|guests?|visiting brothers?)(?: (?:(?:were|are) )?(?:present|recorded|reported|attended))?|no entr(?:y|ies)(?: (?:(?:was|were) )?(?:recorded|reported|noted))?)\.?$/i.test(value);
 const normalizeVisitors = value => Array.isArray(value) ? value.map(visitor => String(visitor).trim()).filter(visitor => visitor && !visitorPlaceholder(visitor)) : [];
 
-const cleanSavedSectionBody = (value) => String(value || '').split(/\n+/).filter((line) => (
+const cleanSavedSectionBody = (value, preserveBoundaries) => String(value || '').split(preserveBoundaries ? '\n' : /\n+/).filter((line) => (
   /\b(?:grand lodge visitation|official visitation)\b/i.test(line)
   || !/\b(?:grand secretary|grand treasurer|grand lodge officer|district deputy|grand master)\b.*\bpresent as (?:a )?member\b/i.test(line)
 )).join('\n').trim();
@@ -502,7 +547,7 @@ const normalizeSections = (value, draft = {}) => {
   const sections = cleanMinutesSectionsForPresentation((Array.isArray(value) ? value : []).map(section => ({
     heading: isSicknessHeading(section?.heading) ? SICKNESS_HEADING
       : String(section?.heading || '').trim().replace(/^Grand Lodge Officers?'? Remarks$/i, 'Communications'),
-    body: cleanSavedSectionBody(section?.body),
+    body: cleanSavedSectionBody(section?.body, draft.entryFormatVersion >= 1),
   })).filter(section => section.heading || section.body), draft);
   const sickness = sections.filter(section => section.heading === SICKNESS_HEADING);
   if (sickness.length) {
@@ -551,6 +596,7 @@ export const normalizeMinutesDraft = (value = {}) => {
   const otherNames = list => otherAttendanceNames(list, officerAttendance, attendanceVersion);
   return {
   organizerVersion: value.organizerVersion || 1,
+  ...(Number(value.entryFormatVersion) >= 1 ? {entryFormatVersion: 1} : {}),
   officerAttendanceVersion: attendanceVersion,
   closingFormatVersion: Number(value.closingFormatVersion) >= 4 ? 4 : Number(value.closingFormatVersion) >= 3 ? 3 : Number(value.closingFormatVersion) >= 2 ? 2 : 1,
   ...(Number(value.meetingDetailsVersion) >= 1 ? {meetingDetailsVersion:1} : {}),
@@ -609,12 +655,12 @@ export const generateMinutesDraft = async (transcript, {
     const issues = minutesMeetingDetailsIssues(meetingDetails);
     if (issues.length) throw Object.assign(new Error(issues.join(' ')), {statusCode:400, code:'MINUTES_MEETING_DETAILS_REQUIRED'});
   }
-  const finish = draft => applyMinutesMeetingDetails(workingMinutesEditorialDraft(draft), meetingDetails);
+  const finish = draft => applyMinutesMeetingDetails(workingMinutesEditorialDraft(draft, {groupEntries:false}), meetingDetails);
   const source = String(transcript || '').trim();
   if (source.length < 100) throw Object.assign(new Error('The transcript is too short to create reliable minutes.'), { statusCode: 400 });
   if (source.length > 500_000) throw Object.assign(new Error('The transcript is too long. Upload the Plaud text export for one meeting.'), { statusCode: 400 });
 
-  if (testResponse) return finish(normalizeMinutesDraft({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2}));
+  if (testResponse) return finish(normalizeMinutesDraft(withMinutesEntryGrouping({...JSON.parse(testResponse), officerAttendanceVersion: 2, closingFormatVersion: 2})));
   const localDraft = organizeMeetingSource(source, { sourceType });
   localDraft.closingPrayerGiven = detectPrayerFacts(source, {closingFormatVersion:4}).closingPrayerGiven;
   if (typeof generateStructured === 'function') {
@@ -632,7 +678,7 @@ export const generateMinutesDraft = async (transcript, {
     if (localDraft.closingPrayerGiven === false) checked.closingPrayerGiven = false;
     return finish(checked);
   }
-  return finish(normalizeMinutesDraft(localDraft));
+  return finish(normalizeMinutesDraft(withMinutesEntryGrouping(localDraft)));
 };
 
 export function applyMinutesMeetingDetails(draft, supplied) {

@@ -1,6 +1,6 @@
 import { CURRENT_OFFICERS, namesMatch } from './minutes-layout.js';
 import { detectPrayerFacts } from './minutes-format.js';
-import { SICKNESS_HEADING, isSicknessHeading } from './minutes-sections.js';
+import { SICKNESS_HEADING, isSicknessHeading, joinWrappedMinutesEntries } from './minutes-sections.js';
 
 // Preserve agenda blocks before interpreting their contents. In compiled notes the
 // author has already supplied context; a speaker's name must never start a section.
@@ -196,17 +196,28 @@ export const detectMinutesSourceType = (source, sourceType) => ['compiled_notes'
   ? sourceType : sourceTypeFromLines(source.split('\n').map(clean).filter(Boolean));
 
 export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
-  const rawLines = source.split('\n');
-  const lines = rawLines.map(clean).filter(Boolean);
+  // PDF extraction labels pages. Those labels remain in the numbered source,
+  // but must never become meeting content or break a clear continuation.
+  const rawLines = source.split('\n').filter(line => !/^\s*-- \d+ of \d+ --\s*$/.test(line));
   const markedHeadings = new Set(rawLines.filter(line => /^\s*#{1,6}\s+\S/.test(line)
     || /^\s*(?:\d+[.)]\s*)?(?:\*\*[^*]+\*\*|__[^_]+__)\s*:?\s*$/.test(line)).map(clean));
-  const detectedType = sourceTypeFromLines(lines);
+  const detectedType = sourceTypeFromLines(rawLines.map(clean).filter(Boolean));
   const type = ['compiled_notes', 'transcript'].includes(sourceType) ? sourceType : detectedType;
+  const lines = (type === 'compiled_notes'
+    ? joinWrappedMinutesEntries(rawLines.join('\n'), line => {
+      const text = clean(line);
+      return knownHeading(text) || unknownHeading(text, markedHeadings) || /^[^:]+:\s+/.test(text);
+    }).split('\n')
+    : rawLines).map(clean);
   const attendance = { present: [], excused: [], absent: [], visitors: [] };
   const content = [];
   const placementWarnings = [];
   let attendanceLabel = null;
   for (const line of lines) {
+    if (!line) {
+      if (type === 'compiled_notes') content.push('');
+      continue;
+    }
     const label = /^(?:(?:brothers?|members?|officers?)\s+)?(present|excused|absent|visitors?)(?:\s+(?:brothers?|members?|officers?))?\s*:\s*(.*)$/i.exec(undecorated(line));
     if (label) {
       attendanceLabel = label[1].toLowerCase().replace(/^visitor$/, 'visitors');
@@ -232,6 +243,10 @@ export function organizeMeetingSource(source, { sourceType = 'auto' } = {}) {
   const begin = (heading, topic = '', preserveBlock = false, obsoletePraise = false) => { active = { heading, lines: topic ? [topic] : [], preserveBlock, obsoletePraise }; blocks.push(active); };
   const explicitPresence = /\b(?:include|record) (?:the )?grand lodge (?:officer|presence)\b/i.test(source);
   for (let line of content) {
+    if (!line) {
+      if (active?.lines.length) active.lines.push('');
+      continue;
+    }
     const heading = knownHeading(line);
     if (heading) { begin(heading, '', false, obsoletePraiseHeading(line)); continue; }
     const inline = /^([^:]+):\s+(.+)$/.exec(line);

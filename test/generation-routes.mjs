@@ -248,11 +248,20 @@ try {
   const minutesBeforeFailure = (await api('/api/minutes', owner.token)).data.minutes.length;
   const callsBeforeMinutesFailure = await providerCalls();
   await control({mode: 'error'});
-  result = await api('/api/minutes/generate', owner.token, 'POST', minutesForm());
-  check('Paid minutes generation reports a provider failure instead of saving a local substitute',
-    result.status >= 500 && (await api('/api/minutes', owner.token)).data.minutes.length === minutesBeforeFailure
+  const unavailableSource = minutesSource + '\nDistinct organization failure example.';
+  result = await api('/api/minutes/generate', owner.token, 'POST', minutesForm(unavailableSource));
+  const unavailableDraft = result.data.minutes;
+  check('Paid minutes failure retains source and entered details without an unverified substitute',
+    result.status === 201 && unavailableDraft.status === 'draft' && /Automatic organization is unavailable/.test(result.data.recoveryNotice)
+      && unavailableDraft.draft.sections.every(section => !section.body.trim())
+      && unavailableDraft.draft.openingTime === enteredDetails.openingTime
+      && (await api('/api/minutes/' + unavailableDraft.id + '/source', owner.token)).data.sourceText.replace(/\r\n/g,'\n') === unavailableSource
+      && (await api('/api/minutes', owner.token)).data.minutes.length === minutesBeforeFailure + 1
       && await providerCalls() === callsBeforeMinutesFailure + 1);
   await control({mode: 'success'});
+  const unavailableRetry = await api('/api/minutes/generate', owner.token, 'POST', minutesForm(unavailableSource));
+  check('Reopening the saved source makes no additional generation call', unavailableRetry.status === 200
+    && unavailableRetry.data.minutes.id === unavailableDraft.id && await providerCalls() === callsBeforeMinutesFailure + 1);
   result = await api('/api/minutes/generate', owner.token, 'POST', minutesForm());
   assert.equal(result.status, 201); let minutes = result.data.minutes;
   let count = await providerCalls();

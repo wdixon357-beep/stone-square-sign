@@ -4,10 +4,21 @@ import { officerAttendanceRows, nonOfficerExcused } from '../minutes-layout.js';
 import { buildMinutesPdf } from '../minutes-pdf.js';
 import { PDFDocument } from 'pdf-lib';
 import { SICKNESS_HEADING, isSicknessHeading } from '../minutes-sections.js';
+import { documentSections, sectionBlocks } from '../minutes-format.js';
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = () => { throw new Error('Local minutes generation must not call an external service.'); };
 try {
+  const compiled = 'Sickness and Distress\n- The first family should be kept in the\n-- 1 of 2 --\nBrothers’ prayers.\n- A second family made a separate request.\n\nCommunications\nA distinct notice was shared with the members at the\n\nAnother paragraph is separate.';
+  const imported = await generateMinutesDraft(compiled, {sourceType:'compiled_notes'});
+  const sicknessBlocks = sectionBlocks(documentSections(imported).find(section=>section.heading===SICKNESS_HEADING));
+  assert.deepEqual(sicknessBlocks.map(item=>item.text), [
+    "The first family should be kept in the Brothers' prayers.",
+    'A second family made a separate request.',
+  ]);
+  assert.match(imported.sections.find(section=>section.heading==='Communications').body, /distinct notice/);
+  assert.match(imported.sections.find(section=>section.heading==='Communications').body, /at the\n\nAnother paragraph/);
+
   const sicknessAliases = [
     'Sickness and Distress', 'SICKNESS & DISTRESS', '3. Sick and Distressed:',
     '### **SICKNESS & DISTRESS:**', '**SICKNESS & DISTRESS**:', '(3) __Sick & Distressed__',
