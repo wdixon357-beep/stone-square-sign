@@ -38,6 +38,26 @@ assert.deepEqual(sectionBlocks(documentSections(workingDraft)[0]).map(item=>item
 ]);
 assert.equal(wrappedDraft.sections[0].body, wrappedBody, 'the legacy snapshot is unchanged');
 
+const familyUpdates = {sourceType:'compiled_notes', sections:[{heading:'Sickness and Distress', body:[
+  '- Brother Example shared an update. He is doing better.',
+  'He is having difficulty traveling and asked for',
+  'continued prayers.',
+  '- Sister Example was a member of Star',
+  'Valley Chapter No. 4.',
+  '',
+  'She has a separate announcement.',
+  '- A third family gave a separate update.',
+].join('\n')}]};
+const familyReview = withMinutesEntryGrouping(familyUpdates);
+assert.deepEqual(sectionBlocks(familyReview.sections[0]).map(item => item.text), [
+  'Brother Example shared an update. He is doing better. He is having difficulty traveling and asked for continued prayers.',
+  'Sister Example was a member of Star Valley Chapter No. 4.',
+  'She has a separate announcement.',
+  'A third family gave a separate update.',
+]);
+assert.deepEqual(withMinutesEntryGrouping(familyReview), familyReview);
+assert.match(withMinutesEntryGrouping({...familyUpdates,sourceType:'transcript'}).sections[0].body, /better\.\nHe/);
+
 for (const value of ['2026-09-03', '9/3/2026', 'September 3, 2026', 'Sept. 3rd, 2026', 'Thu, Sept. 3, 2026', 'Thursday, 2026-09-03']) {
   assert.equal(formatMinutesDate(value), 'Thursday, September 3, 2026');
   assert.equal(minutesDateValue(value), '2026-09-03');

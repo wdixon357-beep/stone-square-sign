@@ -1090,14 +1090,14 @@ const enteredMinutesMeetingDetails = value => {
   return normalizeMinutesMeetingDetails(details);
 };
 
-// Upgrade only an unsigned working copy. Captured attestation snapshots and
-// pending/final records retain the format in which they were submitted.
+// Format the editable copy for preparation or Master review. The preparer's
+// submitted snapshot and previously finalized records keep their original format.
 const workingMinutesDraft = (row, value) => {
   const saved = JSON.parse(row.draft_json);
   const input = {...(value ?? saved), entryFormatVersion: saved.entryFormatVersion,
     closingFormatVersion: row.status === 'draft' ? 4 : saved.closingFormatVersion};
-  const needsGrouping = row.status === 'draft' && (value != null || !saved.entryFormatVersion);
-  const draft = normalizeMinutesDraft(needsGrouping ? withMinutesEntryGrouping(input) : input);
+  const editable = row.status === 'draft' || row.status === 'awaiting_master_attestation';
+  const draft = normalizeMinutesDraft(editable ? withMinutesEntryGrouping(input) : input);
   if (row.status === 'draft' || row.status === 'awaiting_master_attestation' && draft.closingFormatVersion >= 4) {
     return workingMinutesEditorialDraft(draft, {groupEntries:false});
   }
@@ -2418,7 +2418,7 @@ const applyMinutesPreparerSignature = async req => withTransaction(async () => {
     if (row.created_by_user_id !== req.user.id) {
       throw httpError(403, 'The officer who prepared this draft must attest to it.');
     }
-    const draft = workingMinutesEditorialDraft(JSON.parse(row.draft_json));
+    const draft = workingMinutesDraft(row);
     if (!draft.sections.some(section => section.body.trim())) throw httpError(400, 'The minutes need at least one section with meeting notes.');
     draft.officerAttendanceVersion = 2;
     const reviewIssues = [...minutesMeetingDetailsIssues(draft), ...attendanceReviewIssues(draft), ...closingReviewIssues(draft)];
@@ -2478,7 +2478,7 @@ const applyMinutesMasterSignature = async req => withTransaction(async () => {
     const row = await getMinutesRow(req.params.id);
     if (!row) throw httpError(404, 'Meeting minutes not found.');
     if (row.status !== 'awaiting_master_attestation') throw httpError(409, 'The preparing officer must attest to the draft first.');
-    const draft = currentMinutesEditorialDraft(JSON.parse(row.draft_json));
+    const draft = workingMinutesDraft(row);
     if (!draft.sections.some(section => section.body.trim())) throw httpError(400, 'The minutes need at least one section with meeting notes.');
     const attestedDraftJson = JSON.stringify(draft);
     const changes = reviewedMinutesChanges(row.submitted_draft_json ? JSON.parse(row.submitted_draft_json) : null, JSON.parse(row.draft_json), draft, JSON.parse(row.master_changes_json || '[]'));
@@ -3687,8 +3687,7 @@ for (const phase of ['preparer','master']) registerSignatureOperation(`owner.min
     if(!row)throw httpError(404,'Meeting minutes not found.');
     if(phase==='preparer'&&(row.status!=='draft'||row.created_by_user_id!==owner.id))throw httpError(403,'Only the actual preparing officer can attest to their unsigned draft.');
     if(phase==='master'&&row.status!=='awaiting_master_attestation')throw httpError(409,'The preparing officer must attest to this exact draft first.');
-    const draft = phase === 'preparer' ? workingMinutesEditorialDraft(JSON.parse(row.draft_json))
-      : currentMinutesEditorialDraft(JSON.parse(row.draft_json));
+    const draft = workingMinutesDraft(row);
     if(!draft.sections.some(section=>section.body.trim()))throw httpError(409,'The minutes need a section with meeting notes.');
     if (phase === 'preparer') draft.officerAttendanceVersion = 2;
     const issues=phase==='preparer'?[...minutesMeetingDetailsIssues(draft),...attendanceReviewIssues(draft),...closingReviewIssues(draft)]:[...attendanceRecordIssues(draft),...closingReviewIssues(draft)];

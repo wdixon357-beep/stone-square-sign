@@ -7,7 +7,7 @@ const newMatter = /^(?:(?:HPM|PM|WM|SW|JW|Bro(?:ther)?|Sister)\.?\s+[A-Z]|[Mm]ot
 
 // Join only clear continuations on the editable copy. A blank, marked item,
 // heading, or standalone statement is a boundary even in a wrapped PDF import.
-export function joinWrappedMinutesEntries(value, startsSection = () => false) {
+export function joinWrappedMinutesEntries(value, startsSection = () => false, {namedUpdates = false} = {}) {
   const lines = [];
   let markedEntry = false;
   let previousWasHeading = false;
@@ -19,8 +19,16 @@ export function joinWrappedMinutesEntries(value, startsSection = () => false) {
     const heading = startsSection(line) || /^(?:#{1,6}\s|[^.!?]{1,65}:\s*$)/.test(text);
     const previousText = previous?.replace(entryMarker, '').trimEnd();
     const incomplete = previousText && !/[:.!?…]["')\]]*$/.test(previousText);
+    // In a marked list of family updates, a third-person follow-up can start
+    // a new sentence inside the same item. A wrapped affiliation can also
+    // start with a capital letter. Keep blanks, headings and new people apart.
+    const sameUpdate = namedUpdates && markedEntry && previousText && (
+      /^(?:He|She|They) (?:is|was|has|had|will|are|were|have)\b/.test(text)
+      || incomplete && /\b(?:of|at|from) [A-Z][a-z]+$/.test(previousText)
+        && /^[A-Z][\w'-]+ (?:Lodge|Chapter|Council|Court|Temple)\b/.test(text)
+    );
     const continuation = previousText && text && !marked && !heading && !previousWasHeading && !newMatter.test(text)
-      && (unfinishedEntry.test(previousText) || incomplete && (markedEntry && markedContinuation.test(line)
+      && (sameUpdate || unfinishedEntry.test(previousText) || incomplete && (markedEntry && markedContinuation.test(line)
         || (markedEntry || /[,;]$/.test(previousText)) && /^[a-z]/.test(text)));
     if (continuation) lines[lines.length - 1] = previous.trimEnd() + ' ' + text;
     else {
@@ -35,7 +43,10 @@ export function joinWrappedMinutesEntries(value, startsSection = () => false) {
 export function withMinutesEntryGrouping(draft) {
   if (!Array.isArray(draft?.sections)) return draft;
   return {...draft, entryFormatVersion: 1, sections: draft.sections.map(section =>
-    section && typeof section.body === 'string' ? {...section, body: joinWrappedMinutesEntries(section.body)} : section)};
+    section && typeof section.body === 'string' ? {...section, body: joinWrappedMinutesEntries(section.body, undefined, {
+      namedUpdates: draft.sourceType === 'compiled_notes' && isSicknessHeading(section.heading)
+        && section.body.split('\n').filter(line => entryMarker.test(line)).length >= 2,
+    })} : section)};
 }
 
 // Match a complete agenda heading, never a sentence mentioning a Brother's

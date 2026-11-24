@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 import JSZip from 'jszip';
 import {PDFParse} from 'pdf-parse';
-import {documentSections, closingReviewIssues, detectPrayerFacts, closingPrayerText, closingPrayerTextV3, prayerRequestText} from '../minutes-format.js';
+import {documentSections, sectionBlocks, closingReviewIssues, detectPrayerFacts, closingPrayerText, closingPrayerTextV3, prayerRequestText} from '../minutes-format.js';
 import {organizeMeetingSource} from '../minutes-organizer.js';
 import {buildMinutesPdf} from '../minutes-pdf.js';
 import {buildMinutesDocx} from '../minutes-document.js';
+import {normalizeMinutesDraft} from '../minutes.js';
+import {withMinutesEntryGrouping} from '../minutes-sections.js';
+import {currentMinutesEditorialDraft, workingMinutesEditorialDraft} from '../minutes-editorial.js';
 
 const missingTime = 'Closing time: confirm and enter the time the Lodge was closed.';
 const missingPrayer = 'Closing prayer: confirm whether the Chaplain gave the closing prayer and prayed for the sick and distressed.';
@@ -127,11 +132,11 @@ for(const closingFormatVersion of [1,2]) {
   if(closingFormatVersion===1) assert.ok(renderedText({...draft,prayerRequested:true}).includes(prayerRequestText));
 }
 
-async function texts(draft) {
-  const parser=new PDFParse({data:await buildMinutesPdf({draft,status:'draft'})});
+async function texts(draft, status = 'draft') {
+  const parser=new PDFParse({data:await buildMinutesPdf({draft,status})});
   let pdf;
   try {pdf=(await parser.getText()).text;} finally {await parser.destroy();}
-  const archive=await JSZip.loadAsync(await buildMinutesDocx({draft,status:'draft'}));
+  const archive=await JSZip.loadAsync(await buildMinutesDocx({draft,status}));
   const xml=await archive.file('word/document.xml').async('string');
   return [pdf,xml.replace(/<[^>]+>/g,'')];
 }
@@ -146,5 +151,74 @@ for(const closingFormatVersion of [1,2]) for(const text of await texts({...legac
   assert.match(text,/Closing time: confirm/,'Captured PDF and Word retain legacy time prompt');
   assert.match(text,/Closing prayer: confirm/,'Captured PDF and Word retain legacy prayer prompt');
 }
+
+const server = await readFile(new URL('../server.js', import.meta.url), 'utf8');
+const workingCopySource = server.slice(server.indexOf('const workingMinutesDraft ='), server.indexOf('const minutesForResponse ='));
+const workingCopy = vm.runInNewContext(`${workingCopySource}\nworkingMinutesDraft`, {
+  normalizeMinutesDraft, withMinutesEntryGrouping, currentMinutesEditorialDraft, workingMinutesEditorialDraft,
+});
+const submitted = {
+  ...completeTimes, closingFormatVersion: 4,
+  sections: [{
+    heading: 'Sickness and Distress',
+    body: '- A family asked for\ncontinued prayers during recovery.\n- A separate prayer request was received.',
+  }],
+};
+const signedPreparerJson = JSON.stringify(submitted);
+const pending = Object.freeze({
+  status: 'awaiting_master_attestation',
+  draft_json: signedPreparerJson,
+  submitted_draft_json: signedPreparerJson,
+});
+const sicknessBlocks = draft => sectionBlocks(documentSections(draft).find(section => section.heading === 'Sickness and Distress'))
+  .map(item => item.text);
+const reviewDraft = workingCopy(pending);
+assert.equal(reviewDraft.entryFormatVersion, 1);
+assert.deepEqual(sicknessBlocks(reviewDraft), [
+  'A family asked for continued prayers during recovery.',
+  'A separate prayer request was received.',
+]);
+const {entryFormatVersion: formatMarker, ...postedDraft} = reviewDraft;
+assert.equal(formatMarker, 1);
+assert.deepEqual(workingCopy(pending, postedDraft), reviewDraft, 'Previewing browser or Mac draft data preserves the working-copy layout');
+const earlierPending = { ...pending, draft_json: JSON.stringify({ ...submitted, closingFormatVersion: 2, closingPrayerGiven: null }) };
+assert.equal(workingCopy(earlierPending).closingPrayerGiven, null, 'Entry grouping does not attest an older unknown closing prayer');
+for (const text of await texts(reviewDraft, pending.status)) {
+  assert.match(text, /A family asked for continued prayers during recovery\./, 'Both previews keep the continuation on the same item');
+  assert.match(text, /A separate prayer request was received\./, 'Both previews retain the next separate matter');
+}
+assert.equal(pending.submitted_draft_json, signedPreparerJson);
+assert.equal(pending.draft_json, signedPreparerJson, 'Opening legacy minutes does not rewrite the submitted or working record');
+
+const olderGrouping = { ...pending, draft_json: JSON.stringify({ ...submitted, entryFormatVersion: 1 }) };
+for (const status of ['draft', 'awaiting_master_attestation']) {
+  const row = { ...olderGrouping, status };
+  const current = workingCopy(row);
+  assert.deepEqual(sicknessBlocks(current), sicknessBlocks(reviewDraft), 'An existing format marker does not skip working-copy line corrections');
+  assert.deepEqual(workingCopy(row, current), current, 'Read, edited preview, and save use the same formatted copy');
+  assert.deepEqual(workingCopy({ ...row, draft_json: JSON.stringify(current) }), current, 'Reading an already repaired copy is idempotent');
+}
+
+for (const status of ['ready_for_distribution', 'distributed', 'approved_by_lodge']) {
+  for (const [row, marker] of [[pending, undefined], [olderGrouping, 1]]) {
+    const finalized = workingCopy({ ...row, status });
+    assert.equal(finalized.entryFormatVersion, marker);
+    assert.deepEqual(sicknessBlocks(finalized), [
+      'A family asked for',
+      'continued prayers during recovery.',
+      'A separate prayer request was received.',
+    ], 'Previously finalized minutes retain their original item boundaries with or without a format marker');
+  }
+}
+for (const text of await texts(normalizeMinutesDraft(JSON.parse(signedPreparerJson)), 'approved_by_lodge')) {
+  assert.doesNotMatch(text, /A family asked for continued prayers during recovery\./, 'Captured historical PDF and Word retain their original layout');
+}
+
+const preparerApply = server.slice(server.indexOf('const applyMinutesPreparerSignature ='), server.indexOf('const finishMinutesPreparerSignature ='));
+const masterApply = server.slice(server.indexOf('const applyMinutesMasterSignature ='), server.indexOf('const finishMinutesMasterSignature ='));
+const signatureReview = server.slice(server.indexOf("for (const phase of ['preparer','master'])"), server.indexOf("registerSignatureOperation('documents.sign'"));
+assert.match(preparerApply, /const draft = workingMinutesDraft\(row\);/, 'Direct preparer signing captures the exact working-copy draft');
+assert.match(masterApply, /const draft = workingMinutesDraft\(row\);/, 'Direct Master signing captures the exact working-copy draft');
+assert.match(signatureReview, /const draft = workingMinutesDraft\(row\);/, 'Confirmation binds the same working-copy draft in either phase');
 assert.equal(JSON.stringify(fixture),snapshot);
-console.log('PASS: version3 closing PDF/Word omit uncertainty filler, preserve actual prayer/closure facts and form gates, and leave captured version1/version2 rendering unchanged.');
+console.log('PASS: reviewed PDF and Word text, legacy pending entry grouping, shared Master signature input, and captured archive protection.');

@@ -16,7 +16,7 @@ These are William Dixon-Saunders's settled requirements. Update this record, the
 
 ## Minutes
 
-- Preserve logical entries when formatted notes wrap across lines. Join only clear continuations on working drafts. Keep explicit bullets, agenda headings and paragraph breaks as boundaries. The editor and document preview use the same grouped draft. Keep the original numbered source and earlier attestation snapshots intact.
+- Preserve logical entries when formatted notes wrap across lines. Join only clear continuations on the editable copy during preparation and Master review, including older drafts awaiting Master review. Keep explicit bullets, agenda headings and paragraph breaks as boundaries. The editor, PDF and Word previews, and the Master's signature review use the same grouped working copy. Keep the original numbered source, the preparer's submitted snapshot and previously finalized records intact.
 - Check the outcome of an explicitly named motion against that motion's own cited text. When sources report more than one outcome or an explicit motion is missing from the draft, flag it for private review. The preparing officer still checks the complete meeting record before attesting.
 
 - The Worshipful Master may upload or paste a transcript or compiled notes as a Secretary's Office handoff without generating a draft. The source is stored privately and both the Secretary and Assistant Secretary are notified. Either Adrian Reese or William McDuffie may claim it; the claim is atomic, only the claiming officer can generate and edit the draft, and the other officer immediately sees who claimed it. Paid organization runs only after the claim. The original uploader, source, claim time and preparing officer remain in the audit trail.
